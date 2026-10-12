@@ -1,5 +1,11 @@
 # Kermach
 
+<p>
+  <a href="https://github.com/delorostislavbiz/kermach/releases/download/v0.1.0-mac/Kermach-0.1.0-arm64.dmg"><img alt="Завантажити для macOS" src="https://img.shields.io/badge/%D0%97%D0%B0%D0%B2%D0%B0%D0%BD%D1%82%D0%B0%D0%B6%D0%B8%D1%82%D0%B8-macOS%20%C2%B7%20Apple%20Silicon-000000?style=for-the-badge&logo=apple&logoColor=white"></a>
+</p>
+
+<sub>Kermach 0.1.0 · .dmg · 127 МБ · M1 і новіші · <a href="https://github.com/delorostislavbiz/kermach/releases/tag/v0.1.0-mac">усі файли релізу</a></sub>
+
 Термінали для Claude Code і Codex на Electron. Кожен проєкт відкривається в окремому вікні.
 Агенти працюють в окремому фоновому процесі, тому не зупиняються, коли закриваєш вікно.
 Відкрив вікно знову — вкладки та їхній вивід на місці.
@@ -46,7 +52,7 @@
 
 ## Встановлення на Mac
 
-1. Відкрийте `Kermach-<версія>-arm64.dmg` і перетягніть Kermach у «Програми».
+1. [Завантажте `Kermach-0.1.0-arm64.dmg`](https://github.com/delorostislavbiz/kermach/releases/download/v0.1.0-mac/Kermach-0.1.0-arm64.dmg), відкрийте його і перетягніть Kermach у «Програми».
 2. Збірка підписана ad-hoc, без сертифіката Apple. Якщо macOS пише, що програму «пошкоджено» або «не вдалося перевірити»
    (так буває з файлом, завантаженим з інтернету), один раз виконайте в Терміналі:
    `xattr -dr com.apple.quarantine /Applications/Kermach.app`
