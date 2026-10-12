@@ -36,8 +36,8 @@ const browserCli = require('../plugins/browser/cli');
 
 /** Что ставится новой вкладке. Цвета — из палитры макета. */
 const KINDS = /** @type {const} */ ({
-  claude: { title: 'Claude', color: '#2091F6', icon: 'bot' },
-  codex: { title: 'Codex', color: '#ECA855', icon: 'cpu' },
+  claude: { title: 'Claude', color: '#2091F6', icon: 'claude' },
+  codex: { title: 'Codex', color: '#ECA855', icon: 'openai' },
   shell: { title: 'Терминал', color: '#8D91A5', icon: 'terminal' },
 });
 
@@ -358,12 +358,16 @@ function shownTitle(s) {
   return kindOf(s) === 'claude' && !s.titleManual && s.autoTitle && !NO_TOPIC.has(s.autoTitle) ? s.autoTitle : own;
 }
 
+/** Значки Claude и Codex до логотипов (робот и процессор): их хранят вкладки, открытые раньше, — показываются логотипом. */
+const OLD_ICONS = { claude: 'bot', codex: 'cpu' };
+
 /** Что окно получает о терминале. state — код из STATE_WORDS или ''; старый демон его не знает — ''.
  * pics — получатель снимка и элемента со страницы: агент понимает картинку по пути (pics в каталоге agents.js, t416). @param {any} s */
 function pick(s) {
   const k = lookOf(kindOf(s));
+  const old = /** @type {Record<string, string>} */ (OLD_ICONS)[kindOf(s)];
   return {
-    sid: s.sid, kind: kindOf(s), title: shownTitle(s), color: s.color || k.color, icon: s.icon || k.icon, pid: s.pid, createdAt: s.createdAt, alive: true,
+    sid: s.sid, kind: kindOf(s), title: shownTitle(s), color: s.color || k.color, icon: !s.icon || s.icon === old ? k.icon : s.icon, pid: s.pid, createdAt: s.createdAt, alive: true,
     state: String(s.state || ''), pics: agents.takesPics(kindOf(s)),
   };
 }

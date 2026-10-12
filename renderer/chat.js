@@ -229,6 +229,8 @@
       if (/^\/(?!clear\b|compact\b)\S/.test(s.trim())) setTimeout(() => setView('term', false), 250);
     }
     const key2 = (/** @type {string} */ d) => t.term.write(sid, d);
+    /** Путь файла для поля ввода: с пробелами и прочим — в кавычках. @param {string} p */
+    const quote = (p) => (/^[a-zA-Z0-9_./@:\\-]+$/.test(p) ? p : `"${p}"`);
 
     function submit() {
       const v = ta.value;
@@ -252,10 +254,36 @@
       if (!files.length) return;
       ev.preventDefault();
       const paths = files.map((f) => { try { return t.filePath(f); } catch { return ''; } }).filter(Boolean);
-      const add = paths.map((p) => (/^[a-zA-Z0-9_./@:\\-]+$/.test(p) ? p : `"${p}"`)).join(' ');
+      const add = paths.map(quote).join(' ');
       ta.value = ta.value ? `${ta.value} ${add}` : add;
       grow();
       ta.focus();
+    });
+    // Cmd+V: текст вставляет само поле. Файлы, скопированные в Finder, — их путями; картинка из буфера (снимок экрана,
+    // «Скопировать изображение») — файлом во временной папке (main\chat.js chat:image), в поле — его путь:
+    // Claude Code и Codex прикрепляют картинку по пути. Вставка — в место курсора, как у текста.
+    ta.addEventListener('paste', (ev) => {
+      const cd = ev.clipboardData;
+      const files = cd ? [...cd.files] : [];
+      if (!files.length) return;
+      ev.preventDefault();
+      const at = [ta.selectionStart, ta.selectionEnd];
+      Promise.all(files.map(async (f) => {
+        let p = '';
+        try { p = t.filePath(f); } catch {}
+        if (p) return p;
+        if (!/^image\//.test(f.type)) return '';
+        const r = await t.chat.image(new Uint8Array(await f.arrayBuffer()), f.type).catch(() => null);
+        return r && r.ok ? r.path : '';
+      })).then((paths) => {
+        const add = paths.filter(Boolean).map(quote).join(' ');
+        if (!add) return;
+        const before = ta.value.slice(0, at[0]);
+        const text = `${before && !/\s$/.test(before) ? ' ' : ''}${add} `;
+        ta.setRangeText(text, at[0], at[1], 'end');
+        grow();
+        ta.focus();
+      });
     });
     // Ссылки ответа — в браузер системы; копирование блока кода.
     col.addEventListener('click', (ev) => {

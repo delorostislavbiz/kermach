@@ -254,6 +254,11 @@ async function describe(sid) {
  * Обработчики — один раз на процесс.
  * @param {{ log: (m: string) => void, sessions: () => Promise<any[]> }} c sessions — список терминалов демона (client.request('list').sessions)
  */
+/** Картинки, которые можно вставить в «Разговор»: тип из буфера → расширение файла. */
+const IMAGE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+/** Самая большая картинка из буфера, байт. */
+const IMAGE_MAX = 30 * 1024 * 1024;
+
 function register(c) {
   if (ctx) return;
   ctx = c;
@@ -279,6 +284,26 @@ function register(c) {
     if (!sender.allowed(e, 'chat:unwatch')) return;
     const w = watches.get(`${e.sender.id}:${String(sid || '')}`);
     if (w) stop(w);
+  });
+  // Картинка из буфера (Cmd+V в поле «Разговора»): в файл во временной папке, ответ — путь. Путь уходит в поле ввода,
+  // Claude Code и Codex сами прикрепляют картинку по пути, как при перетаскивании файла.
+  ipcMain.handle('chat:image', async (e, bytes, type) => {
+    if (!sender.allowed(e, 'chat:image')) return sender.refused();
+    const ext = IMAGE_TYPES[String(type || '')];
+    const buf = bytes instanceof Uint8Array ? Buffer.from(bytes) : bytes instanceof ArrayBuffer ? Buffer.from(new Uint8Array(bytes)) : null;
+    if (!ext || !buf || !buf.length || buf.length > IMAGE_MAX) return { ok: false, why: !ext ? 'type' : 'size' };
+    try {
+      const dir = path.join(os.tmpdir(), 'kermach-paste');
+      fs.mkdirSync(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+      const file = path.join(dir, `image-${stamp}-${Math.random().toString(36).slice(2, 6)}.${ext}`);
+      fs.writeFileSync(file, buf);
+      ctx.log(`разговор: картинка из буфера ${Math.round(buf.length / 1024)} КБ → ${file}`);
+      return { ok: true, path: file };
+    } catch (err) {
+      ctx.log(`разговор: картинку из буфера не сохранить: ${err instanceof Error ? err.message : err}`);
+      return { ok: false, why: 'write' };
+    }
   });
 }
 

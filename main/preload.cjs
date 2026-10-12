@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld('terminalus', {
     unwatch: (sid) => ipcRenderer.send('chat:unwatch', sid),
     onEvents: (cb) => ipcRenderer.on('chat:events', (_e, m) => cb(m.sid, m.events)),
     onReset: (cb) => ipcRenderer.on('chat:reset', (_e, m) => cb(m.sid)),
+    image: (bytes, type) => ipcRenderer.invoke('chat:image', bytes, type),
   },
   // Плагины окна проекта (main\plugins.js): { id, name, url } каждого.
   plugins: {

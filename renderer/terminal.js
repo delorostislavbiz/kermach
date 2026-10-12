@@ -270,6 +270,10 @@ function createTerminal(pane, io, fontSize = 17) {
 
   // Буквы — по физической клавише (ev.code): при русской раскладке ev.key у Ctrl+V равен «м».
   // preventDefault обязателен: иначе браузер сам вставит текст ещё раз, а Enter после Shift+Enter уйдёт следом.
+  // Слушатели мыши, буфера и файлов на .pane (ниже, все в фазе захвата) не трогают события вида «Разговор» (renderer\chat.js):
+  // его слой лежит в том же .pane, и иначе Cmd+V, перетаскивание файла и правая кнопка в поле ввода уходили бы в скрытый терминал.
+  const onPane = (/** @type {string} */ type, /** @type {(ev: any) => void} */ fn, /** @type {boolean} */ cap = false) =>
+    pane.addEventListener(type, (ev) => { const el = /** @type {any} */ (ev.target); if (el && el.closest && el.closest('.cv, .cv-back')) return; fn(ev); }, cap);
   term.attachCustomKeyEventHandler((ev) => {
     // Cmd на Windows — не наша клавиша. На macOS Cmd — главная клавиша сочетаний (t228, keys.js).
     if (ev.type !== 'keydown' || ev.altKey || (ev.metaKey && !MAC)) return true;
@@ -308,12 +312,12 @@ function createTerminal(pane, io, fontSize = 17) {
   // Само нажатие правой кнопки xterm не получает. Иначе в режиме мыши (его включает Claude Code) xterm передаст нажатие
   // программе, от этого снимется выделение, а Claude Code вставит текст второй раз.
   for (const type of ['mousedown', 'mouseup']) {
-    pane.addEventListener(type, (ev) => { if (ev.button === 2) ev.stopPropagation(); }, true);
+    onPane(type, (ev) => { if (ev.button === 2) ev.stopPropagation(); }, true);
   }
   // По той же причине, пока есть выделение, xterm не получает движения мыши без нажатых кнопок: каждое такое движение
   // ушло бы в Claude Code и сняло выделение, и тогда Ctrl+C прервал бы Claude вместо копирования.
-  pane.addEventListener('mousemove', (ev) => { if (ev.buttons === 0 && term.hasSelection()) ev.stopPropagation(); }, true);
-  pane.addEventListener('contextmenu', (ev) => {
+  onPane('mousemove', (ev) => { if (ev.buttons === 0 && term.hasSelection()) ev.stopPropagation(); }, true);
+  onPane('contextmenu', (ev) => {
     ev.preventDefault();
     if (copySelection()) term.clearSelection();
     else paste();
@@ -321,7 +325,7 @@ function createTerminal(pane, io, fontSize = 17) {
   }, true);
   // Событие paste страницы (вставка меню браузера) xterm вставил бы как есть, мимо очистки. Сейчас его не вызывает ничего:
   // Ctrl+V и Shift+Insert перехвачены выше, меню у окна нет. На macOS его вызывает пункт меню Edit → Paste (t222-Б).
-  pane.addEventListener('paste', (ev) => {
+  onPane('paste', (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
     const text = ev.clipboardData && ev.clipboardData.getData('text/plain');
@@ -329,12 +333,12 @@ function createTerminal(pane, io, fontSize = 17) {
   }, true);
   // Файл, брошенный на терминал (t62): путь — в программу, как в Орке (dropText). Без этого окно ушло бы на файл (переход запрещает t61).
   const hasFiles = (ev) => !!ev.dataTransfer && [...ev.dataTransfer.types].includes('Files');
-  pane.addEventListener('dragover', (ev) => {
+  onPane('dragover', (ev) => {
     if (!hasFiles(ev)) return;
     ev.preventDefault();
     ev.dataTransfer.dropEffect = 'copy';
   }, true);
-  pane.addEventListener('drop', (ev) => {
+  onPane('drop', (ev) => {
     if (!hasFiles(ev)) return;
     ev.preventDefault();
     ev.stopPropagation();
@@ -400,7 +404,7 @@ function createTerminal(pane, io, fontSize = 17) {
     return l ? l.text : '';
   };
   for (const type of ['mousedown', 'mouseup']) {
-    pane.addEventListener(type, (ev) => {
+    onPane(type, (ev) => {
       if (ev.button !== 0 || !(MAC ? ev.metaKey : ev.ctrlKey)) return;
       const target = hovered || linkAt(ev);
       if (!target) return;
@@ -416,7 +420,7 @@ function createTerminal(pane, io, fontSize = 17) {
   let press = null;
   const release = () => { const h = held; held = null; if (h) for (const d of h) io.write(d); };
   const moved = (/** @type {MouseEvent} */ ev) => !!press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > 3;
-  pane.addEventListener('mousedown', (ev) => {
+  onPane('mousedown', (ev) => {
     press = null;
     release();
     if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
@@ -425,10 +429,10 @@ function createTerminal(pane, io, fontSize = 17) {
     press = { x: ev.clientX, y: ev.clientY, target };
     if (term.modes.mouseTrackingMode !== 'none') held = [];
   }, true);
-  pane.addEventListener('mousemove', (ev) => { if (moved(ev)) { press = null; release(); } }, true);
+  onPane('mousemove', (ev) => { if (moved(ev)) { press = null; release(); } }, true);
   // Мышь ушла с терминала: щелчка не будет, придержанное — программе (у Орки — mouseleave).
-  pane.addEventListener('mouseleave', () => { press = null; release(); });
-  pane.addEventListener('mouseup', (ev) => {
+  onPane('mouseleave', () => { press = null; release(); });
+  onPane('mouseup', (ev) => {
     const p = press;
     press = null;
     if (!p || ev.button !== 0 || Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 3 || term.hasSelection()) { release(); return; }
