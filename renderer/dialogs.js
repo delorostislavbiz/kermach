@@ -84,6 +84,25 @@
   .dlg .btns .danger { background: var(--danger); border-color: var(--danger); color: #fff; }
   .dlg .btns .danger:hover { background: var(--danger-hover); border-color: var(--danger-hover); }
   .dlg .seg { display: flex; gap: 8px; }
+  /* Тема программы: четыре карточки с образцом окна (main/ui-themes.js). */
+  .dlg .uicards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .dlg .uicard { display: flex; flex-direction: column; gap: 6px; padding: 6px; border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 8px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+  .dlg .uicard:hover { background: var(--hover); }
+  .dlg .uicard.on { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(var(--accent-rgb),.35); }
+  .dlg .uicard .pv { height: 46px; border-radius: 5px; display: grid; grid-template-columns: 32% 1fr; overflow: hidden; }
+  .dlg .uicard .pv i { display: block; }
+  .dlg .uicard .nm { font-size: 12px; font-weight: 600; line-height: 1.25; }
+  .dlg .uicard .by { font-size: 10.5px; line-height: 1.25; color: var(--muted); }
+  .dlg .uicard .pv.rostyslav { background: #141729; } .dlg .uicard .pv.rostyslav i:first-child { border-right: 1px solid #23273D; }
+  .dlg .uicard .pv.rostyslav i:last-child { background: linear-gradient(#141729 0 28%, #1A1D2F 28% 40%, #141729 40%); box-shadow: inset 6px -10px 0 -4px #21B568; }
+  .dlg .uicard .pv.glass { background: linear-gradient(135deg, #8FB8F2, #8C74C9 70%, #C890B5); }
+  .dlg .uicard .pv.glass i:first-child { background: rgba(246,246,248,.45); }
+  .dlg .uicard .pv.glass i:last-child { background: #fff; margin: 5px 5px 5px 0; border-radius: 4px; box-shadow: inset -10px -8px 0 -6px #0A84FF; }
+  .dlg .uicard .pv.studio { background: #F4F5F7; }
+  .dlg .uicard .pv.studio i:last-child { background: #fff; margin: 5px 5px 0 0; border: 1px solid #E4E7EB; border-bottom: 0; border-radius: 4px 4px 0 0; box-shadow: inset 0 -9px 0 -6px #13795B; }
+  .dlg .uicard .pv.deck { background: #0B0D10; } .dlg .uicard .pv.deck i:first-child { background: #101317; border-right: 1px solid #232A33; }
+  .dlg .uicard .pv.deck i:last-child { background: repeating-linear-gradient(#0B0D10 0 6px, #151A20 6px 13px); box-shadow: inset 3px 0 0 #4DA3FF; margin: 4px; border-radius: 3px; }
+  .dlg .uinote { font-size: 11px; color: var(--muted); }
   .dlg .seg button, .dlg .stepper button, .dlg .stepper input { height: 30px; border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 4px; background: none; color: var(--text); font: 13px 'Segoe UI', system-ui, sans-serif; outline-offset: 2px; }
   .dlg .seg button { flex: 1; }
   .dlg .seg button:hover, .dlg .stepper button:hover { background: var(--hover); }
@@ -521,6 +540,9 @@
     await watch(t);
     // Надписи ставит tx — по таблице STATIC и в коде строк ниже: язык выбирают в этом же окне, и оно перерисовывается без переоткрытия (t184).
     const body = `
+      <div class="sec uis"><div class="cap uit"></div><div class="uicards">${['rostyslav', 'glass', 'studio', 'deck'].map((u) => `<button class="uicard" data-ui="${u}"><span class="pv ${u}"><i></i><i></i></span><span class="nm"></span><span class="by"></span></button>`).join('')}</div></div>
+      <div class="sec apr"><div class="cap apt"></div><div class="seg">${['system', 'light', 'dark'].map((a) => `<button data-ap="${a}"></button>`).join('')}</div><div class="uinote"></div></div>
+      <div class="sec avw"><div class="cap avt"></div><div class="seg">${['chat', 'terminal'].map((a) => `<button data-av="${a}"></button>`).join('')}</div></div>
       <div class="sec"><div class="cap zoom"></div>
         <div class="seg">${ZOOMS.map((z) => `<button data-z="${z}">${z} %</button>`).join('')}</div></div>
       <div class="sec"><div class="cap font"></div>
@@ -532,6 +554,16 @@
     /** Селектор, ключ, русский текст, свойство. @type {[string, string, string, string][]} */
     const STATIC = [
       ['.dlg-title .t', 'dialogs.nastroyki', 'Настройки', 'textContent'], ['.dlg-title .x', 'common.close', 'Закрыть', 'title'],
+      ['.uit', 'dialogs.uiTheme', 'Тема программы', 'textContent'],
+      ['.uicard[data-ui="rostyslav"] .nm', 'dialogs.uiRostyslav', 'Тема Ростислава', 'textContent'], ['.uicard[data-ui="rostyslav"] .by', 'dialogs.uiRostyslavBy', 'прежний вид', 'textContent'],
+      ['.uicard[data-ui="glass"] .nm', 'dialogs.uiGlass', 'Стекло', 'textContent'], ['.uicard[data-ui="glass"] .by', 'dialogs.uiNahorniak', 'Тема Нагорняка', 'textContent'],
+      ['.uicard[data-ui="studio"] .nm', 'dialogs.uiStudio', 'Студия', 'textContent'], ['.uicard[data-ui="studio"] .by', 'dialogs.uiNahorniak', 'Тема Нагорняка', 'textContent'],
+      ['.uicard[data-ui="deck"] .nm', 'dialogs.uiDeck', 'Пульт', 'textContent'], ['.uicard[data-ui="deck"] .by', 'dialogs.uiNahorniak', 'Тема Нагорняка', 'textContent'],
+      ['.apt', 'dialogs.appearance', 'Оформление', 'textContent'],
+      ['[data-ap="system"]', 'dialogs.apSystem', 'Как в системе', 'textContent'], ['[data-ap="light"]', 'dialogs.apLight', 'Светлое', 'textContent'], ['[data-ap="dark"]', 'dialogs.apDark', 'Тёмное', 'textContent'],
+      ['.uinote', 'dialogs.apNote', 'У «Темы Ростислава» светлый или тёмный вид задаёт схема плагина «Темы».', 'textContent'],
+      ['.avt', 'dialogs.agentView', 'Вкладки агентов открывать как', 'textContent'],
+      ['[data-av="chat"]', 'dialogs.avChat', 'Разговор', 'textContent'], ['[data-av="terminal"]', 'dialogs.avTerm', 'Терминал', 'textContent'],
       ['.cap.zoom', 'dialogs.razmerShriftaOkon', 'Размер шрифта окон', 'textContent'], ['.cap.font', 'dialogs.razmerShriftaTerminala', 'Размер шрифта терминала', 'textContent'],
       ['.m', 'dialogs.menshe', 'Меньше', 'title'], ['.p', 'dialogs.bolshe', 'Больше', 'title'],
       ['.sndt', 'dialogs.zvukKogdaAgentZakonchil', 'Звук, когда агент закончил или ждёт ответа', 'textContent'],
@@ -541,7 +573,7 @@
     ];
     /** @type {() => void} */
     let off = () => {};
-    const r = await modal(I18n.t('dialogs.nastroyki', 'Настройки'), 420, body, (dlg, done) => {
+    const r = await modal(I18n.t('dialogs.nastroyki', 'Настройки'), 480, body, (dlg, done) => {
       const q = (/** @type {string} */ s) => /** @type {HTMLElement} */ (dlg.querySelector(s));
       q('.dlg-body').classList.add('scroll');
       // Надписи окна: ключ и русский текст запоминаются, смена языка ставит их заново (РЕШЕНИЯ «Разметка, которую строит код, — не через data-i18n»).
@@ -556,6 +588,10 @@
       const snd = /** @type {HTMLInputElement} */ (q('.snd'));
       const paint = (/** @type {any} */ s) => {
         dlg.querySelectorAll('.seg button[data-z]').forEach((b) => b.classList.toggle('on', Number(/** @type {HTMLElement} */ (b).dataset.z) === s.uiZoom));
+        dlg.querySelectorAll('.uicard').forEach((b) => b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.ui === (s.ui || 'rostyslav')));
+        dlg.querySelectorAll('[data-ap]').forEach((b) => { b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.ap === (s.appearance || 'system')); /** @type {HTMLButtonElement} */ (b).disabled = (s.ui || 'rostyslav') === 'rostyslav'; });
+        /** @type {HTMLElement} */ (dlg.querySelector('.uinote')).hidden = (s.ui || 'rostyslav') !== 'rostyslav';
+        dlg.querySelectorAll('[data-av]').forEach((b) => b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.av === (s.agentView || 'chat')));
         if (document.activeElement !== num) num.value = String(s.termFont);
         snd.checked = !!s.sound;
         dlg.querySelectorAll('.plg input').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); const on = s.plugins && s.plugins[i.dataset.id || '']; i.checked = typeof on === 'boolean' ? on : plgDefault.get(i.dataset.id || '') !== false; });
@@ -616,6 +652,9 @@
       // поэтому «Настройки» закрываются; после «Агентов» они заново не открываются.
       q('.agt .open').onclick = () => { done(null); agents(t); };
       dlg.querySelectorAll('.seg button[data-z]').forEach((b) => b.addEventListener('click', () => change(t, { uiZoom: Number(/** @type {HTMLElement} */ (b).dataset.z) })));
+      dlg.querySelectorAll('.uicard').forEach((b) => b.addEventListener('click', () => change(t, { ui: /** @type {HTMLElement} */ (b).dataset.ui })));
+      dlg.querySelectorAll('[data-ap]').forEach((b) => b.addEventListener('click', () => change(t, { appearance: /** @type {HTMLElement} */ (b).dataset.ap })));
+      dlg.querySelectorAll('[data-av]').forEach((b) => b.addEventListener('click', () => change(t, { agentView: /** @type {HTMLElement} */ (b).dataset.av })));
       const font = (/** @type {number} */ v) => {
         const n = Math.round(v);
         if (!Number.isFinite(n)) { paint(cur); return; }

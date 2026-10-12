@@ -166,6 +166,7 @@ function open(project) {
     webPreferences: { preload: PRELOAD, contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   const w = win;
+  settings.dress(w);
   w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   w.webContents.on('will-navigate', (ev) => ev.preventDefault());
   w.once('ready-to-show', () => w.show());

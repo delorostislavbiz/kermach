@@ -112,7 +112,12 @@
   const SD = w.Dialogs;
   let setg = { uiZoom: 100, termFont: 17 };
   const fontPx = () => setg.termFont / (setg.uiZoom / 100);
-  SD.onSettings((/** @type {any} */ s) => { setg = s; for (const tab of tabs.values()) if (tab.x) tab.x.setFont(fontPx()); });
+  SD.onSettings((/** @type {any} */ s) => {
+    const view = setg.agentView;
+    setg = s;
+    for (const tab of tabs.values()) if (tab.x) tab.x.setFont(fontPx());
+    if (view !== s.agentView && w.Chat) w.Chat.defaults();
+  });
   SD.zoomKeys(t, () => !!(document.activeElement && document.activeElement.closest('.pane:not(.page)')));
 
   /** Новая вкладка со своим xterm; повторный вызов для того же sid вкладку не плодит. @param {any} s @returns {Tab} */
@@ -135,6 +140,10 @@
     /** @type {Tab} */
     const tab = { sid, kind: s.kind, runs: String(s.runs || ''), pics: !!s.pics, title: s.title, color: colorOf(s.color), icon: s.icon, alive: true, state: String(s.state || ''), pane, x };
     tabs.set(sid, tab);
+    // Вид «Разговор» (renderer\chat.js) — у Claude и Codex; терминал под ним работает как раньше.
+    if ((s.kind === 'claude' || s.kind === 'codex') && w.Chat) {
+      tab.chat = w.Chat.attach(tab, t, { defaultView: () => (setg.agentView === 'terminal' ? 'term' : 'chat'), agentName: () => (tab.kind === 'codex' ? 'Codex' : 'Claude') });
+    }
     const early = pending.get(sid);
     if (early) { for (const d of early) x.write(d); pending.delete(sid); }
     if (!firstLogged) {
@@ -246,6 +255,7 @@
     if (lay) place(sid, beside);
     else for (const x of tabs.values()) x.pane.classList.toggle('on', x.sid === sid);
     if (tab.x) { tab.x.fit(); tab.x.focus(); } else if (tab.page) tab.page.focus();
+    if (tab.chat) tab.chat.focus();
     render();
   }
 
@@ -495,6 +505,8 @@
 
   /** Боковая панель и полоса вкладок — по таблице tabs. */
   function render() {
+    // Состояние агента — и в «Разговор» (работает, ждёт ответа, готов).
+    for (const x of tabs.values()) if (x.chat) x.chat.state(x.alive ? x.state : 'exited');
     // Раскладка (t397): вкладки из её файла, что уже пришли, — по частям; место частей; пришедшим — подгонка и фокус.
     const put = restoreStep();
     paint();
@@ -547,6 +559,7 @@
     recent = recent.filter((x) => x !== sid);
     if (lastAgent === sid) lastAgent = '';
     walk = null;
+    if (tab.chat && w.Chat) w.Chat.detach(sid);
     if (tab.x) { try { tab.x.term.dispose(); } catch {} }
     tab.pane.remove();
     // Раскладка (t397): закрыли вкладку в части с фокусом — туда недавняя или соседняя, которой нет на виду в других частях;
@@ -1152,6 +1165,7 @@
         // В раскладке и часть с фокусом — по ключу: по месту в полосе замена могла оказаться той, что уже встала в соседнюю часть, и фокус уходил туда (t398).
         if (lay && lay.parts.includes(sid)) { const k = keys.get(sid); const j = lay.parts.indexOf(sid); lay.parts[j] = ''; swapParts.push([j, k ? { kind: k.kind, n: k.n } : null]); }
         else if (sid === active) swapped = ordered().findIndex((x) => x.sid === sid);
+        if (tab.chat && w.Chat) w.Chat.detach(sid);
         tab.x.term.dispose();
         tab.pane.remove();
         tabs.delete(sid);

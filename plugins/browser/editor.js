@@ -35,6 +35,10 @@
       if (val) st.setProperty(v, val);
     }
     document.documentElement.dataset.theme = look.id;
+    // Тема интерфейса (main\ui-themes.js): ui.css по data-ui, свои переменные — шрифты, радиусы.
+    document.documentElement.dataset.ui = look.ui || 'rostyslav';
+    document.documentElement.dataset.mode = look.kind === 'light' ? 'light' : 'dark';
+    if (look.vars) for (const [k, v] of Object.entries(look.vars)) st.setProperty(k, String(v));
   }
 
   // --- editkey:begin

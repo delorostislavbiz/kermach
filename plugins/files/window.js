@@ -130,7 +130,8 @@ function filesSetup(host) {
     input.placeholder = I18n.t('files.searchPh', 'Поиск по имени файла');
     /** @type {HTMLElement} */ ($('.fs label span')).textContent = I18n.t('files.inText', 'искать в тексте');
   };
-  const paintRow = () => { row.style.background = open ? 'var(--hover)' : ''; row.style.color = open ? 'var(--text)' : 'var(--muted)'; };
+  // Класс on и plugin-row — для тем интерфейса (renderer\ui-*.css): по ним темы рисуют открытую панель по-своему.
+  const paintRow = () => { row.classList.toggle('on', open); row.style.background = open ? 'var(--hover)' : ''; row.style.color = open ? 'var(--text)' : 'var(--muted)'; };
   row.onmouseenter = () => { row.style.background = 'var(--hover)'; row.style.color = 'var(--text)'; };
   row.onmouseleave = paintRow;
 

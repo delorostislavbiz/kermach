@@ -1,0 +1,161 @@
+/* Вид «Разговор» вкладки агента (renderer\chat.js). Цвета — переменные темы (theme.css / main\ui-themes.js), поэтому вид работает во всех темах.
+   Слой лежит поверх терминала вкладки: .pane стоит с отступом 16 px, слой занимает и отступ (inset -16px). */
+.pane > .cv { position: absolute; inset: -16px; z-index: 4; display: none; flex-direction: column; background: var(--surface, var(--bg)); color: var(--text);
+  font-family: var(--font-ui, 'Segoe UI', system-ui, sans-serif); font-size: 13.5px; line-height: 1.55; user-select: text; }
+.pane.cv-on > .cv { display: flex; }
+.pane.cv-on > .xterm { visibility: hidden; }
+.cv .cv-ic { width: 15px; height: 15px; flex-shrink: 0; display: block; }
+
+/* Кнопка «Разговор» поверх терминала, когда открыт терминал. */
+.pane > .cv-back { position: absolute; top: -10px; right: -8px; z-index: 5; }
+.pane.cv-on > .cv-back { display: none; }
+.cv-back button { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; border: 1px solid rgba(var(--muted-rgb), .28);
+  background: var(--menu); color: var(--text); font: 500 12px var(--font-ui, system-ui); cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.18); opacity: .82; }
+.cv-back button:hover { opacity: 1; border-color: var(--accent); }
+.cv-back .cv-ic, .cv-back svg { width: 14px; height: 14px; }
+
+/* Верхняя строка: переключатель, название разговора, состояние. */
+.cv-top { height: 42px; flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--line, rgba(var(--muted-rgb), .14)); }
+.cv-seg { display: inline-flex; padding: 2px; border-radius: var(--r-md, 8px); background: rgba(var(--muted-rgb), .12); }
+.cv-seg button { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px; border: 0; border-radius: calc(var(--r-md, 8px) - 2px); background: none;
+  color: var(--muted); font: 500 12px var(--font-ui, system-ui); cursor: pointer; }
+.cv-seg button .cv-ic { width: 14px; height: 14px; }
+.cv-seg button.on { background: var(--surface, var(--bg)); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.14); }
+.cv-ttl { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.cv-sp { flex: 1; }
+.cv-meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.cv[data-state="working"] .cv-meta { color: var(--accent); }
+.cv[data-state="waiting"] .cv-meta { color: var(--warn); }
+.cv[data-state="done"] .cv-meta { color: var(--info); }
+
+/* Лента. Колонка — ширина для чтения. */
+.cv-feed { flex: 1; min-height: 0; overflow-y: auto; }
+.cv-col { max-width: 760px; margin: 0 auto; padding: 22px 24px 12px; display: flex; flex-direction: column; gap: 14px; }
+.cv-you { align-self: flex-end; max-width: 80%; padding: 9px 14px; border-radius: 16px 16px 5px 16px; background: rgba(var(--muted-rgb), .14); white-space: pre-wrap; word-wrap: break-word; }
+.cv-ans { min-width: 0; word-wrap: break-word; }
+.cv-ans > :first-child { margin-top: 0; } .cv-ans > :last-child { margin-bottom: 0; }
+.cv-ans p { margin: 0 0 10px; }
+.cv-ans h1, .cv-ans h2, .cv-ans h3, .cv-ans h4 { margin: 16px 0 6px; line-height: 1.3; font-weight: 650; }
+.cv-ans h1 { font-size: 19px; } .cv-ans h2 { font-size: 17px; } .cv-ans h3 { font-size: 15px; } .cv-ans h4 { font-size: 14px; }
+.cv-ans ul, .cv-ans ol { margin: 0 0 10px; padding-left: 22px; }
+.cv-ans li { margin: 3px 0; }
+.cv-ans a { color: var(--accent); text-decoration: none; } .cv-ans a:hover { text-decoration: underline; }
+.cv-ans blockquote { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 3px solid rgba(var(--muted-rgb), .35); color: var(--muted); }
+.cv-ans hr { border: 0; border-top: 1px solid var(--line, rgba(var(--muted-rgb), .2)); margin: 14px 0; }
+.cv-ans code { font-family: var(--font-label-mono, 'Kermach JBMono', 'TERMINALUS Mono', ui-monospace, Menlo, monospace); font-size: 12.5px; padding: 1px 5px; border-radius: 5px; background: rgba(var(--muted-rgb), .14); }
+.cv-ans pre { position: relative; margin: 6px 0 12px; padding: 12px 14px; border-radius: var(--r-md, 8px); background: var(--input); border: 1px solid var(--line, rgba(var(--muted-rgb), .14)); overflow-x: auto; }
+.cv-ans pre code { padding: 0; background: none; font-size: 12.5px; line-height: 1.6; white-space: pre; }
+.cv-ans table { border-collapse: collapse; margin: 6px 0 12px; font-size: 13px; display: block; overflow-x: auto; }
+.cv-ans th, .cv-ans td { border: 1px solid var(--line, rgba(var(--muted-rgb), .2)); padding: 5px 10px; text-align: left; }
+.cv-ans th { background: rgba(var(--muted-rgb), .08); font-weight: 600; }
+.cv-copy { position: absolute; top: 6px; right: 6px; width: 26px; height: 24px; display: grid; place-items: center; border: 1px solid var(--line, rgba(var(--muted-rgb), .2)); border-radius: 6px; background: var(--surface, var(--bg)); color: var(--muted); cursor: pointer; opacity: 0; }
+.cv-ans pre:hover .cv-copy { opacity: 1; }
+.cv-copy.done { color: var(--info); border-color: var(--info); }
+
+/* Шаги агента: свёрнутая сводка, по щелчку — список. */
+.cv-steps { border: 1px solid var(--line, rgba(var(--muted-rgb), .16)); border-radius: var(--r-md, 9px); overflow: hidden; }
+.cv-sum { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12.5px; color: var(--muted); cursor: pointer; user-select: none; }
+.cv-sum:hover { background: rgba(var(--muted-rgb), .07); }
+.cv-sum .cv-t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cv-sum .cv-n { font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cv-chev { width: 13px !important; height: 13px !important; transition: transform .15s; }
+.cv-steps.open .cv-chev { transform: rotate(90deg); }
+.cv-list { display: none; padding: 2px 12px 10px 33px; flex-direction: column; gap: 5px; font-size: 12.5px; }
+.cv-steps.open .cv-list { display: flex; }
+.cv-step { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cv-step .cv-t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
+.cv-step .cv-d { margin-left: auto; max-width: 45%; font-family: 'Kermach JBMono', ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cv-st { width: 14px; height: 14px; display: grid; place-items: center; flex-shrink: 0; }
+.cv-st .cv-ic { width: 13px; height: 13px; }
+.cv-st.ok { color: var(--info); } .cv-st.bad { color: var(--danger); }
+.cv-step.err .cv-t { color: var(--danger); }
+
+/* Живая строка: что делает агент сейчас, прогресс. */
+.cv-live { padding: 10px 13px; border-radius: var(--r-md, 9px); background: var(--accent-bg); display: flex; flex-direction: column; gap: 8px; }
+.cv-row { display: flex; align-items: center; gap: 9px; }
+.cv-row .cv-t { flex: 1; font-weight: 550; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cv-row .cv-n { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cv-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: cv-rot .8s linear infinite; flex-shrink: 0; display: inline-block; }
+.cv-prog { height: 4px; border-radius: 4px; background: rgba(var(--accent-rgb), .18); overflow: hidden; position: relative; }
+.cv-prog i { position: absolute; inset: 0 auto 0 0; width: var(--done, 30%); border-radius: 4px; background: var(--accent); transition: width .4s ease; }
+.cv-prog i::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.5), transparent); animation: cv-shine 1.6s linear infinite; }
+@keyframes cv-rot { to { transform: rotate(360deg); } }
+@keyframes cv-shine { from { transform: translateX(-100%); } to { transform: translateX(160%); } }
+@media (prefers-reduced-motion: reduce) { .cv-spin, .cv-prog i::after { animation: none; } }
+
+/* Пусто: разговора ещё нет. */
+.cv-empty { margin: 9vh auto 0; max-width: 440px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--muted); }
+.cv-badge { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; background: rgba(var(--accent-rgb), .14); color: var(--accent); }
+.cv-badge.claude { background: color-mix(in srgb, var(--claude) 16%, transparent); color: var(--claude); }
+.cv-badge.codex { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); }
+.cv-badge .cv-ic { width: 22px; height: 22px; }
+.cv-h { font-size: 16px; font-weight: 600; color: var(--text); }
+.cv-p { font-size: 13px; line-height: 1.55; }
+
+/* Низ: просьба разрешения и поле ввода. */
+.cv-dock { flex-shrink: 0; padding: 0 24px 16px; display: flex; flex-direction: column; gap: 10px; max-width: 808px; width: 100%; margin: 0 auto; box-sizing: border-box; }
+.cv-ask { padding: 12px 14px; border-radius: var(--r-lg, 12px); background: color-mix(in srgb, var(--warn) 12%, var(--surface, var(--bg))); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); display: flex; flex-direction: column; gap: 9px; }
+.cv-q { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.cv-q .cv-ic { color: var(--warn); }
+.cv-what { margin: 0; padding: 8px 10px; border-radius: var(--r-sm, 6px); background: var(--input); font: 12px/1.5 'Kermach JBMono', ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 140px; overflow: auto; }
+.cv-btns { display: flex; flex-wrap: wrap; gap: 7px; }
+.cv-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 13px; border-radius: var(--r-sm, 7px); border: 1px solid rgba(var(--muted-rgb), .3); background: var(--surface, var(--bg)); color: var(--text); font: 500 12.5px var(--font-ui, system-ui); cursor: pointer; }
+.cv-btn:hover { border-color: rgba(var(--muted-rgb), .55); }
+.cv-btn.pri { background: var(--button); border-color: var(--button); color: var(--button-fg); }
+.cv-btn.ghost { background: none; border-color: transparent; color: var(--muted); }
+.cv-btn .cv-ic { width: 14px; height: 14px; }
+.cv-comp { border: 1px solid rgba(var(--muted-rgb), .28); border-radius: var(--r-lg, 14px); background: var(--surface, var(--bg)); padding: 10px 12px 8px; display: flex; flex-direction: column; gap: 6px;
+  box-shadow: 0 4px 18px rgba(0,0,0,.08); }
+.cv-comp:focus-within { border-color: color-mix(in srgb, var(--focus) 70%, transparent); }
+.cv-comp textarea { resize: none; border: 0; outline: 0; background: none; color: var(--text); font: 14px/1.5 var(--font-ui, system-ui); min-height: 22px; max-height: 220px; padding: 0; user-select: text; }
+.cv-comp textarea::placeholder { color: var(--muted); }
+.cv-tools { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); }
+.cv-send { width: 28px; height: 28px; border-radius: 9px; border: 0; display: grid; place-items: center; background: var(--button); color: var(--button-fg); cursor: pointer; }
+.cv-stop { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 9px; border: 1px solid rgba(var(--danger-rgb), .45); background: none; color: var(--danger); font: 500 12px var(--font-ui, system-ui); cursor: pointer; }
+.cv-stop[hidden] { display: none; }
+
+/* ——— Характер «Разговора» в каждой теме (концепты A, B, C) ——— */
+/* Скло: реплика человека — пузырь цвета акцента системы, как в «Сообщениях»; переключатель — сегменты macOS. */
+html[data-ui="glass"] .cv-you { background: var(--accent); color: var(--on-accent); border-radius: 18px 18px 5px 18px; }
+html[data-ui="glass"] .cv-top { border-bottom-color: var(--line); }
+html[data-ui="glass"] .cv-steps { border: 0; background: rgba(var(--muted-rgb), .09); }
+html[data-ui="glass"] .cv-live { background: transparent; border: 1px solid var(--line); }
+html[data-ui="glass"] .cv-comp { border-radius: 16px; border-color: var(--line); box-shadow: 0 2px 12px rgba(0,0,0,.07); }
+html[data-ui="glass"] .cv-send { border-radius: 50%; background: var(--accent); color: var(--on-accent); }
+
+/* Студия: колонка для чтения, ответ крупнее и свободнее, мягкие поверхности. */
+html[data-ui="studio"] .cv-col { gap: 18px; padding-top: 28px; }
+html[data-ui="studio"] .cv-ans { font-size: 14.5px; line-height: 1.7; }
+html[data-ui="studio"] .cv-ans h1, html[data-ui="studio"] .cv-ans h2, html[data-ui="studio"] .cv-ans h3 { font-weight: 600; letter-spacing: -.01em; }
+html[data-ui="studio"] .cv-you { background: rgba(var(--muted-rgb), .13); border-radius: 16px; }
+html[data-ui="studio"] .cv-steps { background: var(--surface); }
+html[data-ui="studio"] .cv-comp { border-radius: 16px; box-shadow: 0 8px 28px rgba(16,24,40,.08); }
+html[data-ui="studio"][data-mode="dark"] .cv-comp { box-shadow: 0 8px 28px rgba(0,0,0,.35); }
+
+/* Пульт: каждый ход — блок с полосой состояния, подписи моноширинные, всё плотнее. */
+html[data-ui="deck"] .cv { font-size: 13px; }
+html[data-ui="deck"] .cv-top { height: 38px; font-family: var(--font-label); font-size: 11.5px; }
+html[data-ui="deck"] .cv-seg { border: 1px solid var(--line); background: none; border-radius: var(--r-sm); }
+html[data-ui="deck"] .cv-seg button { font-family: var(--font-label); font-size: 11px; border-radius: 3px; }
+html[data-ui="deck"] .cv-seg button.on { background: var(--accent-bg); color: var(--accent); box-shadow: none; }
+html[data-ui="deck"] .cv-meta, html[data-ui="deck"] .cv-ttl { font-family: var(--font-label); font-size: 11.5px; }
+html[data-ui="deck"] .cv-col { max-width: none; padding: 14px 18px 10px; gap: 10px; }
+html[data-ui="deck"] .cv-you, html[data-ui="deck"] .cv-ans, html[data-ui="deck"] .cv-steps, html[data-ui="deck"] .cv-live {
+  align-self: stretch; max-width: none; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--input); box-shadow: inset 3px 0 0 var(--stripe, var(--line)); padding: 10px 14px 10px 16px; }
+html[data-ui="deck"] .cv-you { --stripe: var(--muted); font-weight: 500; }
+html[data-ui="deck"] .cv-ans { --stripe: var(--info); }
+html[data-ui="deck"] .cv-steps { --stripe: var(--line); padding: 0; }
+html[data-ui="deck"] .cv-sum, html[data-ui="deck"] .cv-list { font-family: var(--font-label); font-size: 11.5px; }
+html[data-ui="deck"] .cv-sum { padding-left: 16px; }
+html[data-ui="deck"] .cv-live { --stripe: var(--accent); background: var(--input); }
+html[data-ui="deck"] .cv-row .cv-t, html[data-ui="deck"] .cv-row .cv-n { font-family: var(--font-label); font-size: 11.5px; font-weight: 500; }
+html[data-ui="deck"] .cv-prog { height: 3px; }
+html[data-ui="deck"] .cv-dock { max-width: none; padding: 0 18px 14px; }
+html[data-ui="deck"] .cv-ask { border-radius: var(--r-md); background: var(--input); border-color: var(--line); box-shadow: inset 3px 0 0 var(--warn); }
+html[data-ui="deck"] .cv-btn { font-family: var(--font-label); font-size: 11px; border-radius: var(--r-sm); }
+html[data-ui="deck"] .cv-comp { border-radius: var(--r-md); border-color: var(--line); box-shadow: none; background: var(--input); }
+html[data-ui="deck"] .cv-comp textarea { font-family: var(--font-label); font-size: 12.5px; }
+html[data-ui="deck"] .cv-tools { font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] .cv-send { border-radius: var(--r-sm); background: var(--accent); color: var(--on-accent); }
+.cv-end { display: flex; align-items: center; gap: 10px; justify-content: center; padding: 10px; color: var(--muted); font-size: 12.5px; border-top: 1px dashed var(--line, rgba(var(--muted-rgb), .2)); }
+.cv-end.err { color: var(--danger); }

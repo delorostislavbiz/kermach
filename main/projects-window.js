@@ -224,6 +224,8 @@ function open(c, opt = {}) {
     title: 'Kermach — Проекты',
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true },
   });
+  // Тема (Скло — полупрозрачность macOS): main\settings.js dress.
+  settings.dress(win);
   // macOS (t222-Б): у окна нет своего меню, меню — одно на программу (main.js).
   if (process.platform !== 'darwin') win.setMenu(null);
   // Заголовок окна — document.title страницы: его переводит словарь языка (<title data-i18n>, t329), смена языка меняет и панель задач.

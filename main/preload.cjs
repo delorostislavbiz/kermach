@@ -63,6 +63,13 @@ contextBridge.exposeInMainWorld('terminalus', {
     // Вкладку открыла главная часть плагина (ctx.openTab, t253): окно её показывает.
     onShow: (cb) => ipcRenderer.on('term:show', (_e, m) => cb(m.sid)),
   },
+  // Вид «Разговор» вкладки агента (main\chat.js): журнал сессии Claude или Codex событиями.
+  chat: {
+    watch: (sid) => ipcRenderer.invoke('chat:watch', sid),
+    unwatch: (sid) => ipcRenderer.send('chat:unwatch', sid),
+    onEvents: (cb) => ipcRenderer.on('chat:events', (_e, m) => cb(m.sid, m.events)),
+    onReset: (cb) => ipcRenderer.on('chat:reset', (_e, m) => cb(m.sid)),
+  },
   // Плагины окна проекта (main\plugins.js): { id, name, url } каждого.
   plugins: {
     list: () => ipcRenderer.invoke('plugins:list'),

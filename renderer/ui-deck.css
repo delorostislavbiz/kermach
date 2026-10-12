@@ -1,0 +1,402 @@
+/* Тема «deck» (Тема Нагорняка). Селекторы — только под html[data-ui="deck"]. Цвета — из переменных (main\ui-themes.js). */
+/* «Пульт»: плотный интерфейс для работы с клавиатуры (как Warp / Linear). Образец — концепт «C · Пульт».
+   Правила темы: тонкие рамки var(--line) между всеми панелями; скругления 4–8 px (--r-sm/--r-md/--r-lg);
+   подписи, метаданные, строка состояния, счётчики и пути — моноширинным --font-label; заголовки разделов — им же, заглавными с разрядкой;
+   выбранный пункт слева — фон var(--selected) и полоса акцента 2 px слева; состояния — цветной полосой или точкой;
+   кнопки — с тонкой рамкой, главная — заливка акцентом; меню и окошки — рамка и глубокая тень.
+   Акцент (синий) — он же «работает»; --warn (янтарный) — «требует ответа»; --info (зелёный) — «готов».
+   Многие правила старых стилей окон заданы позже этого файла (стили диалогов и плагинов вставляются из JS),
+   поэтому каждое правило здесь начинается с html[data-ui="deck"] — так оно сильнее. Встроенные style="" плагинов перебиваются !important. */
+
+/* ---------- Свои переменные темы ---------- */
+html[data-ui="deck"] {
+  --dk-shadow: 0 18px 50px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.35); /* меню и окошки */
+  --dk-term: var(--bg); /* фон терминала (ui-themes.js: тёмный — как --bg) — им залито поле вокруг xterm */
+  --dk-block: var(--tab-active); /* приподнятый блок: плитка, карточка */
+  --dk-lab: 10.5px; /* размер моноподписей */
+  --dk-track: .07em; /* разрядка заглавных подписей */
+  --dk-line-strong: rgba(var(--muted-rgb), .45); /* рамка под мышью */
+}
+html[data-ui="deck"][data-mode="light"] {
+  --dk-shadow: 0 18px 50px rgba(16,24,40,.18), 0 2px 6px rgba(16,24,40,.08);
+  --dk-term: var(--chrome); /* светлый терминал белый (#FFFFFF = --chrome), а --bg серее: поле вокруг xterm — белое */
+  --dk-block: var(--chrome);
+  --dk-line-strong: rgba(var(--muted-rgb), .55);
+}
+
+/* ---------- Общее для всех окон ---------- */
+html[data-ui="deck"] body { font-size: 12.5px; letter-spacing: 0; }
+html[data-ui="deck"] ::selection { background: rgba(var(--accent-rgb), .3); }
+/* Заголовок окна: тонкая линия снизу, имя — моно. Высота 36 — под родные кнопки macOS. */
+html[data-ui="deck"] #title { background: var(--title); border-bottom: 1px solid var(--line); }
+html[data-ui="deck"] #title .name { font-family: var(--font-label); font-size: 11.5px; gap: 7px; }
+html[data-ui="deck"] #title .name .muted,
+html[data-ui="deck"] #title .name #sub { color: var(--muted); }
+html[data-ui="deck"] #pColor { width: 8px; height: 8px; border-radius: 2px; }
+html[data-ui="deck"] button:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+
+/* =====================================================================
+   Окно проекта (renderer\index.html)
+   ===================================================================== */
+html[data-ui="deck"] #main { background: var(--bg); }
+
+/* --- Слева: список вкладок --- */
+html[data-ui="deck"] #side { width: 228px; background: var(--side); border-right: 1px solid var(--line); padding: 0 0 0; }
+html[data-ui="deck"] #side .cap { font-family: var(--font-label); font-size: var(--dk-lab); font-weight: 500; text-transform: uppercase; letter-spacing: var(--dk-track);
+  color: var(--muted); padding: 11px 14px 7px; }
+html[data-ui="deck"] #list { gap: 1px; padding: 0 6px 6px; }
+html[data-ui="deck"] .term { height: 38px; gap: 9px; padding: 0 8px 0 9px; border-radius: var(--r-md); }
+html[data-ui="deck"] .term:hover { background: var(--hover); }
+html[data-ui="deck"] .term.on { background: var(--selected); box-shadow: inset 2px 0 0 var(--accent); }
+html[data-ui="deck"] .term.vis { background: rgba(var(--muted-rgb), .08); box-shadow: inset 2px 0 0 rgba(var(--accent-rgb), .45); }
+/* Цвет вкладки — точкой: полоса у края занята выбором (акцент) и «требует ответа» (янтарь). */
+html[data-ui="deck"] .term .strip { width: 6px; height: 6px; border-radius: 50%; margin-right: -2px; }
+html[data-ui="deck"] .term .text { gap: 1px; }
+html[data-ui="deck"] .term .n { font-size: 12.5px; line-height: 15px; }
+html[data-ui="deck"] .term.on .n { color: var(--tab-active-fg); font-weight: 500; }
+html[data-ui="deck"] .term .st { font-family: var(--font-label); font-size: 10px; line-height: 12px; min-height: 12px; gap: 4px; }
+html[data-ui="deck"] .term .st.url { font-family: var(--font-label); font-size: 10px; }
+/* «Требует ответа»: янтарная полоса слева и лёгкий фон. */
+html[data-ui="deck"] .term.need, html[data-ui="deck"] .term.need:hover { background: rgba(var(--need-rgb), .08); box-shadow: inset 2px 0 0 var(--need); }
+html[data-ui="deck"] .term.need.on { background: rgba(var(--need-rgb), .15); }
+html[data-ui="deck"] .term.ins-before { box-shadow: inset 0 2px 0 var(--accent); }
+html[data-ui="deck"] .term.ins-after { box-shadow: inset 0 -2px 0 var(--accent); }
+
+/* Низ левой панели: строки плагинов («Автоматизации», «Файлы»). Их размеры заданы style="" — перебиваются !important. */
+html[data-ui="deck"] #sideFoot { border-top: 1px solid var(--line); padding: 4px 6px 6px; display: flex; flex-direction: column; gap: 1px; }
+html[data-ui="deck"] #sideFoot[hidden] { display: none; }
+html[data-ui="deck"] #sideFoot > div { margin: 0 !important; height: 30px !important; padding: 0 9px !important; border: 0 !important; border-radius: var(--r-md);
+  font-family: var(--font-label); font-size: 11px !important; gap: 9px !important; }
+html[data-ui="deck"] #sideFoot > div:hover { background: var(--hover) !important; color: var(--text) !important; }
+/* «Файлы» открыты — строка как выбранный пункт. */
+html[data-ui="deck"] #main:has(#plugin-files-panel:not([hidden])) #plugin-files { background: var(--selected) !important; color: var(--text) !important; box-shadow: inset 2px 0 0 var(--accent); }
+html[data-ui="deck"] #plugin-automations .dot { box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .18); }
+
+/* --- Полоса вкладок: сегменты с рамкой, у открытой — линия акцента снизу --- */
+html[data-ui="deck"] #center { background: var(--bg); }
+html[data-ui="deck"] #tabrow { height: 36px; background: var(--tabbar); border-bottom: 1px solid var(--line); }
+html[data-ui="deck"] .tab { gap: 7px; padding: 0 12px 0 13px; font-size: 12.5px; color: var(--tab-fg); border-right: 1px solid var(--line); }
+html[data-ui="deck"] .tab:hover { background: var(--hover); color: var(--text); }
+html[data-ui="deck"] .tab.on { background: var(--bg); color: var(--tab-active-fg); }
+html[data-ui="deck"][data-mode="light"] .tab.on { background: var(--chrome); }
+/* Полоса снизу (<i>, цвет вкладки задан style="") — только у открытой и цветом акцента. */
+html[data-ui="deck"] .tab i { height: 2px; background: transparent !important; }
+html[data-ui="deck"] .tab.on i { background: var(--accent) !important; }
+html[data-ui="deck"] .tab.vis { background: rgba(var(--muted-rgb), .07); }
+html[data-ui="deck"] .tab.vis i { background: rgba(var(--accent-rgb), .45) !important; }
+html[data-ui="deck"] .tab .x { border-radius: var(--r-sm); }
+html[data-ui="deck"] .tab .x:hover { background: rgba(var(--muted-rgb), .18); }
+html[data-ui="deck"] .tab .x:hover svg { stroke: var(--text); }
+html[data-ui="deck"] .tab.need, html[data-ui="deck"] .tab.need:hover { background: rgba(var(--need-rgb), .10); color: var(--need); }
+html[data-ui="deck"] .tab.need.on { background: rgba(var(--need-rgb), .16); }
+html[data-ui="deck"] .tab.need i { background: var(--need) !important; }
+html[data-ui="deck"] .tab.ins-before { box-shadow: inset 2px 0 0 var(--accent); }
+html[data-ui="deck"] .tab.ins-after { box-shadow: inset -2px 0 0 var(--accent); }
+/* «+» и «Раскладка» — маленькие кнопки с рамкой. */
+html[data-ui="deck"] #plus, html[data-ui="deck"] #layoutBtn { width: 26px; height: 24px; border: 1px solid transparent; border-radius: var(--r-sm); color: var(--muted); }
+html[data-ui="deck"] #plus { margin: 0 6px 0 6px; }
+html[data-ui="deck"] #layoutBtn { margin: 0 8px 0 auto; }
+html[data-ui="deck"] #plus:hover, html[data-ui="deck"] #plus.open,
+html[data-ui="deck"] #layoutBtn:hover, html[data-ui="deck"] #layoutBtn.open { background: var(--hover); border-color: var(--line); color: var(--text); }
+
+/* --- Меню «+» --- */
+html[data-ui="deck"] #adds, html[data-ui="deck"] #addsAgents { padding: 4px; background: var(--menu); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--dk-shadow); }
+html[data-ui="deck"] #adds { min-width: 210px; }
+html[data-ui="deck"] #adds .item { height: 28px; gap: 9px; padding: 0 9px; border-radius: var(--r-sm); font-size: 12.5px; }
+html[data-ui="deck"] #adds .item:hover, html[data-ui="deck"] #addAgents.open { background: var(--hover); box-shadow: inset 2px 0 0 var(--accent); }
+html[data-ui="deck"] #adds .sep { margin: 4px 0; background: var(--line); }
+html[data-ui="deck"] #addAgents::after { font-family: var(--font-label); font-size: 13px; }
+
+/* --- Середина: терминалы, пустое окно, раскладка --- */
+/* Поле 16 px вокруг xterm (.pane inset) залито фоном терминала — края не видно. */
+html[data-ui="deck"] #panes { background: var(--dk-term); }
+html[data-ui="deck"] #empty { gap: 14px; background: var(--bg); }
+html[data-ui="deck"] #empty .ask { font-family: var(--font-label); font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: var(--dk-track); color: var(--muted); }
+html[data-ui="deck"] #empty .btns { gap: 8px; }
+html[data-ui="deck"] #empty button { height: 34px; gap: 9px; padding: 0 14px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--dk-block); color: var(--text);
+  font-family: var(--font-ui); font-size: 13px; cursor: default; }
+html[data-ui="deck"] #empty button:hover { background: var(--hover); border-color: var(--dk-line-strong); }
+html[data-ui="deck"] .lslot { background: var(--bg); color: var(--muted); }
+html[data-ui="deck"] .lslot .ask { font-family: var(--font-label); font-size: 11px; text-transform: uppercase; letter-spacing: var(--dk-track); color: var(--muted); }
+html[data-ui="deck"] .lslot .btns { gap: 3px; }
+html[data-ui="deck"] .lslot button { height: 30px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--dk-block); font-family: var(--font-ui); font-size: 12.5px; cursor: default; }
+html[data-ui="deck"] .lslot button:hover { background: var(--hover); border-color: var(--dk-line-strong); }
+html[data-ui="deck"] .lslot.focus { box-shadow: inset 0 2px 0 var(--accent); }
+html[data-ui="deck"] #panes.split .pane.focus::after { background: var(--accent); }
+html[data-ui="deck"] .lgrip.v { background: linear-gradient(to right, transparent 3px, var(--line) 3px, var(--line) 4px, transparent 4px); }
+html[data-ui="deck"] .lgrip.h { background: linear-gradient(to bottom, transparent 3px, var(--line) 3px, var(--line) 4px, transparent 4px); }
+html[data-ui="deck"] .lgrip:hover, html[data-ui="deck"] .lgrip.drag { background: rgba(var(--accent-rgb), .35); }
+html[data-ui="deck"] .ldrop { box-shadow: inset 0 0 0 2px var(--accent); background: rgba(var(--accent-rgb), .10); }
+
+/* --- Вкладка сайта: строка адреса --- */
+html[data-ui="deck"] .bbar { height: 34px; gap: 2px; padding: 0 6px; background: var(--tabbar); border-bottom: 1px solid var(--line); }
+html[data-ui="deck"] .bbar .bb { width: 26px; height: 24px; border-radius: var(--r-sm); color: var(--muted); }
+html[data-ui="deck"] .bbar .bb:hover { background: var(--hover); color: var(--text); }
+html[data-ui="deck"] .bbar .bb.off { color: var(--disabled); background: none; }
+html[data-ui="deck"] .bbar .bb.on { color: var(--accent); background: var(--accent-bg); box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .35); }
+html[data-ui="deck"] .bbar input { height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--input);
+  font-family: var(--font-label); font-size: 11.5px; }
+html[data-ui="deck"] .bbar input:focus { border-color: var(--focus); box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .18); }
+html[data-ui="deck"] .bbar input + .bnote { font-family: var(--font-label); font-size: 11px; }
+html[data-ui="deck"] .bview .bmsg { font-family: var(--font-label); font-size: 11.5px; }
+
+/* --- Справа: панель плагинов --- */
+html[data-ui="deck"] #right { background: var(--side); border-left: 1px solid var(--line); }
+html[data-ui="deck"] #rightGrip:hover, html[data-ui="deck"] #rightGrip.drag { background: rgba(var(--accent-rgb), .35); }
+
+/* --- Нижняя строка состояния: моно, мелко --- */
+html[data-ui="deck"] #bottom { height: 24px; gap: 0; padding: 0 4px; background: var(--status); color: var(--status-fg); border-top: 1px solid var(--line);
+  font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] #bottom > * { display: flex; align-items: center; height: 100%; padding: 0 10px; }
+html[data-ui="deck"] #bottom > * + * { border-left: 1px solid var(--line); }
+html[data-ui="deck"] #bottom > [hidden] { display: none !important; }
+html[data-ui="deck"] #plugin-git { cursor: default !important; }
+html[data-ui="deck"] #plugin-git:hover { background: var(--hover); color: var(--text); }
+html[data-ui="deck"] #plugin-git::before { content: ''; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: var(--info); flex-shrink: 0; }
+html[data-ui="deck"] #main:has(#plugin-git-panel:not([hidden])) ~ #bottom #plugin-git { background: var(--selected); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+html[data-ui="deck"] #plugin-limits { gap: 18px !important; }
+
+/* --- Плагин «Файлы» (plugins\files\window.js) --- */
+html[data-ui="deck"] #plugin-files-panel { font-size: 12.5px; }
+html[data-ui="deck"] #plugin-files-panel .fh { height: 36px; padding: 0 6px 0 14px; border-bottom: 1px solid var(--line); background: var(--tabbar); }
+html[data-ui="deck"] #plugin-files-panel .fh .t { font-family: var(--font-label); font-size: var(--dk-lab); font-weight: 500; text-transform: uppercase; letter-spacing: var(--dk-track); color: var(--muted); }
+html[data-ui="deck"] #plugin-files-panel .fbtn { width: 24px; height: 24px; border: 1px solid transparent; border-radius: var(--r-sm); }
+html[data-ui="deck"] #plugin-files-panel .fbtn:hover { background: var(--hover); border-color: var(--line); color: var(--text); }
+html[data-ui="deck"] #plugin-files-panel .fs { gap: 6px; padding: 8px 10px 8px; border-bottom: 1px solid var(--line); }
+html[data-ui="deck"] #plugin-files-panel .fs input[type=text] { height: 26px; padding: 0 8px; background: var(--input); border: 1px solid var(--line); border-radius: var(--r-sm);
+  font-family: var(--font-label); font-size: 11.5px; }
+html[data-ui="deck"] #plugin-files-panel .fs input[type=text]:focus { border-color: var(--focus); box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .18); }
+html[data-ui="deck"] #plugin-files-panel .fs label { font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] #plugin-files-panel .fs input[type=checkbox] { accent-color: var(--accent); }
+html[data-ui="deck"] #plugin-files-panel .ftree, html[data-ui="deck"] #plugin-files-panel .fres { padding: 4px 0 8px; }
+html[data-ui="deck"] #plugin-files-panel .frow { min-height: 22px; gap: 5px; }
+html[data-ui="deck"] #plugin-files-panel .frow:hover { background: var(--hover); box-shadow: inset 2px 0 0 rgba(var(--accent-rgb), .6); }
+html[data-ui="deck"] #plugin-files-panel .frow .sub,
+html[data-ui="deck"] #plugin-files-panel .frow.hit .line { font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] #plugin-files-panel .fstat, html[data-ui="deck"] #plugin-files-panel .fnote { font-family: var(--font-label); font-size: 10.5px; padding: 5px 14px; }
+html[data-ui="deck"] #plugin-files-panel .fnote { border-top: 1px solid var(--line); }
+html[data-ui="deck"] #right > #plugin-files-panel:not([hidden]) ~ #plugin-git-panel:not([hidden]) { border-top: 1px solid var(--line); }
+
+/* --- Плагин «Git»: список изменённых файлов --- */
+html[data-ui="deck"] #plugin-git-panel { font-family: var(--font-label); font-size: 11px !important; line-height: 19px !important; padding: 10px 14px !important; }
+
+/* --- Плагин «Markdown» (plugins\markdown\window.js): свои переменные .mdpane — из темы --- */
+html[data-ui="deck"] .mdpane { --md-panel: var(--hover); --md-line: var(--line); --md-edge: var(--line); --md-accent: var(--accent); --md-ok: var(--info); --md-warn: var(--warn); }
+html[data-ui="deck"][data-mode="light"] .mdpane { --md-bg: var(--chrome); --md-field: var(--chrome); }
+html[data-ui="deck"] .mdpane .mdbar { height: 34px; gap: 8px; padding: 0 8px; background: var(--tabbar); border-bottom: 1px solid var(--line); }
+html[data-ui="deck"] .mdpane .mdseg, html[data-ui="deck"] .mdpane .mdsize { border: 1px solid var(--line); border-radius: var(--r-sm); }
+html[data-ui="deck"] .mdpane .mdseg button, html[data-ui="deck"] .mdpane .mdsize button { height: 22px; font-family: var(--font-label); font-size: 10.5px; color: var(--muted); }
+html[data-ui="deck"] .mdpane .mdseg button { padding: 0 10px; }
+html[data-ui="deck"] .mdpane .mdseg button + button, html[data-ui="deck"] .mdpane .mdsize button + button { border-left: 1px solid var(--line); }
+html[data-ui="deck"] .mdpane .mdseg button:hover, html[data-ui="deck"] .mdpane .mdsize button:hover { background: var(--hover); color: var(--text); }
+html[data-ui="deck"] .mdpane .mdseg button.on { background: var(--accent-bg); color: var(--accent); }
+html[data-ui="deck"] .mdpane .mdsize .mdz { color: var(--text); }
+html[data-ui="deck"] .mdpane .mdpath, html[data-ui="deck"] .mdpane .mdstat { font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] .mdpane .mdsave { height: 22px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-sm); font-family: var(--font-label); font-size: 10.5px; color: var(--text); }
+html[data-ui="deck"] .mdpane .mdsave:not(:disabled) { background: var(--button); border-color: var(--button); color: var(--button-fg); }
+html[data-ui="deck"] .mdpane .mdsave:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+html[data-ui="deck"] .mdpane .mdtools { gap: 1px; padding: 3px 8px; background: var(--side); border-bottom: 1px solid var(--line); }
+html[data-ui="deck"] .mdpane .mdtools button { min-width: 26px; height: 22px; border-radius: var(--r-sm); font-family: var(--font-ui); font-size: 12px; }
+html[data-ui="deck"] .mdpane .mdtools button:hover { background: var(--hover); }
+html[data-ui="deck"] .mdpane .mdnote { padding: 5px 10px; background: rgba(var(--need-rgb), .08); border-bottom: 1px solid rgba(var(--need-rgb), .5); font-family: var(--font-label); font-size: 11px; }
+html[data-ui="deck"] .mdpane .mdnote button { height: 22px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-sm); font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] .mdpane .mdview { font-family: var(--font-ui); padding: 18px 28px 40px; }
+html[data-ui="deck"] .mdpane .mdview h1, html[data-ui="deck"] .mdpane .mdview h2, html[data-ui="deck"] .mdpane .mdview h3 { font-weight: 650; letter-spacing: -.01em; }
+html[data-ui="deck"] .mdpane .mdview code { border-radius: var(--r-sm); border: 1px solid var(--line); }
+html[data-ui="deck"] .mdpane .mdview pre { border-radius: var(--r-lg); border: 1px solid var(--line); box-shadow: inset 3px 0 0 var(--line); }
+html[data-ui="deck"] .mdpane .mdview pre code { border: 0; }
+html[data-ui="deck"] .mdpane .mdview blockquote { border-left: 2px solid var(--accent); }
+html[data-ui="deck"] .mdli { height: 28px; border-radius: var(--r-sm); font-family: var(--font-label); font-size: 11.5px; }
+html[data-ui="deck"] .mdli:hover, html[data-ui="deck"] .mdli.on { background: var(--hover); box-shadow: inset 2px 0 0 var(--accent); }
+html[data-ui="deck"] .mdnone { font-family: var(--font-label); font-size: 11px; }
+
+/* =====================================================================
+   Окошки и меню (renderer\dialogs.js)
+   ===================================================================== */
+html[data-ui="deck"] .dlg { background: var(--menu); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--dk-shadow); font-family: var(--font-ui); font-size: 12.5px; }
+html[data-ui="deck"] .dlg-title { height: 36px; padding-left: 14px; border-bottom: 1px solid var(--line); }
+html[data-ui="deck"] .dlg-title .t { font-family: var(--font-label); font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: var(--dk-track); color: var(--muted); }
+html[data-ui="deck"] .dlg-title .x { width: 36px; color: var(--muted); }
+html[data-ui="deck"] .dlg-title .x:hover { background: var(--danger); color: #fff; }
+html[data-ui="deck"] .dlg-body { gap: 16px; padding: 14px 16px 14px; }
+html[data-ui="deck"] .dlg .sec { gap: 7px; }
+html[data-ui="deck"] .dlg .cap { font-family: var(--font-label); font-size: var(--dk-lab); font-weight: 500; text-transform: uppercase; letter-spacing: var(--dk-track); color: var(--muted); }
+html[data-ui="deck"] .dlg .msg { line-height: 18px; }
+html[data-ui="deck"] .dlg .msg .muted { font-family: var(--font-label); font-size: 11px; line-height: 16px; }
+/* Кнопки внизу: тонкая рамка; главная — заливка акцентом. Низ отделён линией. */
+html[data-ui="deck"] .dlg .btns { gap: 6px; padding-top: 12px; margin: 0 -16px; padding-left: 16px; padding-right: 16px; border-top: 1px solid var(--line); }
+html[data-ui="deck"] .dlg .btns button { height: 28px; padding: 0 14px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--dk-block); color: var(--text); font: 500 12.5px var(--font-ui); cursor: default; }
+html[data-ui="deck"] .dlg .btns button:hover { background: var(--hover); border-color: var(--dk-line-strong); }
+html[data-ui="deck"] .dlg .btns .ok { background: var(--button); border-color: var(--button); color: var(--button-fg); }
+html[data-ui="deck"] .dlg .btns .ok:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+html[data-ui="deck"] .dlg .btns .danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+html[data-ui="deck"] .dlg .btns .danger:hover { background: var(--danger-hover); border-color: var(--danger-hover); }
+html[data-ui="deck"] .dlg .btns button:focus-visible { outline: 1px solid var(--focus); outline-offset: 2px; }
+/* Поля ввода и поиск. */
+html[data-ui="deck"] .dlg .field { height: 30px; padding: 0 10px; background: var(--input); border: 1px solid var(--line); border-radius: var(--r-md); font: 13px var(--font-ui); }
+html[data-ui="deck"] .dlg .field:focus { border-color: var(--focus); box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .18); }
+html[data-ui="deck"] .dlg .find { height: 26px; background: var(--input); border: 1px solid var(--line); border-radius: var(--r-sm); }
+html[data-ui="deck"] .dlg .find:focus-within { border-color: var(--focus); }
+html[data-ui="deck"] .dlg .find input { font: 11.5px var(--font-label); }
+/* «Цвет и значок». */
+html[data-ui="deck"] .dlg .prev { height: 40px; border-radius: var(--r-md); background: var(--bg); border: 1px solid var(--line); }
+html[data-ui="deck"] .dlg .prev .s { font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] .dlg .sw { border-radius: var(--r-sm); }
+html[data-ui="deck"] .dlg .own { border: 1px solid var(--line); border-radius: var(--r-sm); font-family: var(--font-label); font-size: 11px; }
+html[data-ui="deck"] .dlg .g { height: 40px; border-radius: var(--r-sm); }
+html[data-ui="deck"] .dlg .none { font-family: var(--font-label); font-size: 11px; }
+/* Сегменты: одна рамка на группу, выбранный — подсветка акцентом. */
+html[data-ui="deck"] .dlg .seg { gap: 0; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: var(--bg); }
+html[data-ui="deck"] .dlg .seg button { height: 28px; border: 0; border-radius: 0; background: none; color: var(--muted); font: 500 11px var(--font-label); cursor: default; }
+html[data-ui="deck"] .dlg .seg button + button { border-left: 1px solid var(--line); }
+html[data-ui="deck"] .dlg .seg button:hover { background: var(--hover); color: var(--text); }
+html[data-ui="deck"] .dlg .seg button.on { background: var(--accent-bg); color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+html[data-ui="deck"] .dlg .seg button:disabled { opacity: .4; background: none; color: var(--muted); box-shadow: none; }
+html[data-ui="deck"] .dlg .seg button:focus-visible { outline: 1px solid var(--focus); outline-offset: -2px; }
+/* Шаг размера шрифта. */
+html[data-ui="deck"] .dlg .stepper { gap: 6px; }
+html[data-ui="deck"] .dlg .stepper button, html[data-ui="deck"] .dlg .stepper input { height: 28px; border: 1px solid var(--line); border-radius: var(--r-md); color: var(--text); font: 12.5px var(--font-label); }
+html[data-ui="deck"] .dlg .stepper button { width: 28px; background: var(--dk-block); cursor: default; }
+html[data-ui="deck"] .dlg .stepper input { width: 60px; background: var(--input); }
+html[data-ui="deck"] .dlg .stepper input:focus { outline: 0; border-color: var(--focus); }
+html[data-ui="deck"] .dlg .stepper .hint { font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] .dlg .chk { gap: 9px; font-size: 12.5px; }
+html[data-ui="deck"] .dlg .chk input { width: 14px; height: 14px; accent-color: var(--accent); }
+/* «Настройки» → «Тема программы»: карточки с образцом. */
+html[data-ui="deck"] .dlg .uicards { gap: 6px; }
+html[data-ui="deck"] .dlg .uicard { gap: 5px; padding: 5px 5px 7px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--bg); cursor: default; }
+html[data-ui="deck"] .dlg .uicard:hover { background: var(--hover); border-color: var(--dk-line-strong); }
+html[data-ui="deck"] .dlg .uicard.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px rgba(var(--accent-rgb), .14); }
+html[data-ui="deck"] .dlg .uicard .pv { border-radius: var(--r-sm); box-shadow: 0 0 0 1px var(--line); }
+html[data-ui="deck"] .dlg .uicard .nm { padding: 0 2px; font-size: 12px; font-weight: 600; }
+html[data-ui="deck"] .dlg .uicard .by { padding: 0 2px; font-family: var(--font-label); font-size: 9.5px; }
+html[data-ui="deck"] .dlg .uicard.on .nm { color: var(--accent); }
+html[data-ui="deck"] .dlg .uinote { font-family: var(--font-label); font-size: 10.5px; line-height: 15px; }
+/* «Агенты». */
+html[data-ui="deck"] .dlg .agt .open, html[data-ui="deck"] .dlg .agt .how button { height: 28px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--dk-block); font: 500 12.5px var(--font-ui); cursor: default; }
+html[data-ui="deck"] .dlg .agt .open:hover, html[data-ui="deck"] .dlg .agt .how button:hover { background: var(--hover); border-color: var(--dk-line-strong); }
+html[data-ui="deck"] .dlg .agt .how button { height: 22px; font-size: 11.5px; }
+html[data-ui="deck"] .dlg .agt .how .link { height: auto; border: 0; background: none; color: var(--accent); }
+html[data-ui="deck"] .dlg .agt .sub, html[data-ui="deck"] .dlg .agt .hint { font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] .dlg .agt .how code { border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--bg); font: 11px var(--font-label); }
+/* Выпадающие списки, что dialogs.js рисует строкой style="" (окно сайта и т. п.). */
+html[data-ui="deck"] .dlg select { border-color: var(--line) !important; border-radius: var(--r-md) !important; background: var(--input); color: var(--text); font: 12px var(--font-ui); }
+/* Меню правого щелчка и «Раскладка». */
+html[data-ui="deck"] .dlg-menu { min-width: 190px; padding: 4px; background: var(--menu); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--dk-shadow); font: 12.5px var(--font-ui); }
+html[data-ui="deck"] .dlg-menu .item { height: 28px; gap: 9px; padding: 0 12px 0 9px; border-radius: var(--r-sm); }
+html[data-ui="deck"] .dlg-menu .item:hover { background: var(--hover); box-shadow: inset 2px 0 0 var(--accent); }
+html[data-ui="deck"] .dlg-menu .item.danger { color: var(--danger); }
+html[data-ui="deck"] .dlg-menu .item.danger:hover { background: rgba(var(--danger-rgb), .10); box-shadow: inset 2px 0 0 var(--danger); }
+html[data-ui="deck"] .dlg-menu .sep { margin: 4px 0; background: var(--line); }
+
+/* =====================================================================
+   Окно «Проекты» (renderer\projects.html)
+   ===================================================================== */
+html[data-ui="deck"] #bar { gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--side); }
+html[data-ui="deck"] #search { height: 30px; gap: 7px; padding: 0 9px; background: var(--input); border: 1px solid var(--line); border-radius: var(--r-md); }
+html[data-ui="deck"] #search:focus-within { border-color: var(--focus); box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .18); }
+html[data-ui="deck"] #q { font-size: 12.5px; }
+html[data-ui="deck"] #q::placeholder { color: var(--faint); }
+/* Кнопки строки поиска: тонкая рамка; «Добавить папку» — главная, заливка акцентом; «Остановить всё» — красная. */
+html[data-ui="deck"] .bbtn { height: 30px; gap: 7px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--dk-block); color: var(--text); font-size: 12.5px; font-weight: 500; }
+html[data-ui="deck"] .bbtn:hover { background: var(--hover); color: var(--text); border-color: var(--dk-line-strong); }
+html[data-ui="deck"] #add.bbtn, html[data-ui="deck"] .bbtn.fill { background: var(--button); border-color: var(--button); color: var(--button-fg); }
+html[data-ui="deck"] #add.bbtn:hover, html[data-ui="deck"] .bbtn.fill:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--button-fg); }
+/* Значок на заливке (цвет задан атрибутом stroke) — цветом текста главной кнопки. */
+html[data-ui="deck"] #add.bbtn svg { stroke: var(--button-fg); color: var(--button-fg); }
+html[data-ui="deck"] .bbtn.danger { background: none; border-color: rgba(var(--danger-rgb), .45); color: var(--danger); }
+html[data-ui="deck"] .bbtn.danger:hover { background: rgba(var(--danger-rgb), .10); border-color: var(--danger); color: var(--danger); }
+html[data-ui="deck"] .bbtn:disabled, html[data-ui="deck"] .bbtn:disabled:hover { opacity: .45; }
+html[data-ui="deck"] #autosN, html[data-ui="deck"] .tag { font-family: var(--font-label); font-size: 10px; line-height: 15px; padding: 0 5px; border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--muted); }
+html[data-ui="deck"] #autosN.new { color: var(--accent); border-color: rgba(var(--accent-rgb), .5); background: var(--accent-bg); }
+html[data-ui="deck"] #error { padding: 6px 16px; font-family: var(--font-label); font-size: 11px; }
+/* Строка счёта — моно. */
+html[data-ui="deck"] #count { gap: 10px; padding: 8px 14px 6px 20px; font-family: var(--font-label); font-size: 10.5px; color: var(--muted); }
+html[data-ui="deck"] .tool { height: 22px; gap: 5px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: none; font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] .tool:hover { background: var(--hover); border-color: var(--dk-line-strong); }
+html[data-ui="deck"] #views { border: 1px solid var(--line); border-radius: var(--r-sm); }
+html[data-ui="deck"] #views button { height: 20px; width: 26px; }
+html[data-ui="deck"] #views button + button { border-left: 1px solid var(--line); }
+html[data-ui="deck"] #views button.on { background: var(--accent-bg); box-shadow: inset 0 -2px 0 var(--accent); }
+/* Список: заголовки групп — заглавные моно, строки — компактные. */
+html[data-ui="deck"] #count ~ #list { padding: 0 8px 10px; }
+html[data-ui="deck"] #list .group { height: 28px; gap: 6px; margin-top: 10px; padding: 0 12px 0 8px; border-radius: var(--r-md); font-family: var(--font-label); font-size: var(--dk-lab); font-weight: 500; letter-spacing: var(--dk-track); }
+html[data-ui="deck"] #list .group .gc { font-weight: 400; }
+html[data-ui="deck"] #list .group.shut { background: var(--side); box-shadow: inset 0 0 0 1px var(--line); }
+html[data-ui="deck"] #list .group.shut.need { background: rgba(var(--need-rgb), .08); box-shadow: inset 2px 0 0 var(--need), inset 0 0 0 1px rgba(var(--need-rgb), .3); }
+html[data-ui="deck"] #list .row { height: 38px; gap: 10px; padding: 0 12px 0 9px; border-radius: var(--r-md); }
+html[data-ui="deck"] #list .row:hover { background: var(--hover); }
+html[data-ui="deck"] #list .row.fresh { background: var(--accent-bg); outline: 0; box-shadow: inset 2px 0 0 var(--accent); }
+html[data-ui="deck"] #list .row .strip { width: 2px; height: 20px; border-radius: 1px; }
+html[data-ui="deck"] #list .row .text { gap: 1px; }
+html[data-ui="deck"] #list .row .text .n { font-size: 12.5px; line-height: 15px; font-weight: 500; }
+html[data-ui="deck"] #list .row .text .p { font-family: var(--font-label); font-size: 10px; line-height: 13px; color: var(--muted); }
+html[data-ui="deck"] #list .row .right { gap: 1px; }
+html[data-ui="deck"] #list .status, html[data-ui="deck"] #list .states, html[data-ui="deck"] #list .agents { font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] #list .status i { box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .18); }
+html[data-ui="deck"] #list .row.need { background: rgba(var(--need-rgb), .07); box-shadow: inset 2px 0 0 var(--need); }
+html[data-ui="deck"] #list .row.need:hover { background: rgba(var(--need-rgb), .13); }
+/* Плитки: блок с рамкой и цветной полосой слева (как блоки концепта). */
+html[data-ui="deck"] #list .tiles { gap: 6px; padding: 4px 0 6px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+html[data-ui="deck"] #list .tile { height: 76px; padding: 10px 12px 9px 14px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--dk-block); }
+html[data-ui="deck"] #list .tile:hover { background: var(--tile-hover); border-color: var(--dk-line-strong); }
+html[data-ui="deck"] #list .tile::before { left: 0; top: 0; bottom: 0; right: auto; width: 3px; height: auto; }
+html[data-ui="deck"] #list .tile.fresh { outline: 0; border-color: var(--accent); }
+html[data-ui="deck"] #list .tile .n { font-size: 12.5px; font-weight: 500; }
+html[data-ui="deck"] #list .tile .bot { font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] #list .tile.need { background: var(--tile-need); outline: 0; border-color: rgba(var(--need-rgb), .6); }
+html[data-ui="deck"] #list .tile.need::before { background: var(--need); }
+html[data-ui="deck"] #list .tile.need:hover { background: var(--tile-need-hover); }
+html[data-ui="deck"] #list > #empty { font-family: var(--font-label); font-size: 11px; }
+
+/* =====================================================================
+   Окно «Автоматизации» (plugins\automations\window.html)
+   ===================================================================== */
+html[data-ui="deck"] #screen { background: var(--bg); }
+html[data-ui="deck"] #screen .head { gap: 10px; padding: 14px 20px 10px; }
+html[data-ui="deck"] #screen .head h1 { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+html[data-ui="deck"] #screen .back { padding: 10px 20px 0; font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] #screen .bbtn.plain { background: var(--dk-block); border-color: var(--line); color: var(--text); }
+html[data-ui="deck"] #screen .bbtn.small { height: 24px; font-size: 11.5px; }
+html[data-ui="deck"] #screen .head > .bbtn:not(.plain):not(.danger) { background: var(--button); border-color: var(--button); color: var(--button-fg); }
+html[data-ui="deck"] #screen .filter { gap: 4px; padding: 0 20px 10px; border-bottom: 1px solid var(--line); }
+html[data-ui="deck"] #screen .chip { height: 22px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--r-sm); font-family: var(--font-label); font-size: 10.5px; color: var(--muted); }
+html[data-ui="deck"] #screen .chip:hover { background: var(--hover); color: var(--text); }
+html[data-ui="deck"] #screen .chip.on { background: var(--accent-bg); color: var(--accent); border-color: rgba(var(--accent-rgb), .45); }
+html[data-ui="deck"] #screen .count { padding: 8px 22px 6px 31px; font-family: var(--font-label); font-size: 10px; text-transform: uppercase; letter-spacing: var(--dk-track); border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+html[data-ui="deck"] #screen .list { padding: 0 8px 8px; }
+html[data-ui="deck"] #screen .group { font-family: var(--font-label); font-size: var(--dk-lab); font-weight: 500; letter-spacing: var(--dk-track); height: 28px; }
+html[data-ui="deck"] #screen .row { height: 42px; gap: 10px; border-radius: var(--r-md); }
+html[data-ui="deck"] #screen .row:hover { background: var(--hover); }
+html[data-ui="deck"] #screen .strip { width: 2px; height: 20px; border-radius: 1px; }
+html[data-ui="deck"] #screen .text .n { font-size: 12.5px; font-weight: 500; }
+html[data-ui="deck"] #screen .text .p { font-family: var(--font-label); font-size: 10px; }
+html[data-ui="deck"] #screen .st, html[data-ui="deck"] #screen .col, html[data-ui="deck"] #screen .col2, html[data-ui="deck"] #screen .col3 { font-family: var(--font-label); font-size: 10.5px; }
+html[data-ui="deck"] #screen .col .w { font-size: 10px; }
+html[data-ui="deck"] #screen .row.foreign { background: rgba(var(--need-rgb), .07); box-shadow: inset 2px 0 0 var(--warn); }
+html[data-ui="deck"] #screen .sw { width: 28px; height: 16px; border-radius: 8px; background: rgba(var(--muted-rgb), .28); box-shadow: inset 0 0 0 1px var(--line); }
+html[data-ui="deck"] #screen .sw.on { background: var(--accent); box-shadow: none; }
+html[data-ui="deck"] #screen .sw.on::after { left: 14px; }
+/* Форма. */
+html[data-ui="deck"] #screen .form { gap: 0 28px; padding: 12px 20px 0; }
+html[data-ui="deck"] #screen .fld { gap: 5px; margin-bottom: 12px; }
+html[data-ui="deck"] #screen .fld > label:not(.cb), html[data-ui="deck"] #screen .lab { font-family: var(--font-label); font-size: var(--dk-lab); font-weight: 500; text-transform: uppercase; letter-spacing: var(--dk-track); }
+html[data-ui="deck"] #screen input[type=text], html[data-ui="deck"] #screen input[type=number], html[data-ui="deck"] #screen input[type=date],
+html[data-ui="deck"] #screen input[type=time], html[data-ui="deck"] #screen select, html[data-ui="deck"] #screen textarea {
+  height: 28px; background: var(--input); border: 1px solid var(--line); border-radius: var(--r-md); font-size: 12.5px; }
+html[data-ui="deck"] #screen textarea { height: 96px; font-family: var(--font-label); font-size: 12px; line-height: 18px; }
+html[data-ui="deck"] #screen input:focus, html[data-ui="deck"] #screen select:focus, html[data-ui="deck"] #screen textarea:focus { border-color: var(--focus); box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .18); }
+html[data-ui="deck"] #screen .hint { font-family: var(--font-label); font-size: 10px; line-height: 14px; }
+html[data-ui="deck"] #screen .sec { font-family: var(--font-label); font-size: var(--dk-lab); font-weight: 500; letter-spacing: var(--dk-track); border-top: 1px solid var(--line); padding-top: 12px; margin-bottom: 10px; }
+html[data-ui="deck"] #screen .cb input { accent-color: var(--accent); width: 14px; height: 14px; }
+html[data-ui="deck"] #screen .foot { gap: 6px; padding: 10px 20px; background: var(--side); border-top: 1px solid var(--line); }
+html[data-ui="deck"] #screen .msg { font-family: var(--font-label); font-size: 11px; }
+/* Карточка прогона и его вывод. */
+html[data-ui="deck"] #screen .card { margin: 0 20px 10px; padding: 10px 14px; gap: 24px; background: var(--dk-block); border: 1px solid var(--line); border-radius: var(--r-lg);
+  font-family: var(--font-label); font-size: 10px; text-transform: uppercase; letter-spacing: var(--dk-track); }
+html[data-ui="deck"] #screen .card b { font-family: var(--font-ui); font-size: 12.5px; font-weight: 500; text-transform: none; letter-spacing: 0; }
+html[data-ui="deck"] #screen .runrow { height: 32px; gap: 10px; border-radius: var(--r-md); font-family: var(--font-label); font-size: 11px; }
+html[data-ui="deck"] #screen .runrow:hover { background: var(--hover); }
+html[data-ui="deck"] #screen .panel { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--dk-term); font-family: var(--font-label); font-size: 11.5px; line-height: 18px; padding: 10px 14px; }
+html[data-ui="deck"] #screen .file { font-family: var(--font-label); font-size: 11px; height: 24px; }
+html[data-ui="deck"] #screen .empty { font-family: var(--font-label); font-size: 11px; }

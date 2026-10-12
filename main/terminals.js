@@ -21,6 +21,7 @@ const projectWindow = require('./project-window');
 const tabs = require('./tabs');
 const { findProgram, notFound } = require('./find-program');
 const agents = require('./agents');
+const chat = require('./chat');
 const i18n = require('./i18n');
 const { withExtra, unwrap } = require('./cmd-shim');
 // Окружение команды terminalus browser (t381): канал, подпись проекта, папка команды в PATH — в каждый новый терминал проекта.
@@ -123,6 +124,19 @@ function withHint(kind, p) {
   return u ? { file: u.file, pre: [...u.pre, ...p.pre.slice(3), ...hint] } : p;
 }
 
+/** Принимает ли Codex флаг --no-daemon: проба codex --no-daemon --version, один раз на файл программы. @type {Map<string, boolean>} */
+const noDaemonOk = new Map();
+/** @param {string} file @param {string[]} pre */
+function codexNoDaemon(file, pre) {
+  const k = `${file} ${pre.join(' ')}`;
+  if (!noDaemonOk.has(k)) {
+    let ok = false;
+    try { ok = require('child_process').spawnSync(file, [...pre, '--no-daemon', '--version'], { timeout: 8000, windowsHide: true, stdio: 'ignore' }).status === 0; } catch {}
+    noDaemonOk.set(k, ok);
+  }
+  return /** @type {boolean} */ (noDaemonOk.get(k));
+}
+
 /**
  * Как запускать вкладку — всё в одном месте.
  * @param {string} kind claude, codex, shell или agent:<id>
@@ -157,7 +171,8 @@ function launch(kind, resume, hooksSettings, ag) {
     // Уведомления Codex — OSC 9 в вывод вкладки, всегда, даже когда окно в фокусе: по ним демон знает «готов» и «требует ответа» (t26).
     // Значения проходят два слоя cmd (codex.cmd) — без кавычек и пробелов.
     const notify = ['-c', 'tui.notifications=true', '-c', 'tui.notification_method=osc9', '-c', 'tui.notification_condition=always'];
-    return { file: p.file, args: [...p.pre, '--no-daemon', ...notify], meta: { kind } };
+    // --no-daemon есть не у всех версий Codex (0.155 его не знает и выходит с кодом 2): флаг — только если программа его принимает.
+    return { file: p.file, args: [...p.pre, ...(codexNoDaemon(p.file, p.pre) ? ['--no-daemon'] : []), ...notify], meta: { kind } };
   }
   // Агент из системы (t183) — как обычный терминал: демон считает агентом только claude и codex, меток и звука нет.
   if (kind.startsWith('agent:')) {
@@ -654,6 +669,8 @@ function register(c) {
     const changed = (/** @type {any} */ m) => { const w = windowOfSession(m.session); if (w) w.webContents.send('term:changed'); };
     d.on('created', changed);
     d.on('updated', changed);
+    // Вид «Разговор» (main\chat.js): новый номер разговора Claude после /clear — следить за новым журналом.
+    d.on('updated', (/** @type {any} */ m) => chat.updated(m.session));
     // Claude сменил разговор (/clear) — демон прислал новый meta.claudeSessionId. В файл вкладок — сразу, даже без окна:
     // иначе после перезагрузки машины вкладка запустилась бы с --resume старого разговора.
     d.on('updated', (/** @type {any} */ m) => {
@@ -705,6 +722,8 @@ function register(c) {
   };
   // Агент, запущенный руками в терминале (t406): узнал или потерял — окна этих вкладок перечитывают список.
   agents.watchShells({ sessions: async () => (client ? (await client.request('list')).sessions : []), log });
+  // Вид «Разговор» (main\chat.js): журнал сессии ищется по описанию вкладки у демона.
+  chat.register({ log, sessions: async () => (client ? (await client.request('list')).sessions : []) });
   agents.onRunning((sids) => {
     const seen = new Set();
     for (const sid of sids) for (const { wc } of [...watchersOf(sid)]) if (!seen.has(wc.id)) { seen.add(wc.id); wc.send('term:changed'); }

@@ -126,3 +126,10 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
+
+--------------------------------------------------------------------------------
+Fonts (themes Studio and Console)
+--------------------------------------------------------------------------------
+fonts/Onest-Variable.ttf — Onest, Copyright 2021 The Onest Project Authors. SIL Open Font License 1.1 (fonts/OFL-Onest.txt).
+fonts/GolosText-Variable.ttf — Golos Text, Copyright 2020 The Golos Text Project Authors. SIL Open Font License 1.1 (fonts/OFL-GolosText.txt).
+fonts/JetBrainsMono-Variable.ttf — JetBrains Mono, Copyright 2020 The JetBrains Mono Project Authors. SIL Open Font License 1.1 (fonts/OFL-JetBrainsMono.txt).

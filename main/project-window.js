@@ -104,6 +104,8 @@ function open(c, p, opt = {}) {
     // webviewTag — для вкладок сайта. Настройки гостя страница не выбирает: их перезаписывает plugins\browser\main.js.
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, webviewTag: true },
   });
+  // Тема (Скло — полупрозрачность macOS): main\settings.js dress.
+  settings.dress(win);
   // Только Windows и Linux: на macOS этих методов у окна нет, меню — одно на программу (main.js).
   if (!MAC) {
     win.setAppDetails({ appId: `TERMINALUS.p.${p.id}` });
