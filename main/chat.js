@@ -3,7 +3,7 @@
 //   Claude Code — ~/.claude/projects/<папка>/<номер разговора>.jsonl; номер — meta.claudeSessionId вкладки (его задаёт --session-id).
 //   Codex — ~/.codex/sessions/ГГГГ/ММ/ДД/rollout-…jsonl: номера у вкладки нет, файл — по рабочей папке и времени запуска вкладки.
 // Записи журнала переводятся в одинаковые события для окна (renderer\chat.js):
-//   { k: 'user', text } — реплика человека; { k: 'text', text } — ответ агента (Markdown);
+//   { k: 'user', text, parts, images } — реплика человека: части — свой текст и вставленный ({ t: 'text' | 'paste', s }), картинки — data:URL или null; { k: 'text', text } — ответ агента (Markdown);
 //   { k: 'tool', id, name, input } — шаг агента (чтение, правка, команда…); { k: 'result', id, error } — шаг закончен;
 //   { k: 'think' } — агент думает; { k: 'title', text } — название разговора; { k: 'turn' } — ответ закончен (у Codex — task_complete).
 // Терминал под разговором живёт как обычно: ввод окна идёт в него же (term:write), этот модуль только читает файлы.
@@ -94,13 +94,48 @@ function textOf(c) {
 }
 
 /** Служебные реплики Claude Code, которые человек не писал: вывод команд, напоминания, прерывания. @param {string} t */
-const claudeNoise = (t) => /^\s*<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|system-reminder|bash-input|bash-stdout|bash-stderr)\b/.test(t)
+const claudeNoise = (t) => /^\s*<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|system-reminder|bash-input|bash-stdout|bash-stderr|task-notification|agent-message)\b/.test(t)
   || /^\[Request interrupted/.test(t) || /^Caveat: The messages below were generated/.test(t);
 
 /** Результат шага кратко: текст результата, обрезанный. @param {any} c */
 function outOf(c) {
   const t = typeof c === 'string' ? c : Array.isArray(c) ? c.map((b) => (b && b.type === 'text' ? b.text : '')).join('\n') : '';
   return t.length > OUT_MAX ? `${t.slice(0, OUT_MAX)}…` : t;
+}
+
+/** Самая большая картинка реплики, что уходит окну миниатюрой (символов base64, ~1,1 МБ); больше — только значок. */
+const THUMB_MAX = 1500000;
+/** Картинка реплики → data:URL для миниатюры или null (не картинка, слишком большая). @param {any} type @param {any} data */
+function thumb(type, data) {
+  const t = String(type || '');
+  return /^image\/(png|jpeg|gif|webp)$/.test(t) && typeof data === 'string' && data.length <= THUMB_MAX && /^[A-Za-z0-9+/=\s]+$/.test(data.slice(0, 200)) ? `data:${t};base64,${data}` : null;
+}
+
+/**
+ * Реплика человека для окна. Claude Code кладёт большую вставку в <pasted_content id="…">…</pasted_content id="…">,
+ * перед ней — пустые строки; на месте картинок в тексте — «[Image #1]» и «[Image: source: путь]» (сама картинка — отдельным блоком), у Codex — <image …>.
+ * Обёртки уходят: вставка — своей частью (окно сворачивает длинную), пометки картинок — прочь, когда картинки пришли.
+ * Пустая реплика — null. @param {string[]} texts @param {(string | null)[]} images @param {string} at @returns {Ev | null}
+ */
+function userEv(texts, images, at) {
+  let src = texts.join('\n');
+  if (images.length) src = src.replace(/\[Image #\d+\]|\[Image: source: [^\]\n]*\]/g, '').replace(/<\/?image\b[^>]*>/g, '');
+  /** @type {{ t: 'text' | 'paste', s: string }[]} */
+  const parts = [];
+  const add = (/** @type {'text' | 'paste'} */ t, /** @type {string} */ v) => {
+    const x = v.replace(/^\s*\n/, '').replace(/\s+$/, '');
+    if (x.trim()) parts.push({ t, s: x });
+  };
+  const re = /<pasted_content\b[^>]*>([\s\S]*?)<\/pasted_content\b[^>]*>/g;
+  let last = 0;
+  for (let r = re.exec(src); r; r = re.exec(src)) {
+    add('text', src.slice(last, r.index));
+    add('paste', r[1]);
+    last = re.lastIndex;
+  }
+  add('text', src.slice(last));
+  if (!parts.length && !images.length) return null;
+  return { k: 'user', text: parts.map((x) => x.s).join('\n\n'), parts, images, at };
 }
 
 /** Строка журнала Claude → события. @param {any} d @returns {Ev[]} */
@@ -115,16 +150,21 @@ function fromClaude(d) {
   const out = [];
   const at = d.timestamp || '';
   if (d.type === 'user') {
-    if (typeof m.content === 'string') {
-      if (!claudeNoise(m.content)) out.push({ k: 'user', text: m.content, at });
-      return out;
-    }
-    for (const b of Array.isArray(m.content) ? m.content : []) {
+    // Не человек: уведомления фоновых задач, отчёты подагентов (origin.kind — task-notification, peer…).
+    if (d.origin && typeof d.origin === 'object' && d.origin.kind && d.origin.kind !== 'human') return [];
+    const blocks = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : Array.isArray(m.content) ? m.content : [];
+    /** @type {string[]} */
+    const texts = [];
+    /** @type {(string | null)[]} */
+    const images = [];
+    for (const b of blocks) {
       if (!b) continue;
       if (b.type === 'tool_result') out.push({ k: 'result', id: b.tool_use_id, error: !!b.is_error, out: outOf(b.content), at });
-      else if (b.type === 'text' && b.text && !claudeNoise(b.text)) out.push({ k: 'user', text: b.text, at });
-      else if (b.type === 'image') out.push({ k: 'user', text: '🖼', at });
+      else if (b.type === 'text' && b.text && !claudeNoise(b.text)) texts.push(b.text);
+      else if (b.type === 'image') images.push(b.source && b.source.type === 'base64' ? thumb(b.source.media_type, b.source.data) : null);
     }
+    const u = userEv(texts, images, at);
+    if (u) out.push(u);
     return out;
   }
   if (d.type === 'assistant') {
@@ -147,8 +187,14 @@ function fromCodex(d) {
   if (d.type === 'response_item') {
     if (p.type === 'message') {
       const text = textOf(p.content);
+      if (p.role === 'user') {
+        if (/^\s*<(environment_context|user_instructions|permissions|ide_context|user_shell_command|turn_aborted)\b/.test(text)) return [];
+        const images = (Array.isArray(p.content) ? p.content : []).filter((b) => b && b.type === 'input_image')
+          .map((b) => { const r = /^data:([^;,]+);base64,(.*)$/s.exec(String(b.image_url || '')); return r ? thumb(r[1], r[2]) : null; });
+        const u = userEv([text], images, at);
+        return u ? [u] : [];
+      }
       if (!text.trim()) return [];
-      if (p.role === 'user') return /^\s*<(environment_context|user_instructions|permissions|ide_context)\b/.test(text) ? [] : [{ k: 'user', text, at }];
       if (p.role === 'assistant') return [{ k: 'text', text, at }];
       return [];
     }

@@ -689,5 +689,7 @@
  "chat.mWait": "wartet auf Sie",
  "chat.mDone": "fertig",
  "chat.ended": "{name} wurde beendet",
- "chat.endedErr": "{name} wurde mit einem Fehler beendet"
+ "chat.endedErr": "{name} wurde mit einem Fehler beendet",
+ "chat.foldMore": "Alles anzeigen · {n} Zeilen",
+ "chat.foldLess": "Weniger anzeigen"
 }

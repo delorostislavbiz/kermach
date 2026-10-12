@@ -689,5 +689,7 @@
  "chat.mWait": "чекає відповіді",
  "chat.mDone": "готовий",
  "chat.ended": "{name} завершив роботу",
- "chat.endedErr": "{name} завершився з помилкою"
+ "chat.endedErr": "{name} завершився з помилкою",
+ "chat.foldMore": "Показати все · рядків: {n}",
+ "chat.foldLess": "Згорнути"
 }

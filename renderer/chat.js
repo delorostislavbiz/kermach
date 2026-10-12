@@ -20,6 +20,7 @@
     stop: '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
     chat: '<svg class="cv-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.3A8 8 0 1 1 21 12z"/></svg>',
     term: '<svg class="cv-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-5-6-5M12 19h8"/></svg>',
+    image: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-9 8"/></svg>',
     copy: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
   };
 
@@ -117,6 +118,37 @@
    * События → блоки ленты: user, text, steps (подряд идущие шаги и раздумья между текстами).
    * @param {any[]} evs
    */
+  /** Картинки реплик: ключ → data:URL. В разметке только ключ — строка разметки не растёт на мегабайты, src ставится после отрисовки. */
+  const pics = new Map();
+  let picN = 0;
+  /** Длинный текст реплики (вставка) сворачивается до PREVIEW_LINES строк, если в нём больше FOLD_LINES. */
+  const FOLD_LINES = 25;
+  const PREVIEW_LINES = 12;
+  /**
+   * Реплика человека: картинки миниатюрами сверху, дальше текст. Части (свой текст и вставка, main\chat.js userEv) — подряд, как написано:
+   * поле «Разговора» само отправляет текст вставкой, так что «вставка» — обычно просто реплика. Очень длинная часть свёрнута.
+   * @param {any} e событие user @param {number} i номер блока — для ключа свёрнутой части @param {Set<string>} opened развёрнутое во вкладке
+   */
+  function you(e, i, opened) {
+    const parts = Array.isArray(e.parts) ? e.parts : [{ t: 'text', s: String(e.text || '') }];
+    const imgs = (Array.isArray(e.images) ? e.images : []).map((/** @type {string | null} */ src) => {
+      if (!src) return `<span class="cv-you-noimg">${ICON.image}</span>`;
+      if (!e.picKeys) e.picKeys = new Map();
+      let k = e.picKeys.get(src);
+      if (!k) { k = `p${++picN}`; e.picKeys.set(src, k); pics.set(k, src); }
+      return `<img class="cv-you-img" data-pic="${k}" alt="">`;
+    }).join('');
+    const body = parts.map((/** @type {{ t: string, s: string }} */ p, j) => {
+      const lines = p.s.split('\n');
+      if (lines.length <= FOLD_LINES) return `<div class="cv-you-t">${esc(p.s)}</div>`;
+      const id = `u${i}.${j}`;
+      const full = opened.has(id);
+      return `<div class="cv-you-t">${esc(full ? p.s : lines.slice(0, PREVIEW_LINES).join('\n'))}</div>`
+        + `<button class="cv-you-more" data-fold="${id}">${esc(full ? tr('foldLess', 'Свернуть') : tr('foldMore', 'Показать всё · строк: {n}', { n: lines.length }))}</button>`;
+    }).join('');
+    return `<div class="cv-you">${imgs ? `<div class="cv-you-imgs">${imgs}</div>` : ''}${body}</div>`;
+  }
+
   function blocks(evs) {
     /** @type {any[]} */
     const out = [];
@@ -175,10 +207,7 @@
       <div class="cv-dock"><div class="cv-ask" hidden></div>
         <div class="cv-comp"><textarea rows="1" spellcheck="false"></textarea>
           <div class="cv-tools"><span class="cv-hint"></span><span class="cv-sp"></span><button class="cv-stop" hidden>${ICON.stop}<span></span></button><button class="cv-send">${ICON.up}</button></div></div></div>`;
-    const back = document.createElement('div');
-    back.className = 'cv-back';
-    back.innerHTML = `<button>${ICON.chat}<span></span></button>`;
-    tab.pane.append(root, back);
+    tab.pane.append(root);
     const $ = (/** @type {string} */ s) => /** @type {HTMLElement} */ (root.querySelector(s));
     const feed = $('.cv-feed');
     const col = $('.cv-col');
@@ -201,7 +230,6 @@
     const labels = () => {
       /** @type {HTMLElement} */ (root.querySelector('[data-v="chat"] span')).textContent = tr('viewChat', 'Разговор');
       /** @type {HTMLElement} */ (root.querySelector('[data-v="term"] span')).textContent = tr('viewTerm', 'Терминал');
-      /** @type {HTMLElement} */ (back.querySelector('span')).textContent = tr('viewChat', 'Разговор');
       ta.placeholder = tr('placeholder', 'Напишите {name}… / — команды', { name: name() });
       $('.cv-hint').textContent = tr('hint', 'Enter — отправить · Shift+Enter — новая строка');
       /** @type {HTMLElement} */ (stopBtn.querySelector('span')).textContent = tr('stop', 'Остановить');
@@ -210,6 +238,7 @@
     function setView(/** @type {string} */ v, remember = true) {
       view = v === 'term' ? 'term' : 'chat';
       tab.pane.classList.toggle('cv-on', view === 'chat');
+      tab.pane.classList.toggle('cv-term', view === 'term');
       root.querySelectorAll('.cv-seg button').forEach((b) => b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.v === view));
       if (remember) { try { localStorage.setItem(key, view); } catch {} }
       if (view === 'term') { try { tab.x.term.focus(); } catch {} } else { paint(); setTimeout(() => ta.focus(), 0); }
@@ -217,7 +246,6 @@
       if (view === 'term') { try { tab.x.fit(); } catch {} }
     }
     root.querySelectorAll('.cv-seg button').forEach((b) => b.addEventListener('click', () => setView(/** @type {HTMLElement} */ (b).dataset.v || 'chat')));
-    back.querySelector('button')?.addEventListener('click', () => setView('chat'));
 
     /** Отправить в терминал: текст вставкой (скобки вставки — переводы строк доходят целыми), потом Enter отдельно. @param {string} text */
     function send(text) {
@@ -292,6 +320,8 @@
       if (a) { ev.preventDefault(); t.openLink(a.getAttribute('href')); return; }
       const cp = tgt.closest('.cv-copy');
       if (cp) { const pre = cp.closest('pre'); const code = pre && pre.querySelector('code'); t.clipWrite((code || pre)?.textContent || ''); cp.classList.add('done'); setTimeout(() => cp.classList.remove('done'), 900); return; }
+      const fold = /** @type {HTMLElement | null} */ (tgt.closest('[data-fold]'));
+      if (fold) { const id = fold.dataset.fold || ''; if (opened.has(id)) opened.delete(id); else opened.add(id); paint(); return; }
       const sum = tgt.closest('.cv-steps > .cv-sum');
       if (sum) { const g = /** @type {HTMLElement} */ (sum.parentElement); const id = g.dataset.id || ''; if (opened.has(id)) opened.delete(id); else opened.add(id); g.classList.toggle('open', opened.has(id)); }
     });
@@ -324,7 +354,8 @@
       try {
         const b = tab.x.term.buffer.active;
         let text = '';
-        for (let y = Math.max(0, b.length - 40); y < b.length; y++) { const l = b.getLine(y); if (l) text += `${l.translateToString(true)}\n`; }
+        // Только видимый экран: вопрос, на который уже ответили, остаётся выше в прокрутке, и окно продолжало бы ждать ответа.
+        for (let y = b.baseY; y < b.baseY + tab.x.term.rows && y < b.length; y++) { const l = b.getLine(y); if (l) text += `${l.translateToString(true)}\n`; }
         return /trust this folder|Do you trust|Enter to confirm|❯ 1\.|Press Enter to continue|Select login method|Allow Codex|approval/i.test(text);
       } catch { return false; }
     }
@@ -346,7 +377,7 @@
       }
       bl.forEach((b, i) => {
         const last = i === bl.length - 1;
-        if (b.type === 'user') html.push(`<div class="cv-you">${esc(b.e.text).replace(/\n/g, '<br>')}</div>`);
+        if (b.type === 'user') html.push(you(b.e, i, opened));
         else if (b.type === 'text') { if (!b.e.html) b.e.html = md(b.e.text); html.push(`<div class="cv-ans">${b.e.html}</div>`); }
         else if (b.type === 'steps') {
           const id = (b.list[0] && b.list[0].e.id) || `g${i}`;
@@ -379,6 +410,7 @@
       if (next !== painted) {
         painted = next;
         col.innerHTML = next;
+        for (const img of /** @type {NodeListOf<HTMLImageElement>} */ (col.querySelectorAll('img[data-pic]'))) img.src = pics.get(img.dataset.pic || '') || '';
         const ot = col.querySelector('[data-open-term]');
         if (ot) ot.addEventListener('click', () => setView('term', false));
         if (near) feed.scrollTop = feed.scrollHeight;
@@ -414,7 +446,7 @@
     t.chat.watch(sid).then((/** @type {any} */ r) => {
       ready = true;
       if (r && r.ok) { evs = r.events || []; for (const e of evs) if (e.k === 'title') title = e.text; }
-      else if (r && r.why === 'kind') { setView('term', false); root.remove(); back.remove(); }
+      else if (r && r.why === 'kind') { setView('term', false); root.remove(); tab.pane.classList.remove('cv-term'); try { tab.x.fit(); } catch {} }
       paint();
       if (view === 'chat') feed.scrollTop = feed.scrollHeight;
     }, () => { ready = true; paint(); });
@@ -430,7 +462,7 @@
       view: () => view,
       setView,
       focus() { if (view === 'chat') ta.focus(); },
-      destroy() { clearInterval(tick); if (offLang) offLang(); try { t.chat.unwatch(sid); } catch {} root.remove(); back.remove(); tab.pane.classList.remove('cv-on'); },
+      destroy() { clearInterval(tick); if (offLang) offLang(); try { t.chat.unwatch(sid); } catch {} root.remove(); tab.pane.classList.remove('cv-on', 'cv-term'); try { tab.x.fit(); } catch {} },
     };
   }
 

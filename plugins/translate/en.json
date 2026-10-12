@@ -689,5 +689,7 @@
  "chat.mWait": "waiting for you",
  "chat.mDone": "done",
  "chat.ended": "{name} has exited",
- "chat.endedErr": "{name} exited with an error"
+ "chat.endedErr": "{name} exited with an error",
+ "chat.foldMore": "Show all · {n} lines",
+ "chat.foldLess": "Show less"
 }

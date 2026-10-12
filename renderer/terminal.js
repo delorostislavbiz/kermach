@@ -273,7 +273,7 @@ function createTerminal(pane, io, fontSize = 17) {
   // Слушатели мыши, буфера и файлов на .pane (ниже, все в фазе захвата) не трогают события вида «Разговор» (renderer\chat.js):
   // его слой лежит в том же .pane, и иначе Cmd+V, перетаскивание файла и правая кнопка в поле ввода уходили бы в скрытый терминал.
   const onPane = (/** @type {string} */ type, /** @type {(ev: any) => void} */ fn, /** @type {boolean} */ cap = false) =>
-    pane.addEventListener(type, (ev) => { const el = /** @type {any} */ (ev.target); if (el && el.closest && el.closest('.cv, .cv-back')) return; fn(ev); }, cap);
+    pane.addEventListener(type, (ev) => { const el = /** @type {any} */ (ev.target); if (el && el.closest && el.closest('.cv')) return; fn(ev); }, cap);
   term.attachCustomKeyEventHandler((ev) => {
     // Cmd на Windows — не наша клавиша. На macOS Cmd — главная клавиша сочетаний (t228, keys.js).
     if (ev.type !== 'keydown' || ev.altKey || (ev.metaKey && !MAC)) return true;
