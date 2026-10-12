@@ -23,6 +23,7 @@ const { findProgram, notFound } = require('./find-program');
 const agents = require('./agents');
 const chat = require('./chat');
 const i18n = require('./i18n');
+const settings = require('./settings');
 const { withExtra, unwrap } = require('./cmd-shim');
 // Окружение команды terminalus browser (t381): канал, подпись проекта, папка команды в PATH — в каждый новый терминал проекта.
 const browserCli = require('../plugins/browser/cli');
@@ -155,8 +156,11 @@ function launch(kind, resume, hooksSettings, ag) {
     const pre = hooksSettings ? [...p.pre, '--settings', hooksSettings] : p.pre;
     // Агент — и при --resume: без --agent продолженный разговор теряет модель агента (проба t259, q4-summary.txt).
     // permissionMode файла агента при --agent не действует (t249) — его передаёт флаг; нет поля в файле — нет флага, режим Ростислава.
-    const agArgs = ag ? ['--agent', ag.name, ...(ag.mode ? ['--permission-mode', ag.mode] : [])] : [];
-    const agMeta = ag ? { agent: ag.name, ...(ag.mode ? { agentMode: ag.mode } : {}) } : {};
+    // Без запросов разрешений (настройка claudeBypass, по умолчанию да) — и при --resume: режим не сохраняется в разговоре.
+    // Свой режим разрешений агента (поле permissionMode его файла) важнее.
+    const bypass = settings.get().claudeBypass !== false && !(ag && ag.mode) ? ['--dangerously-skip-permissions'] : [];
+    const agArgs = [...(ag ? ['--agent', ag.name, ...(ag.mode ? ['--permission-mode', ag.mode] : [])] : []), ...bypass];
+    const agMeta = { ...(ag ? { agent: ag.name, ...(ag.mode ? { agentMode: ag.mode } : {}) } : {}), ...(bypass.length ? { bypass: '1' } : {}) };
     // По номеру разговора событие хука находит вкладку; с --resume Claude присылает тот же номер.
     if (resume) return { file: p.file, args: [...pre, '--resume', resume, ...agArgs], meta: { kind, claudeSessionId: resume, ...agMeta } };
     // Номер разговора: по нему разговор потом продолжается (claude --resume).

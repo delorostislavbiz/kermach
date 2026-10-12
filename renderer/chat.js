@@ -206,7 +206,7 @@
       <div class="cv-feed"><div class="cv-col"></div></div>
       <div class="cv-dock"><div class="cv-ask" hidden></div>
         <div class="cv-comp"><textarea rows="1" spellcheck="false"></textarea>
-          <div class="cv-tools"><span class="cv-hint"></span><span class="cv-sp"></span><button class="cv-stop" hidden>${ICON.stop}<span></span></button><button class="cv-send">${ICON.up}</button></div></div></div>`;
+          <div class="cv-tools"><select class="cv-pick cv-model"></select><select class="cv-pick cv-effort"></select><button class="cv-pick cv-cxmodel" hidden></button><span class="cv-hint"></span><span class="cv-sp"></span><button class="cv-stop" hidden>${ICON.stop}<span></span></button><button class="cv-send">${ICON.up}</button></div></div><div class="cv-lim"></div></div>`;
     tab.pane.append(root);
     const $ = (/** @type {string} */ s) => /** @type {HTMLElement} */ (root.querySelector(s));
     const feed = $('.cv-feed');
@@ -224,6 +224,8 @@
     /** Открытые руками группы шагов (по id первого шага). @type {Set<string>} */
     const opened = new Set();
     let view = 'chat';
+    /** Выбор модели и лимиты уже собраны (labels зовётся и раньше них). */
+    let picksReady = false;
     try { view = localStorage.getItem(key) || o.defaultView(); } catch { view = o.defaultView(); }
     if (view !== 'term') view = 'chat';
 
@@ -233,6 +235,7 @@
       ta.placeholder = tr('placeholder', 'Напишите {name}… / — команды', { name: name() });
       $('.cv-hint').textContent = tr('hint', 'Enter — отправить · Shift+Enter — новая строка');
       /** @type {HTMLElement} */ (stopBtn.querySelector('span')).textContent = tr('stop', 'Остановить');
+      if (picksReady) { drawPicks(); drawLimits(); }
     };
 
     function setView(/** @type {string} */ v, remember = true) {
@@ -254,7 +257,8 @@
       t.term.write(sid, `\x1b[200~${s}\x1b[201~`);
       setTimeout(() => t.term.write(sid, '\r'), 60);
       // Команды с меню (/model, /resume…) живут в терминале: показать его. /clear и /compact — без меню.
-      if (/^\/(?!clear\b|compact\b)\S/.test(s.trim())) setTimeout(() => setView('term', false), 250);
+      // /model и /effort со значением (выбор у поля ввода) меню не открывают.
+      if (/^\/(?!clear\b|compact\b|model\s+\S|effort\s+\S)\S/.test(s.trim())) setTimeout(() => setView('term', false), 250);
     }
     const key2 = (/** @type {string} */ d) => t.term.write(sid, d);
     /** Путь файла для поля ввода: с пробелами и прочим — в кавычках. @param {string} p */
@@ -274,6 +278,107 @@
       else if (ev.key === 'Escape' && state === 'working') { ev.preventDefault(); key2('\x1b'); }
     });
     $('.cv-send').addEventListener('click', submit);
+
+    // ——— Модель и зусилля у поля ввода ———
+    // Claude: выбор шлёт /model <псевдоним> и /effort <уровень> в тот же терминал (Claude Code 2.1 меняет их прямо в разговоре).
+    // Текущая модель — из журнала (model ответа), до первого ответа — из ~/.claude/settings.json; зусилля — последнее выбранное во вкладке,
+    // иначе effortLevel оттуда же. Codex: модель и зусилля из журнала (turn_context), кнопка открывает его меню /model в терминале.
+    const modelSel = /** @type {HTMLSelectElement} */ ($('.cv-model'));
+    const effortSel = /** @type {HTMLSelectElement} */ ($('.cv-effort'));
+    const cxBtn = /** @type {HTMLButtonElement} */ ($('.cv-cxmodel'));
+    const FAMILIES = ['opus', 'sonnet', 'haiku', 'fable'];
+    const EFFORTS = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'];
+    const effKey = `kermach.cv.effort.${sid}`;
+    let curModel = '';
+    let curEffort = '';
+    let defModel = '';
+    try { curEffort = localStorage.getItem(effKey) || ''; } catch {}
+    /** «claude-opus-5-5» → «Opus 5.5»; псевдоним «opus» → «Opus». @param {string} id */
+    const modelName = (id) => {
+      const m = /(opus|sonnet|haiku|fable)(?:-(\d+)(?:-(\d+))?)?/i.exec(id || '');
+      if (!m) return id || '';
+      const fam = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+      return m[2] ? `${fam} ${m[2]}${m[3] && m[3].length <= 2 ? `.${m[3]}` : ''}` : fam;
+    };
+    const familyOf = (/** @type {string} */ id) => { const m = /(opus|sonnet|haiku|fable)/i.exec(id || ''); return m ? m[1].toLowerCase() : ''; };
+    const effName = (/** @type {string} */ e) => tr(`eff_${e}`, ({ auto: 'Авто', low: 'Низкое', medium: 'Среднее', high: 'Высокое', xhigh: 'Очень высокое', max: 'Максимум', ultra: 'Ультра', minimal: 'Минимальное', none: 'Нет' })[/** @type {'auto'} */ (e)] || e);
+    function drawPicks() {
+      const busy = state === 'working';
+      if (tab.kind === 'codex') {
+        modelSel.hidden = true;
+        effortSel.hidden = true;
+        cxBtn.hidden = false;
+        cxBtn.textContent = curModel ? `${curModel}${curEffort ? ` · ${effName(curEffort)}` : ''}` : tr('model', 'Модель');
+        cxBtn.title = tr('cxModelTip', 'Сменить модель и усилие: меню /model в терминале');
+        cxBtn.disabled = busy;
+        return;
+      }
+      const cur = curModel || defModel;
+      const fam = familyOf(cur);
+      modelSel.innerHTML = (fam ? '' : `<option value="" selected disabled>${esc(cur ? modelName(cur) : tr('model', 'Модель'))}</option>`)
+        + FAMILIES.map((f) => `<option value="${f}"${f === fam ? ' selected' : ''}>${esc(f === fam && cur ? modelName(cur) : modelName(f))}</option>`).join('');
+      const eff = EFFORTS.includes(curEffort) ? curEffort : 'auto';
+      effortSel.innerHTML = EFFORTS.map((e) => `<option value="${e}"${e === eff ? ' selected' : ''}>${esc(tr('effortIs', 'Усилие: {e}', { e: effName(e) }))}</option>`).join('');
+      modelSel.title = tr('modelTip', 'Модель Claude для этой вкладки');
+      effortSel.title = tr('effortTip', 'Усилие (effort): сколько Claude думает над ответом');
+      modelSel.disabled = busy;
+      effortSel.disabled = busy;
+    }
+    /** Команда выбора — только для этой вкладки: умолчания Claude для новых сессий главная часть вернёт (main\chat.js keepDefaults). @param {string} cmd */
+    const pick = (cmd) => { Promise.resolve(t.chat.keepDefaults && t.chat.keepDefaults()).catch(() => {}).then(() => send(cmd)); };
+    const modelKey = `kermach.cv.model.${sid}`;
+    try { curModel = localStorage.getItem(modelKey) || ''; } catch {}
+    modelSel.addEventListener('change', () => {
+      const v = modelSel.value;
+      if (!v) return;
+      curModel = v;
+      try { localStorage.setItem(modelKey, v); } catch {}
+      pick(`/model ${v}`);
+      drawPicks();
+      ta.focus();
+    });
+    effortSel.addEventListener('change', () => {
+      const v = effortSel.value;
+      curEffort = v;
+      try { localStorage.setItem(effKey, v); } catch {}
+      pick(`/effort ${v}`);
+      drawPicks();
+      ta.focus();
+    });
+    cxBtn.addEventListener('click', () => send('/model'));
+    /** События модели не идут в ленту: только запоминаются. @param {any[]} list */
+    const takeModels = (list) => list.filter((e) => {
+      if (e.k !== 'model') return true;
+      curModel = e.model;
+      if (tab.kind === 'codex' && e.effort) curEffort = e.effort;
+      return false;
+    });
+
+    // ——— Лимиты под полем ввода ———
+    // Данные плагина «Лимиты» (window.KermachLimits, событие kermach:limits): у Claude — 5 часов и неделя, у Codex — так же.
+    const lim = $('.cv-lim');
+    /** «2 ч 14 мин» — функция плагина «Лимиты», если он загружен. @param {number} ms */
+    const leftIn = (ms) => { const f = /** @type {any} */ (window).limitsIn; if (typeof f === 'function') return f(ms); const m = Math.max(1, Math.round(ms / 60000)); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
+    function drawLimits() {
+      const all = /** @type {any} */ (window).KermachLimits;
+      const d = all && all[tab.kind];
+      const rl = d && d.rate_limits;
+      const now = Date.now();
+      const rows = [['five_hour', tr('lim5h', '5 часов')], ['seven_day', tr('limWeek', 'Неделя')]].map(([k, label]) => {
+        const w = rl && rl[k];
+        if (!w || typeof w.used_percentage !== 'number') return '';
+        const gone = w.resets_at && w.resets_at * 1000 <= now;
+        const used = gone ? 0 : Math.max(0, Math.min(100, Math.round(w.used_percentage)));
+        const lvl = used >= 80 ? ' bad' : used >= 60 ? ' warn' : '';
+        const reset = w.resets_at && !gone ? tr('limReset', 'сброс через {t}', { t: leftIn(w.resets_at * 1000 - now) }) : gone ? tr('limGone', 'окно обновилось') : '';
+        return `<div class="cv-l${lvl}" title="${esc(`${label}: ${used} %${reset ? ` · ${reset}` : ''}`)}"><span class="cv-l-n">${esc(label)}</span><span class="cv-l-bar"><i style="width:${used}%"></i></span><span class="cv-l-v">${used}%</span>${reset ? `<span class="cv-l-r">${esc(reset)}</span>` : ''}</div>`;
+      }).join('');
+      lim.innerHTML = rows;
+      lim.hidden = !rows;
+    }
+    const onLimits = () => drawLimits();
+    window.addEventListener('kermach:limits', onLimits);
+    const limTimer = setInterval(() => { if (!root.isConnected) { clearInterval(limTimer); window.removeEventListener('kermach:limits', onLimits); return; } drawLimits(); }, 30000);
     stopBtn.addEventListener('click', () => key2('\x1b'));
     // Файлы мышью — путями в поле ввода, как в терминале (renderer\terminal.js dropText даёт тот же вид пути).
     ta.addEventListener('dragover', (ev) => { if (ev.dataTransfer && [...ev.dataTransfer.types].includes('Files')) ev.preventDefault(); });
@@ -440,12 +545,18 @@
     let soon = 0;
     const paintSoon = () => { if (soon) return; soon = requestAnimationFrame(() => { soon = 0; paint(); }); };
 
+    picksReady = true;
     labels();
     const offLang = I18n.onChange ? I18n.onChange(() => { labels(); painted = ''; for (const e of evs) delete e.html; paint(); }) : null;
     setView(view, false);
     t.chat.watch(sid).then((/** @type {any} */ r) => {
       ready = true;
-      if (r && r.ok) { evs = r.events || []; for (const e of evs) if (e.k === 'title') title = e.text; }
+      if (r && r.ok) {
+        evs = takeModels(r.events || []);
+        for (const e of evs) if (e.k === 'title') title = e.text;
+        if (r.defaults) { defModel = r.defaults.model || ''; if (!curEffort && r.defaults.effort) curEffort = r.defaults.effort; }
+        drawPicks();
+      }
       else if (r && r.why === 'kind') { setView('term', false); root.remove(); tab.pane.classList.remove('cv-term'); try { tab.x.fit(); } catch {} }
       paint();
       if (view === 'chat') feed.scrollTop = feed.scrollHeight;
@@ -453,10 +564,10 @@
 
     return {
       /** Новые события журнала. @param {any[]} list */
-      events(list) { for (const e of list) { evs.push(e); if (e.k === 'title') title = e.text; } if (evs.length > 3000) evs = evs.slice(-2000); paintSoon(); },
+      events(list) { const had = curModel; for (const e of takeModels(list)) { evs.push(e); if (e.k === 'title') title = e.text; } if (curModel !== had) drawPicks(); if (evs.length > 3000) evs = evs.slice(-2000); paintSoon(); },
       reset() { evs = []; title = ''; painted = ''; paintSoon(); },
       /** Состояние вкладки сменилось (работает, ждёт ответа, готов). @param {string} s */
-      state(s) { if (s !== state) { state = s; paintSoon(); } },
+      state(s) { if (s !== state) { state = s; drawPicks(); paintSoon(); } },
       /** Вид по умолчанию сменился в «Настройках»: у вкладок без своего выбора — сразу. */
       defaults() { let own = null; try { own = localStorage.getItem(key); } catch {} if (!own) setView(o.defaultView(), false); },
       view: () => view,

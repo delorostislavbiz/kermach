@@ -865,7 +865,9 @@ function writeHooksSettings(port) {
   const statusLine = { type: 'command', command: `${nodeCommand()} ${fwd(STATUSLINE)} ${fwd(RATE_LIMITS_FILE)}` };
   try {
     const tmp = HOOKS_SETTINGS + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify({ hooks, statusLine }, null, 2));
+    // skipDangerousModePermissionPrompt — без разового предупреждения Claude о режиме без запросов разрешений (вкладки запускаются с
+    // --dangerously-skip-permissions, main\terminals.js); только для вкладок программы: файл передаётся им через --settings.
+    fs.writeFileSync(tmp, JSON.stringify({ hooks, statusLine, skipDangerousModePermissionPrompt: true }, null, 2));
     fs.renameSync(tmp, HOOKS_SETTINGS);
     return HOOKS_SETTINGS;
   } catch (e) {

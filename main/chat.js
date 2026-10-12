@@ -5,6 +5,7 @@
 // Записи журнала переводятся в одинаковые события для окна (renderer\chat.js):
 //   { k: 'user', text, parts, images } — реплика человека: части — свой текст и вставленный ({ t: 'text' | 'paste', s }), картинки — data:URL или null; { k: 'text', text } — ответ агента (Markdown);
 //   { k: 'tool', id, name, input } — шаг агента (чтение, правка, команда…); { k: 'result', id, error } — шаг закончен;
+//   { k: 'model', model, effort? } — модель (и у Codex зусилля) ответа: окно показывает её у поля ввода, в ленту не идёт;
 //   { k: 'think' } — агент думает; { k: 'title', text } — название разговора; { k: 'turn' } — ответ закончен (у Codex — task_complete).
 // Терминал под разговором живёт как обычно: ввод окна идёт в него же (term:write), этот модуль только читает файлы.
 const { ipcMain } = require('electron');
@@ -174,6 +175,7 @@ function fromClaude(d) {
       else if (b.type === 'tool_use') out.push({ k: 'tool', id: b.id, name: String(b.name || ''), input: slim(b.input), at });
       else if (b.type === 'thinking' || b.type === 'redacted_thinking') out.push({ k: 'think', at });
     }
+    if (m.model && m.model !== '<synthetic>') out.push({ k: 'model', model: String(m.model), at });
     if (m.stop_reason === 'end_turn') out.push({ k: 'turn', at });
   }
   return out;
@@ -213,6 +215,7 @@ function fromCodex(d) {
     return [];
   }
   if (d.type === 'event_msg' && p.type === 'task_complete') return [{ k: 'turn', at }];
+  if (d.type === 'turn_context' && p.model) return [{ k: 'model', model: String(p.model), effort: String(p.effort || ''), at }];
   return [];
 }
 
@@ -300,6 +303,54 @@ async function describe(sid) {
  * Обработчики — один раз на процесс.
  * @param {{ log: (m: string) => void, sessions: () => Promise<any[]> }} c sessions — список терминалов демона (client.request('list').sessions)
  */
+/** Модель и зусилля Claude по умолчанию из ~/.claude/settings.json; нет файла или поля — пусто. */
+function claudeDefaults() {
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'));
+    return { model: typeof s.model === 'string' ? s.model : '', effort: typeof s.effortLevel === 'string' ? s.effortLevel : '' };
+  } catch { return { model: '', effort: '' }; }
+}
+
+/** Поля ~/.claude/settings.json, которые /model и /effort Claude Code переписывают «по умолчанию для новых сессий». */
+const DEFAULT_KEYS = ['model', 'effortLevel', 'modelSettings'];
+/** Сколько ждать, пока Claude запишет выбор, мс. */
+const KEEP_MS = 6000;
+/** Идущая охрана умолчаний: снимок полей до первой команды и срок. @type {{ snap: Record<string, any>, until: number, timer: NodeJS.Timeout } | null} */
+let keep = null;
+
+/**
+ * Выбор модели и усилия у поля ввода — для одной вкладки. Claude Code же сохраняет его умолчанием для всех новых сессий,
+ * поэтому до команды запоминаем эти поля, а когда Claude их перепишет — возвращаем прежние; остальное в файле не трогаем.
+ * Вторая команда, пока идёт охрана, только продлевает срок: снимок — до первой.
+ */
+function keepDefaults() {
+  const file = path.join(os.homedir(), '.claude', 'settings.json');
+  const read = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+  if (keep) { keep.until = Date.now() + KEEP_MS; return; }
+  const cur = read();
+  if (!cur || typeof cur !== 'object') return;
+  /** @type {Record<string, any>} */
+  const snap = {};
+  for (const k of DEFAULT_KEYS) snap[k] = Object.prototype.hasOwnProperty.call(cur, k) ? JSON.stringify(cur[k]) : undefined;
+  const k0 = { snap, until: Date.now() + KEEP_MS, timer: /** @type {any} */ (null) };
+  keep = k0;
+  k0.timer = setInterval(() => {
+    const now = read();
+    if (now && typeof now === 'object') {
+      const moved = DEFAULT_KEYS.filter((k) => (Object.prototype.hasOwnProperty.call(now, k) ? JSON.stringify(now[k]) : undefined) !== snap[k]);
+      if (moved.length) {
+        for (const k of moved) { if (snap[k] === undefined) delete now[k]; else now[k] = JSON.parse(snap[k]); }
+        try {
+          fs.writeFileSync(`${file}.kermach-tmp`, `${JSON.stringify(now, null, 2)}\n`);
+          fs.renameSync(`${file}.kermach-tmp`, file);
+          if (ctx) ctx.log(`разговор: вернул умолчания Claude (${moved.join(', ')}) — выбор у поля ввода только для вкладки`);
+        } catch (e) { if (ctx) ctx.log(`разговор: не вернул умолчания Claude: ${e instanceof Error ? e.message : e}`); }
+      }
+    }
+    if (Date.now() > k0.until) { clearInterval(k0.timer); if (keep === k0) keep = null; }
+  }, 150);
+}
+
 /** Картинки, которые можно вставить в «Разговор»: тип из буфера → расширение файла. */
 const IMAGE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 /** Самая большая картинка из буфера, байт. */
@@ -324,13 +375,15 @@ function register(c) {
     const first = pump(w, true);
     w.timer = setInterval(() => pump(w), POLL_MS);
     e.sender.once('destroyed', () => stop(w));
-    return { ok: true, kind: w.kind, file: w.file, events: first.slice(-KEEP) };
+    // Модель и зусилля по умолчанию — до первого ответа в журнале их нет: из ~/.claude/settings.json (model, effortLevel).
+    return { ok: true, kind: w.kind, file: w.file, events: first.slice(-KEEP), defaults: w.kind === 'claude' ? claudeDefaults() : {} };
   });
   ipcMain.on('chat:unwatch', (e, sid) => {
     if (!sender.allowed(e, 'chat:unwatch')) return;
     const w = watches.get(`${e.sender.id}:${String(sid || '')}`);
     if (w) stop(w);
   });
+  ipcMain.handle('chat:keep-defaults', (e) => { if (!sender.allowed(e, 'chat:keep-defaults')) return sender.refused(); keepDefaults(); return { ok: true }; });
   // Картинка из буфера (Cmd+V в поле «Разговора»): в файл во временной папке, ответ — путь. Путь уходит в поле ввода,
   // Claude Code и Codex сами прикрепляют картинку по пути, как при перетаскивании файла.
   ipcMain.handle('chat:image', async (e, bytes, type) => {

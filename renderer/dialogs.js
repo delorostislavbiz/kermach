@@ -543,6 +543,7 @@
       <div class="sec uis"><div class="cap uit"></div><div class="uicards">${['rostyslav', 'glass', 'studio', 'deck'].map((u) => `<button class="uicard" data-ui="${u}"><span class="pv ${u}"><i></i><i></i></span><span class="nm"></span><span class="by"></span></button>`).join('')}</div></div>
       <div class="sec apr"><div class="cap apt"></div><div class="seg">${['system', 'light', 'dark'].map((a) => `<button data-ap="${a}"></button>`).join('')}</div><div class="uinote"></div></div>
       <div class="sec avw"><div class="cap avt"></div><div class="seg">${['chat', 'terminal'].map((a) => `<button data-av="${a}"></button>`).join('')}</div></div>
+      <div class="sec cbp"><div class="cap cbt"></div><div class="seg">${['on', 'off'].map((a) => `<button data-bp="${a}"></button>`).join('')}</div><div class="uinote cbn"></div></div>
       <div class="sec"><div class="cap zoom"></div>
         <div class="seg">${ZOOMS.map((z) => `<button data-z="${z}">${z} %</button>`).join('')}</div></div>
       <div class="sec"><div class="cap font"></div>
@@ -564,6 +565,9 @@
       ['.uinote', 'dialogs.apNote', 'У «Темы Ростислава» светлый или тёмный вид задаёт схема плагина «Темы».', 'textContent'],
       ['.avt', 'dialogs.agentView', 'Вкладки агентов открывать как', 'textContent'],
       ['[data-av="chat"]', 'dialogs.avChat', 'Разговор', 'textContent'], ['[data-av="terminal"]', 'dialogs.avTerm', 'Терминал', 'textContent'],
+      ['.cbt', 'dialogs.claudePerms', 'Разрешения Claude', 'textContent'],
+      ['[data-bp="on"]', 'dialogs.bpOn', 'Без запросов', 'textContent'], ['[data-bp="off"]', 'dialogs.bpOff', 'Спрашивать', 'textContent'],
+      ['.cbn', 'dialogs.bpNote', 'Для новых и перезапущенных вкладок Claude.', 'textContent'],
       ['.cap.zoom', 'dialogs.razmerShriftaOkon', 'Размер шрифта окон', 'textContent'], ['.cap.font', 'dialogs.razmerShriftaTerminala', 'Размер шрифта терминала', 'textContent'],
       ['.m', 'dialogs.menshe', 'Меньше', 'title'], ['.p', 'dialogs.bolshe', 'Больше', 'title'],
       ['.sndt', 'dialogs.zvukKogdaAgentZakonchil', 'Звук, когда агент закончил или ждёт ответа', 'textContent'],
@@ -592,6 +596,7 @@
         dlg.querySelectorAll('[data-ap]').forEach((b) => { b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.ap === (s.appearance || 'system')); /** @type {HTMLButtonElement} */ (b).disabled = (s.ui || 'rostyslav') === 'rostyslav'; });
         /** @type {HTMLElement} */ (dlg.querySelector('.uinote')).hidden = (s.ui || 'rostyslav') !== 'rostyslav';
         dlg.querySelectorAll('[data-av]').forEach((b) => b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.av === (s.agentView || 'chat')));
+        dlg.querySelectorAll('[data-bp]').forEach((b) => b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.bp === (s.claudeBypass === false ? 'off' : 'on')));
         if (document.activeElement !== num) num.value = String(s.termFont);
         snd.checked = !!s.sound;
         dlg.querySelectorAll('.plg input').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); const on = s.plugins && s.plugins[i.dataset.id || '']; i.checked = typeof on === 'boolean' ? on : plgDefault.get(i.dataset.id || '') !== false; });
@@ -655,6 +660,7 @@
       dlg.querySelectorAll('.uicard').forEach((b) => b.addEventListener('click', () => change(t, { ui: /** @type {HTMLElement} */ (b).dataset.ui })));
       dlg.querySelectorAll('[data-ap]').forEach((b) => b.addEventListener('click', () => change(t, { appearance: /** @type {HTMLElement} */ (b).dataset.ap })));
       dlg.querySelectorAll('[data-av]').forEach((b) => b.addEventListener('click', () => change(t, { agentView: /** @type {HTMLElement} */ (b).dataset.av })));
+      dlg.querySelectorAll('[data-bp]').forEach((b) => b.addEventListener('click', () => change(t, { claudeBypass: /** @type {HTMLElement} */ (b).dataset.bp === 'on' })));
       const font = (/** @type {number} */ v) => {
         const n = Math.round(v);
         if (!Number.isFinite(n)) { paint(cur); return; }

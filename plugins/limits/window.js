@@ -153,6 +153,9 @@ function limitsSetup(host) {
     if (d && d.error) throw new Error(d.error);
     data = d;
     draw(limitsParts(data, Date.now()));
+    // Поле ввода «Разговора» (renderer\chat.js) показывает лимиты своего агента под собой — те же данные, без второго опроса.
+    /** @type {any} */ (window).KermachLimits = d;
+    window.dispatchEvent(new Event('kermach:limits'));
   }).catch((/** @type {any} */ e) => {
     // Одна строка в журнал на одну и ту же ошибку, а не каждые 30 с.
     const m = String((e && e.message) || e);
