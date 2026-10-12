@@ -226,16 +226,19 @@ function compose(project, opts = {}) {
   const tf = templateFile(opts.dataDir, COMPOSE);
   /** @type {string[]} */
   const warnings = [];
+  /** @type {string | null} */
   let text = '';
-  const read = (/** @type {string} */ f) => { const s = readSmall(f, MAX_TEMPLATES); const m = /^## .*$/m.exec(s); return m ? s.slice(m.index + m[0].length).trim() : ''; };
+  // null — в файле нет строки «## », '' — строка есть, а после неё пусто (t571: это разные предупреждения).
+  const read = (/** @type {string} */ f) => { const s = readSmall(f, MAX_TEMPLATES); const m = /^## .*$/m.exec(s); return m ? s.slice(m.index + m[0].length).trim() : null; };
+  const lack = (/** @type {string | null} */ t) => t === null ? 'нет заголовка «## »' : 'после заголовка «## » пусто';
   try { text = read(tf.file); } catch (e) { if (!tf.own) return { error: `задание не прочитано: ${e instanceof Error ? e.message : e}` }; warnings.push(`своя копия ${tf.file}: ${e instanceof Error ? e.message : e} — взят встроенный текст`); }
-  // Своя копия не читается или в ней нет «## » — встроенный текст и предупреждение, как у шаблонов карты.
+  // Своя копия не читается, в ней нет «## » или после него пусто — встроенный текст и предупреждение, как у шаблонов карты.
   if (!text && tf.own) {
-    if (!warnings.length) warnings.push(`в своей копии ${tf.file} нет заголовка «## » — взят встроенный текст`);
+    if (!warnings.length) warnings.push(`в своей копии ${tf.file} ${lack(text)} — взят встроенный текст`);
     tf.file = path.join(__dirname, COMPOSE); tf.own = false;
     try { text = read(tf.file); } catch (e) { return { error: `задание не прочитано: ${e instanceof Error ? e.message : e}` }; }
   }
-  if (!text) return { error: `в ${path.basename(tf.file)} нет заголовка «## »: задание пустое` };
+  if (!text) return { error: `в ${path.basename(tf.file)} ${lack(text)}: задание пустое` };
   const vars = { 'проект': project, 'папка': board.root(project) + path.sep, 'формат': path.join(__dirname, 'FORMAT.md'), 'образцы': path.join(__dirname, 'samples') + path.sep };
   const out = subst(text, vars) + '\n';
   return { text: out, chars: out.length, warnings, templates: tf };

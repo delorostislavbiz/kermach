@@ -8,6 +8,7 @@
 // «Запустить» (t515) — вкладка агента карты в верхней полосе, первое сообщение — тот же промпт; статус карты дальше идёт за вкладкой (main.js, sync).
 // Окно зовёт sync на каждое изменение списка вкладок: так «пауза» приходит сразу, как вкладку закрыли. Волн и галочек выбора нет.
 // Значки «Командный центр» и «Составить роадмап» в шапке неактивны, с подсказкой. На пустом проекте кнопка «Составить роадмап» (t519) открывает вкладку Claude с заданием.
+// Паспорт проекта (t569, экран 15): строка под «Входящими», если passport.md есть; щелчок — девять разделов во всю панель, только чтение. Пустой раздел — жёлтой рамкой.
 // Рядом с «Файлами» и Git: панели в одной колонке, каждая своей строкой; «Роадмап» под «Файлами», над списком Git.
 // Уже 480 px строка карты — в две строки (container query): заголовок, под ним статус · агент · время. За наведением ничего не прячется.
 // Цвета — переменные темы окна; зелёного и фиолетового в теме нет, они запасными значениями.
@@ -37,6 +38,13 @@ const RM_HUMAN = { 'без человека': 'no', 'нужен человек':
 const RM_KIND = { 'сделать': 'do', 'ревью': 'review', 'разведка': 'scout' };
 /** Все поля формы карты: сначала ключи шапки, потом тело. */
 const RM_KEYS = ['status', 'agent', 'model', 'effort', 'human', ...RM_TEXT.map((f) => f.key), ...RM_CLOSE.map((f) => f.key)];
+/** Разделы паспорта (ключи board.js PASSPORT) в порядке FORMAT.md: подпись; mono — команды и пути. */
+const RM_PASSPORT = [
+  { key: 'transport', ru: 'транспорт и сервер' }, { key: 'tools', ru: 'инструменты проекта' },
+  { key: 'check', ru: 'команда проверки и ожидаемый итог', mono: true }, { key: 'cache', ru: 'кэш после правки' },
+  { key: 'disconnect', ru: 'обрыв соединения' }, { key: 'samples', ru: 'где образцы и канон' }, { key: 'keep', ru: 'что не трогать' },
+  { key: 'required', ru: 'что ещё обязано быть, кроме зелёной проверки' }, { key: 'journal', ru: 'журнал' },
+];
 
 /** @param {any} host */
 function roadmapSetup(host) {
@@ -69,6 +77,12 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .inbox { min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-weight: 600; }
     #plugin-roadmap-panel .badge { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--hover); color: var(--muted); font-size: 11px; font-weight: 600; text-align: center; line-height: 18px; }
     #plugin-roadmap-panel .grow { flex: 1; }
+    #plugin-roadmap-panel .composing { font-weight: 400; cursor: pointer; white-space: nowrap; }
+    #plugin-roadmap-panel .composing:hover { background: var(--hover); }
+    #plugin-roadmap-panel .composing .ctab { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 11.5px; }
+    #plugin-roadmap-panel .spin { width: 12px; height: 12px; flex-shrink: 0; border-radius: 50%; border: 2px solid var(--hover); border-top-color: var(--rm-info); animation: rm-spin 1s linear infinite; }
+    @keyframes rm-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { #plugin-roadmap-panel .spin { animation: none; } }
     #plugin-roadmap-panel .errs { padding: 6px 12px; border-color: rgba(var(--danger-rgb, 229,83,75), .45); }
     #plugin-roadmap-panel .errs .cap { font-weight: 600; color: var(--rm-bad); padding: 2px 0 4px; }
     #plugin-roadmap-panel .errs .e { padding: 2px 0; line-height: 17px; overflow-wrap: anywhere; }
@@ -173,6 +187,19 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .dec .dx { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; }
     #plugin-roadmap-panel .dec .dm { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
     #plugin-roadmap-panel .none { color: var(--muted); }
+    /* Паспорт (t569): строка на доске и разделы во всю панель — разметка частей промпта, пустой раздел жёлтый. */
+    #plugin-roadmap-panel .pass { cursor: pointer; white-space: nowrap; }
+    #plugin-roadmap-panel .pass:hover { background: var(--hover); }
+    #plugin-roadmap-panel .pass > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    #plugin-roadmap-panel .badge.warn { color: var(--rm-warn); background: color-mix(in srgb, var(--rm-warn) 18%, transparent); }
+    #plugin-roadmap-panel .rpass { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 12px; display: flex; flex-direction: column; gap: 8px; }
+    #plugin-roadmap-panel .rpass .ttl { font-weight: 600; color: var(--text); }
+    #plugin-roadmap-panel .rpass .psec { padding: 8px 10px; }
+    #plugin-roadmap-panel .rpass .psec.empty-sec { border-color: color-mix(in srgb, var(--rm-warn) 55%, transparent); background: color-mix(in srgb, var(--rm-warn) 7%, var(--bg)); }
+    #plugin-roadmap-panel .rpass .psec .pnote.warn { color: var(--rm-warn); }
+    #plugin-roadmap-panel .rpass .psec .pv { margin: 0; line-height: 17px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+    #plugin-roadmap-panel .rpass .psec .pv.mono { font-family: var(--font-mono, Consolas, ui-monospace, monospace); font-size: 12px; }
+    #plugin-roadmap-panel .rpass .psec .pv.none { color: var(--muted); }
     @container rmp (max-width: 479px) {
       #plugin-roadmap-panel .card:not(.done-row) { flex-wrap: wrap; row-gap: 1px; padding-top: 4px; padding-bottom: 4px; }
       #plugin-roadmap-panel .card:not(.done-row) .meta { flex-basis: 100%; margin-left: 0; padding-left: 26px; white-space: normal; }
@@ -201,7 +228,7 @@ function roadmapSetup(host) {
   panel.innerHTML = `<div class="rh"><div class="t"><b></b><span></span></div>
     <label class="hd"><input type="checkbox"><span></span></label>
     <div class="rbtn" data-act="center" aria-disabled="true">${ICON(I_CENTER)}</div><div class="rbtn" data-act="compose" aria-disabled="true">${ICON(I_COMPOSE)}</div></div>
-    <div class="rbody"></div><div class="rcard" hidden></div><div class="rprompt" hidden></div>`;
+    <div class="rbody"></div><div class="rcard" hidden></div><div class="rprompt" hidden></div><div class="rpass" hidden></div>`;
   // Под «Файлами», если они уже в колонке; список Git (appendChild) встаёт ниже.
   const files = host.right.querySelector('#plugin-files-panel');
   host.right.insertBefore(panel, files ? files.nextSibling : host.right.firstChild);
@@ -209,6 +236,7 @@ function roadmapSetup(host) {
   const body = $('.rbody');
   const cardEl = $('.rcard');
   const promptEl = $('.rprompt');
+  const passEl = $('.rpass');
   const hideBox = /** @type {HTMLInputElement} */ ($('.hd input'));
 
   let open = false;
@@ -217,7 +245,8 @@ function roadmapSetup(host) {
   /** Последняя доска от главной части. @type {any} */
   let last = null;
   /** «Составить роадмап» (t519): busy — вкладка открывается, note — строка под кнопкой. Держим здесь: draw перестраивает пустой экран на каждое событие доски. */
-  const comp = { busy: false, /** @type {{ bad: boolean, text: string } | null} */ note: null };
+  const comp = { busy: false, /** @type {{ bad: boolean, text: string } | null} */ note: null, sid: '', shown: '' };
+  // sid — вкладка из ответа compose, пока доска не прислала свою запись (t568); shown — заголовок вкладки в нарисованной строке «составляется…».
   /** Последняя ошибка вызова: строка журнала не повторяется на каждую перерисовку. */
   let said = '';
   /** Фазы и строки «готово», которые человек раскрыл или свернул сам: id → раскрыта. Живёт до закрытия окна. @type {Map<string, boolean>} */
@@ -230,8 +259,10 @@ function roadmapSetup(host) {
   let lists = { AGENTS: ['claude', 'codex'], MODELS: {}, EFFORT: {}, EFFORTS: {} };
   /** Открытый промпт карты: номер карты и последний ответ prompt; null — промпт не открыт. @type {{ id: string, r: any, copied: string, at: string } | null} */
   let pv = null;
+  /** Паспорт открыт во всю панель (t569). */
+  let passOpen = false;
 
-  const api = (/** @type {string} */ cmd, /** @type {any[]} */ ...a) => host.call(cmd, ...a).catch((/** @type {any} */ e) => ({ error: String((e && e.message) || e) }));
+  const api =(/** @type {string} */ cmd, /** @type {any[]} */ ...a) => host.call(cmd, ...a).catch((/** @type {any} */ e) => ({ error: String((e && e.message) || e) }));
 
   const statusWord = (/** @type {string} */ s) => { const m = got(RM_STATUS, s); return m ? T(`st.${m.key}`, s) : s; };
   const phaseWord = (/** @type {string} */ s) => T(`ph.${s === 'идёт' ? 'run' : s === 'готова' ? 'done' : 'plan'}`, s);
@@ -277,8 +308,29 @@ function roadmapSetup(host) {
       + `<span class="tt">${esc(c.title || c.id)}</span><span class="meta${tone}">${esc(meta)}</span></div>`;
   };
 
+  /** Живая вкладка составления в этом окне (t568): номер — из доски (мешок главной части) или из ответа compose. @returns {any} */
+  const composeTab = () => {
+    const ids = [last && last.compose && last.compose.sid, comp.sid].filter(Boolean);
+    if (!ids.length) return null;
+    return host.terminals().find((/** @type {any} */ t) => t.alive && ids.includes(t.sid)) || null;
+  };
+  /** Строка «составляется…» над доской (экран 02): щелчок — к вкладке. @param {any} t */
+  const composeLine = (t) => `<div class="box inbox composing" data-do="toTab" data-sid="${esc(t.sid)}"><span class="spin"></span><span>${esc(T('composing', 'составляется…'))}</span>`
+    + `<span class="grow"></span><span class="ctab">${esc(T('composingTab', 'вкладка «{title}»', { title: t.title || '' }))}</span></div>`;
+
+  /** Разделы паспорта без текста: пустой заголовок или раздела в файле нет вовсе. @param {any} p */
+  const passEmpty = (p) => RM_PASSPORT.filter((s) => { const x = got(p.sections, s.key); return !x || x.empty; }).length;
+  /** @param {any} p */
+  const passBadge = (p) => {
+    const n = passEmpty(p);
+    return n ? `<span class="badge warn">${esc(I18n.n('roadmap.passEmpty', n, ['{n} раздел не заполнен', '{n} раздела не заполнены', '{n} разделов не заполнено']))}</span>`
+      : `<span class="badge">${esc(T('passFull', 'заполнен'))}</span>`;
+  };
+
   const draw = () => {
     if (stopped) return;
+    const ct = composeTab();
+    comp.shown = ct ? `${ct.sid} ${ct.title}` : '';
     hideBox.checked = hideDone;
     const b = last;
     const center = $('[data-act="center"]');
@@ -290,7 +342,7 @@ function roadmapSetup(host) {
       // Экран 01: пустой проект — кнопка и две строки подсказки (t519). Своё имя data-do: data-act="compose" — значок шапки, он раньше в DOM.
       label.hidden = true; compose.hidden = true; center.hidden = false;
       const n = comp.note;
-      body.innerHTML = `<div class="empty"><div class="ic">${ICON(I_BOARD, 20)}</div>`
+      body.innerHTML = `${ct ? composeLine(ct) : ''}<div class="empty"><div class="ic">${ICON(I_BOARD, 20)}</div>`
         + `<button type="button" data-do="compose"${comp.busy ? ' disabled' : ''}>${esc(comp.busy ? T('composeBusy', 'Открываю вкладку…') : T('compose', 'Составить роадмап'))}</button>`
         + `<div>${esc(T('emptyHint1', 'Откроется вкладка Claude: агент прочитает проект и предложит паспорт, фазы и карты.'))}<br>`
         + `${esc(T('emptyHint2', 'Вы увидите их здесь по мере появления и сможете править до запуска.'))}</div>`
@@ -302,7 +354,9 @@ function roadmapSetup(host) {
     label.hidden = false; compose.hidden = false; center.hidden = false;
     /** @type {Map<string, any>} */
     const byId = new Map(b.cards.map((/** @type {any} */ c) => [c.id, c]));
-    let html = `<div class="box inbox"><span>${esc(T('inbox', 'Входящие'))}</span><span class="badge">${b.inbox.length}</span><span class="grow"></span>${chevron(false)}</div>`;
+    let html = `${ct ? composeLine(ct) : ''}<div class="box inbox"><span>${esc(T('inbox', 'Входящие'))}</span><span class="badge">${b.inbox.length}</span><span class="grow"></span>${chevron(false)}</div>`;
+    // Паспорта нет — строки нет: пустой блок «паспорт» на доске без паспорта ничего не говорит.
+    if (b.passport) html += `<div class="box inbox pass" data-do="passport"><span>${esc(T('passport', 'Паспорт проекта'))}</span>${passBadge(b.passport)}<span class="grow"></span>${chevron(false)}</div>`;
     const probs = [...b.errors.map((/** @type {any} */ e) => ({ ...e, warn: false })), ...b.warnings.map((/** @type {any} */ e) => ({ ...e, warn: true }))];
     if (probs.length) {
       html += `<div class="box errs"><div class="cap">${esc(b.errors.length ? T('errsCap', 'Файлы с ошибкой — не показаны: {n}', { n: b.errors.length }) : T('warnsCap', 'Замечания к файлам'))}</div>`;
@@ -679,6 +733,44 @@ function roadmapSetup(host) {
     }
   });
 
+  // ——— Паспорт во всю панель (t569, экран 15): девять разделов по FORMAT.md, только чтение ———
+  const paintPassport = () => {
+    const p = last && last.passport;
+    if (!passOpen || !p) return;
+    let html = `<div class="ctop"><div class="cbar"><span class="back" data-sact="back">‹ ${esc(T('passBack', 'роадмап'))}</span>`
+      + `<span class="ttl">${esc(T('passport', 'Паспорт проекта'))}</span>${passBadge(p)}</div>`
+      + `<div class="pinfo">${esc(T('passHint', 'Только чтение. Правка — в файле {file}', { file: `.kermach\\roadmap\\${p.file}` }))}</div></div>`;
+    RM_PASSPORT.forEach((s, i) => {
+      const x = got(p.sections, s.key);
+      const empty = !x || x.empty;
+      html += `<div class="box psec${empty ? ' empty-sec' : ''}" data-sec="${esc(s.key)}"><div class="phd"><span class="pn">${String(i + 1).padStart(2, '0')}</span>`
+        + `<span class="pt">${esc(T(`pass.${s.key}`, s.ru))}</span>${empty ? `<span class="pnote warn">● ${esc(T('passNotFilled', 'не заполнено'))}</span>` : ''}</div>`
+        + (empty ? `<div class="pv none">${esc(T('passEmptySec', 'раздел пуст — агент не узнает об этом'))}</div>`
+          : `<div class="pv${s.mono ? ' mono' : ''}">${esc(x.text)}</div>`) + '</div>';
+    });
+    passEl.innerHTML = html;
+  };
+  const openPassport = () => {
+    if (!last || !last.passport) return;
+    passOpen = true;
+    body.hidden = true;
+    passEl.hidden = false;
+    passEl.scrollTop = 0;
+    paintPassport();
+  };
+  const closePassport = () => {
+    passOpen = false;
+    passEl.hidden = true;
+    passEl.textContent = '';
+    body.hidden = false;
+    draw();
+  };
+  /** Доска пришла заново: паспорт перерисовать; файла нет или он с ошибкой — назад к доске, там видна строка ошибки. */
+  const refreshPassport = () => { if (!passOpen) return; if (last && last.passport) paintPassport(); else closePassport(); };
+  passEl.addEventListener('click', (ev) => {
+    if (/** @type {HTMLElement} */ (ev.target).closest('[data-sact="back"]')) closePassport();
+  });
+
   const closeCard = () => {
     if (pv) closePrompt();
     cur = null;
@@ -829,6 +921,7 @@ function roadmapSetup(host) {
     if (stopped) return;
     if (r && r.error) { if (r.error !== said) { said = r.error; host.log(`доска не прочитана: ${r.error}`); } last = { error: r.error }; } else last = r;
     draw();
+    refreshPassport();
     if (cur) { refreshCard(); growAll(); }
     // Панель снова открыта: шаблон в ctx.dataDir или файлы доски могли поменяться, пока слежение было снято (t546).
     if (pv) loadPrompt();
@@ -853,14 +946,25 @@ function roadmapSetup(host) {
     const r = await api('compose', T('composeTab', 'Роадмап · составить'));
     comp.busy = false;
     if (stopped) return;
-    if (!r || r.error || !r.session) {
+    if (r && r.sid) {
+      // Вкладка составления уже открыта (t568): её номер — в строке «составляется…», окно переходит на неё.
+      comp.sid = String(r.sid);
+      comp.note = { bad: true, text: T('composeAlready', 'Вкладка составления уже открыта, показываю её.') };
+      host.pages.show(comp.sid);
+    } else if (!r || r.error || !r.session) {
       comp.note = { bad: true, text: T('composeFail', 'Не открыто: {why}', { why: (r && r.error) || '?' }) };
       host.log(`составить роадмап: не открыто: ${(r && r.error) || '?'}`);
-    } else comp.note = { bad: false, text: T('composeOpened', 'Вкладка открыта. Отвечайте агенту в ней: доска появится здесь, когда он заведёт файлы.') };
+    } else {
+      comp.sid = String(r.session.sid);
+      comp.note = { bad: false, text: T('composeOpened', 'Вкладка открыта. Отвечайте агенту в ней: доска появится здесь, когда он заведёт файлы.') };
+    }
     draw();
   };
   body.addEventListener('click', (ev) => {
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="compose"]')) { composeRun(); return; }
+    if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="passport"]')) { openPassport(); return; }
+    const to = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-do="toTab"]'));
+    if (to) { host.pages.show(to.dataset.sid || ''); return; }
     const f = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-fold]'));
     const c = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('.card[data-id]'));
     if (!f && c) { openCard(c.dataset.id || ''); return; }
@@ -877,9 +981,15 @@ function roadmapSetup(host) {
   // Одна сверка на пачку перерисовок: окно рисует список на каждое событие терминала.
   /** @type {any} */
   let syncTimer = null;
-  if (typeof host.onTerminals === 'function') host.onTerminals(() => { if (!stopped && !syncTimer) syncTimer = setTimeout(() => { syncTimer = null; if (!stopped) api('sync'); }, 300); });
+  if (typeof host.onTerminals === 'function') host.onTerminals(() => {
+    if (stopped) return;
+    // Вкладка составления закрылась, появилась или сменила заголовок — перерисовать строку «составляется…» (t568). Остальные события доску не меняют.
+    const ct = composeTab();
+    if (open && (ct ? `${ct.sid} ${ct.title}` : '') !== comp.shown) draw();
+    if (!syncTimer) syncTimer = setTimeout(() => { syncTimer = null; if (!stopped) api('sync'); }, 300);
+  });
   // Правка файлов доски снаружи: главная часть прислала новую доску.
-  host.on('board', (/** @type {any} */ b) => { if (stopped || !b) return; last = b; if (open) draw(); if (cur) refreshCard(); if (pv) loadPrompt(); });
+  host.on('board', (/** @type {any} */ b) => { if (stopped || !b) return; last = b; if (open) draw(); refreshPassport(); if (cur) refreshCard(); if (pv) loadPrompt(); });
 
   labels();
   paintRow();
@@ -893,7 +1003,7 @@ function roadmapSetup(host) {
     hideDone = !!s.hideDone;
     if (s.open) setOpen(true, false);
   });
-  const offLang = w.I18n ? w.I18n.onChange(() => { labels(); draw(); if (cur) { cardLabels(); refreshCard(); } if (pv) paintPrompt(); }) : null;
+  const offLang = w.I18n ? w.I18n.onChange(() => { labels(); draw(); if (cur) { cardLabels(); refreshCard(); } if (pv) paintPrompt(); paintPassport(); }) : null;
   return () => {
     stopped = true;
     if (syncTimer) clearTimeout(syncTimer);

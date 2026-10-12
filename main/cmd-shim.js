@@ -43,7 +43,7 @@ function unwrap(cmdFile) {
  * Дописать к запуску свои аргументы и первое сообщение. Программа через cmd.exe /d /c <файл>.cmd — запуск переводится мимо cmd.
  * Нет ни аргументов, ни сообщения — запуск не меняется: обычные вкладки идут как раньше.
  * @param {{ file: string, args: string[] }} how @param {string[]} extra @param {string} [prompt]
- * @returns {{ file: string, args: string[] } | { error: string }}
+ * @returns {{ file: string, args: string[] } | { error: string, code?: string }}
  */
 function withExtra(how, extra, prompt) {
   const tail = prompt ? [...extra, prompt] : [...extra];
@@ -53,7 +53,8 @@ function withExtra(how, extra, prompt) {
     const u = unwrap(a[2]);
     if (u) return { file: u.file, args: [...u.pre, ...a.slice(3), ...tail] };
     if (tail.every((x) => SAFE.test(x))) return { file: how.file, args: [...a, ...tail] };
-    return { error: `${path.basename(a[2])} запускается через cmd.exe и не похож на установку npm — текст со знаками " & | % ^ < > и переводом строки ему не передать` };
+    // code — признак для плагина (t572): тот же текст файлом и короткой ссылкой пройдёт.
+    return { error: `${path.basename(a[2])} запускается через cmd.exe и не похож на установку npm — текст со знаками " & | % ^ < > и переводом строки ему не передать`, code: 'cmd-unsafe' };
   }
   return { file: how.file, args: [...a, ...tail] };
 }

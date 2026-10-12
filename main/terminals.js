@@ -353,6 +353,8 @@ function pick(s) {
   return {
     sid: s.sid, kind: kindOf(s), title: shownTitle(s), color: s.color || k.color, icon: s.icon || k.icon, pid: s.pid, createdAt: s.createdAt, alive: true,
     state: String(s.state || ''), pics: agents.takesPics(kindOf(s)),
+    // Заголовок, данный при открытии (или руками), без темы Claude: revive его переносит, а sid меняет — плагин узнаёт по нему свою вкладку (t568).
+    ownTitle: String(s.title || ''),
   };
 }
 
