@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'">
+<title data-i18n="browser.snimokStranicyTerminalus">Снимок страницы — Kermach</title>
+<!-- Язык окна (t299): словарь даёт editor-preload.cjs, надписи с data-i18n i18n.js переводит сам и при смене языка тоже. -->
+<script src="../../renderer/i18n.js"></script>
+<style>
+  /* Окно правки снимка (t201). Цвета — переменные theme.css под схему плагина «Темы» (t264): их ставит editor.js из ответа open().
+     Схемы нет — запасной цвет после запятой, нынешний вид окна. Значки — линиями, как renderer\icons.js. */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg, #141729); color: var(--text, #C9D0DC); font: 13px 'Segoe UI', system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  #bar { flex: none; height: 48px; display: flex; align-items: center; gap: 4px; padding: 0 10px; background: var(--title, #1A1D2F); border-bottom: 1px solid var(--line, #0F1222); }
+  button { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--text, #C9D0DC); font: inherit; cursor: pointer; }
+  button:hover { background: var(--hover, #21253A); }
+  button.on { background: var(--accent-bg, #22304A); border-color: var(--accent, #2091F6); color: var(--text, #fff); }
+  button:disabled { color: var(--disabled, #4A4E62); background: none; cursor: default; }
+  button svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  #send { background: var(--button, #2091F6); color: var(--button-fg, #fff); }
+  #send:hover { background: var(--accent-hover, #3AA0FF); }
+  #send:disabled { background: var(--raised, #22304A); color: var(--muted, #8D91A5); }
+  .sep { width: 1px; height: 24px; margin: 0 6px; background: var(--disabled, #4A4E62); }
+  #hint { flex: 1; min-width: 0; padding: 0 8px; color: var(--muted, #8D91A5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+  #hint.err { color: var(--danger, #F24E50); }
+  #stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: var(--view-back, #0E1020); }
+  canvas { display: block; cursor: crosshair; touch-action: none; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button data-tool="crop" title="Область — обвести рамкой, что отправить. Без рамки уходит вся видимая часть страницы" data-i18n-title="browser.oblastObvestiRamkoyChto" data-i18n="browser.oblast">
+    <svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14"/></svg>Область</button>
+  <button data-tool="arrow" title="Стрелка — протянуть от начала к острию" data-i18n-title="browser.strelkaProtyanutOtNachala" data-i18n="browser.strelka">
+    <svg viewBox="0 0 24 24"><path d="M5 19L19 5M10 5h9v9"/></svg>Стрелка</button>
+  <button data-tool="num" title="Номер — щелчок ставит 1, 2, 3… Протянуть от кружка — хвост к месту, на которое он указывает" data-i18n-title="browser.nomerSchelchokStavit1" data-i18n="browser.nomer">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10.5 9l2-1.5V16"/></svg>Номер</button>
+  <button data-tool="blur" title="Размытие — обвести рамкой, что скрыть" data-i18n-title="browser.razmytieObvestiRamkoyChto" data-i18n="browser.razmytie">
+    <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9.3h16M4 14.6h16M9.3 4v16M14.6 4v16"/></svg>Размытие</button>
+  <span class="sep"></span>
+  <button id="undo" title="Отменить последнее (Ctrl+Z)" disabled data-i18n-title="browser.otmenitPosledneeCtrlZ" data-i18n="browser.otmenit">
+    <svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>Отменить</button>
+  <span id="hint" data-i18n="browser.enterOtpravitEscOtmena">Enter — отправить, Esc — отмена, Ctrl+Z — отменить последнее</span>
+  <button id="cancel" title="Ничего не отправлять (Esc)" data-i18n-title="browser.nichegoNeOtpravlyatEsc" data-i18n="common.cancel">
+    <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>Отмена</button>
+  <button id="send" title="Отправить агенту (Enter)" data-i18n-title="browser.otpravitAgentuEnter" data-i18n="browser.otpravit">
+    <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Отправить</button>
+</div>
+<div id="stage"><canvas id="view"></canvas></div>
+<script src="editor.js"></script>
+</body>
+</html>

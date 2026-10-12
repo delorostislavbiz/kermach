@@ -1,0 +1,12 @@
+# Схемы плагина «Темы» — источники и лицензии
+
+Собрано build.js из spikes\t185-themes\schemes-a2.json. Цвета окна, которых нет в теме, — по формуле spikes\t185-themes\rule.js.
+
+- **Termius dark** — своя; лицензия: нынешняя тема программы; источник: src\renderer\terminal.js (termius-dark.yaml из Termius, как в Орке).
+- **GitHub Dark Default** — https://github.com/primer/github-vscode-theme; лицензия: MIT (GitHub API репозитория и package.json пакета); источник: VS Code Marketplace GitHub.github-vscode-theme 6.3.5, файл extension/themes/dark-default.json (копия: vsix\GitHub.github-vscode-theme\extension\themes\dark-default.json); установок в Marketplace: 20261212.
+- **One Dark Pro** — https://github.com/Binaryify/OneDark-Pro; лицензия: MIT (GitHub API репозитория и package.json пакета); источник: VS Code Marketplace zhuangtongfa.Material-theme 3.20.2, файл extension/themes/OneDark-Pro.json (копия: vsix\zhuangtongfa.Material-theme\extension\themes\OneDark-Pro.json); установок в Marketplace: 12796862.
+- **Dracula** — https://github.com/dracula/visual-studio-code; лицензия: MIT (GitHub API репозитория и package.json пакета); источник: VS Code Marketplace dracula-theme.theme-dracula 2.25.1, файл extension/theme/dracula.json (копия: vsix\dracula-theme.theme-dracula\extension\theme\dracula.json); установок в Marketplace: 11016598.
+- **Atom One Dark** — https://github.com/akamud/vscode-theme-onedark; лицензия: MIT (GitHub API репозитория и package.json пакета); источник: VS Code Marketplace akamud.vscode-theme-onedark 2.3.0, файл extension/themes/OneDark.json (копия: vsix\akamud.vscode-theme-onedark\extension\themes\OneDark.json); установок в Marketplace: 7365331.
+- **Ayu Dark** — https://github.com/ayu-theme/vscode-ayu; лицензия: MIT (GitHub API репозитория и package.json пакета); источник: VS Code Marketplace teabyii.ayu 1.4.0, файл extension/ayu-dark.json (копия: vsix\teabyii.ayu\extension\ayu-dark.json); установок в Marketplace: 4216132.
+- **GitHub Light Default** — https://github.com/primer/github-vscode-theme; лицензия: MIT (GitHub API репозитория и package.json пакета); источник: VS Code Marketplace GitHub.github-vscode-theme 6.3.5, файл extension/themes/light-default.json (копия: vsix\GitHub.github-vscode-theme\extension\themes\light-default.json); установок в Marketplace: 20261212.
+- **Atom One Dark**: цвета терминала (текст и 16 цветов ANSI) — из One Dark Pro, решение Ростислава 05.10.

@@ -1,0 +1,9 @@
+{
+  "name": "Перевод программы",
+  "window": "window.js",
+  "lang": {
+    "uk": { "file": "uk.json", "name": "Українська" },
+    "en": { "file": "en.json", "name": "English" },
+    "de": { "file": "de.json", "name": "Deutsch" }
+  }
+}

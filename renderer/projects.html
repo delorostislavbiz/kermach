@@ -1,0 +1,141 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'">
+<title data-i18n="projects.terminalusProekty">Kermach — Проекты</title>
+<link rel="stylesheet" href="theme.css">
+<script src="theme.js"></script>
+<script src="i18n.js"></script>
+<style>
+  /* Размеры и цвета — экран 1 макета design\TERMINALUS.dc.html. */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px 'Segoe UI', system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: rgba(var(--muted-rgb),.25); border-radius: 4px; }
+  svg { display: block; flex-shrink: 0; }
+
+  /* Заголовок окна: за него окно перетаскивается, кнопки — нет. */
+  #title { height: 36px; display: flex; align-items: center; padding-left: 14px; flex-shrink: 0; -webkit-app-region: drag; }
+  #title .name { display: flex; align-items: center; gap: 8px; flex: 1; font-size: 12px; }
+  #title .name .muted { color: var(--muted); }
+  #title .btns { display: flex; height: 100%; -webkit-app-region: no-drag; }
+  #title .btns div { width: 46px; display: flex; align-items: center; justify-content: center; color: var(--text); }
+  #title .btns div:hover { background: rgba(var(--muted-rgb),.14); }
+  #title .btns #close:hover { background: var(--danger); color: #fff; }
+  /* macOS (t233): слева родные три кнопки окна, свои кнопки не нужны. Класс mac ставит projects-page.js. */
+  .mac #title { padding-left: 84px; }
+  .mac #title .btns { display: none; }
+
+  #bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px 12px; flex-shrink: 0; }
+  #search { flex: 1; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: var(--hover); border: 1px solid rgba(var(--muted-rgb),.18); border-radius: 4px; }
+  #search:focus-within { border-color: rgba(var(--muted-rgb),.4); }
+  #q { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--text); font: inherit; }
+  #q::placeholder { color: var(--muted); }
+  /* Кнопки строки поиска («Добавить папку», «Остановить всё»): общий класс, цвет — зелёный; .danger — красная рамка и цвет (t160). */
+  .bbtn { height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent); background: none; font: inherit; white-space: nowrap; cursor: default; }
+  .bbtn:hover { background: var(--hover); color: var(--accent-hover); border-color: var(--accent-hover); }
+  .bbtn.danger { border-color: rgba(var(--danger-rgb),.55); color: var(--danger); }
+  .bbtn.danger:hover { background: rgba(var(--danger-rgb),.10); color: var(--danger); border-color: var(--danger); }
+  .bbtn:disabled, .bbtn:disabled:hover, .bbtn.danger:disabled:hover { opacity: .45; background: none; }
+  #error { display: none; padding: 0 16px 8px; color: var(--danger); font-size: 12px; }
+  /* Кнопка «Автоматизации N» (t252): число серым, зелёным — есть прогон, который ещё не открывали. */
+  #autosN { font-size: 11px; color: var(--muted); border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 3px; padding: 0 6px; line-height: 16px; }
+  #autosN.new { color: var(--accent); border-color: rgba(var(--accent-rgb),.5); }
+
+  /* Строка счёта: слева сколько проектов, справа «Свернуть незакреплённые» и переключатель «список / плитка». */
+  #count { display: flex; align-items: center; gap: 10px; padding: 0 16px 8px 26px; font-size: 11px; color: var(--muted); flex-shrink: 0; }
+  #allAgents { margin-left: -6px; }
+  /* Сколько всего требуют ответа — оранжевым, как состояние (t31). Занимает остаток строки, кнопки справа. */
+  #allNeed { flex: 1; margin-left: -6px; display: flex; align-items: center; gap: 4px; color: var(--need); }
+  .tool { height: 24px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid rgba(var(--muted-rgb),.18); border-radius: 4px; color: var(--text); background: none; font: inherit; font-size: 11px; cursor: default; }
+  .tool:hover { background: var(--hover); border-color: rgba(var(--muted-rgb),.4); }
+  .tool:disabled { opacity: .45; background: none; border-color: rgba(var(--muted-rgb),.18); }
+  #views { display: flex; border: 1px solid rgba(var(--muted-rgb),.18); border-radius: 4px; overflow: hidden; }
+  #views button { height: 22px; width: 30px; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; background: none; cursor: default; }
+  #views button:hover { background: var(--hover); }
+  #views button.on { background: var(--raised); }
+
+  #list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+  /* Заголовок группы: стрелка свернуть / развернуть, имя, серым — сколько проектов; у свёрнутой справа сводка. */
+  .group { display: flex; align-items: center; gap: 6px; height: 30px; margin-top: 6px; padding: 0 14px 0 6px; border-radius: 4px; font-size: 11px; color: var(--muted); letter-spacing: .04em; }
+  .group:first-child { margin-top: 0; }
+  .group[data-key] { cursor: default; }
+  .group[data-key]:hover { background: var(--hover); }
+  .group .gn { text-transform: uppercase; }
+  .group .gc { color: var(--faint); letter-spacing: 0; }
+  .group .sum { margin-left: auto; letter-spacing: 0; }
+  .group.shut { background: var(--hover); }
+  /* Свёрнутая группа, где кто-то требует ответа: оранжевая полоса слева и число в сводке (образец t27). */
+  .group .need { display: flex; align-items: center; gap: 4px; margin-left: 10px; color: var(--need); letter-spacing: 0; }
+  .group.shut.need { background: rgba(var(--need-rgb),.10); box-shadow: inset 2px 0 0 var(--need); }
+  .row { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 14px 0 10px; border-radius: 4px; cursor: default; }
+  .row:hover { background: var(--hover); }
+  .row.fresh { background: var(--hover); outline: 1px solid rgba(var(--accent-rgb),.5); }
+  .strip { width: 3px; height: 24px; border-radius: 2px; flex-shrink: 0; }
+  .text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .text .n { font-size: 13px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .text .p { font-size: 11px; line-height: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Справа в строке две строчки: сколько работает и кто запущен (образец t27). */
+  .right { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; white-space: nowrap; }
+  /* Кто запущен — значки агентов 15 px и «×N» (t325); обычный терминал — бледный значок >_ 13 px, он не агент. */
+  .agents { display: flex; align-items: center; justify-content: flex-end; gap: 8px; height: 16px; font-size: 11px; color: var(--muted); }
+  .agents .agi { display: inline-flex; align-items: center; gap: 2px; }
+  .agents .ag { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; color: var(--text); }
+  .agents .ag svg, .agents .ag img { width: 15px; height: 15px; border-radius: 3px; }
+  .agents .term .ag svg { width: 13px; height: 13px; border-radius: 0; }
+  .status { line-height: 15px; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--accent); white-space: nowrap; }
+  .status i { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); }
+  /* Состояния терминалов (t31): значок, число и слово; цвет у каждого свой, задан в projects-page.js. */
+  .states { display: flex; gap: 10px; font-size: 12px; line-height: 15px; }
+  .st { display: flex; align-items: center; gap: 5px; }
+  /* Проект, где кто-то требует ответа: оранжевая полоса слева и лёгкий фон (образец t27). */
+  .row.need { background: rgba(var(--need-rgb),.08); box-shadow: inset 2px 0 0 var(--need); }
+  .row.need:hover { background: rgba(var(--need-rgb),.14); }
+  /* Узкая строка: слова состояний прячутся, остаются значок и число (слово — в подсказке), иначе имени проекта не остаётся места. */
+  .row { container-type: inline-size; }
+  @container (max-width: 640px) { .states { gap: 8px; } .states .w { display: none; } }
+  /* Плитка (образец t27): полоса цвета сверху, значок и имя, под именем — кто запущен. Пути нет — он в подсказке. */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 8px; padding: 4px 6px 6px; }
+  .tile { position: relative; height: 84px; padding: 12px 12px 10px; border-radius: 6px; background: var(--hover); overflow: hidden; display: flex; flex-direction: column; cursor: default; }
+  .tile:hover { background: var(--tile-hover); }
+  .tile.fresh { outline: 1px solid rgba(var(--accent-rgb),.5); }
+  .tile::before { content: ''; position: absolute; left: 0; top: 0; right: 0; height: 3px; background: var(--c); }
+  .tile .top { display: flex; align-items: center; gap: 8px; }
+  .tile .n { flex: 1; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .sub { margin: 3px 0 0 28px; white-space: nowrap; overflow: hidden; }
+  .tile .sub .agents { justify-content: flex-start; overflow: hidden; }
+  /* Низ плитки — состояния значками с числом; слово — в подсказке (t31). */
+  .tile .bot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding-left: 28px; font-size: 12px; white-space: nowrap; overflow: hidden; }
+  .tile.need { background: var(--tile-need); outline: 1px solid rgba(var(--need-rgb),.7); }
+  .tile.need:hover { background: var(--tile-need-hover); }
+  #empty { padding: 24px 10px; color: var(--muted); text-align: center; }
+</style>
+</head>
+<body>
+<div id="title">
+  <div class="name"><span id="appIcon"></span><span>Kermach</span><span class="muted" data-i18n="projects.proekty">— Проекты</span></div>
+  <div class="btns">
+    <div id="min" title="Свернуть" data-i18n-title="common.minimize"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" stroke-width="1"/></svg></div>
+    <div id="max" title="Развернуть" data-i18n-title="common.maximize"><svg width="10" height="10" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg></div>
+    <div id="close" title="Закрыть" data-i18n-title="common.close"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1"/></svg></div>
+  </div>
+</div>
+<div id="bar">
+  <label id="search"><span id="searchIcon"></span><input id="q" placeholder="Поиск проекта" spellcheck="false" autofocus data-i18n-placeholder="projects.poiskProekta"></label>
+  <button id="add" class="bbtn"><span id="plusIcon"></span><span data-i18n="projects.dobavitPapku">Добавить папку</span></button>
+  <button id="autos" class="bbtn" hidden><span id="autosIcon"></span><span id="autosName">Автоматизации</span><span id="autosN" class="tag"></span></button>
+  <button id="settings" class="bbtn" title="Размер шрифта окон и терминала, звук" data-i18n-title="projects.razmerShriftaOkonI"><span data-i18n="projects.nastroyki">Настройки</span></button>
+  <button id="stopAll" class="bbtn danger" title="Закрыть программу, все вкладки и агентов. Вкладки вернутся при следующем запуске, разговоры Claude — тоже" data-i18n-title="projects.zakrytProgrammuVseVkladki"><span id="stopIcon"></span><span data-i18n="projects.ostanovitVse">Остановить всё</span></button>
+</div>
+<div id="error"></div>
+<div id="count"><span id="total"></span><span id="allAgents"></span><span id="allNeed"></span><button id="fold" class="tool"></button><span id="views"><button id="vList" title="Список" data-i18n-title="projects.spisok"></button><button id="vTiles" title="Плитка" data-i18n-title="projects.plitka"></button></span></div>
+<div id="list"></div>
+<script src="icons.js"></script>
+<script src="states.js"></script>
+<script src="agent-logos.js"></script>
+<script src="keys.js"></script>
+<script src="dialogs.js"></script>
+<script src="projects-page.js"></script>
+</body>
+</html>

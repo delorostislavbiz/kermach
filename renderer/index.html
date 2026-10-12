@@ -1,0 +1,196 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'">
+<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+<link rel="stylesheet" href="theme.css">
+<script src="theme.js"></script>
+<script src="i18n.js"></script>
+<style>
+  @font-face {
+    font-family: 'TERMINALUS Mono';
+    src: url('../fonts/JetBrainsMonoNLNerdFontPropo-ExtraLight.ttf');
+  }
+  /* Размеры и цвета — экран 2 макета design\TERMINALUS.dc.html. */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px 'Segoe UI', system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  svg { display: block; flex-shrink: 0; }
+  [hidden] { display: none !important; }
+
+  /* Заголовок окна: за него окно перетаскивается, кнопки — нет. */
+  #title { height: 36px; display: flex; align-items: center; padding-left: 14px; flex-shrink: 0; -webkit-app-region: drag; }
+  #title .name { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; font-size: 12px; white-space: nowrap; }
+  #title .name .muted { color: var(--muted); }
+  #pColor { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  #title .btns { display: flex; height: 100%; -webkit-app-region: no-drag; }
+  #title .btns div { width: 46px; display: flex; align-items: center; justify-content: center; color: var(--text); }
+  #title .btns div:hover { background: rgba(var(--muted-rgb),.14); }
+  #title .btns #close:hover { background: var(--danger); color: #fff; }
+  /* macOS (t233): слева родные три кнопки окна, свои кнопки не нужны. Класс mac ставит project-page.js. */
+  .mac #title { padding-left: 84px; }
+  .mac #title .btns { display: none; }
+
+  #main { flex: 1; display: flex; min-height: 0; }
+
+  /* Слева — терминалы проекта. */
+  #side { width: 236px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line, rgba(141,145,165,.14)); padding: 6px 0 8px; }
+  #side .cap { font-size: 11px; color: var(--muted); padding: 4px 14px 6px; }
+  #list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 0 6px; }
+  .term { display: flex; align-items: center; gap: 10px; height: 44px; flex-shrink: 0; padding: 0 10px 0 6px; border-radius: 4px; cursor: default; }
+  .term:hover, .term.on { background: var(--selected); }
+  .term .strip { width: 3px; height: 28px; border-radius: 2px; flex-shrink: 0; }
+  .term .text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .term .n { font-size: 13px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Метка состояния агента (t14): значок и слово; пустая строка держит высоту. Значки и цвета — образец t27. */
+  .term .st.url { display: block; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .term .st:empty { display: none; }
+  .term .st { display: flex; align-items: center; gap: 5px; font-size: 11px; line-height: 13px; min-height: 13px; }
+  /* «Требует ответа» — оранжевый фон и полоса слева, как строка проекта в образце t27. */
+  .term.need, .term.need:hover { background: rgba(var(--need-rgb),.08); box-shadow: inset 2px 0 0 var(--need); }
+  .term.need.on { background: rgba(var(--need-rgb),.14); }
+  /* Меню «+» в конце полосы вкладок (t199): пункты — новые терминалы и пункты плагинов. */
+  #plus { width: 30px; height: 26px; align-self: center; margin: 0 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: 4px; color: var(--muted); cursor: default; }
+  #plus:hover, #plus.open { background: var(--hover); color: var(--text); }
+  /* Меню «Раскладка» (t397) — после «+»: «+» остаётся сразу за последней вкладкой (t199). */
+  #layoutBtn { width: 30px; height: 26px; align-self: center; margin: 0 6px 0 auto; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: 4px; color: var(--muted); cursor: default; }
+  #layoutBtn:hover, #layoutBtn.open { background: var(--hover); color: var(--text); }
+  #adds { position: fixed; z-index: 50; display: none; flex-direction: column; min-width: 220px; padding: 6px; background: var(--menu); border: 1px solid rgba(var(--muted-rgb),.22); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+  #adds.open { display: flex; }
+  #adds .item { height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border-radius: 4px; font-size: 13px; color: var(--text); cursor: default; }
+  #adds .item:hover { background: var(--hover); }
+  #adds .sep { height: 1px; margin: 4px 2px; background: rgba(var(--muted-rgb),.14); }
+  /* Агенты Claude (t291): пункт «Агенты ›», список — по щелчку сбоку от меню. */
+  #addAgents::after { content: '›'; margin-left: auto; font-size: 16px; color: var(--muted); }
+  #addAgents.open { background: var(--hover); }
+  #addsAgents { position: absolute; display: flex; flex-direction: column; min-width: 200px; max-height: 70vh; overflow-y: auto; padding: 6px; background: var(--menu); border: 1px solid rgba(var(--muted-rgb),.22); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+  #adds [hidden] { display: none; }
+  #adds.rest > #addClaude, #adds.rest > #addCodex, #adds.rest > #addShell, #adds.rest > #addsSep { display: none; }
+
+  /* В середине — вкладки и терминалы. */
+  #center { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #tabrow { height: 38px; display: flex; align-items: stretch; border-bottom: 1px solid var(--line, rgba(141,145,165,.14)); flex-shrink: 0; min-width: 0; }
+  #tabs { display: flex; align-items: stretch; min-width: 0; overflow-x: auto; overflow-y: hidden; }
+  #tabs::-webkit-scrollbar { height: 0; }
+  .tab { position: relative; display: flex; align-items: center; gap: 8px; padding: 0 16px; font-size: 13px; color: var(--tab-fg); white-space: nowrap; flex-shrink: 0; cursor: default; }
+  .tab:hover, .tab.on { background: var(--tab-active); }
+  /* Порядок вкладок мышкой (t211): линия на месте вставки, у тянущейся вкладки — полупрозрачность. */
+  body.dragging, body.dragging * { cursor: grabbing !important; user-select: none; }
+  .drag-src { opacity: .45; }
+  /* Вкладку тянут на часть раскладки (t408): страница сайта мышь не забирает, часть-цель подсвечена (.ldrop). */
+  body.dragging webview, body.dragging iframe { pointer-events: none; }
+  .term.ins-before { box-shadow: inset 0 2px 0 var(--info); }
+  .term.ins-after { box-shadow: inset 0 -2px 0 var(--info); }
+  .tab.ins-before { box-shadow: inset 2px 0 0 var(--info); }
+  .tab.ins-after { box-shadow: inset -2px 0 0 var(--info); }
+  .tab.on { color: var(--tab-active-fg); }
+  .tab i { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; }
+  .tab .sg { margin-left: -2px; }
+  /* Крестик закрытия (t171): место под него занято всегда, показывается у открытой вкладки и под мышью — ширина вкладки не прыгает. */
+  .tab .x { display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin: 0 -6px 0 2px; border-radius: 4px; opacity: 0; color: inherit; }
+  .tab .x svg { stroke: currentColor; opacity: .7; }
+  .tab.on .x, .tab:hover .x { opacity: 1; }
+  .tab .x:hover { background: rgba(var(--muted-rgb),.2); }
+  .tab .x:hover svg { opacity: 1; stroke: #fff; }
+  .tab.need, .tab.need:hover { background: rgba(var(--need-rgb),.10); color: var(--need); }
+  .tab.need.on { background: rgba(var(--need-rgb),.16); }
+  /* Терминалы всех вкладок лежат друг на друге, одного размера. Скрытые — visibility, а не display:none:
+     иначе подгонка размера мерит ноль, и терминал скрытой вкладки получает другой размер. Отступ 16 — как в Орке. */
+  #panes { flex: 1; min-height: 0; position: relative; }
+  .pane { position: absolute; inset: 16px; visibility: hidden; }
+  .pane.on { visibility: visible; }
+  /* Вкладка сайта — во всё место вкладки, без отступа терминала. */
+  .pane.page { inset: 0; display: flex; flex-direction: column; }
+  /* Раскладка (t397, layout.js): панель в части — инлайн left/top/width/height, видна в части — .on, в фокусе — .focus (полоса сверху).
+     Разделители .lgrip — между частями, тянутся мышью. Пустая часть .lslot — список вкладок на выбор. */
+  #panes.split .pane.focus::after { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--accent, #2091F6); pointer-events: none; z-index: 10; }
+  #panes.split .pane:not(.page).focus::after { left: -16px; right: -16px; top: -16px; }
+  .lgrip { position: absolute; z-index: 6; }
+  .lgrip.v { width: 7px; margin-left: -3px; cursor: col-resize; background: linear-gradient(to right, transparent 3px, var(--line, rgba(141,145,165,.14)) 3px, var(--line, rgba(141,145,165,.14)) 4px, transparent 4px); }
+  .lgrip.h { height: 7px; margin-top: -3px; cursor: row-resize; background: linear-gradient(to bottom, transparent 3px, var(--line, rgba(141,145,165,.14)) 3px, var(--line, rgba(141,145,165,.14)) 4px, transparent 4px); }
+  .lgrip:hover, .lgrip.drag { background: rgba(var(--muted-rgb),.25); }
+  .lslot { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; overflow: auto; color: var(--muted); font-size: 13px; }
+  .lslot.focus { box-shadow: inset 0 2px 0 var(--accent, #2091F6); }
+  .lslot .ask { color: var(--text); font-size: 14px; }
+  .lslot .btns { display: flex; flex-direction: column; gap: 4px; min-width: 200px; max-width: 100%; }
+  .lslot button { height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid rgba(var(--muted-rgb),.22); border-radius: 6px; background: var(--menu); color: var(--text); font: inherit; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lslot button:hover { background: var(--hover); }
+  .ldrop { position: absolute; z-index: 7; pointer-events: none; box-shadow: inset 0 0 0 2px var(--accent, #2091F6); background: rgba(32,145,246,.12); }
+  .lmeasure { position: absolute; visibility: hidden; }
+  .tab.vis, .term.vis { background: rgba(var(--muted-rgb),.1); }
+  .bbar { height: 36px; flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--line, rgba(141,145,165,.14)); }
+  .bbar .bb { width: 28px; height: 26px; display: flex; align-items: center; justify-content: center; border-radius: 4px; color: var(--text); }
+  .bbar .bb:hover { background: var(--hover); }
+  .bbar .bb.off { color: var(--disabled); background: none; }
+  .bbar input { flex: 1; min-width: 0; height: 26px; margin-left: 6px; padding: 0 10px; border: 1px solid rgba(var(--muted-rgb),.22); border-radius: 4px;
+    background: var(--input); color: var(--text); font: 13px 'Segoe UI', system-ui, sans-serif; outline: none; user-select: text; }
+  .bbar input:focus { border-color: var(--focus); }
+  .bbar input + .bnote { flex-shrink: 1; min-width: 0; max-width: 45%; margin-left: 8px; color: var(--need); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bbar .bb[data-b="pick"] { margin-left: 6px; }
+  .bbar .bb.on { color: var(--accent); background: var(--accent-bg); }
+  .bview { flex: 1; min-height: 0; position: relative; background: #fff; }
+  .bview webview { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .bview .bmsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; text-align: center;
+    background: var(--bg); color: var(--muted); font-size: 13px; }
+  #empty { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 16px; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
+  /* Пустое окно (t360): вопрос и кнопки — пункты меню «+». */
+  #empty .ask { font-size: 15px; color: var(--text); }
+  #empty .btns { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; padding: 0 16px; }
+  #empty button { height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 18px; border: 1px solid rgba(var(--muted-rgb),.22); border-radius: 8px; background: var(--menu); color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
+  #empty button:hover { background: var(--hover); }
+
+  /* Места для плагинов (main\plugins.js): правая панель — под браузер (этап 5), нижняя строка — под лимиты (этап 6).
+     Скрыты, пока плагин сам не снимет hidden. */
+  /* Ширину ставит right-resize.js: тянется за левый край, сохраняется, в узком окне вкладке остаётся 400 px (t347). 350 px — как в Орке. */
+  #right { width: 350px; flex-shrink: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line, rgba(141,145,165,.14)); }
+  #rightGrip { flex: 0 0 6px; margin: 0 -3px; position: relative; z-index: 3; cursor: col-resize; }
+  #rightGrip:hover, #rightGrip.drag { background: rgba(var(--muted-rgb),.25); }
+  #main:has(> #right[hidden]) > #rightGrip { display: none; }
+  body.rdrag, body.rdrag * { cursor: col-resize !important; user-select: none; }
+  body.rdrag webview, body.rdrag iframe { pointer-events: none; }
+  body.rdragh, body.rdragh * { cursor: row-resize !important; user-select: none; }
+  body.rdragh webview, body.rdragh iframe { pointer-events: none; }
+  #bottom { height: 26px; flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 14px; font-size: 11.5px; color: var(--status-fg); white-space: nowrap; overflow: hidden; border-top: 1px solid var(--line, rgba(141,145,165,.14)); }
+</style>
+</head>
+<body>
+<div id="title">
+  <div class="name"><span id="pColor"></span><span id="pIcon"></span><span id="pName"></span><span class="muted">— Kermach</span></div>
+  <div class="btns">
+    <div id="min" title="Свернуть" data-i18n-title="common.minimize"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" stroke-width="1"/></svg></div>
+    <div id="max" title="Развернуть" data-i18n-title="common.maximize"><svg width="10" height="10" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg></div>
+    <div id="close" title="Закрыть" data-i18n-title="common.close"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1"/></svg></div>
+  </div>
+</div>
+<div id="main">
+  <div id="side">
+    <div class="cap" data-i18n="page.vkladki">Вкладки</div>
+    <div id="list"></div>
+    <div id="sideFoot" hidden></div>
+  </div>
+  <div id="center">
+    <div id="tabrow"><div id="tabs"></div><div id="plus" title="Новая вкладка" data-i18n-title="page.novayaVkladka"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div><div id="layoutBtn" title="Раскладка" data-i18n-title="layout.title"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg></div></div>
+    <div id="adds"><div class="item" id="addClaude" data-icon="bot" data-color="#2091F6">Claude</div><div class="item" id="addCodex" data-icon="cpu" data-color="#ECA855">Codex</div><div class="item" id="addShell" data-icon="terminal" data-color="#8D91A5" data-i18n="page.terminal">Терминал</div><div class="sep" id="addsSep" hidden></div><div class="item" id="addAgents" data-icon="bot" data-color="#2091F6" data-i18n="page.agenty" hidden>Агенты</div><div id="addsAgents" hidden></div></div>
+    <div id="panes"><div id="empty" hidden><div class="ask" data-i18n="page.chtoZapustit">Что запустить?</div><div class="btns" id="emptyBtns"></div></div></div>
+  </div>
+  <div id="rightGrip"></div>
+  <div id="right" hidden></div>
+</div>
+<div id="bottom" hidden></div>
+<script src="icons.js"></script>
+<script src="states.js"></script>
+<script src="keys.js"></script>
+<script src="dialogs.js"></script>
+<script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+<script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+<script src="../node_modules/@xterm/addon-webgl/lib/addon-webgl.js"></script>
+<script src="../node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>
+<script src="paste-safe.js"></script>
+<script src="terminal.js"></script>
+<script src="../plugins/browser/window.js"></script>
+<script src="right-resize.js"></script>
+<script src="layout.js"></script>
+<script src="project-page.js"></script>
+</body>
+</html>

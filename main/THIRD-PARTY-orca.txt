@@ -1,0 +1,47 @@
+Сторонний код и идеи: Orca (Orca, оболочка для агентов в терминале)
+=====================================================================
+
+Источник: Orca, https://github.com/stablyai/orca
+Правообладатель: Lovecast Inc. (строка авторского права из LICENSE, который лежит в app.asar установленной Орки: "Copyright (c) 2026 Lovecast Inc.")
+Лицензия: MIT. Версия, которую читали: 1.4.215 (ref\orca-out\package.json, поля license и author в нём нет; тексты взяты из установки Орки, только чтение).
+
+Что взято из Орки в код лимитов и рядом
+---------------------------------------
+Код Орки не копировался. Читали её собранный код (ref\orca-out\) и повторили способ работы и правила отображения:
+
+1. src\main\codex-limits.js
+   - способ чтения лимитов Codex: запуск `codex app-server` по stdio, сообщения initialize -> initialized -> account/rateLimits/read;
+   - флаги запуска (`-c approval_policy=never -c features.plugins=false -s read-only -a never`);
+   - своя пустая рабочая папка для процесса codex;
+   - окна определяются по windowDurationMins (300 и 10080), а не по именам primary и secondary;
+   - список признаков «не вошёл» (по shared\codex-auth-errors.js Орки).
+2. src\plugins\limits\window.js
+   - вид строки лимитов (по StatusBar-*.js Орки): время до сброса («2 ч 14 мин»), цвет по израсходованному (до 60 % обычный, до 80 % жёлтый, дальше красный), «нет данных» вместо нуля, старые цифры с временем записи.
+3. src\main\claude-limits.js, src\daemon\claude-statusline.js, src\plugins\limits\main.js
+   - Орки здесь нет: Claude отдаёт rate_limits в строку состояния сам. Файл лимитов Claude и его чтение написаны заново.
+
+Прочие места src\, где в комментариях сказано «как в Орке» (поведение, не код): main.js (пускать только тот же файл, запрет разрешений, вставка из буфера), terminals.js, tray.js, sound.js, attention.js, projects*.js, plugins\browser\*, renderer\*.
+
+Текст лицензии
+--------------
+MIT License
+
+Copyright (c) 2026 Lovecast Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
