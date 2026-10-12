@@ -518,7 +518,7 @@
     box.appendChild(row);
     return (/** @type {any} */ s) => {
       /** Код → имя; тот же код у плагина дальше по списку заменяет прежний, как словарь в main\i18n.js. @type {Map<string, string>} */
-      const langs = new Map([['', 'Русский']]);
+      const langs = new Map([['ru', 'Русский']]);
       for (const p of list) if (on(s, p.id)) for (const [code, name] of Object.entries(p.langs || {})) langs.set(code, name);
       box.style.display = langs.size > 1 ? '' : 'none';
       const ids = JSON.stringify([...langs]);
@@ -527,7 +527,7 @@
         sel.replaceChildren(...[...langs].map(([code, name]) => { const o = document.createElement('option'); o.value = code; o.textContent = name; return o; }));
       }
       // Язык выключенного плагина окна не переводят (main\i18n.js), поэтому в списке тогда «Русский».
-      sel.value = langs.has(s.lang) ? s.lang : '';
+      sel.value = langs.has(s.lang) ? s.lang : 'ru';
     };
   }
 
@@ -632,7 +632,7 @@
               return;
             }
             // Выключили плагин, чей язык выбран (t184), — сразу и русский, одним вызовом: иначе в settings.json остался бы язык без словаря.
-            if (!cb.checked && cur && cur.lang && pl.langs && Object.prototype.hasOwnProperty.call(pl.langs, cur.lang)) change(t, { plugins: { [pl.id]: false }, lang: '' });
+            if (!cb.checked && cur && cur.lang && pl.langs && Object.prototype.hasOwnProperty.call(pl.langs, cur.lang)) change(t, { plugins: { [pl.id]: false }, lang: 'ru' });
             else change(t, { plugins: { [pl.id]: cb.checked } });
           });
           const sp = document.createElement('span');

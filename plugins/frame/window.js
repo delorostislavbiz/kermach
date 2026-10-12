@@ -7,6 +7,9 @@
 // Толщина 4, 6 или 8 px — pluginSettings.frame.width в settings.json, строка «Толщина» в «Настройках» под «Плагинами» (renderer\dialogs.js frameRow).
 // Сохранённые до 12.10 2 и 3 px в списке не значатся — рамка берёт 6.
 // Подписки на мост ставятся один раз при загрузке: у ipcRenderer.on в preload нет снятия, а плагин включают и выключают много раз.
+// Цвет проекта не выбран (серый по умолчанию, так у всех проектов, перенесённых из Orca) — в темах «Скло», «Студия», «Пульт»
+// рамка берёт акцент темы (var(--accent)): серая полоса на их фоне выглядит грязной. «Тема Ростислава» — как в оригинале.
+// На macOS углы окна скруглены, а рамка — нет: снаружи её обрезает окно, внутри остаётся прямой угол. Рамке дан тот же радиус, что у окна.
 (function () {
   const w = /** @type {any} */ (window);
   const t = w.terminalus;
@@ -14,6 +17,8 @@
   const WIDTH = 6;
   /** Бледность рамки окна без фокуса. */
   const DIM = 0.45;
+  /** Радиус углов окна macOS 26 без панели инструментов, в точках экрана (замер по снимку окна: 35 px на Retina — около 16–17 pt). */
+  const RADIUS = /Mac/.test(navigator.platform) ? 16 : 0;
   const colorOf = (/** @type {string} */ c) => (/^#[0-9a-f]{6}$/i.test(c) ? c : w.Icons.DEFAULT_COLOR);
   /** @type {HTMLElement | null} */
   let el = null;
@@ -28,7 +33,12 @@
     if (!el) return;
     const k = window.devicePixelRatio || 1;
     const px = Math.max(1, Math.round(width * k)) / k;
-    el.style.border = `${px}px solid ${color}`;
+    const unset = color.toLowerCase() === w.Icons.DEFAULT_COLOR.toLowerCase();
+    const themed = (document.documentElement.dataset.ui || 'rostyslav') !== 'rostyslav';
+    el.style.border = `${px}px solid ${unset && themed ? 'var(--accent)' : color}`;
+    // Радиус окна — в точках, а страницу масштабирует шрифт окон: переводим в CSS px через ширину окна в точках и в CSS px.
+    const zoom = window.innerWidth ? window.outerWidth / window.innerWidth : 1;
+    el.style.borderRadius = RADIUS ? `${RADIUS / (zoom || 1)}px` : '';
     el.style.opacity = focused ? '1' : String(DIM);
     document.body.style.boxSizing = 'border-box';
     document.body.style.padding = `${px}px`;
@@ -44,6 +54,8 @@
   t.win.onBlur(() => { focused = false; paint(); });
   t.win.onFocus(() => { focused = true; paint(); });
   window.addEventListener('focus', () => { focused = true; paint(); });
+  // Сменили тему программы — рамка решает заново, брать ли акцент.
+  new MutationObserver(paint).observe(document.documentElement, { attributes: true, attributeFilter: ['data-ui'] });
   // Сменили шрифт окон (масштаб страницы) или окно ушло на экран с другим масштабом — пересчитать точки.
   window.addEventListener('resize', paint);
   // Толщина — из своих настроек плагина; чужое значение — 6 px.

@@ -15,7 +15,7 @@ const TERM_MIN = 10;
 const TERM_MAX = 28;
 /** Сдвиг шрифта просмотра Markdown от «Шрифта терминала», px: кнопки A−/A+ (t242). Видимый размер окно держит в TERM_MIN…TERM_MAX. */
 const MD_SHIFT = TERM_MAX - TERM_MIN;
-const DEFAULTS = { uiZoom: 100, termFont: 17, mdShift: 0, sound: true, theme: '', ui: 'rostyslav', appearance: 'system', agentView: 'chat', lang: '', plugins: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
+const DEFAULTS = { uiZoom: 100, termFont: 17, mdShift: 0, sound: true, theme: '', ui: 'rostyslav', appearance: 'system', agentView: 'chat', lang: 'uk', plugins: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
 /** Предел мешка настроек одного плагина в JSON, знаков (t256): больше — запись отклоняется, остаётся прежняя. */
 const BAG_MAX = 64 * 1024;
 /** Пресеты раскладок окна проекта (t397): не больше PRESETS_MAX, имя до 60 знаков. */
@@ -33,7 +33,7 @@ const partKind = (k) => (PART_KINDS.includes(k) || (typeof k === 'string' && /^a
  * ui — тема интерфейса (main\ui-themes.js): rostyslav — прежний вид со схемами плагина «Темы»; glass, studio, deck — Тема Нагорняка.
  * appearance — светлый или тёмный вид новых тем: system (как в macOS), light, dark. У «Темы Ростислава» вид задаёт схема.
  * agentView — как открывать вкладки агентов: chat (вид «Разговор») или terminal.
- * lang — язык надписей (t258): '' — русский; иначе ключ из поля "lang" plugin.json включённого плагина (main\i18n.js).
+ * lang — язык надписей (t258): 'ru' — русский (словаря нет, тексты из кода), по умолчанию 'uk', пустое поле (так писали до 12.10) — тоже 'uk'. Иначе ключ из поля "lang" plugin.json включённого плагина (main\i18n.js).
  * layoutPresets — пресеты раскладок окна проекта (t397), общие для всех проектов: { name, kind, fr, parts, files: { open, width } };
  *   parts — вид вкладки в каждой части ('' — часть пустая), files — панель «Файлы» (открыта ли, ширина в px).
  * @typedef {{ uiZoom: number, termFont: number, mdShift: number, sound: boolean, theme: string, ui: string, appearance: string, agentView: string, lang: string, plugins: Record<string, boolean>, agents: Record<string, boolean>,
@@ -114,7 +114,7 @@ function clean(raw, base) {
     ui: uiThemes.UIS.includes(r.ui) ? r.ui : base.ui,
     appearance: uiThemes.APPEARANCES.includes(r.appearance) ? r.appearance : base.appearance,
     agentView: r.agentView === 'terminal' || r.agentView === 'chat' ? r.agentView : base.agentView,
-    lang: typeof r.lang === 'string' && r.lang.length <= 16 ? r.lang : base.lang,
+    lang: typeof r.lang === 'string' && r.lang && r.lang.length <= 16 ? r.lang : base.lang,
     plugins: cleanFlags(r.plugins, base.plugins),
     agents: cleanFlags(r.agents, base.agents),
     pluginSettings: cleanBags(r.pluginSettings, base.pluginSettings),
@@ -237,7 +237,7 @@ function set(patch) {
   const restyleNow = next.ui !== cur.ui || next.appearance !== cur.appearance;
   cur = next;
   save();
-  log(`настройки: шрифт окон ${cur.uiZoom} %, шрифт терминала ${cur.termFont}, сдвиг Markdown ${cur.mdShift}, звук ${cur.sound ? 'вкл' : 'выкл'}, тема ${cur.ui}${cur.ui === 'rostyslav' ? ` (схема ${cur.theme || 'по умолчанию'})` : `, вид ${cur.appearance}`}, вкладки агентов ${cur.agentView}, язык ${cur.lang || 'ru'}, выключены плагины: ${Object.keys(cur.plugins).filter((k) => !cur.plugins[k]).join(', ') || 'нет'}, включены агенты: ${Object.keys(cur.agents).filter((k) => cur.agents[k]).join(', ') || 'нет'}`);
+  log(`настройки: шрифт окон ${cur.uiZoom} %, шрифт терминала ${cur.termFont}, сдвиг Markdown ${cur.mdShift}, звук ${cur.sound ? 'вкл' : 'выкл'}, тема ${cur.ui}${cur.ui === 'rostyslav' ? ` (схема ${cur.theme || 'по умолчанию'})` : `, вид ${cur.appearance}`}, вкладки агентов ${cur.agentView}, язык ${cur.lang}, выключены плагины: ${Object.keys(cur.plugins).filter((k) => !cur.plugins[k]).join(', ') || 'нет'}, включены агенты: ${Object.keys(cur.agents).filter((k) => cur.agents[k]).join(', ') || 'нет'}`);
   if (restyleNow) syncNative();
   for (const w of pages()) apply(w);
   if (restyleNow) dressAll();
