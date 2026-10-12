@@ -40,8 +40,6 @@ const MAC = process.platform === 'darwin';
 app.setPath('userData', path.join(DATA_DIR, 'chromium'));
 
 const LOG_FILE = path.join(DATA_DIR, 'logs', 'main.log');
-/** Файлы, которые Windows не открывает, а запускает: ссылку на них из терминала программа не открывает (t58). */
-const LINK_PROGRAMS = /\.(exe|com|bat|cmd|ps1|psm1|ps1xml|psd1|vbs|vbe|js|jse|wsf|wsh|msc|msi|msp|msix|appx|appinstaller|scr|pif|lnk|url|reg|hta|cpl|jar|appref-ms|application|scf|inf|diagcab|settingcontent-ms|py|pyw|sh)$/i;
 
 fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
 try {
@@ -302,7 +300,7 @@ function start(asked) {
         if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return { error: i18n.t('link.outside', 'вне папки проекта: {t}', { t }) };
         t = path.resolve(p.path, t);
       }
-      if ((MAC ? osRules.MAC_LINK_PROGRAMS : LINK_PROGRAMS).test(t)) return { error: i18n.t('link.program', 'программу не запускаю: {t}', { t }) };
+      if ((MAC ? osRules.MAC_LINK_PROGRAMS : osRules.LINK_PROGRAMS).test(t)) return { error: i18n.t('link.program', 'программу не запускаю: {t}', { t }) };
       const st = await fs.promises.stat(t).catch(() => { throw new Error(i18n.t('link.noFile', 'нет такого файла: {t}', { t })); });
       if (MAC && st.isFile() && osRules.executable(st.mode)) return { error: i18n.t('link.program', 'программу не запускаю: {t}', { t }) };
       const err = await shell.openPath(t);

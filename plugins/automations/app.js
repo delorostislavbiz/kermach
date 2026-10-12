@@ -88,7 +88,8 @@ function row(i) {
 function listAll() {
   const c = /** @type {Ctx} */ (ctx);
   const projects = projectsOf(c.dataDir);
-  return { projects, filter, items: store.list(c.dataDir, projects.map((p) => p.path)).map(row) };
+  // warn — реестр слишком большой (t527): окно говорит, почему проектные автоматизации стали «чужими».
+  return { projects, filter, items: store.list(c.dataDir, projects.map((p) => p.path)).map(row), warn: store.regWarn(c.dataDir) };
 }
 
 /** Число и точка для кнопки «Проектов» (project '') и строки окна проекта. Чужие не считаются. @param {string} project */
@@ -253,16 +254,11 @@ function register(c) {
   handle('auto:run', (dir, stamp) => {
     const i = itemOf(dir);
     if (!i || i.foreign || !/^[\d_-]+$/.test(String(stamp))) return { error: 'нет прогона' };
-    const d = path.join(store.runsOf(c.dataDir, i.id), String(stamp));
-    /** @type {any} */
-    let res = null;
-    try { res = JSON.parse(fs.readFileSync(path.join(d, 'итог.json'), 'utf8')); } catch {}
-    let md = '';
-    try { md = fs.readFileSync(path.join(d, 'ответ.md'), 'utf8'); } catch {}
-    const files = ((res && res.files) || []).map((/** @type {string} */ f) => { let size = -1; try { size = fs.statSync(f).size; } catch {} return { path: f, size }; });
+    // Итог, ответ и файлы — с пределами размера (t527): итог.json в сотни МБ подвесил бы главный процесс.
+    const { result, md, files, more } = store.readRun(path.join(store.runsOf(c.dataDir, i.id), String(stamp)));
     store.markSeen(c.dataDir, i.id, String(stamp));
     changed();
-    return { result: res || { stamp, status: '' }, md, files, work: store.workOf(c.dataDir, i.id) };
+    return { result: { stamp, ...result }, md, files, more, work: store.workOf(c.dataDir, i.id) };
   });
   handle('auto:save', async (f) => {
     const cfg = cfgOf(f);

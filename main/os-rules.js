@@ -71,6 +71,12 @@ function parsePs(out) {
 }
 
 /**
+ * Файлы, которые Windows не открывает, а запускает: ссылку на них из терминала программа не открывает (t58), «Файлы» вместо запуска показывают в Проводнике (t327).
+ * Один список на оба места (t503): раньше main.js и plugins\files\main.js держали по копии.
+ */
+const LINK_PROGRAMS = /\.(exe|com|bat|cmd|ps1|psm1|ps1xml|psd1|vbs|vbe|js|jse|wsf|wsh|msc|msi|msp|msix|appx|appinstaller|scr|pif|lnk|url|reg|hta|cpl|jar|appref-ms|application|scf|inf|diagcab|settingcontent-ms|py|pyw|sh)$/i;
+
+/**
  * Файлы, которые macOS не открывает, а запускает: ссылку на них из терминала программа не открывает (t58, t222-Б).
  * Программы и установщики, скрипты (Finder откроет их в Терминале и выполнит), расширения системы, файлы-ссылки на адрес или файл.
  */
@@ -82,4 +88,4 @@ const MAC_LINK_PROGRAMS = /\.(app|command|tool|sh|zsh|bash|csh|ksh|pkg|mpkg|dmg|
  */
 const executable = (mode) => (mode & 0o111) !== 0;
 
-module.exports = { parseShellPath, mergePath, loginPath, PS_ARGS, parsePs, MAC_LINK_PROGRAMS, executable, UNIX_EXTRA, SHELL_PATH_MS, MARK };
+module.exports = { parseShellPath, mergePath, loginPath, PS_ARGS, parsePs, LINK_PROGRAMS, MAC_LINK_PROGRAMS, executable, UNIX_EXTRA, SHELL_PATH_MS, MARK };

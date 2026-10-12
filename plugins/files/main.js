@@ -11,8 +11,6 @@ const osRules = require('../../main/os-rules');
 const { STOP_MS, watchKids, hold, diskThread, diskEnding, diskStuck, diskThreads, diskRead } = require('../../main/exec-worker');
 
 const MAC = process.platform === 'darwin';
-// Тот же список, что LINK_PROGRAMS в main\main.js:44 (там он не вынесен в модуль). Меняешь один — поменяй и другой.
-const PROGRAMS = /\.(exe|com|bat|cmd|ps1|psm1|ps1xml|psd1|vbs|vbe|js|jse|wsf|wsh|msc|msi|msp|msix|appx|appinstaller|scr|pif|lnk|url|reg|hta|cpl|jar|appref-ms|application|scf|inf|diagcab|settingcontent-ms|py|pyw|sh)$/i;
 /**
  * Работа в отдельном потоке (search-worker.js), чтобы не замирали окна: mode 'list' — список файлов (запуск git держит поток до 1,5 с, t341),
  * 'text' — поиск в тексте (сборка мусора после чтения тысяч файлов держала главный процесс до 0,6 с, t327).
@@ -102,6 +100,8 @@ const shell = () => require('electron').shell;
 /** @param {{ project: { path: string }, log: (m: string) => void, settings: { get: () => any, set: (v: any) => any } }} ctx */
 module.exports = (ctx) => {
   const root = ctx.project.path;
+  /** Ключ проекта в openIn (t525): «панель открыта» у каждого проекта своя, мешок ctx.settings один на программу. На Windows без разницы в регистре. */
+  const key = root ? (process.platform === 'win32' ? path.resolve(root).toLowerCase() : path.resolve(root)) : '';
   /** Номер последнего поиска: новый запрос из окна отменяет прежний. */
   let gen = 0;
   /**
@@ -225,7 +225,7 @@ module.exports = (ctx) => {
         const r = /** @type {{ full: string, rel: string }} */ (v);
         const st = /** @type {fs.Stats | null} */ (v.st);
         if (!st || !st.isFile()) return { error: 'noFile', path: r.rel };
-        if ((MAC ? osRules.MAC_LINK_PROGRAMS : PROGRAMS).test(r.full) || (MAC && osRules.executable(st.mode))) {
+        if ((MAC ? osRules.MAC_LINK_PROGRAMS : osRules.LINK_PROGRAMS).test(r.full) || (MAC && osRules.executable(st.mode))) {
           shell().showItemInFolder(r.full);
           ctx.log(`программу не запускаю — показана в папке: ${r.full}`);
           return { program: true };
@@ -285,12 +285,16 @@ module.exports = (ctx) => {
       // Обновить — список для поиска собрать заново при следующем поиске. Поток ещё собирает — его список и останется: второй обход рядом не запускается.
       // Чтение папки застряло — прежний список остаётся до его ответа (t463).
       if (cmd === 'refresh') { if (list && list.at && !diskThreads().stuck) list = null; return {}; }
-      if (cmd === 'state') { const s = ctx.settings.get(); return { open: !!s.open }; }
-      if (cmd === 'setState') { ctx.settings.set({ open: !!(args[0] && args[0].open) }); return {}; }
+      // Проекта в openIn нет — старое общее open: его не трогаем, по нему открываются проекты, где панель ещё не открывали и не закрывали.
+      if (cmd === 'state') { const s = ctx.settings.get(); const o = s.openIn && typeof s.openIn === 'object' ? s.openIn : {}; return { open: key in o ? !!o[key] : !!s.open }; }
+      // set заменяет весь мешок (t502): прежние поля сливаются, иначе второе поле пропадало бы при каждом setState.
+      if (cmd === 'setState') {
+        const s = ctx.settings.get();
+        ctx.settings.set({ ...s, openIn: { ...(s.openIn && typeof s.openIn === 'object' ? s.openIn : {}), [key]: !!(args[0] && args[0].open) } });
+        return {};
+      }
       return { error: `нет команды ${cmd}` };
     },
     stop() { stopped = true; gen++; list = null; halt(); for (const c of listers) quit(c, ctx.log); listers.clear(); },
   };
 };
-
-module.exports.PROGRAMS = PROGRAMS;

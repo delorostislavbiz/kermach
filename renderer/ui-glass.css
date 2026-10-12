@@ -1,0 +1,327 @@
+/* Тема «glass» (Тема Нагорняка). Селекторы — только под html[data-ui="glass"]. Цвета — из переменных (main\ui-themes.js). */
+/* Характер: родной macOS. Хром окна (заголовок, левая панель, нижняя строка) прозрачный — сквозь него видна vibrancy окна;
+   содержимое — на карточке var(--surface) со скруглением var(--r-lg) и тенью var(--card-shadow), в 8 px от краёв окна. */
+
+/* —— Свои переменные темы: сегменты, кнопки, поля, меню. Светлый вид — здесь, тёмный — ниже. */
+html[data-ui="glass"] {
+  --g-gap: 8px; /* отступ карточки от краёв окна */
+  --g-seg-track: rgba(0,0,0,.06); /* дорожка сегментного переключателя */
+  --g-seg-on: #FFFFFF; /* выбранный сегмент */
+  --g-seg-shadow: 0 0 0 .5px rgba(0,0,0,.06), 0 1px 3px rgba(0,0,0,.14);
+  --g-btn: #FFFFFF; /* обычная кнопка macOS */
+  --g-btn-hover: #F7F7F9;
+  --g-btn-shadow: 0 0 0 .5px rgba(0,0,0,.14), 0 1px 1.5px rgba(0,0,0,.08);
+  --g-field: rgba(0,0,0,.05); /* поле поиска на хроме (поверх vibrancy) */
+  --g-ring: 0 0 0 3px rgba(var(--accent-rgb),.28); /* кольцо фокуса */
+  --g-menu: rgba(255,255,255,.82); /* меню — полупрозрачное, с размытием */
+  --g-menu-line: rgba(0,0,0,.1);
+  --g-pop-shadow: 0 0 0 .5px rgba(0,0,0,.12), 0 10px 32px rgba(0,0,0,.16), 0 2px 6px rgba(0,0,0,.06);
+  --g-dlg-shadow: 0 0 0 .5px rgba(0,0,0,.14), 0 24px 60px rgba(0,0,0,.22), 0 4px 12px rgba(0,0,0,.08);
+  --g-side-hover: rgba(0,0,0,.05); /* наведение в левой панели (на хроме) */
+  --g-knob: #FFFFFF; /* ручка выключателя */
+}
+html[data-ui="glass"][data-mode="dark"] {
+  --g-seg-track: rgba(255,255,255,.07);
+  --g-seg-on: rgba(255,255,255,.2);
+  --g-seg-shadow: 0 0 0 .5px rgba(255,255,255,.06), 0 1px 3px rgba(0,0,0,.35);
+  --g-btn: rgba(255,255,255,.13);
+  --g-btn-hover: rgba(255,255,255,.18);
+  --g-btn-shadow: 0 0 0 .5px rgba(255,255,255,.04), 0 1px 1.5px rgba(0,0,0,.25);
+  --g-field: rgba(255,255,255,.08);
+  --g-ring: 0 0 0 3px rgba(var(--accent-rgb),.4);
+  --g-menu: rgba(40,40,44,.84);
+  --g-menu-line: rgba(255,255,255,.1);
+  --g-pop-shadow: 0 0 0 .5px rgba(0,0,0,.6), inset 0 0 0 .5px rgba(255,255,255,.12), 0 12px 36px rgba(0,0,0,.45);
+  --g-dlg-shadow: 0 0 0 .5px rgba(0,0,0,.7), inset 0 0 0 .5px rgba(255,255,255,.1), 0 24px 70px rgba(0,0,0,.55);
+  --g-side-hover: rgba(255,255,255,.06);
+  --g-knob: #F5F5F7;
+}
+
+/* —— Общее для всех окон: прозрачный фон (vibrancy главного процесса), заголовок без рамок. */
+html[data-ui="glass"], html[data-ui="glass"] body { background: transparent; }
+html[data-ui="glass"] body { font-size: 13px; letter-spacing: -.003em; }
+html[data-ui="glass"] #title { background: transparent; height: 38px; }
+html[data-ui="glass"] #title .name { font-size: 13px; font-weight: 600; }
+html[data-ui="glass"] #title .name .muted { font-weight: 400; }
+html[data-ui="glass"] :focus-visible { outline-color: var(--focus); }
+
+/* ================= Окно проекта (renderer\index.html) ================= */
+
+/* Левая панель — на хроме, без рамки; пункты — скруглённые «пилюли». */
+html[data-ui="glass"] #side { background: transparent; border-right: 0; padding: 2px 0 10px; width: 228px; }
+html[data-ui="glass"] #side .cap { font-size: 11px; font-weight: 600; color: var(--muted); padding: 4px 18px 6px; letter-spacing: .01em; }
+html[data-ui="glass"] #list { padding: 0 10px; gap: 1px; }
+html[data-ui="glass"] #side .term { height: 42px; padding: 0 10px 0 8px; border-radius: var(--r-md); gap: 9px; }
+html[data-ui="glass"] #side .term:hover { background: var(--g-side-hover); }
+html[data-ui="glass"] #side .term.on, html[data-ui="glass"] #side .term.on:hover { background: var(--selected); }
+html[data-ui="glass"] #side .term.vis { background: rgba(var(--accent-rgb),.07); }
+html[data-ui="glass"] #side .term .strip { height: 22px; width: 3px; border-radius: 3px; }
+html[data-ui="glass"] #side .term .n { font-size: 13px; }
+html[data-ui="glass"] #side .term.need, html[data-ui="glass"] #side .term.need:hover { background: rgba(var(--need-rgb),.12); box-shadow: none; }
+html[data-ui="glass"] #side .term.need.on { background: rgba(var(--need-rgb),.2); }
+html[data-ui="glass"] #side .term.need .strip { background: var(--need) !important; }
+/* Низ левой панели: строки плагинов («Файлы», «Автоматизации»). Их стиль — инлайн из плагинов, поэтому !important. */
+html[data-ui="glass"] #sideFoot { margin: 8px 18px 0; padding-top: 6px; border-top: 1px solid var(--line); }
+html[data-ui="glass"] #sideFoot > div { margin: 0 -8px 1px !important; height: 30px !important; padding: 0 10px !important; border-top: 0 !important; border-radius: var(--r-md); font-size: 13px !important; }
+
+/* Середина — карточка: вкладки, терминалы, страницы. */
+html[data-ui="glass"] #main { gap: 0; }
+html[data-ui="glass"] #center { margin: 0 var(--g-gap) var(--g-gap) 0; background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--card-shadow); overflow: hidden; position: relative; }
+html[data-ui="glass"] #tabrow { height: 40px; border-bottom: 1px solid var(--line); background: transparent; padding: 0 2px 0 6px; }
+html[data-ui="glass"] #tabs { gap: 2px; padding: 6px 0; }
+html[data-ui="glass"] .tab { padding: 0 12px; border-radius: var(--r-md); font-size: 12.5px; gap: 7px; }
+html[data-ui="glass"] .tab:hover { background: var(--hover); }
+html[data-ui="glass"] .tab.on { background: var(--tab-active); font-weight: 500; }
+html[data-ui="glass"] .tab.vis { background: rgba(var(--muted-rgb),.08); }
+/* Цветная черта снизу вкладки — у «Скла» вместо неё цвет значка; оставлена короткой меткой под открытой вкладкой. */
+html[data-ui="glass"] .tab i { display: none; }
+html[data-ui="glass"] .tab .x { border-radius: 50%; }
+html[data-ui="glass"] .tab .x:hover { background: rgba(var(--muted-rgb),.22); }
+html[data-ui="glass"] .tab .x:hover svg { stroke: var(--text); }
+html[data-ui="glass"] .tab.need, html[data-ui="glass"] .tab.need:hover { background: rgba(var(--need-rgb),.12); }
+html[data-ui="glass"] .tab.need.on { background: rgba(var(--need-rgb),.2); }
+html[data-ui="glass"] .tab.ins-before { box-shadow: inset 2px 0 0 var(--accent); }
+html[data-ui="glass"] .tab.ins-after { box-shadow: inset -2px 0 0 var(--accent); }
+html[data-ui="glass"] #side .term.ins-before { box-shadow: inset 0 2px 0 var(--accent); }
+html[data-ui="glass"] #side .term.ins-after { box-shadow: inset 0 -2px 0 var(--accent); }
+html[data-ui="glass"] #plus, html[data-ui="glass"] #layoutBtn { width: 28px; height: 28px; border-radius: var(--r-sm); }
+html[data-ui="glass"] #plus:hover, html[data-ui="glass"] #plus.open,
+html[data-ui="glass"] #layoutBtn:hover, html[data-ui="glass"] #layoutBtn.open { background: var(--hover); }
+
+/* Меню «+» и его подменю «Агенты» — как меню macOS: полупрозрачные, с размытием, выбор — заливка акцентом. */
+html[data-ui="glass"] #adds, html[data-ui="glass"] #addsAgents { padding: 5px; background: var(--g-menu); border: 0; border-radius: 10px; box-shadow: var(--g-pop-shadow);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8); backdrop-filter: blur(24px) saturate(1.8); }
+html[data-ui="glass"] #adds .item { height: 28px; padding: 0 9px; border-radius: var(--r-sm); font-size: 13px; }
+html[data-ui="glass"] #adds .item:hover, html[data-ui="glass"] #addAgents.open { background: var(--accent); color: var(--on-accent); }
+html[data-ui="glass"] #adds .item:hover svg { stroke: var(--on-accent); }
+html[data-ui="glass"] #adds .item:hover::after { color: var(--on-accent); }
+html[data-ui="glass"] #adds .sep { background: var(--g-menu-line); margin: 4px 8px; }
+
+/* Поле терминалов: фон = фон терминала (var(--surface)), поле 16 px вокруг xterm сливается с ним. */
+html[data-ui="glass"] #panes { background: var(--surface); }
+html[data-ui="glass"] .pane:not(.page) { inset: 12px 12px 8px 16px; }
+html[data-ui="glass"] #panes.split .pane:not(.page).focus::after { left: -16px; right: -12px; top: -12px; }
+html[data-ui="glass"] #panes.split .pane.focus::after { height: 2px; background: var(--accent); }
+html[data-ui="glass"] .lgrip:hover, html[data-ui="glass"] .lgrip.drag { background: rgba(var(--accent-rgb),.25); }
+html[data-ui="glass"] .ldrop { box-shadow: inset 0 0 0 2px var(--accent); background: rgba(var(--accent-rgb),.1); border-radius: var(--r-md); }
+html[data-ui="glass"] .lslot.focus { box-shadow: inset 0 2px 0 var(--accent); }
+html[data-ui="glass"] .lslot button { height: 30px; border: 0; border-radius: var(--r-md); background: var(--g-btn); box-shadow: var(--g-btn-shadow); }
+html[data-ui="glass"] .lslot button:hover { background: var(--g-btn-hover); }
+
+/* Пустое окно «Что запустить?». */
+html[data-ui="glass"] #empty { gap: 18px; }
+html[data-ui="glass"] #empty .ask { font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+html[data-ui="glass"] #empty .btns { gap: 10px; }
+html[data-ui="glass"] #empty button { height: 38px; padding: 0 16px; border: 0; border-radius: 10px; background: var(--g-btn); box-shadow: var(--g-btn-shadow); font-size: 13px; font-weight: 500; }
+html[data-ui="glass"] #empty button:hover { background: var(--g-btn-hover); }
+html[data-ui="glass"] #empty button:active { filter: brightness(.96); }
+
+/* Вкладка сайта: полоса адреса. */
+html[data-ui="glass"] .bbar { height: 40px; padding: 0 8px; gap: 2px; border-bottom: 1px solid var(--line); }
+html[data-ui="glass"] .bbar .bb { height: 28px; border-radius: var(--r-sm); }
+html[data-ui="glass"] .bbar .bb.on { color: var(--accent); background: var(--accent-bg); }
+html[data-ui="glass"] .bbar input { height: 28px; border: 1px solid transparent; border-radius: var(--r-md); background: var(--input); font: 13px var(--font-ui); text-align: center; }
+html[data-ui="glass"] .bbar input:focus { text-align: left; border-color: var(--focus); box-shadow: var(--g-ring); }
+html[data-ui="glass"] .bview .bmsg { background: var(--surface); }
+
+/* Правая панель — вторая карточка; ручка ширины — в зазоре между карточками. */
+html[data-ui="glass"] #right { margin: 0 var(--g-gap) var(--g-gap) 0; background: var(--surface); border-left: 0; border-radius: var(--r-lg); box-shadow: var(--card-shadow); overflow: hidden; }
+html[data-ui="glass"] #rightGrip { flex: 0 0 6px; margin: 0 1px 0 -7px; border-radius: 3px; }
+html[data-ui="glass"] #rightGrip:hover, html[data-ui="glass"] #rightGrip.drag { background: rgba(var(--accent-rgb),.35); }
+
+/* Нижняя строка — на хроме, без рамки; карточки над ней отступают меньше. */
+html[data-ui="glass"] #bottom { background: transparent; border-top: 0; height: 24px; margin-top: -4px; padding: 0 16px 2px; font-size: 11.5px; }
+html[data-ui="glass"] #bottom > * { cursor: default; }
+
+/* Плагин «Файлы» (plugins\files\window.js). */
+html[data-ui="glass"] #plugin-files-panel { font-size: 13px; }
+html[data-ui="glass"] #plugin-files-panel .fh { height: 40px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); }
+html[data-ui="glass"] #plugin-files-panel .fh .t { font-weight: 600; font-size: 13px; }
+html[data-ui="glass"] #plugin-files-panel .fbtn { width: 26px; height: 26px; border-radius: var(--r-sm); }
+html[data-ui="glass"] #plugin-files-panel .fs { padding: 10px 10px 6px; gap: 8px; }
+html[data-ui="glass"] #plugin-files-panel .fs input[type=text] { height: 28px; padding: 0 10px; border: 1px solid transparent; border-radius: var(--r-md); background: var(--input); }
+html[data-ui="glass"] #plugin-files-panel .fs input[type=text]:focus { border-color: var(--focus); box-shadow: var(--g-ring); }
+html[data-ui="glass"] #plugin-files-panel .fs label { padding-left: 2px; }
+html[data-ui="glass"] #plugin-files-panel .fs input[type=checkbox] { accent-color: var(--accent); margin: 0; }
+html[data-ui="glass"] #plugin-files-panel .ftree, html[data-ui="glass"] #plugin-files-panel .fres { padding: 2px 6px 8px; }
+html[data-ui="glass"] #plugin-files-panel .frow { min-height: 26px; border-radius: var(--r-sm); }
+html[data-ui="glass"] #plugin-files-panel .frow:hover { background: var(--hover); }
+html[data-ui="glass"] #plugin-files-panel .fnote { border-top: 1px solid var(--line); }
+html[data-ui="glass"] #right > #plugin-files-panel:not([hidden]) ~ #plugin-git-panel:not([hidden]) { border-top: 1px solid var(--line); }
+/* Плагин «Git»: список изменений — моноширинным, как в терминале. */
+html[data-ui="glass"] #plugin-git-panel { font-family: ui-monospace, 'SF Mono', Menlo, monospace !important; font-size: 12px !important; }
+
+/* Плагин «Markdown» (plugins\markdown\window.js): свои переменные .mdpane — под «Скло»; ссылки и выбор — акцент, не зелёный info. */
+html[data-ui="glass"] .mdpane { --md-bg: var(--surface); --md-field: var(--surface); --md-accent: var(--accent); --md-panel: var(--input); --md-line: var(--line); --md-edge: var(--line); }
+html[data-ui="glass"] .mdpane .mdbar { height: 40px; padding: 0 10px; gap: 10px; }
+html[data-ui="glass"] .mdpane .mdseg, html[data-ui="glass"] .mdpane .mdsize { padding: 2px; gap: 2px; border: 0; border-radius: var(--r-md); background: var(--g-seg-track); }
+html[data-ui="glass"] .mdpane .mdseg button, html[data-ui="glass"] .mdpane .mdsize button { height: 22px; border-radius: var(--r-sm); font: 12px var(--font-ui); color: var(--text); }
+html[data-ui="glass"] .mdpane .mdseg button:hover, html[data-ui="glass"] .mdpane .mdsize button:hover { background: rgba(var(--muted-rgb),.12); }
+html[data-ui="glass"] .mdpane .mdseg button.on, html[data-ui="glass"] .mdpane .mdseg button.on:hover { background: var(--g-seg-on); color: var(--text); box-shadow: var(--g-seg-shadow); font-weight: 500; }
+html[data-ui="glass"] .mdpane .mdsize .mdz { color: var(--muted); }
+html[data-ui="glass"] .mdpane .mdsave { height: 24px; padding: 0 12px; border: 0; border-radius: var(--r-sm); background: var(--accent); color: var(--on-accent); font: 500 12px var(--font-ui); }
+html[data-ui="glass"] .mdpane .mdsave:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+html[data-ui="glass"] .mdpane .mdsave:disabled { opacity: 1; background: var(--g-seg-track); color: var(--faint); }
+html[data-ui="glass"] .mdpane .mdtools { padding: 4px 10px; gap: 2px; }
+html[data-ui="glass"] .mdpane .mdtools button { border-radius: var(--r-sm); font: 12px var(--font-ui); color: var(--text); }
+html[data-ui="glass"] .mdpane .mdtools button:hover { background: var(--hover); }
+html[data-ui="glass"] .mdpane .mdnote { background: rgba(var(--need-rgb),.1); border-bottom: 1px solid rgba(var(--need-rgb),.35); }
+html[data-ui="glass"] .mdpane .mdnote button { border: 0; border-radius: var(--r-sm); background: var(--g-btn); box-shadow: var(--g-btn-shadow); font: 12px var(--font-ui); }
+html[data-ui="glass"] .mdpane .mded { padding: 16px 22px; }
+html[data-ui="glass"] .mdpane .mdview { padding: 18px 32px 48px; max-width: none; color: var(--text); font-family: var(--font-ui); line-height: 1.55; }
+html[data-ui="glass"] .mdpane .mdview h1, html[data-ui="glass"] .mdpane .mdview h2, html[data-ui="glass"] .mdpane .mdview h3 { font-weight: 700; letter-spacing: -.015em; line-height: 1.25; }
+html[data-ui="glass"] .mdpane .mdview code { border-radius: 5px; font-size: .88em; }
+html[data-ui="glass"] .mdpane .mdview pre { padding: 12px 16px; border-radius: var(--r-md); border: 1px solid var(--line); }
+html[data-ui="glass"] .mdpane .mdview blockquote { border-left: 3px solid rgba(var(--accent-rgb),.5); }
+html[data-ui="glass"] .mdpane .mdview table { border-radius: var(--r-md); overflow: hidden; }
+html[data-ui="glass"] .mdpane .mdview input[type=checkbox] { accent-color: var(--accent); }
+html[data-ui="glass"] .mdli { border-radius: var(--r-sm); }
+html[data-ui="glass"] .mdli.on { background: var(--accent); color: var(--on-accent); }
+
+/* ================= Окно «Проекты» (renderer\projects.html) ================= */
+
+html[data-ui="glass"] #bar { padding: 2px 16px 12px; gap: 8px; }
+html[data-ui="glass"] #search { height: 30px; padding: 0 10px; gap: 7px; border: 1px solid transparent; border-radius: var(--r-md); background: var(--g-field); }
+html[data-ui="glass"] #search:focus-within { border-color: var(--focus); box-shadow: var(--g-ring); background: var(--surface); }
+/* Кнопки строки поиска — кнопки macOS; «Добавить папку» — главная, заливка акцентом. */
+html[data-ui="glass"] .bbtn { height: 30px; padding: 0 12px; gap: 6px; border: 0; border-radius: var(--r-md); background: var(--g-btn); color: var(--text); box-shadow: var(--g-btn-shadow); font-weight: 500; }
+html[data-ui="glass"] .bbtn:hover { background: var(--g-btn-hover); color: var(--text); }
+html[data-ui="glass"] .bbtn:active { filter: brightness(.95); }
+html[data-ui="glass"] #add { background: var(--accent); color: var(--on-accent); box-shadow: 0 1px 2px rgba(0,0,0,.12), inset 0 .5px 0 rgba(255,255,255,.2); }
+html[data-ui="glass"] #add:hover { background: var(--accent); filter: brightness(1.08); }
+html[data-ui="glass"] #add svg { stroke: var(--on-accent); }
+html[data-ui="glass"] .bbtn.danger, html[data-ui="glass"] .bbtn.danger:hover { color: var(--danger); background: var(--g-btn); }
+html[data-ui="glass"] .bbtn.danger:hover { background: var(--g-btn-hover); }
+html[data-ui="glass"] .bbtn:disabled, html[data-ui="glass"] .bbtn:disabled:hover { opacity: .5; background: var(--g-btn); filter: none; }
+html[data-ui="glass"] #autosN { border: 0; border-radius: 9px; padding: 0 6px; background: rgba(var(--muted-rgb),.16); line-height: 16px; }
+html[data-ui="glass"] #autosN.new { background: var(--accent); color: var(--on-accent); }
+html[data-ui="glass"] #count { padding: 0 20px 8px 22px; font-size: 11.5px; }
+html[data-ui="glass"] .tool { height: 24px; padding: 0 9px; border: 0; border-radius: var(--r-sm); background: var(--g-seg-track); font-size: 11.5px; }
+html[data-ui="glass"] .tool:hover { background: rgba(var(--muted-rgb),.2); }
+html[data-ui="glass"] .tool:disabled { background: var(--g-seg-track); }
+/* «Список / плитка» — сегментный переключатель macOS. */
+html[data-ui="glass"] #views { padding: 2px; gap: 2px; border: 0; border-radius: var(--r-md); background: var(--g-seg-track); overflow: visible; }
+html[data-ui="glass"] #views button { height: 20px; width: 28px; border-radius: var(--r-sm); }
+html[data-ui="glass"] #views button:hover { background: rgba(var(--muted-rgb),.12); }
+html[data-ui="glass"] #views button.on, html[data-ui="glass"] #views button.on:hover { background: var(--g-seg-on); box-shadow: var(--g-seg-shadow); }
+/* Список проектов — на карточке. Через #bar ~ #list — чтобы не задеть #list левой панели окна проекта и строки диалогов. */
+html[data-ui="glass"] #bar ~ #list { margin: 0 var(--g-gap) var(--g-gap); padding: 6px; background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--card-shadow); }
+html[data-ui="glass"] #bar ~ #list .group { height: 28px; padding: 0 12px 0 8px; border-radius: var(--r-sm); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+html[data-ui="glass"] #bar ~ #list .group.shut { background: var(--g-seg-track); }
+html[data-ui="glass"] #bar ~ #list .group.shut.need { background: rgba(var(--need-rgb),.12); box-shadow: none; }
+html[data-ui="glass"] #bar ~ #list .row { height: 44px; padding: 0 14px 0 10px; border-radius: var(--r-md); }
+html[data-ui="glass"] #bar ~ #list .row:hover { background: var(--hover); }
+html[data-ui="glass"] #bar ~ #list .row.fresh { background: var(--accent-bg); outline: 0; }
+html[data-ui="glass"] #bar ~ #list .row.need { background: rgba(var(--need-rgb),.1); box-shadow: none; }
+html[data-ui="glass"] #bar ~ #list .row.need:hover { background: rgba(var(--need-rgb),.16); }
+html[data-ui="glass"] #bar ~ #list .row.need .strip { background: var(--need) !important; }
+html[data-ui="glass"] #bar ~ #list .row .strip { height: 22px; border-radius: 3px; }
+html[data-ui="glass"] #bar ~ #list .text .n { font-size: 13px; font-weight: 500; }
+html[data-ui="glass"] #bar ~ #list .tiles { gap: 10px; padding: 6px; }
+html[data-ui="glass"] #bar ~ #list .tile { height: 86px; padding: 14px 12px 10px; border-radius: 10px; background: var(--input); box-shadow: inset 0 0 0 .5px var(--line); }
+html[data-ui="glass"] #bar ~ #list .tile:hover { background: var(--tile-hover); }
+html[data-ui="glass"] #bar ~ #list .tile.fresh { outline: 2px solid rgba(var(--accent-rgb),.5); }
+html[data-ui="glass"] #bar ~ #list .tile.need { background: var(--tile-need); outline: 0; box-shadow: inset 0 0 0 1px rgba(var(--need-rgb),.45); }
+html[data-ui="glass"] #bar ~ #list .tile .n { font-weight: 500; }
+
+/* ================= Диалоги (renderer\dialogs.js) ================= */
+
+html[data-ui="glass"] .dlg { background: var(--bg); border: 0; border-radius: var(--r-lg); box-shadow: var(--g-dlg-shadow); font: 13px var(--font-ui); }
+html[data-ui="glass"] .dlg-title { height: 44px; padding-left: 20px; }
+html[data-ui="glass"] .dlg-title .t { font-size: 13px; font-weight: 600; }
+html[data-ui="glass"] .dlg-title .x { width: 24px; height: 24px; margin-right: 12px; border-radius: 50%; color: var(--muted); }
+html[data-ui="glass"] .dlg-title .x:hover { background: var(--hover); color: var(--text); }
+html[data-ui="glass"] .dlg-title .x svg { stroke: currentColor; }
+html[data-ui="glass"] .dlg-body { padding: 4px 20px 20px; gap: 20px; }
+html[data-ui="glass"] .dlg .sec { gap: 8px; }
+html[data-ui="glass"] .dlg .cap { font-size: 12px; font-weight: 600; color: var(--text); }
+html[data-ui="glass"] .dlg .prev { border-radius: var(--r-md); background: var(--input); }
+html[data-ui="glass"] .dlg .sw { border-radius: 50%; }
+html[data-ui="glass"] .dlg .sw.on { outline: 2px solid var(--accent); }
+html[data-ui="glass"] .dlg .own { border: 0; border-radius: var(--r-sm); background: var(--g-btn); box-shadow: var(--g-btn-shadow); }
+html[data-ui="glass"] .dlg .own:hover { background: var(--g-btn-hover); }
+html[data-ui="glass"] .dlg .own.on { box-shadow: 0 0 0 2px var(--accent); }
+html[data-ui="glass"] .dlg .find { height: 28px; border: 1px solid transparent; border-radius: var(--r-md); background: var(--input); }
+html[data-ui="glass"] .dlg .find:focus-within { border-color: var(--focus); box-shadow: var(--g-ring); }
+html[data-ui="glass"] .dlg .find input, html[data-ui="glass"] .dlg .field { font-family: var(--font-ui); }
+html[data-ui="glass"] .dlg .g { border-radius: var(--r-md); }
+html[data-ui="glass"] .dlg .field { height: 30px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--input); font-size: 13px; }
+html[data-ui="glass"] .dlg .field:focus { border-color: var(--focus); box-shadow: var(--g-ring); }
+/* Кнопки внизу диалога: обычная — кнопка macOS, главная — заливка акцентом. */
+html[data-ui="glass"] .dlg .btns { gap: 10px; padding-top: 6px; }
+html[data-ui="glass"] .dlg .btns button { height: 28px; min-width: 80px; padding: 0 14px; border: 0; border-radius: var(--r-sm); background: var(--g-btn); color: var(--text); box-shadow: var(--g-btn-shadow); font: 500 13px var(--font-ui); }
+html[data-ui="glass"] .dlg .btns button:hover { background: var(--g-btn-hover); }
+html[data-ui="glass"] .dlg .btns button:focus-visible { outline: 0; box-shadow: var(--g-btn-shadow), var(--g-ring); }
+html[data-ui="glass"] .dlg .btns .ok, html[data-ui="glass"] .dlg .btns .ok:hover { background: var(--button); color: var(--button-fg); box-shadow: 0 1px 2px rgba(0,0,0,.14), inset 0 .5px 0 rgba(255,255,255,.2); }
+html[data-ui="glass"] .dlg .btns .ok:hover { filter: brightness(1.08); }
+html[data-ui="glass"] .dlg .btns .ok:disabled { opacity: .45; filter: none; }
+html[data-ui="glass"] .dlg .btns .danger, html[data-ui="glass"] .dlg .btns .danger:hover { background: var(--danger); color: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.14); }
+html[data-ui="glass"] .dlg .btns .danger:hover { filter: brightness(1.08); }
+/* Сегментный переключатель macOS: серая дорожка, выбранный сегмент — светлая «кнопка» с тенью. */
+html[data-ui="glass"] .dlg .seg { gap: 2px; padding: 2px; border-radius: var(--r-md); background: var(--g-seg-track); }
+html[data-ui="glass"] .dlg .seg button { height: 26px; border: 0; border-radius: var(--r-sm); background: none; color: var(--text); font: 13px var(--font-ui); }
+html[data-ui="glass"] .dlg .seg button:hover { background: rgba(var(--muted-rgb),.12); }
+html[data-ui="glass"] .dlg .seg button.on, html[data-ui="glass"] .dlg .seg button.on:hover { background: var(--g-seg-on); color: var(--text); box-shadow: var(--g-seg-shadow); font-weight: 500; }
+html[data-ui="glass"] .dlg .seg button:focus-visible { outline: 0; box-shadow: var(--g-ring); }
+html[data-ui="glass"] .dlg .stepper > button { height: 28px; width: 28px; border: 0; border-radius: var(--r-sm); background: var(--g-btn); box-shadow: var(--g-btn-shadow); font: 15px var(--font-ui); }
+html[data-ui="glass"] .dlg .stepper > button:hover { background: var(--g-btn-hover); }
+html[data-ui="glass"] .dlg .stepper > input { height: 28px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--input); font: 13px var(--font-ui); }
+html[data-ui="glass"] .dlg .stepper > input:focus { outline: 0; border-color: var(--focus); box-shadow: var(--g-ring); }
+html[data-ui="glass"] .dlg select { border-radius: var(--r-sm) !important; border-color: var(--line) !important; background: var(--input); color: var(--text); font: 13px var(--font-ui); height: 28px !important; }
+html[data-ui="glass"] .dlg .chk { gap: 9px; }
+/* Карточки «Тема программы». */
+html[data-ui="glass"] .dlg .uicards { gap: 10px; }
+html[data-ui="glass"] .dlg .uicard { padding: 6px 6px 8px; gap: 6px; border: 0; border-radius: 10px; background: var(--input); box-shadow: inset 0 0 0 1px var(--line); }
+html[data-ui="glass"] .dlg .uicard:hover { background: var(--hover); }
+html[data-ui="glass"] .dlg .uicard.on { background: var(--accent-bg); box-shadow: inset 0 0 0 2px var(--accent); }
+html[data-ui="glass"] .dlg .uicard .pv { border-radius: 6px; height: 50px; }
+html[data-ui="glass"] .dlg .uicard .nm { padding: 0 2px; font-weight: 600; }
+html[data-ui="glass"] .dlg .uicard .by { padding: 0 2px; }
+html[data-ui="glass"] .dlg .agt .open, html[data-ui="glass"] .dlg .agt .how button:not(.link) { height: 28px; border: 0; border-radius: var(--r-sm); background: var(--g-btn); box-shadow: var(--g-btn-shadow); font: 500 13px var(--font-ui); }
+html[data-ui="glass"] .dlg .agt .how button:not(.link) { height: 24px; font-size: 12px; }
+html[data-ui="glass"] .dlg .agt .open:hover, html[data-ui="glass"] .dlg .agt .how button:not(.link):hover { background: var(--g-btn-hover); }
+html[data-ui="glass"] .dlg .agt .how code { border-radius: var(--r-sm); background: var(--input); font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+html[data-ui="glass"] .dlg .agt .how .link { box-shadow: none; background: none; }
+/* Контекстное меню (Dialogs.menu) — как меню macOS. */
+html[data-ui="glass"] .dlg-menu { padding: 5px; background: var(--g-menu); border: 0; border-radius: 10px; box-shadow: var(--g-pop-shadow); font: 13px var(--font-ui);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8); backdrop-filter: blur(24px) saturate(1.8); }
+html[data-ui="glass"] .dlg-menu .item { height: 26px; padding: 0 10px 0 8px; border-radius: var(--r-sm); }
+html[data-ui="glass"] .dlg-menu .item:hover { background: var(--accent); color: var(--on-accent); }
+html[data-ui="glass"] .dlg-menu .item:hover svg { stroke: var(--on-accent); }
+html[data-ui="glass"] .dlg-menu .item.danger { color: var(--danger); }
+html[data-ui="glass"] .dlg-menu .item.danger:hover { background: var(--danger); color: #fff; }
+html[data-ui="glass"] .dlg-menu .item.danger:hover svg { stroke: #fff; }
+html[data-ui="glass"] .dlg-menu .sep { background: var(--g-menu-line); margin: 4px 8px; }
+
+/* ================= Окно «Автоматизации» (plugins\automations\window.html) ================= */
+
+html[data-ui="glass"] #screen { margin: 0 var(--g-gap) var(--g-gap); padding-top: 12px; background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--card-shadow); overflow: hidden; }
+html[data-ui="glass"] #screen .bbtn.plain { color: var(--text); }
+html[data-ui="glass"] #screen .bbtn.danger { color: var(--danger); }
+/* «Новая автоматизация» — главная кнопка экрана, как .fill. */
+html[data-ui="glass"] #screen #new svg { stroke: var(--on-accent); }
+html[data-ui="glass"] #screen .bbtn.fill, html[data-ui="glass"] #screen .bbtn.fill:hover, html[data-ui="glass"] #screen #new, html[data-ui="glass"] #screen #new:hover { background: var(--accent); color: var(--on-accent); box-shadow: 0 1px 2px rgba(0,0,0,.12), inset 0 .5px 0 rgba(255,255,255,.2); }
+html[data-ui="glass"] #screen .bbtn.fill:hover, html[data-ui="glass"] #screen #new:hover { filter: brightness(1.08); }
+html[data-ui="glass"] #screen .bbtn.small { height: 24px; border-radius: var(--r-sm); }
+html[data-ui="glass"] #screen .bbtn:not(.fill):not(.plain):not(.danger):not(#new) { color: var(--accent); }
+html[data-ui="glass"] #screen .row { border-radius: var(--r-md); }
+html[data-ui="glass"] #screen .runrow { border-radius: var(--r-sm); }
+html[data-ui="glass"] #screen .row.foreign { background: rgba(var(--need-rgb),.1); box-shadow: none; }
+html[data-ui="glass"] #screen .group { font-weight: 600; letter-spacing: .02em; }
+html[data-ui="glass"] #screen .tag { border: 0; border-radius: 9px; background: rgba(var(--muted-rgb),.16); }
+html[data-ui="glass"] #screen .chip { height: 24px; border: 0; border-radius: 12px; background: var(--g-seg-track); color: var(--text); }
+html[data-ui="glass"] #screen .chip:hover { background: rgba(var(--muted-rgb),.2); }
+html[data-ui="glass"] #screen .chip.on { background: var(--accent); color: var(--on-accent); }
+/* Выключатель — как у macOS: белая ручка с тенью. */
+html[data-ui="glass"] #screen .sw { width: 32px; height: 18px; border-radius: 9px; background: rgba(var(--muted-rgb),.32); }
+html[data-ui="glass"] #screen .sw::after { top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 7px; background: var(--g-knob); box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+html[data-ui="glass"] #screen .sw.on { background: var(--accent); }
+html[data-ui="glass"] #screen .sw.on::after { left: 16px; background: var(--g-knob); }
+html[data-ui="glass"] #screen input[type=text], html[data-ui="glass"] #screen input[type=number], html[data-ui="glass"] #screen input[type=date],
+html[data-ui="glass"] #screen input[type=time], html[data-ui="glass"] #screen select, html[data-ui="glass"] #screen textarea { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--input); }
+html[data-ui="glass"] #screen input:focus, html[data-ui="glass"] #screen select:focus, html[data-ui="glass"] #screen textarea:focus { border-color: var(--focus); box-shadow: var(--g-ring); }
+html[data-ui="glass"] #screen .head h1 { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+html[data-ui="glass"] #screen .sec { font-weight: 600; letter-spacing: .02em; }
+html[data-ui="glass"] #screen .card { border-radius: 10px; background: var(--input); }
+html[data-ui="glass"] #screen .panel { border-radius: var(--r-md); }
+html[data-ui="glass"] #screen .foot { border-top: 1px solid var(--line); }

@@ -23,7 +23,7 @@ const { findProgram, notFound } = require('./find-program');
 const agents = require('./agents');
 const i18n = require('./i18n');
 const { withExtra, unwrap } = require('./cmd-shim');
-// Окружение команды terminalus browser (t381): канал, подпись проекта, папка команды в PATH — в каждый новый терминал проекта.
+// Окружение команды kermach browser (старое имя terminalus, t381): канал, подпись проекта, папка команды в PATH — в каждый новый терминал проекта.
 const browserCli = require('../plugins/browser/cli');
 
 /**
@@ -111,7 +111,7 @@ const abandoned = new Set();
 const exits = new Map();
 
 /**
- * Программа с подсказкой о команде terminalus browser (t389) — флаги сразу после программы, до номера разговора: хвост args прежний.
+ * Программа с подсказкой о команде kermach browser (t389) — флаги сразу после программы, до номера разговора: хвост args прежний.
  * .cmd от npm — мимо cmd.exe (cmd-shim.unwrap): текст с пробелами через два слоя cmd не дойдёт целым. Не обёртка npm — без подсказки.
  * @param {string} kind @param {{ file: string, pre: string[] }} p
  */
@@ -174,7 +174,7 @@ function launch(kind, resume, hooksSettings, ag) {
 /**
  * Флаги, которыми ядро ведёт вкладку само (номер разговора, хуки, продолжение): свои аргументы плагина их не задают (t253).
  * И флаги, которые выводят агента за папку проекта (t278): --add-dir и --worktree (у claude ещё -w), у codex ещё -C / --cd — как cwd вне проекта.
- * Системные инструкции Claude — тоже у ядра: в них подсказка о команде terminalus browser (t389).
+ * Системные инструкции Claude — тоже у ядра: в них подсказка о команде kermach browser (t389).
  * @type {Record<string, string[]>}
  */
 const OWN_FLAGS = {
@@ -185,14 +185,17 @@ const OWN_FLAGS = {
 /**
  * Свои флаги плагина (t279): только из этого списка, у каждого вида свой; флаг → проверка его значения. Остальное — отказ:
  * флаги прав (claude --dangerously-skip-permissions, codex -c, -s, -a, -p, --dangerously-bypass-approvals-and-sandbox) запретом по одному не закрыть.
- * Сейчас плагины шлют только модель (ОТЧЁТ-t279-allow.md). Агенты из системы (agent:<id>) своих флагов не имеют: у каждого свои флаги прав.
+ * Плагины шлют модель (ОТЧЁТ-t279-allow.md) и усилие (t536, «Роадмап»). Агенты из системы (agent:<id>) своих флагов не имеют: у каждого свои флаги прав.
  * Модель — алиас или полное имя, у Claude бывает с [1m]: без пробелов, кавычек и «-» в начале.
+ * Усилие — только известные значения, флаги как в Орке: claude --effort (значения из claude --help); codex -c model_reasoning_effort=… — значения из ответа сервера
+ * (spikes\t536-effort\minimal-400.txt): minimal и ultra клиент знает, сервер отвечает 400.
+ * У codex -c — общий флаг настроек, им меняют и права (-c sandbox_mode=…): разрешён только ключ model_reasoning_effort одним словом, -c=… и -cX — отказ.
  * @type {Record<string, Record<string, RegExp>>}
  */
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}$/;
 const ALLOW_FLAGS = {
-  claude: { '--model': MODEL_RE },
-  codex: { '--model': MODEL_RE, '-m': MODEL_RE },
+  claude: { '--model': MODEL_RE, '--effort': /^(low|medium|high|xhigh|max)$/ },
+  codex: { '--model': MODEL_RE, '-m': MODEL_RE, '-c': /^model_reasoning_effort=(none|low|medium|high|xhigh|max)$/ },
 };
 
 /**

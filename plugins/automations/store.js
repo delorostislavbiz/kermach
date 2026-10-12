@@ -15,6 +15,8 @@ const crypto = require('crypto');
 const RUNS = 'automation-runs';
 /** Сколько прогонов хранить у одной автоматизации. */
 const KEEP = 50;
+/** Больше — automation.json и задание.md не читаем и не пишем: «слишком большой» (t524). Как у доски Роадмапа. */
+const MAX_SIZE = 256 * 1024;
 const ID_RE = /^a-[0-9a-f]{8}$/;
 const MODELS = ['auto', 'haiku', 'sonnet', 'opus'];
 const KINDS = ['once', 'daily', 'weekdays', 'weekly', 'hours'];
@@ -90,14 +92,39 @@ function nextRun(r, from) {
 const newId = () => `a-${crypto.randomBytes(4).toString('hex')}`;
 const commonRoot = (/** @type {string} */ dataDir) => path.join(dataDir, 'automations');
 const projectRoot = (/** @type {string} */ project) => path.join(project, '.terminalus', 'automations');
+
+/**
+ * Куда на деле ведёт путь в проекте, если за пределы проекта (ссылка или junction на .terminalus и ниже, t523); '' — внутри.
+ * Смотрит ближайшую существующую папку пути: её realpath раскрывает все ссылки выше, а новые папки mkdir создаст уже внутри неё.
+ * Не прочитать путь — тоже «за пределами»: писать туда нельзя. @param {string} project @param {string} file
+ */
+function outside(project, file) {
+  try {
+    const base = fs.realpathSync(path.resolve(project));
+    let d = path.resolve(file);
+    while (!fs.existsSync(d) && path.dirname(d) !== d) d = path.dirname(d);
+    const real = fs.realpathSync(d);
+    const rel = path.relative(base, real);
+    return rel.startsWith('..') || path.isAbsolute(rel) ? real : '';
+  } catch (e) { return `${file} (${e instanceof Error ? e.message : e})`; }
+}
+
+/** Отказ, если путь в проекте ведёт за его пределы. @param {string} project @param {string} file */
+function ownPath(project, file) {
+  if (!fs.existsSync(project)) throw new Error(`нет папки проекта ${project}`);
+  const real = outside(project, file);
+  if (real) throw new Error(`папка .terminalus ведёт за пределы проекта: ${real}`);
+}
+
 /**
  * Папка прогонов. Проект — из реестра этого компьютера. Нет записи или папки проекта (отказ «нет папки проекта») — папка данных:
- * не создавать папку пропавшего проекта.
+ * не создавать папку пропавшего проекта. Папка прогонов в проекте ведёт за его пределы — тоже папка данных: туда ляжет отказ прогона (readItem), а не чужая папка.
  * @param {string} dataDir @param {string} id
  */
 function runsOf(dataDir, id) {
   const p = (registry(dataDir)[id] || {}).project;
-  return p && fs.existsSync(p) ? path.join(p, '.terminalus', RUNS, id) : path.join(dataDir, RUNS, id);
+  const own = p && fs.existsSync(p) ? path.join(p, '.terminalus', RUNS, id) : '';
+  return own && !outside(p, own) ? own : path.join(dataDir, RUNS, id);
 }
 const workOf = (/** @type {string} */ dataDir, /** @type {string} */ id) => path.join(runsOf(dataDir, id), 'работа');
 const regFile = (/** @type {string} */ dataDir) => path.join(dataDir, 'automations.json');
@@ -111,19 +138,51 @@ function writeAtomic(file, text) {
   fs.renameSync(tmp, file);
 }
 
-/** @param {string} file */
+/** Код ошибки «слишком большой» у readSmall. */
+const TOO_BIG = 'TOO_BIG';
+
+/**
+ * JSON реестра или прогона (t527). Нет файла или битый — null. Больше MAX_SIZE — ошибка «слишком большой»: файл в сотни МБ подвесил бы главный процесс,
+ * а что делать с таким файлом, решает вызывающий. @param {string} file
+ */
 function readJson(file) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+  let text;
+  try { text = readSmall(file); } catch (e) { if (/** @type {any} */ (e).code === TOO_BIG) throw e; return null; }
+  try { return JSON.parse(text); } catch { return null; }
 }
 
-/** Реестр компьютера. Битый или нет файла — пустой. @param {string} dataDir @returns {Record<string, RegEntry>} */
+/** Файл описания текстом; больше MAX_SIZE — ошибка «слишком большой», файл в память не берётся. @param {string} file */
+function readSmall(file) {
+  const size = fs.statSync(file).size;
+  if (size > MAX_SIZE) throw Object.assign(new Error(`слишком большой: ${size} байт, предел ${MAX_SIZE}`), { code: TOO_BIG });
+  return fs.readFileSync(file, 'utf8');
+}
+
+/** Описание на запись: проверка и предел размера задания. Текст ошибки или ''. @param {Config} cfg @param {string} task */
+function checkSave(cfg, task) {
+  const size = Buffer.byteLength(task);
+  return check(cfg) || (cfg.repeat ? '' : 'нет повтора') || (size > MAX_SIZE ? `задание.md слишком большой: ${size} байт, предел ${MAX_SIZE}` : '');
+}
+
+/**
+ * Реестр компьютера. Битый или нет файла — пустой. Слишком большой — тоже пустой: описания в папках читаются, общие включены по умолчанию,
+ * а писать в такой реестр нельзя (regWritable) — записи остальных автоматизаций в нём не затираются. @param {string} dataDir @returns {Record<string, RegEntry>}
+ */
 function registry(dataDir) {
-  const r = readJson(regFile(dataDir));
+  let r = null;
+  try { r = readJson(regFile(dataDir)); } catch {}
   return r && typeof r === 'object' && !Array.isArray(r) ? r : {};
 }
 
+/** Отказ, если реестр больше MAX_SIZE (t527): он прочитан пустым, и запись затёрла бы все его записи. Зовётся до первых изменений на диске. @param {string} dataDir */
+function regWritable(dataDir) {
+  let size = 0;
+  try { size = fs.statSync(regFile(dataDir)).size; } catch { return; }
+  if (size > MAX_SIZE) throw new Error(`реестр ${regFile(dataDir)} слишком большой: ${size} байт, предел ${MAX_SIZE} — автоматизации не меняю, пока его не уменьшить или не удалить`);
+}
+
 /** @param {string} dataDir @param {Record<string, RegEntry>} reg */
-function saveRegistry(dataDir, reg) { writeAtomic(regFile(dataDir), JSON.stringify(reg, null, 2)); }
+function saveRegistry(dataDir, reg) { regWritable(dataDir); writeAtomic(regFile(dataDir), JSON.stringify(reg, null, 2)); }
 
 /** Описание из папки. @param {string} dir @param {string} project @param {Record<string, RegEntry>} reg @returns {Item} */
 function readItem(dir, project, reg) {
@@ -131,8 +190,14 @@ function readItem(dir, project, reg) {
   let cfg = null;
   let error = '';
   let task = '';
-  try { cfg = JSON.parse(fs.readFileSync(path.join(dir, 'automation.json'), 'utf8')); error = check(cfg); } catch (e) { error = `automation.json не прочитан: ${e instanceof Error ? e.message : e}`; }
-  try { task = fs.readFileSync(path.join(dir, 'задание.md'), 'utf8'); } catch { if (!error) error = 'нет задание.md'; }
+  const away = project ? outside(project, dir) || outside(project, path.join(project, '.terminalus', RUNS, id)) : '';
+  if (away) error = `папка .terminalus ведёт за пределы проекта: ${away}`;
+  else {
+    try { cfg = JSON.parse(readSmall(path.join(dir, 'automation.json'))); error = check(cfg); } catch (e) { error = `automation.json не прочитан: ${e instanceof Error ? e.message : e}`; }
+    try { task = readSmall(path.join(dir, 'задание.md')); } catch (e) {
+      if (!error) error = /** @type {any} */ (e).code === 'ENOENT' ? 'нет задание.md' : `задание.md не прочитан: ${e instanceof Error ? e.message : e}`;
+    }
+  }
   const r = reg[id];
   const mine = !!r && same(r.dir, dir);
   return { id, dir, project, cfg: error ? null : cfg, raw: cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : null, task, error, on: mine && !!r.on, foreign: !mine };
@@ -163,10 +228,13 @@ function find(dataDir, id) {
 
 /** Новая автоматизация: папка, файлы, запись в реестре (включена). @param {string} dataDir @param {{ project?: string, cfg: Config, task: string }} o @returns {string} номер */
 function create(dataDir, o) {
-  const bad = check(o.cfg) || (o.cfg.repeat ? '' : 'нет повтора');
+  const bad = checkSave(o.cfg, o.task);
   if (bad) throw new Error(bad);
+  regWritable(dataDir);
   const id = newId();
   const dir = path.join(o.project ? projectRoot(o.project) : commonRoot(dataDir), id);
+  // Папки проекта ещё нет — mkdir создаст её целиком, ссылок внутри неё быть не может.
+  if (o.project && fs.existsSync(o.project)) { ownPath(o.project, dir); ownPath(o.project, path.join(o.project, '.terminalus', RUNS, id)); }
   fs.mkdirSync(dir, { recursive: true });
   writeAtomic(path.join(dir, 'automation.json'), JSON.stringify(o.cfg, null, 2));
   writeAtomic(path.join(dir, 'задание.md'), o.task);
@@ -178,8 +246,9 @@ function create(dataDir, o) {
 
 /** Поменять описание. @param {Item} item @param {Config} cfg @param {string} task */
 function update(item, cfg, task) {
-  const bad = check(cfg) || (cfg.repeat ? '' : 'нет повтора');
+  const bad = checkSave(cfg, task);
   if (bad) throw new Error(bad);
+  if (item.project) ownPath(item.project, item.dir);
   writeAtomic(path.join(item.dir, 'automation.json'), JSON.stringify(cfg, null, 2));
   writeAtomic(path.join(item.dir, 'задание.md'), task);
 }
@@ -189,6 +258,8 @@ function update(item, cfg, task) {
  * @param {string} dataDir @param {Item} item @param {boolean} on @returns {string} номер после включения
  */
 function setOn(dataDir, item, on) {
+  if (item.project) ownPath(item.project, item.dir);
+  regWritable(dataDir);
   const reg = registry(dataDir);
   let { id, dir } = item;
   if (reg[id] && !same(reg[id].dir, dir)) {
@@ -204,6 +275,10 @@ function setOn(dataDir, item, on) {
 
 /** Удалить: описание, прогоны, запись реестра. Пришедшую с папкой (не своя) — только описание в папке проекта. @param {string} dataDir @param {Item} item */
 function remove(dataDir, item) {
+  // Через junction rmSync стёр бы чужую папку за пределами проекта (t523). Папки проекта уже нет — удалять там нечего, запись реестра уберём.
+  if (item.project && fs.existsSync(item.dir)) ownPath(item.project, item.dir);
+  // Реестр не прочитать — запись и прогоны остались бы без описания; удаление отказывает целиком (t527).
+  regWritable(dataDir);
   fs.rmSync(item.dir, { recursive: true, force: true });
   const reg = registry(dataDir);
   if (reg[item.id] && same(reg[item.id].dir, item.dir)) {
@@ -225,7 +300,55 @@ function runDirs(dataDir, id) {
 
 /** Прогоны с итогами, новые первыми. Прогон без итог.json (прерван, идёт) — с status: '' . @param {string} dataDir @param {string} id @param {number} [max] @returns {Result[]} */
 function runs(dataDir, id, max = KEEP) {
-  return runDirs(dataDir, id).slice(0, max).map((stamp) => ({ ...(readJson(path.join(runsOf(dataDir, id), stamp, 'итог.json')) || { status: '' }), stamp }));
+  const dir = runsOf(dataDir, id);
+  return runDirs(dataDir, id).slice(0, max).map((stamp) => ({ ...readResult(path.join(dir, stamp)), stamp }));
+}
+
+/**
+ * Итог прогона из его папки. Нет или битый — status '' («Прерван»). Больше MAX_SIZE (t527) — status error с причиной:
+ * прогон остаётся в списке, а не «Прерван» — про сам прогон по такому файлу ничего не известно. @param {string} dir @returns {any}
+ */
+function readResult(dir) {
+  try { return readJson(path.join(dir, 'итог.json')) || { status: '' }; } catch (e) {
+    return { status: 'error', error: `итог.json не прочитан: ${e instanceof Error ? e.message : e}` };
+  }
+}
+
+/** Ответ агента длиннее — в окне только начало с пометкой «обрезано» (t527). */
+const ANSWER_MAX = 1024 * 1024;
+/** Сколько путей из files итога проверять (stat) и показывать. */
+const FILES_MAX = 200;
+
+/** Начало текстового файла не длиннее max байт: { text, size }. Нет файла — пустой текст. @param {string} file @param {number} max */
+function readHead(file, max) {
+  let fd;
+  try { fd = fs.openSync(file, 'r'); } catch { return { text: '', size: 0 }; }
+  try {
+    const size = fs.fstatSync(fd).size;
+    const buf = Buffer.alloc(Math.min(size, max));
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    const text = buf.subarray(0, n).toString('utf8');
+    // Обрезано посреди буквы UTF-8 — неполная последняя буква отбрасывается.
+    return { text: n < size ? text.replace(/�+$/, '') : text, size };
+  } catch { return { text: '', size: 0 }; } finally { fs.closeSync(fd); }
+}
+
+/**
+ * Прогон для окна (auto:run): итог, ответ агента и файлы, которые он создал. Каждое чтение с пределом (t527): итог — readResult,
+ * ответ — первые ANSWER_MAX байт и пометка «обрезано», файлы — первые FILES_MAX путей. @param {string} dir папка прогона
+ */
+function readRun(dir) {
+  const result = readResult(dir);
+  const a = readHead(path.join(dir, 'ответ.md'), ANSWER_MAX);
+  const md = a.size > ANSWER_MAX ? `${a.text}\n\n… обрезано: показано ${Math.round(ANSWER_MAX / 1024)} КБ из ${Math.round(a.size / 1024)} КБ, весь ответ — ответ.md в папке прогона` : a.text;
+  const list = Array.isArray(result.files) ? result.files.filter((/** @type {any} */ f) => typeof f === 'string') : [];
+  const files = list.slice(0, FILES_MAX).map((/** @type {string} */ f) => { let size = -1; try { size = fs.statSync(f).size; } catch {} return { path: f, size }; });
+  return { result, md, files, more: Math.max(0, list.length - FILES_MAX) };
+}
+
+/** Реестр больше MAX_SIZE — текст для окна (t527): он прочитан пустым, проектные автоматизации показаны «чужими». '' — реестр в порядке. @param {string} dataDir */
+function regWarn(dataDir) {
+  try { regWritable(dataDir); return ''; } catch (e) { return `${e instanceof Error ? e.message : e}. Проектные автоматизации показаны пришедшими с папкой проекта.`; }
 }
 
 /** Процесс жив. EPERM — жив, но чужой. @param {number} pid */
@@ -239,7 +362,9 @@ function alive(pid) {
  * @param {string} dataDir @param {string} id
  */
 function running(dataDir, id) {
-  const r = readJson(path.join(runsOf(dataDir, id), 'running.json'));
+  // Слишком большой — как битый (t527): прогон не идёт, и замок прогона (run.js, lock) считает файл брошенным.
+  let r = null;
+  try { r = readJson(path.join(runsOf(dataDir, id), 'running.json')); } catch {}
   if (!r || !Number.isInteger(r.pid) || (r.host && r.host !== os.hostname())) return null;
   return alive(r.pid) ? { pid: r.pid, start: String(r.start || ''), stamp: String(r.stamp || '') } : null;
 }
@@ -267,6 +392,6 @@ function prune(dataDir, id, keep = KEEP) {
 }
 
 module.exports = {
-  RUNS, KEEP, ID_RE, MODELS, KINDS, check, checkRepeat, nextRun, newId, commonRoot, projectRoot, runsOf, workOf, writeAtomic,
-  registry, saveRegistry, list, find, create, update, setOn, remove, runDirs, runs, running, state, markSeen, prune,
+  RUNS, KEEP, MAX_SIZE, ID_RE, MODELS, KINDS, check, checkRepeat, nextRun, newId, commonRoot, projectRoot, runsOf, workOf, writeAtomic,
+  registry, saveRegistry, list, find, create, update, setOn, remove, runDirs, runs, readResult, readRun, regWarn, running, state, markSeen, prune,
 };

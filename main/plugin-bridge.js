@@ -10,7 +10,8 @@
 //   Тогда при следующем открытии окна main.js читается с диска заново. Нет stop() — экземпляр живёт до выхода программы
 //   и новым кодом не заменяется: иначе его таймеры остались бы вдвоём.
 // ctx: id, project { id, name, path }, dataDir — %APPDATA%\TERMINALUS\plugins-data\<id> (создана), log(текст) — строка в main.log,
-//   settings.get() / settings.set(obj) — свой мешок pluginSettings[id] (main\settings.js), send(event, payload) — событие окну проекта,
+//   settings.get() / settings.set(obj) — свой мешок pluginSettings[id] (main\settings.js). set заменяет весь мешок, не сливает:
+//   дописать поле — set({ ...settings.get(), поле }), null — мешок удалить (t502). send(event, payload) — событие окну проекта,
 //   readTab(sid, format) — вывод вкладки проекта (команда read демона),
 //   writeTab(sid, data) — записать байты во вкладку проекта, Enter — '\r' (t276); terminals() — живые вкладки проекта со state (t276);
 //   onState(cb) — смена состояния вкладки проекта { sid, state, by, at }, ответ — отписка; при остановке экземпляра отписка сама (t276),

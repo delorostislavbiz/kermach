@@ -1,5 +1,5 @@
 // @ts-check
-// Команда `terminalus browser` (t381), сторона главного процесса: агент в терминале программы читает вкладки сайта своего проекта и действует в них.
+// Команда `kermach browser` (старое имя `terminalus browser` работает так же, t381, t396), сторона главного процесса: агент в терминале программы читает вкладки сайта своего проекта и действует в них.
 // Чтение — любая вкладка: список вкладок, адрес и заголовок, текст страницы, консоль с загрузки страницы, снимок в PNG.
 // Действия (t382: snapshot, click, fill, keypress, goto, back, reload, scroll, wait, eval) — только во вкладке, которую человек отдал агенту
 // переключателем «Агенту» (window.js); иначе отказ с кодом 5. Нажатия и ввод — событиями DOM из изолированного мира, не мышью и клавиатурой системы:
@@ -291,7 +291,7 @@ const inPage = (body) => `(() => {
   const pick = (ref, css) => {
     if (css) { let el = null; try { el = document.querySelector(css); } catch (e) { return { error: "--css: не CSS-селектор: " + e.message, code: 1 }; } return el ? { el } : { error: "по селектору " + css + " на странице ничего нет", code: 4 }; }
     const el = st.refs[ref - 1];
-    if (!el || !el.isConnected) return { error: "ссылки e" + ref + " нет на странице — она от старого snapshot или страница сменилась; сделайте terminalus browser snapshot заново", code: 4 };
+    if (!el || !el.isConnected) return { error: "ссылки e" + ref + " нет на странице — она от старого snapshot или страница сменилась; сделайте kermach browser snapshot заново", code: 4 };
     return { el };
   };
   ${body}
@@ -538,7 +538,7 @@ async function handle(q) {
   if (!id) return fail(2, 'нет доступа: команду можно вызвать только из терминала Kermach, открытого в этом проекте');
   if (!settings.pluginOn('browser')) return fail(3, '«Браузер» выключен: «Настройки» → «Плагины» → «Браузер»');
   const n = busy.get(id) || 0;
-  if (n >= LIMIT.busy) return fail(3, `занято: окно проекта уже выполняет ${n} команды terminalus browser — повторите через несколько секунд`);
+  if (n >= LIMIT.busy) return fail(3, `занято: окно проекта уже выполняет ${n} команды kermach browser — повторите через несколько секунд`);
   busy.set(id, n + 1);
   try { return await work(q, id); } finally {
     const left = (busy.get(id) || 1) - 1;
@@ -572,7 +572,7 @@ async function work(q, id) {
     else if (given.length > 1) return fail(1, `агенту отданы вкладки ${given.map((t) => t.n).join(', ')} — укажите, в какой действовать: --tab N`);
     else tab = given[0];
   } else tab = want ? tabs.find((t) => t.n === want) : tabs.find((t) => t.active && t.guest) || tabs.find((t) => t.guest);
-  if (!tab) return fail(1, want ? `нет вкладки ${want}: вкладок ${tabs.length}, список — terminalus browser tabs` : 'во всех вкладках браузера пусто — откройте адрес');
+  if (!tab) return fail(1, want ? `нет вкладки ${want}: вкладок ${tabs.length}, список — kermach browser tabs` : 'во всех вкладках браузера пусто — откройте адрес');
   const g = guestIn(host, tab.guest);
   if (!g) return fail(3, `во вкладке ${tab.n} нет страницы — в ней не открыт адрес`);
   const head = { ok: true, project, tab: { ...tab, url: clean(g.getURL()).slice(0, 4096), title: clean(g.getTitle()).replace(/\s+/g, ' ').slice(0, 300) }, count: tabs.length };

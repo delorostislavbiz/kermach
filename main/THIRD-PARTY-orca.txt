@@ -20,7 +20,7 @@
 3. src\main\claude-limits.js, src\daemon\claude-statusline.js, src\plugins\limits\main.js
    - Орки здесь нет: Claude отдаёт rate_limits в строку состояния сам. Файл лимитов Claude и его чтение написаны заново.
 
-Прочие места src\, где в комментариях сказано «как в Орке» (поведение, не код): main.js (пускать только тот же файл, запрет разрешений, вставка из буфера), terminals.js, tray.js, sound.js, attention.js, projects*.js, plugins\browser\*, renderer\*.
+Прочие места src\, где в комментариях сказано «как в Орке» (поведение, не код): main.js (пускать только тот же файл, запрет разрешений, вставка из буфера), terminals.js, agents.js (список CLI-агентов и их команды запуска — по настройкам агентов Орки), stop-all.js, sound.js, attention.js, projects*.js, plugins\browser\*, plugins\files\tree.js, renderer\*.
 
 Текст лицензии
 --------------

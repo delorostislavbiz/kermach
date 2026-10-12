@@ -27,8 +27,13 @@
    * @param {any} look { id, kind, window }
    */
   function paintLook(look) {
+    // Тема интерфейса (main\ui-themes.js, t506): ui.css по data-ui. Ставится и без схемы — «Тема Ростислава», ui.css окно не трогает.
+    document.documentElement.dataset.ui = (look && look.ui) || 'rostyslav';
     if (!look || !look.window) return;
     const st = document.documentElement.style;
+    document.documentElement.dataset.mode = look.kind === 'light' ? 'light' : 'dark';
+    // Свои переменные новой темы — шрифты, радиусы.
+    if (look.vars) for (const [k, v] of Object.entries(look.vars)) st.setProperty(k, String(v));
     for (const [k, v] of Object.entries(LOOK_VARS)) {
       // Поля вокруг картинки нет в схеме — как поле ввода, так же, как renderer\theme.js.
       const val = look.window[k] || (k === 'viewBack' ? look.window.input : '');

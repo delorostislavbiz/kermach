@@ -23,6 +23,8 @@
   const rgb = (/** @type {string} */ h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(',');
   /** @type {any} */
   let look = null;
+  /** Свои переменные темы интерфейса (look.vars: шрифты, поверхность, радиусы), поставленные прошлым apply — снимаются при смене (t506). @type {string[]} */
+  let varsSet = [];
   /** @type {Set<() => void>} */
   const subs = new Set();
 
@@ -49,6 +51,16 @@
       if (need) { st.setProperty('--need', need); st.setProperty('--need-rgb', rgb(need)); }
       delete document.documentElement.dataset.theme;
     }
+    // Тема интерфейса (main\ui-themes.js, t506): data-ui — для renderer\ui.css, data-mode — светлый или тёмный вид.
+    // color-scheme окна — только у новых тем: у «Темы Ростислава» полосы прокрутки и поля как раньше.
+    const root = document.documentElement;
+    for (const v of varsSet) st.removeProperty(v);
+    varsSet = [];
+    if (look && look.vars) for (const [k, v] of Object.entries(look.vars)) { st.setProperty(k, String(v)); varsSet.push(k); }
+    const ui = (look && look.ui) || 'rostyslav';
+    root.dataset.ui = ui;
+    root.dataset.mode = look && look.kind === 'light' ? 'light' : 'dark';
+    if (ui === 'rostyslav') st.removeProperty('color-scheme'); else st.colorScheme = root.dataset.mode;
     if (JSON.stringify(look) !== before) for (const cb of subs) { try { cb(); } catch {} }
   }
 
@@ -67,6 +79,8 @@
     color: (name) => (look && look.window[name]) || '',
     /** Схемы плагина для выбора в «Настройках»: [{ id, name, kind }]; пусто — плагин выключен. */
     list: () => (look && Array.isArray(look.list) ? look.list : []),
+    /** Тема интерфейса: rostyslav, studio, deck, glass (macOS). */
+    ui: () => (look && look.ui) || 'rostyslav',
     /** id действующей схемы или '' — темы нет. */
     id: () => (look ? look.id : ''),
     /** Переспросить тему у главного процесса: «Настройки» зовут при открытии — схему могли добавить файлом, пока окно открыто. */

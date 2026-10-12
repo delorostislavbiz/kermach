@@ -112,6 +112,8 @@
     h += `<div class="filter">${chips.map(([k, n]) => `<button class="chip${chip === k ? ' on' : ''}" data-chip="${esc(k)}">${esc(n)}</button>`).join('')}
       <button class="chip right${view.fresh ? ' on' : ''}" id="fresh">${t('onlyNew', 'Только с новым результатом')}</button></div>`;
     h += `<div class="count"><span style="flex:1">${t('colName', 'Название и повтор')}</span><span style="width:170px">${t('colLast', 'Последний прогон')}</span><span style="width:120px">${t('colNext', 'Следующий')}</span><span style="width:56px;text-align:right">${t('colCost', 'Цена')}</span><span style="width:84px"></span></div><div class="list">`;
+    // Реестр слишком большой (t527): главный процесс прочитал его пустым — причина видна над списком.
+    if (data.warn) h += `<div class="card" id="regWarn" style="color:var(--danger)">${esc(data.warn)}</div>`;
     if (!data.items.length) h += `<div class="empty">${t('empty', 'Автоматизаций пока нет. Нажмите «Новая автоматизация».')}</div>`;
     for (const g of groups) {
       const items = shown.filter((a) => a.project.toLowerCase() === g.key.toLowerCase());
@@ -280,6 +282,8 @@
     // run.js пишет ответ со знаком перевода строки: пустой ответ модели — один перевод строки, не текст.
     const md = String(x.md || '').trim();
     const files = x.files || [];
+    // Окну отдаётся не больше 200 путей (store.readRun, t527); more — сколько ещё в итоге.
+    const more = Number(x.more) || 0;
     const size = (/** @type {number} */ b) => (b < 0 ? t('noFile', 'файла уже нет') : b < 1024 ? `${b} Б` : `${(b / 1024).toFixed(1).replace('.', ',')} КБ`);
     const short = (/** @type {string} */ f) => (f.toLowerCase().startsWith(x.work.toLowerCase()) ? f.slice(x.work.length + 1) : f);
     const start = new Date(r.start);
@@ -289,11 +293,11 @@
       <div class="card"><div>${t('fModel', 'Модель')}<b>${esc(r.model || '—')}</b></div>
       <div>${t('start', 'Начало')}<b>${isNaN(start.getTime()) ? '—' : `${pad(start.getDate())}.${pad(start.getMonth() + 1)} ${pad(start.getHours())}:${pad(start.getMinutes())}:${pad(start.getSeconds())}`}</b></div>
       <div>${t('colLasted', 'Длилось')}<b>${lasted(Date.parse(r.end) - Date.parse(r.start))}</b></div>
-      <div>${t('colCost', 'Цена')}<b>${cost(r.cost, budgetOf(a))}${typeof budgetOf(a) === 'number' ? ` ${t('of', 'из')} ${money(budgetOf(a))}` : ''}</b></div><div>${t('files', 'Файлов')}<b>${files.length}</b></div></div>
+      <div>${t('colCost', 'Цена')}<b>${cost(r.cost, budgetOf(a))}${typeof budgetOf(a) === 'number' ? ` ${t('of', 'из')} ${money(budgetOf(a))}` : ''}</b></div><div>${t('files', 'Файлов')}<b>${files.length + more}</b></div></div>
       <div class="lab" style="padding:4px 20px 4px">${t('answer', 'Ответ агента')}</div>
       <div class="panel">${md || r.error ? esc(md || r.error) : `<span class="faint">${esc(noAnswer(r, a))}</span>`}</div>
       <div class="lab" style="padding:12px 20px 4px">${t('made', 'Созданные и изменённые файлы')}</div>
-      <div class="files">${files.length ? files.map((/** @type {any} */ f) => `<div class="file">${ic('file', 14)}${esc(short(f.path))}<span class="muted">· ${size(f.size)}</span></div>`).join('') : `<span class="faint">${t('noFiles', 'нет')}</span>`}</div>`;
+      <div class="files">${files.length ? files.map((/** @type {any} */ f) => `<div class="file">${ic('file', 14)}${esc(short(f.path))}<span class="muted">· ${size(f.size)}</span></div>`).join('') : `<span class="faint">${t('noFiles', 'нет')}</span>`}${more ? `<div class="faint" id="moreFiles">${esc(t('moreFiles', 'и ещё {n} — весь список в итог.json прогона', { n: more }))}</div>` : ''}</div>`;
   }
 
   // ---- Отрисовка и события ----

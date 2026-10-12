@@ -1398,6 +1398,8 @@
       pluginUrls.set(pl.url, pl.id);
       const s = document.createElement('script');
       s.src = pl.url;
+      // Скрипты выполняются в порядке списка, а не загрузки: строки внизу левой панели всегда в одном порядке (t520).
+      s.async = false;
       s.dataset.plugin = pl.id;
       loads.push(new Promise((done) => {
         s.onload = () => { if (!pluginFailed.has(pl.id)) t.log(`плагин ${pl.id}: загружен`); done(null); };
