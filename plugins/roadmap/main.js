@@ -14,6 +14,7 @@
 // ctx.onState выход вкладки не присылает (terminals.js, d.on('exit') шлёт его только окнам), поэтому «пауза» — по пропаже вкладки из списка демона.
 // Программа меняет только свои статусы: «в работе» и «ждёт ответа». Агент или человек поставил другой — карта больше не ведётся, запись запуска забыта.
 // Записи запусков меняются правками по ключам карт (patchRuns): sync и run ждут демона, и запись целиком затёрла бы то, что сделал другой за это время (t555).
+// «Составить роадмап» (t519) — команда compose: доски нет — вкладка Claude с заданием из compose.md (prompt.compose), доску заводит агент.
 // Файл карты есть, но не читается (агент пишет его не разом, опечатка в шапке) — запись держим: забываем, только когда карты нет на доске (t553).
 const fs = require('fs');
 const path = require('path');
@@ -233,6 +234,47 @@ module.exports = (ctx) => {
     }
   };
 
+  /** Вкладка «Составить роадмап» (t519): номер последней в памяти — пока она жива у демона, вторую не открываем. */
+  let composeSid = '';
+  let composing = false;
+  /**
+   * «Составить роадмап» на пустом проекте (t519): вкладка Claude в папке проекта, первое сообщение — задание из compose.md.
+   * Модель и усилие — по умолчанию claude: человек их ещё не выбирал, а имя модели в коде устарело бы. Доску заводит агент, панель видит её слежением.
+   * @param {string} title заголовок вкладки — от окна, на языке программы
+   */
+  const compose = async (title) => {
+    if (board.read(project).exists) return { error: 'доска уже есть: папка .kermach\\roadmap заведена' };
+    // До первого await: второй щелчок, пока первый ждёт демона или вкладку, видит флаг (как t554).
+    if (composing) return { error: 'вкладка уже открывается' };
+    composing = true;
+    try {
+      if (composeSid) {
+        const r = await ctx.terminals();
+        if (r && 'tabs' in r && r.tabs.some((/** @type {any} */ t) => t.sid === composeSid)) return { error: `вкладка составления уже открыта: ${composeSid}`, sid: composeSid };
+      }
+      const pr = prompt.compose(project, { dataDir: ctx.dataDir });
+      if ('error' in pr) return { error: pr.error };
+      for (const w of pr.warnings) ctx.log(`составить роадмап: ${w}`);
+      let first = pr.text;
+      if (first.length > PROMPT_MAX) {
+        try {
+          const lp = longPrompt(project, 'compose', pr.text);
+          first = lp.first;
+          ctx.log(`составить роадмап: задание ${pr.text.length} знаков длиннее ${PROMPT_MAX} — целиком в файле ${lp.rel}`);
+        } catch (e) { return { error: `задание ${pr.text.length} знаков длиннее ${PROMPT_MAX}, а файл для него не записан: ${why(e)}` }; }
+      }
+      const r = await ctx.openTab({ kind: 'claude', args: [], title: String(title || 'Роадмап').slice(0, 64), prompt: first });
+      if (!r || 'error' in r) {
+        const e = r ? r.error : 'нет ответа';
+        ctx.log(`составить роадмап: вкладка не открылась: ${e}`);
+        return { error: e };
+      }
+      composeSid = r.session.sid;
+      ctx.log(`составить роадмап: вкладка ${composeSid}, claude, задание ${pr.text.length} знаков${pr.templates.own ? ' (своя копия шаблона)' : ''}`);
+      return { session: r.session };
+    } finally { composing = false; }
+  };
+
   /** Доска с временем последней правки файла карты (at, мс): его панель показывает в строке карты. */
   const snapshot = () => {
     const b = board.read(project);
@@ -264,6 +306,7 @@ module.exports = (ctx) => {
       // Поля по имени (t541): весь модуль с функцией launchArgs IPC не клонирует.
       if (cmd === 'lists') return { AGENTS: agents.AGENTS, MODELS: agents.MODELS, EFFORT: agents.EFFORT, EFFORTS: agents.EFFORTS };
       if (cmd === 'run') return run(String(args[0] || ''));
+      if (cmd === 'compose') return compose(String(args[0] || ''));
       if (cmd === 'sync') { sync(); return {}; }
       if (cmd === 'state') {
         const s = ctx.settings.get();

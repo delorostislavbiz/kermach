@@ -5,6 +5,7 @@
 // Шаблоны — общие правила и виды работы, одни на все проекты; читаются при каждой сборке, правка видна без перезапуска.
 //   Своя копия — prompt.md в папке данных плагина (ctx.dataDir, %APPDATA%\TERMINALUS\plugins-data\roadmap\): перенос программы её не затирает.
 //   Копии нет — встроенный prompt.md рядом с этим файлом. Копию человек кладёт сам: кнопки для неё нет (t547).
+// Задание «Составить роадмап» (t519, compose) — шаблон compose.md, своя копия в той же папке данных; пути FORMAT.md и образцов подставляются абсолютные.
 // «Свежее» (часть 5) — то, чего не было, когда карту писали (её created):
 //   карты этой фазы, закрытые позже (closed; нет поля — время правки файла), решения и тупики с датой не раньше дня карты
 //   по тем же файлам (без файлов — по этой карте или карте той же фазы), открытые карты «Входящих» по тем же файлам.
@@ -15,6 +16,8 @@ const board = require('./board');
 /** Встроенные шаблоны: запасной текст, когда своей копии нет. */
 const TEMPLATES = path.join(__dirname, 'prompt.md');
 const OWN = 'prompt.md';
+/** Шаблон задания «Составить роадмап» (t519): своя копия — compose.md в ctx.dataDir, как prompt.md. */
+const COMPOSE = 'compose.md';
 const SAMPLE = path.join(__dirname, 'samples', 't12.md');
 const MAX_TEMPLATES = 64 * 1024;
 const RULES = 'Общие правила';
@@ -60,17 +63,17 @@ function templates(file = TEMPLATES) {
 }
 
 /**
- * Какие шаблоны берёт сборка: своя копия в dataDir, если она есть, иначе встроенные.
- * @param {string} [dataDir] @returns {{ file: string, own: boolean }}
+ * Какие шаблоны берёт сборка: своя копия в dataDir, если она есть, иначе встроенные. name — имя файла шаблона (compose.md — задание t519).
+ * @param {string} [dataDir] @param {string} [name] @returns {{ file: string, own: boolean }}
  */
-function templateFile(dataDir) {
-  const own = dataDir ? path.join(dataDir, OWN) : '';
+function templateFile(dataDir, name = OWN) {
+  const own = dataDir ? path.join(dataDir, name) : '';
   if (own) { try { fs.lstatSync(own); return { file: own, own: true }; } catch { /* копии нет */ } }
-  return { file: TEMPLATES, own: false };
+  return { file: path.join(__dirname, name), own: false };
 }
 
-/** Подстановки {папка}, {образец}, {карта}. @param {string} text @param {Record<string, string>} vars */
-const subst = (text, vars) => text.replace(/\{(папка|образец|карта)\}/g, (all, k) => (k in vars ? vars[k] : all));
+/** Подстановки по ключам vars: {папка}, {образец}, {карта} — промпт карты; {проект}, {формат}, {образцы} — задание t519. Чужие скобки остаются как есть. @param {string} text @param {Record<string, string>} vars */
+const subst = (text, vars) => text.replace(/\{([^{}\n]{1,20})\}/g, (all, k) => (Object.hasOwn(vars, k) ? vars[k] : all));
 
 /**
  * Пути файлов из поля «Файлы» карты или списка files решения: в обратных кавычках, если они есть, иначе через запятую.
@@ -214,4 +217,28 @@ function build(project, ref, opts = {}) {
   return { card: card.id, title: card.title, kind: card.kind, parts, text, chars: text.length, warnings, skipped: fr.skipped, templates: tf };
 }
 
-module.exports = { TEMPLATES, FRESH_NOTE, templates, templateFile, paths, shared, fresh, build };
+/**
+ * Задание «Составить роадмап» (t519) из шаблона compose.md: всё после строки первого «## », с подстановками путей.
+ * Пути FORMAT.md и образцов — абсолютные, из папки плагина: агент читает их сам. Ошибка — { error }.
+ * @param {string} project @param {{ dataDir?: string }} [opts]
+ */
+function compose(project, opts = {}) {
+  const tf = templateFile(opts.dataDir, COMPOSE);
+  /** @type {string[]} */
+  const warnings = [];
+  let text = '';
+  const read = (/** @type {string} */ f) => { const s = readSmall(f, MAX_TEMPLATES); const m = /^## .*$/m.exec(s); return m ? s.slice(m.index + m[0].length).trim() : ''; };
+  try { text = read(tf.file); } catch (e) { if (!tf.own) return { error: `задание не прочитано: ${e instanceof Error ? e.message : e}` }; warnings.push(`своя копия ${tf.file}: ${e instanceof Error ? e.message : e} — взят встроенный текст`); }
+  // Своя копия не читается или в ней нет «## » — встроенный текст и предупреждение, как у шаблонов карты.
+  if (!text && tf.own) {
+    if (!warnings.length) warnings.push(`в своей копии ${tf.file} нет заголовка «## » — взят встроенный текст`);
+    tf.file = path.join(__dirname, COMPOSE); tf.own = false;
+    try { text = read(tf.file); } catch (e) { return { error: `задание не прочитано: ${e instanceof Error ? e.message : e}` }; }
+  }
+  if (!text) return { error: `в ${path.basename(tf.file)} нет заголовка «## »: задание пустое` };
+  const vars = { 'проект': project, 'папка': board.root(project) + path.sep, 'формат': path.join(__dirname, 'FORMAT.md'), 'образцы': path.join(__dirname, 'samples') + path.sep };
+  const out = subst(text, vars) + '\n';
+  return { text: out, chars: out.length, warnings, templates: tf };
+}
+
+module.exports = { TEMPLATES, FRESH_NOTE, templates, templateFile, paths, shared, fresh, build, compose };

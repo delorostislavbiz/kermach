@@ -7,7 +7,7 @@
 // «Показать промпт» (t514) — промпт карты во всю панель, только чтение: пять частей с подписями, текст собирает главная часть (prompt.js) из файлов.
 // «Запустить» (t515) — вкладка агента карты в верхней полосе, первое сообщение — тот же промпт; статус карты дальше идёт за вкладкой (main.js, sync).
 // Окно зовёт sync на каждое изменение списка вкладок: так «пауза» приходит сразу, как вкладку закрыли. Волн и галочек выбора нет.
-// Значки «Командный центр» и «Составить роадмап» в шапке неактивны, с подсказкой.
+// Значки «Командный центр» и «Составить роадмап» в шапке неактивны, с подсказкой. На пустом проекте кнопка «Составить роадмап» (t519) открывает вкладку Claude с заданием.
 // Рядом с «Файлами» и Git: панели в одной колонке, каждая своей строкой; «Роадмап» под «Файлами», над списком Git.
 // Уже 480 px строка карты — в две строки (container query): заголовок, под ним статус · агент · время. За наведением ничего не прячется.
 // Цвета — переменные темы окна; зелёного и фиолетового в теме нет, они запасными значениями.
@@ -104,7 +104,10 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .ph.fold, #plugin-roadmap-panel .card.fold { cursor: default; }
     #plugin-roadmap-panel .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px 22px 60px; text-align: center; color: var(--muted); line-height: 18px; }
     #plugin-roadmap-panel .empty .ic { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line, rgba(141,145,165,.14)); background: var(--raised, transparent); color: var(--rm-info); }
-    #plugin-roadmap-panel .empty button { height: 32px; padding: 0 18px; border: 0; border-radius: 6px; background: var(--accent); color: var(--on-accent, #fff); font: inherit; font-weight: 600; opacity: .55; }
+    #plugin-roadmap-panel .empty button { height: 32px; padding: 0 18px; border: 0; border-radius: 6px; background: var(--accent); color: var(--on-accent, #fff); font: inherit; font-weight: 600; cursor: pointer; }
+    #plugin-roadmap-panel .empty button:disabled { opacity: .55; cursor: default; }
+    #plugin-roadmap-panel .empty .cnote { color: var(--text); }
+    #plugin-roadmap-panel .empty .cnote.bad { color: var(--rm-bad); }
     #plugin-roadmap-panel .card[data-id]:hover { background: var(--hover); }
     #plugin-roadmap-panel .rcard { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 12px; display: flex; flex-direction: column; gap: 8px; }
     #plugin-roadmap-panel .ctop { position: sticky; top: 0; z-index: 1; background: var(--bg); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
@@ -213,6 +216,8 @@ function roadmapSetup(host) {
   let stopped = false;
   /** Последняя доска от главной части. @type {any} */
   let last = null;
+  /** «Составить роадмап» (t519): busy — вкладка открывается, note — строка под кнопкой. Держим здесь: draw перестраивает пустой экран на каждое событие доски. */
+  const comp = { busy: false, /** @type {{ bad: boolean, text: string } | null} */ note: null };
   /** Последняя ошибка вызова: строка журнала не повторяется на каждую перерисовку. */
   let said = '';
   /** Фазы и строки «готово», которые человек раскрыл или свернул сам: id → раскрыта. Живёт до закрытия окна. @type {Map<string, boolean>} */
@@ -282,14 +287,18 @@ function roadmapSetup(host) {
     if (!b) { body.textContent = ''; return; }
     if (b.error) { body.innerHTML = `<div class="box errs"><div class="e">${esc(T('readFail', 'Доска не прочитана: {why}', { why: b.error }))}</div></div>`; return; }
     if (!b.exists) {
-      // Экран 01: пустой проект — кнопка и две строки подсказки. Кнопка заработает в t519.
+      // Экран 01: пустой проект — кнопка и две строки подсказки (t519). Своё имя data-do: data-act="compose" — значок шапки, он раньше в DOM.
       label.hidden = true; compose.hidden = true; center.hidden = false;
+      const n = comp.note;
       body.innerHTML = `<div class="empty"><div class="ic">${ICON(I_BOARD, 20)}</div>`
-        + `<button type="button" disabled title="${esc(T('composeLater', 'Появится в следующих шагах плагина. Пока доску можно завести руками по описанию FORMAT.md'))}">${esc(T('compose', 'Составить роадмап'))}</button>`
+        + `<button type="button" data-do="compose"${comp.busy ? ' disabled' : ''}>${esc(comp.busy ? T('composeBusy', 'Открываю вкладку…') : T('compose', 'Составить роадмап'))}</button>`
         + `<div>${esc(T('emptyHint1', 'Откроется вкладка Claude: агент прочитает проект и предложит паспорт, фазы и карты.'))}<br>`
-        + `${esc(T('emptyHint2', 'Вы увидите их здесь по мере появления и сможете править до запуска.'))}</div></div>`;
+        + `${esc(T('emptyHint2', 'Вы увидите их здесь по мере появления и сможете править до запуска.'))}</div>`
+        + `${n ? `<div class="cnote${n.bad ? ' bad' : ''}">${esc(n.text)}</div>` : ''}</div>`;
       return;
     }
+    // Доска появилась — строка под кнопкой отслужила: вернётся пустой экран (папку удалили) — без старой строки.
+    comp.note = null;
     label.hidden = false; compose.hidden = false; center.hidden = false;
     /** @type {Map<string, any>} */
     const byId = new Map(b.cards.map((/** @type {any} */ c) => [c.id, c]));
@@ -836,7 +845,22 @@ function roadmapSetup(host) {
   };
   row.onclick = () => setOpen(!open);
   hideBox.addEventListener('change', () => { hideDone = hideBox.checked; api('setState', { hideDone }); draw(); });
+  /** «Составить роадмап» (t519): вкладку открывает главная часть. Доска появится — слежение пришлёт её, пустой экран уйдёт сам. */
+  const composeRun = async () => {
+    if (comp.busy) return;
+    comp.busy = true; comp.note = null;
+    draw();
+    const r = await api('compose', T('composeTab', 'Роадмап · составить'));
+    comp.busy = false;
+    if (stopped) return;
+    if (!r || r.error || !r.session) {
+      comp.note = { bad: true, text: T('composeFail', 'Не открыто: {why}', { why: (r && r.error) || '?' }) };
+      host.log(`составить роадмап: не открыто: ${(r && r.error) || '?'}`);
+    } else comp.note = { bad: false, text: T('composeOpened', 'Вкладка открыта. Отвечайте агенту в ней: доска появится здесь, когда он заведёт файлы.') };
+    draw();
+  };
   body.addEventListener('click', (ev) => {
+    if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="compose"]')) { composeRun(); return; }
     const f = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-fold]'));
     const c = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('.card[data-id]'));
     if (!f && c) { openCard(c.dataset.id || ''); return; }
