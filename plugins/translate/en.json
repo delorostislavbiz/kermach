@@ -627,7 +627,6 @@
  "roadmap.back": "roadmap",
  "roadmap.backTitle": "Back to phases and cards",
  "roadmap.prompt": "Show prompt",
- "roadmap.promptSoon": "The card prompt for the agent — from the passport, the template and the card itself. Coming in the next step of the plugin",
  "roadmap.save": "Save",
  "roadmap.saveTitle": "Write the fields you changed to the card file. Other lines of the file stay as they are",
  "roadmap.capClose": "On closing",

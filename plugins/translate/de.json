@@ -627,7 +627,6 @@
  "roadmap.back": "Roadmap",
  "roadmap.backTitle": "Zurück zu Phasen und Karten",
  "roadmap.prompt": "Prompt zeigen",
- "roadmap.promptSoon": "Der Prompt der Karte für den Agenten — aus Pass, Vorlage und der Karte selbst. Kommt im nächsten Schritt des Plugins",
  "roadmap.save": "Speichern",
  "roadmap.saveTitle": "Die geänderten Felder in die Kartendatei schreiben. Die übrigen Zeilen der Datei bleiben, wie sie sind",
  "roadmap.capClose": "Beim Abschluss",

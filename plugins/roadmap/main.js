@@ -3,15 +3,18 @@
 // Окно спрашивает доску командой board; правка файлов снаружи (редактор, агент) приходит окну событием board с новой доской.
 // Слежение включается вызовом board (панель открыли) и снимается, когда панель закрыли, и в stop(): окно закрыли — наблюдателя нет, после переоткрытия он один (t256).
 // Слежение — опрос папки (board.watch, t533): папку проекта можно переименовать, пока панель открыта.
-// «Панель открыта» — у каждого проекта своя (t525): мешок ctx.settings один на программу, поэтому openIn[ключ проекта]. Проекта в openIn нет — старое общее open.
+// «Панель открыта» — у каждого проекта своя (t525): мешок ctx.settings один на программу, поэтому openIn[ключ проекта]. openIn пуст — старое общее open (t547).
 // Правка карты в панели (t512) — команда update: board.update меняет в файле только присланные поля; отказ приходит окну строкой error.
 // Статус стал «готово» — заодно closed: время закрытия, по нему промпт берёт свежие заметки фазы (t514).
 // «Показать промпт» (t514) — команда prompt: текст собирает prompt.js из файлов доски и шаблонов при каждом вызове (своя копия prompt.md в ctx.dataDir, нет — встроенный); lists — списки моделей из agents.js.
 // «Запустить» (t515) — команда run: вкладка агента карты через ctx.openTab, первое сообщение — тот же prompt.build, агент, модель и усилие — agents.launchArgs.
-// Запуски — в мешке ctx.settings: runs[ключ проекта][карта] = { sid, started, gone }; в файл карты — только статус (файл под git, номер вкладки ему не нужен).
+// Запуски — в мешке ctx.settings: runs[ключ проекта][карта] = { sid, started, gone, st, at }; в файл карты — только статус (файл под git, номер вкладки ему не нужен).
+// st и at — статус, который записала сама программа, и время правки файла сразу после записи (t551): окно по ним отличает свою запись от правки снаружи.
 // Статус идёт за вкладкой — sync: его зовут ctx.onState и окно на каждое изменение списка вкладок; живые вкладки — ctx.terminals() у демона.
 // ctx.onState выход вкладки не присылает (terminals.js, d.on('exit') шлёт его только окнам), поэтому «пауза» — по пропаже вкладки из списка демона.
 // Программа меняет только свои статусы: «в работе» и «ждёт ответа». Агент или человек поставил другой — карта больше не ведётся, запись запуска забыта.
+// Записи запусков меняются правками по ключам карт (patchRuns): sync и run ждут демона, и запись целиком затёрла бы то, что сделал другой за это время (t555).
+// Файл карты есть, но не читается (агент пишет его не разом, опечатка в шапке) — запись держим: забываем, только когда карты нет на доске (t553).
 const fs = require('fs');
 const path = require('path');
 const board = require('./board');
@@ -45,10 +48,22 @@ const LONG_DIR = path.join('.kermach', 'prompts');
  */
 function longPrompt(project, ref, text) {
   const dir = path.join(project, LONG_DIR);
-  fs.mkdirSync(dir, { recursive: true });
+  // .kermach и prompts — по одной, каждую проверяем до следующего шага: junction или ссылка увели бы запись за пределы проекта (t556, как ensureRoot доски).
+  for (const d of [path.dirname(dir), dir]) {
+    if (!fs.existsSync(d)) fs.mkdirSync(d);
+    try { board.ownRoot(project, d); } catch { throw new Error(`папка ${path.relative(project, d)} ведёт за пределы проекта`); }
+  }
   const ign = path.join(dir, '.gitignore');
-  if (!fs.existsSync(ign)) fs.writeFileSync(ign, '# Kermach: длинные промпты карт «Роадмапа» — не для git.\n*\n');
-  fs.writeFileSync(path.join(dir, `${ref}.md`), text);
+  try { fs.writeFileSync(ign, '# Kermach: длинные промпты карт «Роадмапа» — не для git.\n*\n', { flag: 'wx' }); } catch (e) { if (!e || /** @type {any} */ (e).code !== 'EEXIST') throw e; }
+  // Через временный файл: rename заменяет саму ссылку на месте файла, а не файл, куда она ведёт.
+  // Временный — только новый (wx): жёсткая ссылка на его имени увела бы запись за пределы проекта (t562). Имя занято (ссылка, остаток от сбоя) — убираем само имя, файл по ссылке цел.
+  const file = path.join(dir, `${ref}.md`);
+  const tmp = path.join(dir, `.${ref}.${process.pid}.tmp`);
+  const fresh = () => fs.writeFileSync(tmp, text, { flag: 'wx' });
+  try {
+    try { fresh(); } catch (e) { if (!e || /** @type {any} */ (e).code !== 'EEXIST') throw e; fs.unlinkSync(tmp); fresh(); }
+    fs.renameSync(tmp, file);
+  } catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
   const rel = `${LONG_DIR.split(path.sep).join('/')}/${ref}.md`;
   return { rel, first: `Промпт карты ${ref} не помещается в первое сообщение: ${text.length} знаков. Он целиком в файле ${rel} в папке проекта. Прочитай этот файл полностью и выполняй его как первое сообщение.` };
 }
@@ -65,53 +80,90 @@ module.exports = (ctx) => {
   /** sync идёт; again — за время прогона пришёл новый вызов, нужен ещё один. */
   let syncing = false;
   let again = false;
+  /** Карты, у которых run ждёт вкладку: второй запуск той же карты — отказ (t554). Только в памяти: после сбоя не застрянет. */
+  const starting = new Set();
+  /** Карты, о которых уже сказали в журнал «файл не читается»: строка одна на сбой, а не на каждую сверку. */
+  const unread = new Set();
 
   /** Файлы карт с живым запуском: слежение смотрит их каждый круг (board.watch, pin) — первая правка агента видна сразу и на большой доске. @type {string[]} */
   let pins = [];
-  /** @param {Record<string, { gone?: boolean }>} mine */
-  const repin = (mine) => { pins = Object.entries(mine).filter(([, r]) => !r.gone).map(([id]) => `${id}.md`); };
-  /** Запуски этого проекта из мешка: карта → { sid, started, gone }. @returns {Record<string, { sid: string, started: number, gone?: boolean }>} */
+  /** Номер карты из имени файла (t1.md, t01.md → t1); не карта — пусто. @param {string} file */
+  const cardOf = (file) => { const m = /^t(\d{1,6})\.md$/.exec(file); return m ? `t${Number(m[1])}` : ''; };
+  /** Имена — с диска, а не `${id}.md`: карта t1 может лежать в t01.md (t562). @param {Record<string, { gone?: boolean }>} mine */
+  const repin = (mine) => {
+    const ids = new Set(Object.entries(mine).filter(([, r]) => !r.gone).map(([id]) => id));
+    let names = [];
+    if (ids.size) try { names = fs.readdirSync(board.root(project)); } catch { /* папки доски нет — смотреть нечего */ }
+    pins = names.filter((n) => ids.has(cardOf(n)));
+  };
+  /** Запуски этого проекта из мешка: карта → { sid, started, gone, st, at }. @returns {Record<string, { sid: string, started: number, gone?: boolean, st?: string, at?: number }>} */
   const runsOf = () => {
     const s = ctx.settings.get();
     const all = s.runs && typeof s.runs === 'object' ? s.runs : {};
     return all[key] && typeof all[key] === 'object' ? { ...all[key] } : {};
   };
-  /** @param {Record<string, any>} mine */
-  const saveRuns = (mine) => {
+  /** Правка записей запусков по ключам на свежем мешке (t555): значение — новая запись, null — забыть. @param {Record<string, any>} ch */
+  const patchRuns = (ch) => {
     const s = ctx.settings.get();
     const all = { ...(s.runs && typeof s.runs === 'object' ? s.runs : {}) };
+    const mine = all[key] && typeof all[key] === 'object' ? { ...all[key] } : {};
+    for (const [id, v] of Object.entries(ch)) {
+      if (v) mine[id] = v; else delete mine[id];
+    }
     if (Object.keys(mine).length) all[key] = mine; else delete all[key];
     ctx.settings.set({ ...s, runs: all });
     repin(mine);
   };
+  /** Записать статус карты и запомнить, что его записала программа: значение и время правки файла (t551). @param {string} id @param {string} status */
+  const writeStatus = (id, status) => {
+    const item = board.update(project, id, { status });
+    let at = 0;
+    // Файл — тот, что правил board.update: карта t1 может лежать в t01.md (t562).
+    try { at = fs.statSync(path.join(board.root(project), item.file)).mtimeMs; } catch { /* файл пропал сразу после записи */ }
+    return { item, own: { st: status, at } };
+  };
   /**
    * Статусы карт по живым вкладкам демона. Вкладки нет — «пауза»; запись остаётся с gone, по ней строка показывает время запуска.
+   * gone ставим вместе с записанной «паузой»: не записалась — следующая сверка попробует снова, запись не теряется (t553).
    * Связи с демоном нет — ничего не меняем: пропажу вкладки от обрыва не отличить.
    */
   const syncOnce = async () => {
-    const mine = runsOf();
-    if (!Object.keys(mine).length) return;
+    if (!Object.keys(runsOf()).length) return;
+    const asked = Date.now();
     const r = await ctx.terminals();
     if (stopped || !r || 'error' in r) return;
+    // Записи — после ответа демона (t555): пока он отвечал, карту могли запустить или перезапустить. Дальше до patchRuns ожиданий нет.
+    // Запуск новее вопроса к демону пропускаем: его вкладки может не быть в ответе, это не «пауза».
+    const mine = runsOf();
     /** @type {Map<string, any>} */
     const live = new Map(r.tabs.map((/** @type {any} */ t) => [t.sid, t]));
-    const cards = board.read(project).cards;
-    let changed = false;
+    const b = board.read(project);
+    // Папка доски сама не читается (ведёт за пределы проекта) — о картах ничего не известно, записи не трогаем.
+    if (b.errors.some((e) => e.file === board.DIR)) return;
+    const hurt = new Set(b.errors.map((e) => cardOf(e.file)));
+    /** @type {Record<string, any>} */
+    const ch = {};
     for (const [id, run] of Object.entries(mine)) {
-      const c = cards.find((x) => x.id === id);
+      const c = b.cards.find((x) => x.id === id);
+      if (!c && hurt.has(id)) {
+        if (!unread.has(id)) { unread.add(id); ctx.log(`${id}: файл карты не читается — статус не меняю, запуск помню`); }
+        continue;
+      }
+      unread.delete(id);
+      if (run.started >= asked) continue;
       const own = c && (run.gone ? c.status === 'пауза' : OWN.includes(c.status));
-      if (!c || !own) { delete mine[id]; changed = true; continue; }
+      if (!c || !own) { ch[id] = null; continue; }
       if (run.gone) continue;
       const t = live.get(run.sid);
       const want = t ? BY_STATE[t.state] || '' : 'пауза';
-      if (!t) { mine[id] = { ...run, gone: true }; changed = true; }
-      if (!want || want === c.status) continue;
+      if (!want) continue;
+      if (want === c.status) { if (!t) ch[id] = { ...run, gone: true }; continue; }
       try {
-        board.update(project, id, { status: want });
+        ch[id] = { ...run, ...(t ? {} : { gone: true }), ...writeStatus(id, want).own };
         ctx.log(`${id}: статус ${c.status} → ${want} (вкладка ${run.sid}${t ? `, состояние ${t.state}` : ' закрыта'})`);
       } catch (e) { ctx.log(`${id}: статус ${want} не записан: ${why(e)}`); }
     }
-    if (changed) saveRuns(mine);
+    if (Object.keys(ch).length) patchRuns(ch);
   };
   const sync = async () => {
     if (syncing) { again = true; return; }
@@ -135,6 +187,13 @@ module.exports = (ctx) => {
     if (c.status === 'готово') return { error: 'карта уже готова' };
     const agent = c.agent || 'claude';
     if (!agents.AGENTS.includes(agent)) return { error: `запуск — только ${agents.AGENTS.join(' и ')}, а в карте агент ${agent}` };
+    // До первого await: второй вызов, пока первый ждёт демона или вкладку, видит флаг (t554).
+    if (starting.has(ref)) return { error: `карта ${ref} уже запускается` };
+    starting.add(ref);
+    try { return await start(ref, c, agent); } finally { starting.delete(ref); }
+  };
+  /** Запуск после проверок карты; run держит флаг «запуск идёт». @param {string} ref @param {any} c @param {string} agent */
+  const start = async (ref, c, agent) => {
     const prev = runsOf()[ref];
     if (prev && !prev.gone) {
       const r = await ctx.terminals();
@@ -160,11 +219,14 @@ module.exports = (ctx) => {
       return { error: e };
     }
     const sid = r.session.sid;
-    saveRuns({ ...runsOf(), [ref]: { sid, started: Date.now() } });
+    patchRuns({ [ref]: { sid, started: Date.now() } });
     ctx.log(`${ref}: запущена во вкладке ${sid}, ${agent}${la.args.length ? ` ${la.args.join(' ')}` : ''}, промпт ${pr.text.length} знаков`);
     try {
-      const item = c.status === 'в работе' ? c : board.update(project, ref, { status: 'в работе' });
-      return { session: r.session, item, skipped: la.skipped };
+      if (c.status === 'в работе') return { session: r.session, item: c, skipped: la.skipped };
+      const w = writeStatus(ref, 'в работе');
+      const mine = runsOf();
+      if (mine[ref] && mine[ref].sid === sid) patchRuns({ [ref]: { ...mine[ref], ...w.own } });
+      return { session: r.session, item: w.item, skipped: la.skipped };
     } catch (e) {
       ctx.log(`${ref}: статус «в работе» не записан: ${why(e)}`);
       return { session: r.session, skipped: la.skipped, warn: why(e) };
@@ -180,8 +242,12 @@ module.exports = (ctx) => {
       /** @type {any} */ (c).at = at;
     }
     // Запуск карты (t515): время запуска для строки и gone — вкладку закрыли. Номер вкладки окну не нужен.
+    // st и at — своя запись статуса (t551): совпали со статусом и временем файла — окно не пишет «изменился снаружи».
     const mine = runsOf();
-    for (const c of b.cards) if (mine[c.id]) /** @type {any} */ (c).run = { started: mine[c.id].started, gone: !!mine[c.id].gone };
+    for (const c of b.cards) {
+      const m = mine[c.id];
+      if (m) /** @type {any} */ (c).run = { started: m.started, gone: !!m.gone, st: m.st || '', at: m.at || 0 };
+    }
     return b;
   };
   const startWatch = () => {
@@ -201,8 +267,10 @@ module.exports = (ctx) => {
       if (cmd === 'sync') { sync(); return {}; }
       if (cmd === 'state') {
         const s = ctx.settings.get();
-        const mine = s.openIn && typeof s.openIn === 'object' && key in s.openIn;
-        return { open: mine ? !!s.openIn[key] : !!s.open, hideDone: !!s.hideDone };
+        // Старое общее open — только пока openIn пуст: одноразовый переход со старого вида (t547). Дальше проекта нет в openIn — панель закрыта.
+        const openIn = s.openIn && typeof s.openIn === 'object' ? s.openIn : {};
+        const open = Object.keys(openIn).length ? Object.hasOwn(openIn, key) && !!openIn[key] : !!s.open;
+        return { open, hideDone: !!s.hideDone };
       }
       if (cmd === 'update') {
         const [ref, changes, base] = args;
@@ -223,7 +291,7 @@ module.exports = (ctx) => {
       if (cmd === 'setState') {
         const a = args[0] && typeof args[0] === 'object' ? args[0] : {};
         const next = { ...ctx.settings.get() };
-        // Старое общее open не трогаем: по нему открываются проекты, где панель ещё не открывали и не закрывали.
+        // Старое общее open не трогаем: пока openIn пуст, по нему открываются все проекты (state).
         if ('open' in a) next.openIn = { ...(next.openIn && typeof next.openIn === 'object' ? next.openIn : {}), [key]: !!a.open };
         if ('open' in a && !a.open) unwatch();
         if ('hideDone' in a) next.hideDone = !!a.hideDone;

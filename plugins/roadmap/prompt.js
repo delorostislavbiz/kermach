@@ -4,7 +4,7 @@
 // Готовый текст нигде не хранится: собирается при каждом вызове из файлов доски и шаблонов.
 // Шаблоны — общие правила и виды работы, одни на все проекты; читаются при каждой сборке, правка видна без перезапуска.
 //   Своя копия — prompt.md в папке данных плагина (ctx.dataDir, %APPDATA%\TERMINALUS\plugins-data\roadmap\): перенос программы её не затирает.
-//   Копии нет — встроенный prompt.md рядом с этим файлом. Копию создаёт ownCopy (первая правка, кнопка «Открыть шаблон»).
+//   Копии нет — встроенный prompt.md рядом с этим файлом. Копию человек кладёт сам: кнопки для неё нет (t547).
 // «Свежее» (часть 5) — то, чего не было, когда карту писали (её created):
 //   карты этой фазы, закрытые позже (closed; нет поля — время правки файла), решения и тупики с датой не раньше дня карты
 //   по тем же файлам (без файлов — по этой карте или карте той же фазы), открытые карты «Входящих» по тем же файлам.
@@ -67,14 +67,6 @@ function templateFile(dataDir) {
   const own = dataDir ? path.join(dataDir, OWN) : '';
   if (own) { try { fs.lstatSync(own); return { file: own, own: true }; } catch { /* копии нет */ } }
   return { file: TEMPLATES, own: false };
-}
-
-/** Своя копия шаблонов: нет — создаётся из встроенных. Путь к ней. @param {string} dataDir */
-function ownCopy(dataDir) {
-  const own = path.join(dataDir, OWN);
-  fs.mkdirSync(dataDir, { recursive: true });
-  try { fs.copyFileSync(TEMPLATES, own, fs.constants.COPYFILE_EXCL); } catch (e) { if (!e || /** @type {any} */ (e).code !== 'EEXIST') throw e; }
-  return own;
 }
 
 /** Подстановки {папка}, {образец}, {карта}. @param {string} text @param {Record<string, string>} vars */
@@ -222,4 +214,4 @@ function build(project, ref, opts = {}) {
   return { card: card.id, title: card.title, kind: card.kind, parts, text, chars: text.length, warnings, skipped: fr.skipped, templates: tf };
 }
 
-module.exports = { TEMPLATES, FRESH_NOTE, templates, templateFile, ownCopy, paths, shared, fresh, build };
+module.exports = { TEMPLATES, FRESH_NOTE, templates, templateFile, paths, shared, fresh, build };

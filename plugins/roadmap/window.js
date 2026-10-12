@@ -43,6 +43,8 @@ function roadmapSetup(host) {
   const w = /** @type {any} */ (window);
   const T = (/** @type {string} */ k, /** @type {string} */ ru, /** @type {any} */ v) => I18n.t(`roadmap.${k}`, ru, v);
   const esc = (/** @type {string} */ s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  /** Значение по ключу из файла карты: только своё поле объекта, не constructor и не __proto__ (t544, РЕШЕНИЯ.md). @param {any} o @param {string} k */
+  const got = (o, k) => (o && Object.hasOwn(o, k) ? o[k] : undefined);
   const ICON = (/** @type {string} */ d, size = 14) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const I_BOARD = '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16M4 14h16M9 9v11"/>';
   const I_CENTER = '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M12 4v16M4 12h16"/>';
@@ -226,7 +228,7 @@ function roadmapSetup(host) {
 
   const api = (/** @type {string} */ cmd, /** @type {any[]} */ ...a) => host.call(cmd, ...a).catch((/** @type {any} */ e) => ({ error: String((e && e.message) || e) }));
 
-  const statusWord = (/** @type {string} */ s) => { const m = /** @type {any} */ (RM_STATUS)[s]; return m ? T(`st.${m.key}`, s) : s; };
+  const statusWord = (/** @type {string} */ s) => { const m = got(RM_STATUS, s); return m ? T(`st.${m.key}`, s) : s; };
   const phaseWord = (/** @type {string} */ s) => T(`ph.${s === 'идёт' ? 'run' : s === 'готова' ? 'done' : 'plan'}`, s);
   const HEALTH = { 'зелёный': ['g', 'zel', 'зелёная'], 'жёлтый': ['y', 'zhel', 'жёлтая'], 'красный': ['r', 'kras', 'красная'] };
   /** Время правки файла карты: сегодня — ЧЧ:ММ, раньше — ДД.ММ. @param {number} at */
@@ -253,7 +255,7 @@ function roadmapSetup(host) {
 
   /** Строка карты. @param {any} c @param {Map<string, any>} byId */
   const cardRow = (c, byId) => {
-    const m = /** @type {any} */ (RM_STATUS)[c.status] || RM_STATUS['в очереди'];
+    const m = got(RM_STATUS, c.status) || RM_STATUS['в очереди'];
     let meta = statusWord(c.status);
     let tone = '';
     if (c.status === 'в очереди') {
@@ -304,7 +306,7 @@ function roadmapSetup(host) {
       if (hideDone && f.status === 'готова') continue;
       const busy = f.status === 'идёт' || cards.some((/** @type {any} */ c) => RM_ACTIVE.has(c.status));
       const fopen = folds.has(f.id) ? !!folds.get(f.id) : busy;
-      const hl = /** @type {any} */ (HEALTH)[f.health];
+      const hl = got(HEALTH, f.health);
       const dot = hl ? hl[0] : '';
       let right = '';
       if (fopen && hl) right += `<span class="h ${hl[0]}">${esc(T(`health.${hl[1]}`, hl[2]))}</span>`;
@@ -364,10 +366,10 @@ function roadmapSetup(host) {
 
   /** Подпись пункта списка. @param {string} k @param {string} v */
   const optText = (k, v) => {
-    if (k === 'status') return /** @type {any} */ (RM_STATUS)[v] ? statusWord(v) : v;
+    if (k === 'status') return got(RM_STATUS, v) ? statusWord(v) : v;
     if (k === 'agent') return v || T('agentNone', 'агент не задан');
     if (k === 'model') return v || T('modelDefault', 'модель по умолчанию');
-    if (k === 'effort') { const e = lists.EFFORT[v]; return !v ? T('effortDefault', 'усилие по умолчанию') : e ? T(`eff.${e.key}`, v) : v; }
+    if (k === 'effort') { const e = got(lists.EFFORT, v); return !v ? T('effortDefault', 'усилие по умолчанию') : e ? T(`eff.${e.key}`, v) : v; }
     return v;
   };
   /** Пункты списка: свои значения плюс значения из файла и формы, которых в списке нет. @param {string} k @param {string[]} vals */
@@ -379,9 +381,9 @@ function roadmapSetup(host) {
     e.innerHTML = all.map((v) => `<option value="${esc(v)}">${esc(optText(k, v))}</option>`).join('');
     e.value = keep;
   };
-  const modelList = (/** @type {string} */ agent) => ['', ...lists.MODELS[agent] || []];
+  const modelList = (/** @type {string} */ agent) => ['', ...got(lists.MODELS, agent) || []];
   /** Усилия агента; агент не задан — все, какие знает программа. @param {string} agent */
-  const effortList = (agent) => ['', ...lists.EFFORTS[agent] || Object.keys(lists.EFFORT)];
+  const effortList = (agent) => ['', ...got(lists.EFFORTS, agent) || Object.keys(lists.EFFORT)];
   const paintOpts = () => {
     fillOpts('status', Object.keys(RM_STATUS));
     fillOpts('agent', lists.AGENTS);
@@ -457,7 +459,7 @@ function roadmapSetup(host) {
     const ph = c && c.phase ? b.phases.find((/** @type {any} */ f) => f.id === c.phase) : null;
     q('.crumb').textContent = `/ ${ph ? `${T('phase', 'Фаза {n}', { n: ph.num })} · ${ph.title || ph.id}` : c && c.phase ? c.phase : T('inbox', 'Входящие')}`;
     const st = getV('status');
-    const m = /** @type {any} */ (RM_STATUS)[st] || RM_STATUS['в очереди'];
+    const m = got(RM_STATUS, st) || RM_STATUS['в очереди'];
     const si = q('.pill.st .si');
     si.className = `si ${m.tone}`;
     si.textContent = m.icon;
@@ -553,7 +555,9 @@ function roadmapSetup(host) {
         cur.base[k] = fv;
         delete cur.ext[k];
         setV(k, fv);
-        if (!n.upd.includes(k)) n.upd.push(k);
+        // Статус записала сама программа по вкладке запуска (t551): это не правка снаружи, пометки нет.
+        const own = k === 'status' && c.run && c.run.st === fv && c.run.at === c.at;
+        if (!own && !n.upd.includes(k)) n.upd.push(k);
       } else if (nv(fv) === nv(getV(k))) {
         cur.base[k] = fv;
         delete cur.ext[k];
@@ -817,6 +821,8 @@ function roadmapSetup(host) {
     if (r && r.error) { if (r.error !== said) { said = r.error; host.log(`доска не прочитана: ${r.error}`); } last = { error: r.error }; } else last = r;
     draw();
     if (cur) { refreshCard(); growAll(); }
+    // Панель снова открыта: шаблон в ctx.dataDir или файлы доски могли поменяться, пока слежение было снято (t546).
+    if (pv) loadPrompt();
   };
 
   /** @param {boolean} on @param {boolean} [save] */

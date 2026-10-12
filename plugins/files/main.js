@@ -285,8 +285,8 @@ module.exports = (ctx) => {
       // Обновить — список для поиска собрать заново при следующем поиске. Поток ещё собирает — его список и останется: второй обход рядом не запускается.
       // Чтение папки застряло — прежний список остаётся до его ответа (t463).
       if (cmd === 'refresh') { if (list && list.at && !diskThreads().stuck) list = null; return {}; }
-      // Проекта в openIn нет — старое общее open: его не трогаем, по нему открываются проекты, где панель ещё не открывали и не закрывали.
-      if (cmd === 'state') { const s = ctx.settings.get(); const o = s.openIn && typeof s.openIn === 'object' ? s.openIn : {}; return { open: key in o ? !!o[key] : !!s.open }; }
+      // Старое общее open — только пока openIn пуст: одноразовый переход со старого вида (t547). Дальше проекта нет в openIn — панель закрыта.
+      if (cmd === 'state') { const s = ctx.settings.get(); const o = s.openIn && typeof s.openIn === 'object' ? s.openIn : {}; return { open: Object.keys(o).length ? Object.hasOwn(o, key) && !!o[key] : !!s.open }; }
       // set заменяет весь мешок (t502): прежние поля сливаются, иначе второе поле пропадало бы при каждом setState.
       if (cmd === 'setState') {
         const s = ctx.settings.get();

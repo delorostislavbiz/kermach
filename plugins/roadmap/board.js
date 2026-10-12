@@ -612,4 +612,4 @@ async function ownRootAsync(project, dir) {
   if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`папка доски ведёт за пределы проекта: ${real}`);
 }
 
-module.exports = { DIR, MAX_SIZE, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, read, update, nextId, create, watch };
+module.exports = { DIR, MAX_SIZE, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, update, nextId, create, watch };
