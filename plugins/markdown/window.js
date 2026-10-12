@@ -30,6 +30,8 @@
   const esc = (/** @type {string} */ s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c));
   // --- paths:begin — чистые функции путей; spikes\t230-mdmac\unit проверяет этот кусок по обеим веткам (posix — Mac, иначе Windows).
   const POSIX = !/Win/i.test(navigator.platform);
+  /** Подсказка сочетания клавиш: на Mac Cmd (⌘) вместо Ctrl — клавиши ловят оба (ctrlKey || metaKey). @param {string} s */
+  const kbd = (s) => (/Mac/i.test(navigator.platform) ? s.replace(/Ctrl\+/g, '⌘') : s);
   /** @param {string} p @param {boolean} [posix] */
   const baseOf = (p, posix = POSIX) => p.replace(posix ? /^.*\// : /^.*[\\/]/, '');
   /** @param {string} p @param {boolean} [posix] */
@@ -371,11 +373,11 @@
 
     /** Кнопки панели разметки: [код, надпись, подсказка, стиль надписи]; null — разделитель. Список — на текущем языке (t287). */
     const tools = () => [
-      ['bold', I18n.t('md.zh', 'Ж'), I18n.t('md.zhirnyyTekstCtrlB', 'Жирный: **текст** (Ctrl+B)'), 'font-weight:700'], ['italic', I18n.t('md.k', 'К'), I18n.t('md.kursivTekstCtrlI', 'Курсив: *текст* (Ctrl+I)'), 'font-style:italic'],
+      ['bold', I18n.t('md.zh', 'Ж'), kbd(I18n.t('md.zhirnyyTekstCtrlB', 'Жирный: **текст** (Ctrl+B)')), 'font-weight:700'], ['italic', I18n.t('md.k', 'К'), kbd(I18n.t('md.kursivTekstCtrlI', 'Курсив: *текст* (Ctrl+I)')), 'font-style:italic'],
       ['strike', I18n.t('md.abv', 'абв'), I18n.t('md.zacherknutyyTekst', 'Зачёркнутый: ~~текст~~'), 'text-decoration:line-through'], ['code', I18n.t('md.kod', 'Код'), I18n.t('md.kodVStrokeTekst', 'Код в строке: `текст`')], ['codeblock', I18n.t('md.blok', 'Блок'), I18n.t('md.blokKodaNaOtdelnyh', 'Блок кода: ``` на отдельных строках')],
       null, ['h1', 'H1', I18n.t('md.zagolovok1UrovnyaV', 'Заголовок 1 уровня: # в начале строки')], ['h2', 'H2', I18n.t('md.zagolovok2UrovnyaV', 'Заголовок 2 уровня: ## в начале строки')], ['h3', 'H3', I18n.t('md.zagolovok3UrovnyaV', 'Заголовок 3 уровня: ### в начале строки')],
       null, ['ul', '•', I18n.t('md.markirovannyySpisokVNachale', 'Маркированный список: - в начале строк')], ['ol', '1.', I18n.t('md.numerovannyySpisok12', 'Нумерованный список: 1. 2. 3.')], ['quote', '>', I18n.t('md.citataVNachaleStrok', 'Цитата: > в начале строк')],
-      null, ['link', I18n.t('md.ssylka', 'Ссылка'), I18n.t('md.ssylkaTekstAdresCtrl', 'Ссылка: [текст](адрес) (Ctrl+K)')],
+      null, ['link', I18n.t('md.ssylka', 'Ссылка'), kbd(I18n.t('md.ssylkaTekstAdresCtrl', 'Ссылка: [текст](адрес) (Ctrl+K)'))],
     ];
     const INLINE = { bold: '**', italic: '*', strike: '~~', code: '`' };
     const WORD = /[\p{L}\p{N}_]/u;
@@ -554,7 +556,7 @@
       // Надписи панели ставит label(d): при открытии и после смены языка (t287).
       d.pane.innerHTML = `<div class="mdbar"><div class="mdseg">${VIEWS.map((v) => `<button data-v="${v}"></button>`).join('')}</div>
         <div class="mdsize"><button data-z="-1">A−</button><button class="mdz"></button><button data-z="1">A+</button></div>
-        <span class="mdpath" title="${esc(o.path)}">${esc(relOf(o.path))}</span><span class="mdstat"></span><button class="mdsave" title="Ctrl+S"></button></div>
+        <span class="mdpath" title="${esc(o.path)}">${esc(relOf(o.path))}</span><span class="mdstat"></span><button class="mdsave" title="${kbd('Ctrl+S')}"></button></div>
         <div class="mdtools">${tools().map((t) => (t ? `<button data-t="${t[0]}" tabindex="-1"${t[3] ? ` style="${t[3]}"` : ''}></button>` : '<i class="sep"></i>')).join('')}</div>
         <div class="mdnote" hidden></div>
         <div class="mdbody"><textarea class="mded" spellcheck="false" wrap="off"></textarea><div class="mdview"></div></div>`;

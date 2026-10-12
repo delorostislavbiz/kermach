@@ -19,6 +19,9 @@
   #title { height: 36px; display: flex; align-items: center; padding-left: 14px; flex-shrink: 0; -webkit-app-region: drag; }
   #title .name { display: flex; align-items: center; gap: 8px; flex: 1; font-size: 12px; min-width: 0; white-space: nowrap; overflow: hidden; }
   #title .btns { display: flex; height: 100%; -webkit-app-region: no-drag; }
+  /* macOS: слева родные три кнопки окна, свои не нужны. Класс mac ставит page.js. */
+  .mac #title { padding-left: 84px; }
+  .mac #title .btns { display: none; }
   #title .btns div { width: 46px; display: flex; align-items: center; justify-content: center; }
   #title .btns div:hover { background: rgba(var(--muted-rgb),.14); }
   #title .btns #close:hover { background: var(--danger); color: #fff; }

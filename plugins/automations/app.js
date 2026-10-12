@@ -13,7 +13,8 @@ const sender = require('../../main/sender');
 const settings = require('../../main/settings');
 const i18n = require('../../main/i18n');
 const store = require('./store');
-const schedule = require('./schedule');
+// macOS — задачи launchd (schedule-mac.js), Windows — Планировщик. Договор у обоих один.
+const schedule = process.platform === 'darwin' ? require('./schedule-mac') : require('./schedule');
 const { execWorker } = require('../../main/exec-worker');
 
 const PAGE = path.join(__dirname, 'window.html');
@@ -158,8 +159,10 @@ function open(project) {
     return;
   }
   win = new BrowserWindow({
-    width: 1100, height: 720, minWidth: 760, minHeight: 480, show: false, frame: false, backgroundColor: settings.background(),
+    width: 1100, height: 720, minWidth: 760, minHeight: 480, show: false, backgroundColor: settings.background(),
     title: i18n.t('auto.title', 'Kermach — Автоматизации'),
+    // macOS: родные три кнопки окна слева, как у «Проектов»; Windows — без рамки, свои кнопки.
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 11 } } : { frame: false }),
     webPreferences: { preload: PRELOAD, contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   const w = win;

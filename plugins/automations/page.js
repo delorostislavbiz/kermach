@@ -7,6 +7,9 @@
   const A = w.auto;
   const I18n = w.I18n;
   const t = (/** @type {string} */ k, /** @type {string} */ ru, /** @type {any} */ v) => I18n.t(`auto.${k}`, ru, v);
+  /** macOS: задачи launchd и уведомления macOS вместо Планировщика и тостов Windows. */
+  const MAC = /Mac/i.test(navigator.platform);
+  document.documentElement.classList.toggle('mac', MAC);
   const $ = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.getElementById(id));
   const esc = (/** @type {any} */ s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   /** @type {Record<string, string>} */
@@ -183,7 +186,7 @@
       <div class="fld"><label for="fModel">${t('fModel', 'Модель')}</label><select id="fModel">${none(!c.model)}${MODELS.map((m) => opt(m, modelText(m), c.model)).join('')}</select>${mark('model')}</div>
       <div class="fld"><label for="fBudget">${t('fBudget', 'Лимит денег на прогон, $')}</label><div class="rowf"><input type="number" id="fBudget" min="0.01" max="100" step="0.01" value="${esc(c.budget === undefined ? '' : c.budget)}" style="width:90px"><span class="muted">${t('budgetHint', 'дошёл до лимита — прогон остановится')}</span></div>${mark('budget')}</div>
       <div class="fld wide">${cb('fCatch', t('fCatch', 'Компьютер был выключен в это время — запустить один раз после включения'), c.catchUp !== false && !('catchUp' in bad))}${mark('catchUp')}</div>
-      <div class="fld wide">${cb('fNotify', t('fNotify', 'Показать уведомление Windows, когда прогон закончится'), c.notify !== false && !('notify' in bad))}${mark('notify')}</div>
+      <div class="fld wide">${cb('fNotify', (MAC ? t('fNotifyMac', 'Показать уведомление macOS, когда прогон закончится') : t('fNotify', 'Показать уведомление Windows, когда прогон закончится')), c.notify !== false && !('notify' in bad))}${mark('notify')}</div>
       <div class="sec">${t('rights', 'Что агенту можно')}</div>
       <div class="fld" style="gap:8px">${cb('fRead', t('fRead', 'Читать файлы'), true, true)}${cb('fOwn', t('fOwn', 'Писать в свою папку автоматизации'), true, true)}${cb('fNet', t('fNet', 'Выходить в интернет'), c.internet !== false && !('internet' in bad))}
         <span id="fWriteBox">${cb('fWrite', t('fWrite', 'Писать в папку проекта'), !!c.writeProject)}</span><span class="hint" id="writeHint">${t('writeHint', 'Только у проектной')}</span>${mark('internet', 'writeProject')}</div>
@@ -322,7 +325,7 @@
   /** @param {any} next */
   const go = (next) => { view = { ...view, ...next }; render(); };
   /** @param {any} r @param {string} [okText] */
-  const said = (r) => { if (r && r.error) alertLine(r.error); else if (r && r.warn) alertLine(t('schedWarn', 'Сохранено, но Планировщик Windows не принял задачу: {e}', { e: r.warn }), true); };
+  const said = (r) => { if (r && r.error) alertLine(r.error); else if (r && r.warn) alertLine((MAC ? t('schedWarnMac', 'Сохранено, но launchd не принял задачу: {e}', { e: r.warn }) : t('schedWarn', 'Сохранено, но Планировщик Windows не принял задачу: {e}', { e: r.warn })), true); };
   /** Строка ошибки: в форме — внизу формы, в других экранах — в заголовке окна. @param {string} m @param {boolean} [warn] */
   function alertLine(m, warn = false) {
     const el = document.getElementById('fMsg');
@@ -355,7 +358,7 @@
     }
     if (el.id === 'fDel') {
       const a = itemOf(view.dir);
-      if (!a || !confirm(t('askDelete', 'Удалить автоматизацию «{name}»? Описание, задача в Планировщике и все прогоны удалятся.', { name: nameOf(a) }))) return;
+      if (!a || !confirm((MAC ? t('askDeleteMac', 'Удалить автоматизацию «{name}»? Описание, задача launchd и все прогоны удалятся.', { name: nameOf(a) }) : t('askDelete', 'Удалить автоматизацию «{name}»? Описание, задача в Планировщике и все прогоны удалятся.', { name: nameOf(a) })))) return;
       const r = await A.remove(a.dir);
       if (r && r.error) return alertLine(r.error);
       return go({ name: 'list', dir: '' });

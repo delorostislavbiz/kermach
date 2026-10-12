@@ -59,6 +59,11 @@
   const sendBtn = /** @type {HTMLButtonElement} */ (document.getElementById('send'));
   const cancelBtn = /** @type {HTMLButtonElement} */ (document.getElementById('cancel'));
   const toolBtns = /** @type {HTMLButtonElement[]} */ ([...document.querySelectorAll('[data-tool]')]);
+  // macOS: в подсказках Cmd вместо Ctrl — отмена на Mac по Cmd+Z (editKey).
+  if (MAC) {
+    hint.textContent = (hint.textContent || '').replace(/Ctrl\+/g, '⌘');
+    undoBtn.title = undoBtn.title.replace(/Ctrl\+/g, '⌘');
+  }
   const HINT = hint.textContent || '';
 
   /**

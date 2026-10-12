@@ -8,8 +8,15 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
-const ORCA_FILE = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
+const ORCA_FILE = process.platform === 'darwin' ? macOrcaFile() : path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
   'orca-termius', 'profiles', 'local-default', 'orca-data.json');
+
+/** macOS: данные Орки в ~/Library/Application Support — сборка orca-termius, если есть, иначе обычная Орка (папка orca). */
+function macOrcaFile() {
+  const base = path.join(os.homedir(), 'Library', 'Application Support');
+  const file = (/** @type {string} */ dir) => path.join(base, dir, 'profiles', 'local-default', 'orca-data.json');
+  return fs.existsSync(file('orca-termius')) ? file('orca-termius') : file('orca');
+}
 
 // Значки Орки → наши (имена из макета design\TERMINALUS.dc.html). Подбор по смыслу, таблица — в CEL-terminalus.md.
 /** @type {Record<string, string>} */

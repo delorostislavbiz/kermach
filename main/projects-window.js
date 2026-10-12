@@ -211,7 +211,8 @@ function open(c, opt = {}) {
     win.focus();
     return win;
   }
-  const pl = windowState.place('projects', 820, 760);
+  // macOS: системный шрифт (SF) шире Segoe UI — при 820 кнопка «Остановить всё» уходила за край.
+  const pl = windowState.place('projects', process.platform === 'darwin' ? 900 : 820, 760);
   win = new BrowserWindow({
     ...pl.bounds,
     minWidth: 480,

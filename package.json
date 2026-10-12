@@ -12,5 +12,72 @@
     "@xterm/headless": "6.0.0",
     "@xterm/xterm": "6.0.0",
     "node-pty": "1.1.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.2.1",
+    "electron": "44.7.0",
+    "electron-builder": "^26.15.3"
+  },
+  "description": "Термінали для Claude Code і Codex: кожен проєкт у своєму вікні (порт для macOS)",
+  "author": "Kermach",
+  "scripts": {
+    "start": "electron .",
+    "rebuild": "electron-rebuild -f -w node-pty",
+    "dist": "electron-builder --mac --arm64"
+  },
+  "build": {
+    "appId": "ua.kermach.app",
+    "productName": "Kermach",
+    "asar": false,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main/**",
+      "daemon/**",
+      "renderer/**",
+      "plugins/**",
+      "bin/**",
+      "fonts/**",
+      "icons/**",
+      "package.json",
+      "LICENSE",
+      "THIRD-PARTY-NOTICES.txt",
+      "!**/*.cmd",
+      "!**/.DS_Store",
+      "node_modules/**"
+    ],
+    "npmRebuild": true,
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "identity": null,
+      "hardenedRuntime": false,
+      "minimumSystemVersion": "12.0",
+      "extendInfo": {
+        "NSHumanReadableCopyright": "MIT",
+        "LSApplicationCategoryType": "public.app-category.developer-tools"
+      }
+    },
+    "dmg": {
+      "title": "Kermach ${version}",
+      "artifactName": "Kermach-${version}-arm64.dmg"
+    },
+    "afterSign": "build/adhoc-sign.cjs"
   }
 }

@@ -76,8 +76,13 @@ function changed(root, since, max = 200) {
 /** Остановить claude с детьми: claude.cmd идёт через cmd.exe, p.kill() снял бы только cmd. @param {import('child_process').ChildProcess} p */
 function killTree(p) {
   if (process.platform === 'win32' && p.pid) spawnSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { windowsHide: true });
+  // macOS: claude запущен своей группой (detached) — гасим группу целиком, с его bash и прочими детьми.
+  else if (p.pid) { try { process.kill(-p.pid, 'SIGTERM'); } catch { p.kill(); } }
   else p.kill();
 }
+
+/** Запуск своей группой процессов на macOS: killTree гасит её целиком. На Windows — как было. */
+const GROUP = process.platform !== 'win32';
 
 const STATUS_TEXT = { done: 'готово', error: 'ошибка', budget: 'остановлен лимитом', refused: 'отказ до запуска', stopped: 'остановлен по времени' };
 
@@ -102,6 +107,11 @@ function notify(title, text, log) {
   /** @type {string[]} */
   let args;
   if (alt && alt.endsWith('.js')) { file = process.execPath; args = [alt, title, text]; env.ELECTRON_RUN_AS_NODE = '1'; }
+  // macOS: уведомление Центра уведомлений через osascript. Текст — аргументами (argv), в код скрипта не попадает.
+  else if (process.platform === 'darwin') {
+    file = '/usr/bin/osascript';
+    args = ['-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title (item 1 of argv)', '-e', 'end run', title, text];
+  }
   else if (process.platform !== 'win32') return Promise.resolve();
   else args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(psToast(), 'utf16le').toString('base64')];
   return new Promise((resolve) => {
@@ -152,10 +162,20 @@ function lock(file, text, stale) {
 
 /**
  * Один прогон автоматизации id. Ответ — код выхода: 0 готово, 1 ошибка claude, 2 отказ до запуска, 3 прогон уже идёт.
- * @param {{ dataDir: string, id: string, log: (m: string) => void }} o
+ * @param {{ dataDir: string, id: string, log: (m: string) => void, scheduled?: boolean }} o
  * @returns {Promise<number>}
  */
-function runAutomation({ dataDir, id, log }) {
+function runAutomation({ dataDir, id, log, scheduled = false }) {
+  // macOS, запуск launchd (--scheduled): то, чего launchd не умеет сам, — «один раз», «не догонять пропущенный» (schedule-mac.js).
+  if (scheduled && process.platform === 'darwin' && store.ID_RE.test(id)) {
+    const it = store.find(dataDir, id);
+    if (it && it.cfg) {
+      const ranSince = (/** @type {number} */ since) => store.runs(dataDir, id).some((r) => r.start && Date.parse(r.start) >= since);
+      const sm = require('./schedule-mac');
+      const why = sm.scheduledSkip(it.cfg, new Date(), ranSince, sm.writtenAt(id));
+      if (why) { log(`${id}: запуск по расписанию пропущен — ${why}`); return Promise.resolve(0); }
+    }
+  }
   const runs = store.runsOf(dataDir, store.ID_RE.test(id) ? id : '_bad');
   const start = new Date();
   let stamp = stampOf(start);
@@ -202,14 +222,15 @@ function runAutomation({ dataDir, id, log }) {
     if (alt && alt.endsWith('.js')) { file = process.execPath; pre = [alt]; env.ELECTRON_RUN_AS_NODE = '1'; }
     else if (alt) file = alt;
     else { const found = findProgram('claude'); if (found) { file = found.file; pre = found.pre; } }
-    if (!file) return finish(1, 'error', 'Нет claude: не найден claude.exe или claude.cmd в PATH, ~\\.local\\bin и %APPDATA%\\npm.\n', { error: 'нет claude' });
+    if (!file) return finish(1, 'error', process.platform === 'win32' ? 'Нет claude: не найден claude.exe или claude.cmd в PATH, ~\\.local\\bin и %APPDATA%\\npm.\n'
+      : 'Нет claude: не найден в PATH, ~/.local/bin, /opt/homebrew/bin и /usr/local/bin.\n', { error: 'нет claude' });
 
     const args = flags(cfg, { work, project: item.project });
     const cwd = item.project || work;
     const text = prompt(item.task, { work, project: item.project, writeProject: !!cfg.writeProject });
     fs.writeFileSync(path.join(out, 'cmd.txt'), `${JSON.stringify([file, ...pre, ...args])}\ncwd: ${cwd}\n`);
     // Задание — через stdin: нет кириллицы и кавычек в командной строке, а claude не может поправить своё задание.
-    const p = spawn(file, [...pre, ...args], { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env });
+    const p = spawn(file, [...pre, ...args], { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env, detached: GROUP });
     let so = '';
     let se = '';
     let timedOut = false;
@@ -253,8 +274,17 @@ function cli(argv, dataDir) {
   process.on('uncaughtException', (e) => { log(`ошибка: ${e.stack || e}`); app.exit(1); });
   app.setPath('userData', path.join(dataDir, 'chromium-auto'));
   const id = String(argv[argv.indexOf('--automation') + 1] || '');
-  log(`${id}: старт`);
-  runAutomation({ dataDir, id, log }).then((code) => app.exit(code), (e) => { log(`ошибка: ${e.stack || e}`); app.exit(1); });
+  const scheduled = argv.includes('--scheduled');
+  log(`${id}: старт${scheduled ? ' по расписанию' : ''}`);
+  // macOS: launchd даёт короткий PATH (/usr/bin:/bin:/usr/sbin:/sbin) — claude и его node не нашлись бы. PATH — из оболочки входа, как у окон.
+  if (process.platform === 'darwin') {
+    const r = require('../../main/os-rules').loginPath({
+      shell: process.env.SHELL || '/bin/zsh', env: process.env, home: os.homedir(),
+      run: (file, args, ms) => require('child_process').execFileSync(file, args, { encoding: 'utf8', timeout: ms, stdio: ['ignore', 'pipe', 'ignore'] }),
+    });
+    process.env.PATH = r.path;
+  }
+  runAutomation({ dataDir, id, log, scheduled }).then((code) => app.exit(code), (e) => { log(`ошибка: ${e.stack || e}`); app.exit(1); });
 }
 
 module.exports = { flags, prompt, rulePath, changed, runAutomation, cli, notify };
