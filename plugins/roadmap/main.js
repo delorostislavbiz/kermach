@@ -28,8 +28,8 @@ const agents = require('./agents');
 
 /** Значение поля карты из board.js. @param {any} c @param {string} k */
 const field = (c, k) => String((k in board.CARD_FIELDS ? c.fields[k] : c[k]) || '');
-/** Для сравнения: строки без пробелов по краям и пустых, прочерк — пусто (как пишет board.update). @param {unknown} v */
-const same = (v) => { const s = String(v === undefined || v === null ? '' : v).split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join('\n'); return /^[—–-]$/.test(s) ? '' : s; };
+/** Для сравнения: то, что прочтётся после записи board.update — строки блока ``` с отступом и пустыми, остальные без пробелов по краям, прочерк — пусто (t621). @param {unknown} v */
+const same = (v) => board.sameField(v);
 /** Предмет доски по ссылке (t513): passport — паспорт, f<N> — фаза, остальное — карта. @param {any} b @param {string} ref */
 const itemOf = (b, ref) => (ref === 'passport' ? b.passport : ref.startsWith('f') ? b.phases.find((/** @type {any} */ x) => x.id === ref) : b.cards.find((/** @type {any} */ x) => x.id === ref));
 /** Признаки готовности строкой для сравнения: отметка и текст, по признаку на строку. @param {unknown} v */
@@ -38,14 +38,14 @@ const crit = (v) => (Array.isArray(v) ? v : []).map((c) => `[${c && c.done ? 'x'
 const PHASE_KEY = { health_why: 'healthWhy', health_by: 'healthBy', health_at: 'healthAt' };
 /**
  * Значение поля для сверки base (t513). raw — o это { [k]: значение от окна }, иначе предмет из board.js.
- * Раздел паспорта — текст как есть (пустые строки внутри важны), без пробелов по краям; остальное — как same.
+ * Раздел паспорта — текст как есть (пустые строки внутри важны), без пустых строк по краям и пробелов в конце; отступ первой строки — правка (t616, t621); одиночный \r — как \n, как в окне (t600). Остальное — как same.
  * @param {string} ref @param {any} o @param {string} k @param {boolean} [raw]
  */
 const valueOf = (ref, o, k, raw = false) => {
   if (k === 'criteria') return crit(raw ? o[k] : o.criteria);
   if (ref === 'passport') {
     const v = raw ? o[k] : o.sections && Object.hasOwn(o.sections, k) ? o.sections[k].text : '';
-    return String(v === undefined || v === null ? '' : v).replace(/\r\n/g, '\n').trim();
+    return board.edges(String(v === undefined || v === null ? '' : v).replace(/\r\n?/g, '\n'));
   }
   if (raw) return same(o[k]);
   if (ref.startsWith('f')) return same(o[Object.hasOwn(PHASE_KEY, k) ? /** @type {Record<string, string>} */ (PHASE_KEY)[k] : k]);

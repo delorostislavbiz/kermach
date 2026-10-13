@@ -9,7 +9,8 @@
 // meta.claudeSessionId вкладки Claude меняет и сам демон: Claude после /clear прислал новый session_id — приходит { ev: 'updated' }.
 // У каждого терминала в окружении TERMINALUS_TAB_KEY = его sid: хук шлёт его заголовком X-Terminalus-Tab.
 // Состояние агента (t13): у терминала state — код из STATES или '' (состояния нет: обычный терминал, агент до первого вопроса),
-// stateAt — когда агент последний раз сообщил состояние; событие { ev: 'state', sid, state, by, at }, by — откуда узнали (hook, title, osc9, input).
+// stateAt — когда агент последний раз сообщил состояние; событие { ev: 'state', sid, state, by, at }, by — откуда узнали (hook, title, osc9, input, screen — строка хода Codex, t609;
+// kind — вид вкладки сменили командой update, state '' — состояния нет, t628).
 // От hook и osc9 событие уходит всегда, кроме working (t129: звук не пропадает, если ввод или заголовок поставили то же раньше); от title и input — при смене.
 // В событии exit — state: 'exited' или 'error' (агент вышел с кодом не 0). updated из-за состояния не уходит.
 

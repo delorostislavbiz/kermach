@@ -485,6 +485,15 @@ function headValue(v) {
   return s;
 }
 
+/** Строки поля, как они лягут в файл: строки блока ``` как есть, остальные без пробелов по краям, пустые вне блока — прочь. @param {unknown} v */
+function bodyLs(v) {
+  const raw = String(v === undefined || v === null ? '' : v).split(/\r?\n/);
+  const rc = codeMask(raw);
+  return raw.map((l, i) => (rc[i] ? l : l.trim())).filter((l, i) => l || rc[i]);
+}
+/** Значение поля для сравнения — то, что прочтётся после записи (t621): отступ и пустая строка в блоке ``` — правка, пробелы в конце вне блока — нет. @param {unknown} v */
+const sameField = (v) => fieldValue(bodyLs(v).join('\n'));
+
 /**
  * Строки значения поля тела, как они лягут в файл: без пустых и пробелов по краям, пустое — прочерк.
  * Строки блока кода ``` — как есть, с отступом и пустыми (t617): «# тесты» в блоке ```bash — не новое поле.
@@ -492,9 +501,7 @@ function headValue(v) {
  * @param {unknown} v @param {Record<string, string>} fields @returns {{ ls: string[], code: string, line: string }}
  */
 function bodyText(v, fields) {
-  const raw = String(v === undefined || v === null ? '' : v).split(/\r?\n/);
-  const rc = codeMask(raw);
-  const ls = raw.map((l, i) => (rc[i] ? l : l.trim())).filter((l, i) => l || rc[i]);
+  const ls = bodyLs(v);
   const c = codeMask(ls);
   const head = ls.find((l, i) => i > 0 && !c[i] && (l.startsWith('#') || label(fields, l)));
   if (head !== undefined) return { ls, code: 'heading', line: head };
@@ -798,4 +805,4 @@ async function ownRootAsync(project, dir) {
   if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`папка доски ведёт за пределы проекта: ${real}`);
 }
 
-module.exports = { DIR, MAX_SIZE, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, update, nextId, create, watch, codeMask };
+module.exports = { DIR, MAX_SIZE, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, update, nextId, create, watch, codeMask, edges, sameField };

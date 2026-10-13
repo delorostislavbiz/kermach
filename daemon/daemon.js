@@ -71,6 +71,24 @@ const CODEX_WORK = /^[⠁-⣿]/;
 const CODEX_ASK_TITLE = /^\[ ! \] Action Required/;
 // OSC 9 Codex: с этих слов — ждёт человека, любой другой текст — ответ закончен (t26, tui/src/chatwidget/notifications.rs).
 const CODEX_ASK = /^(Approval requested|Codex wants to edit |Plan mode prompt: |Question: )/;
+// Codex: строка хода над полем ввода «Working (12s • esc to interrupt)» — видна весь ход и пропадает с его концом (t609).
+// Со второго хода это единственный признак начала хода: кадр спиннера в заголовке codex ставит только до темы разговора.
+// В живой строке «esc» жирный, скобка перед ним тусклая — копия строки в тексте ответа не такая. Запуск MCP рисует ту же строку — это не ход.
+// Живая строка начинается с первой клетки, а всё, что codex рисует в разговоре, — со значка или отступа («  └», вывод команды — 4 пробела):
+// так копия строки с оформлением (вывод команды cat записанного экрана) не ставит «работает» (t626, spikes\t626-codex-busy\col0.txt).
+// Счётчик секунд не опора: codex перерисовывает строку по событиям, без них по 3–4 с (spikes\t609-codex-turn\replay-all.txt).
+const CODEX_BUSY = /\((\d[\dhms ]*s) • esc to interrupt\)/;
+const CODEX_BUSY_SKIP = /^\s*Starting MCP servers/;
+// «Готов» → «работает»: строка видна не меньше BUSY_ON_MS (после Esc на вопросе она мелькает на миг).
+// «Работает» → «готов» без OSC 9 (Esc посреди хода): строки нет BUSY_OFF_MS и вывода нет BUSY_QUIET_MS.
+// Пока codex выводит ответ, строки нет весь вывод (40 строк — 3,8 с), но куски идут без пауз длиннее 0,7 с; после Esc — одна строка и тишина
+// (spikes\t609-codex-turn\gaps.txt). Предела «строки нет N с — готов и при выводе» нет: длинный ответ без строки — всё ещё ход (t626).
+// «Работает» навсегда не остаётся: конец хода — OSC 9, прерванный ход — тишина, выход codex — onExit; без хода codex вывода не шлёт.
+// Экран смотрится не чаще раза в BUSY_LOOK_MS.
+const BUSY_ON_MS = 1000;
+const BUSY_OFF_MS = 3000;
+const BUSY_QUIET_MS = 2000;
+const BUSY_LOOK_MS = 300;
 // Другие агенты каталога (t334): состояние по заголовку, правила свои у каждого — grok по пробе t331 (spikes\t331-states\live-grok*.txt),
 // остальные по корпусу и коду Орки (ref\orca-out\shared\agent-title-status.js). Проверка по порядку: ждёт → работает → готов.
 // Слова «waiting» и «permission» — не признак: «⠦ - Waiting - …» у grok — рабочий кадр, «Fix waiting bug - grok» — тема (t331).
@@ -241,6 +259,15 @@ class Session {
     this.settleUntil = 0;
     // Когда началось «работает» (мс) — для звука «готов» у агентов без хуков (LOUD_WORK_MS).
     this.workingAt = 0;
+    // Строка хода Codex (CODEX_BUSY, t609): с какого времени видна и с какого её нет (мс, 0 — не так), видели ли её в этом «работает».
+    // Не видели — «работает» снимает только OSC 9, как до t609: версия codex без этой строки работает по-старому.
+    this.busyOn = 0;
+    this.busyOff = 0;
+    this.busySeen = false;
+    // Когда был последний вывод (мс): пока codex выводит ответ, строки хода нет, а вывод идёт.
+    this.dataAt = 0;
+    /** @type {NodeJS.Timeout | null} */
+    this.busyTimer = null;
     // Когда сменился номер разговора Claude (мс). Строка состояния, запущенная раньше, — о прежнем разговоре (t82).
     this.claudeIdAt = 0;
     // Терминал закрыли командой kill — выход с любым кодом не ошибка.
@@ -290,7 +317,9 @@ class Session {
     const now = Date.now();
     const loud = by === 'title' && Object.hasOwn(TITLE_RULES, this.agent)
       && (state === 'waiting' || (state === 'done' && now - this.workingAt >= LOUD_WORK_MS));
-    if (state === 'working') this.workingAt = now;
+    if (state === 'working') { this.workingAt = now; this.busySeen = false; }
+    // Строку хода считать заново с нового состояния (t626): иначе строка, видная до вопроса, после быстрого Esc сразу вернула бы «работает».
+    if (state !== this.state) { this.busyOn = 0; this.busyOff = 0; }
     log(`терминал ${this.sid}: состояние ${this.state || 'нет'} → ${state} (${by})${loud ? ' звук' : ''}`);
     this.state = state;
     this.stateAt = new Date(now).toISOString();
@@ -343,6 +372,88 @@ class Session {
     // Ответ человека сильнее позднего кадра: спиннер сразу после быстрого «разрешить» — уже работа.
     this.settleUntil = 0;
     this.setState(this.agent === 'codex' && d !== '\x1b' && d !== '\x03' ? 'working' : 'done', 'input');
+  }
+
+  /**
+   * Посмотреть строку хода Codex через ms (t609). Одна проверка на окно ms: вывод идёт кусками десятки раз в секунду.
+   * Экран читается в колбэке пустой записи — к этому моменту весь вывод до него разобран.
+   * @param {number} ms
+   */
+  lookBusy(ms) {
+    if (this.busyTimer) return;
+    this.busyTimer = setTimeout(() => this.term.write('', () => { this.busyTimer = null; if (sessions.has(this.sid) && this.agent === 'codex') this.busyState(); }), ms);
+  }
+
+  /** Забыть строку хода (t626): вид вкладки сменили с codex — признаки и таймер прежнего агента не ставят состояние новому. */
+  busyReset() {
+    if (this.busyTimer) clearTimeout(this.busyTimer);
+    this.busyTimer = null;
+    this.busyOn = 0;
+    this.busyOff = 0;
+    this.busySeen = false;
+  }
+
+  /**
+   * Вид вкладки сменили командой update (t628): состояние прежнего агента — не о новом, у оболочки состояния нет вовсе.
+   * Сброс в «состояния нет», как у агента до первого вопроса. Событие state уходит, чтобы окно и плагины (ctx.onState) перечитали список;
+   * звука у '' нет (LOUD_STATES в main\sound.js), доска «Роадмапа» при '' статус карты не меняет (BY_STATE в plugins\roadmap\main.js).
+   * @param {string} was прежний агент
+   */
+  agentChanged(was) {
+    if (was === 'codex') this.busyReset();
+    this.settleUntil = 0;
+    this.workingAt = 0;
+    if (!this.state) return;
+    log(`терминал ${this.sid}: вид ${was || 'нет'} → ${this.agent || 'нет'}, состояние ${this.state} → нет (kind)`);
+    this.state = '';
+    this.stateAt = new Date().toISOString();
+    broadcast({ ev: 'state', sid: this.sid, state: '', by: 'kind', at: this.stateAt });
+  }
+
+  /**
+   * Состояние Codex по строке хода (CODEX_BUSY). «Готов» → «работает»: строка видна BUSY_ON_MS — ход, начатый текстом после конца прошлого.
+   * «Работает» → «готов»: строки нет BUSY_OFF_MS и вывода нет BUSY_QUIET_MS, а в этом «работает» её видели —
+   * ход прервали (Esc, Ctrl+C), OSC 9 тогда нет.
+   * «Ждёт» и «состояния нет» строка не меняет: при вопросе её нет, а до первого хода «работает» ставит спиннер в заголовке.
+   */
+  busyState() {
+    const now = Date.now();
+    const on = this.busyLine();
+    if (on) { this.busyOff = 0; this.busyOn ||= now; } else { this.busyOn = 0; this.busyOff ||= now; }
+    let wait = -1;
+    if (this.state === 'working') {
+      if (on) this.busySeen = true;
+      else if (this.busySeen) {
+        const off = now - this.busyOff;
+        const quiet = now - this.dataAt;
+        if (off >= BUSY_OFF_MS && quiet >= BUSY_QUIET_MS) this.setState('done', 'screen');
+        else wait = Math.max(BUSY_OFF_MS - off, BUSY_QUIET_MS - quiet);
+      }
+    } else if (this.state === 'done' && on) {
+      if (now - this.busyOn >= BUSY_ON_MS && now >= this.settleUntil) { this.setState('working', 'screen'); this.busySeen = true; }
+      else wait = Math.max(BUSY_ON_MS - (now - this.busyOn), this.settleUntil - now);
+    }
+    // Вывода может больше не быть (ход прервали, строка стоит без перерисовки) — проверить ещё раз по часам.
+    if (wait >= 0) this.lookBusy(Math.max(wait, 50));
+  }
+
+  /** Есть ли на экране живая строка хода Codex: снизу вверх первая подходящая, с первой клетки, «esc» жирный, скобка тусклая. @returns {boolean} */
+  busyLine() {
+    const b = this.term.buffer.active;
+    const cell = b.getNullCell();
+    for (let y = b.baseY + this.term.rows - 1; y >= b.baseY; y--) {
+      const line = b.getLine(y);
+      const s = line?.translateToString(true) || '';
+      const m = CODEX_BUSY.exec(s);
+      if (!line || !m || !/^\S/.test(s) || CODEX_BUSY_SKIP.test(s)) continue;
+      // Позиция в строке — номер клетки, если левее нет широких знаков; иначе оформление не сверить, и строка не считается.
+      const x = m.index;
+      const esc = x + m[1].length + 4;
+      if (line.getCell(x, cell)?.getChars() !== '(' || !cell.isDim()) continue;
+      if (line.getCell(esc, cell)?.getChars() !== 'e' || !cell.isBold()) continue;
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -406,6 +517,7 @@ class Session {
     if (this.da1Until) d = this.answerDa1(d);
     if (!d) return;
     this.term.write(d);
+    if (this.agent === 'codex') { this.dataAt = Date.now(); this.lookBusy(BUSY_LOOK_MS); }
     for (const [c, sub] of this.subs) {
       if (sub.held) sub.held.push(d);
       else c.send({ ev: 'data', sid: this.sid, data: d });
@@ -533,6 +645,7 @@ class Session {
   onExit(code) {
     log(`терминал ${this.sid} вышел, код ${code}`);
     sessions.delete(this.sid);
+    if (this.busyTimer) clearTimeout(this.busyTimer);
     this.term.dispose();
     // Состояние «завершён» или «ошибка» — в самом событии: терминала после него в списке уже нет. Обычный терминал — всегда завершён.
     // «Ошибка» — только у Claude и Codex: коды выхода других агентов (Ctrl+C и т. п.) не проверены, ложное «оборвался» хуже (t334).
@@ -659,13 +772,16 @@ function handle(c, msg) {
     case 'resize':
       s.resize(msg.cols, msg.rows);
       return c.reply(id);
-    case 'update':
+    case 'update': {
+      const was = s.agent;
       for (const k of ['title', 'color', 'icon', 'project', 'meta']) if (k in msg) /** @type {any} */ (s.desc)[k] = msg[k];
+      if (was !== s.agent) s.agentChanged(was);
       // Имя дали вручную — оно главнее заголовка от программы.
       if ('title' in msg) s.desc.titleManual = true;
       saveSessions();
       broadcast({ ev: 'updated', session: s.info() });
       return c.reply(id, { session: s.info() });
+    }
     case 'kill':
       s.terminate();
       return c.reply(id);

@@ -479,8 +479,35 @@ function roadmapSetup(host) {
    *   notes: { clash: string[], upd: string[], err: string, gone: string, leave: null | (() => void), run: { bad: boolean, text: string } | null }, saved: string, busy: boolean, starting: boolean }}
    */
   let cur = null;
-  /** Значение без лишнего: строки без пробелов по краям и пустых, прочерк — пусто. Так же пишет и читает board.js. @param {unknown} v */
-  const nv = (v) => { const s = String(v === undefined || v === null ? '' : v).split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join('\n'); return /^[—–-]$/.test(s) ? '' : s; };
+  /**
+   * Строки блоков кода ``` — копия fences() из board.js (окну require недоступен), правило то же: блок закрывает ``` не короче открывшей, незакрытый — не блок.
+   * Расходиться с board.js нельзя: проба spikes\t621-save\probe сверяет обе на одном наборе. @param {string[]} lines
+   */
+  const codeLines = (lines) => {
+    const out = lines.map(() => false);
+    let open = -1, len = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const m = /^ {0,3}(`{3,})(?![^`]*`)/.exec(lines[i]);
+      if (open < 0) { if (m) { open = i; len = m[1].length; } continue; }
+      if (m && m[1].length >= len && !lines[i].slice(lines[i].indexOf(m[1]) + m[1].length).trim()) {
+        for (let k = open; k <= i; k++) out[k] = true;
+        open = -1;
+      }
+    }
+    return out;
+  };
+  /** Без пустых строк по краям и пробелов в конце, отступ первой строки остаётся — как edges() в board.js (t616). @param {string} s */
+  const edges = (s) => s.replace(/^(?:[ \t]*\n)+/, '').trimEnd();
+  /**
+   * Значение так, как оно прочтётся после записи (board.sameField, t621): строки блока ``` с отступом и пустыми, остальные без пробелов по краям,
+   * пустые вне блока — прочь, прочерк — пусто. «Сохранить» горит, только когда файл изменится. @param {unknown} v
+   */
+  const nv = (v) => {
+    const raw = String(v === undefined || v === null ? '' : v).split(/\r?\n/);
+    const c = codeLines(raw);
+    const s = raw.map((l, i) => (c[i] ? l : l.trim())).filter((l, i) => l || c[i]).join('\n');
+    return /^[—–-]?$/.test(s.trim()) ? '' : edges(s);
+  };
   /** Значение поля в карте из board.js. @param {any} c @param {string} k */
   const fileVal = (c, k) => String((RM_TEXT.some((f) => f.key === k) || RM_CLOSE.some((f) => f.key === k) ? c.fields[k] : c[k]) || '');
   const fieldName = (/** @type {string} */ k) => {
@@ -491,27 +518,38 @@ function roadmapSetup(host) {
     return f ? T(`f.${k}`, f.ru) : k;
   };
   const quote = (/** @type {string[]} */ ks) => ks.map((k) => `«${fieldName(k)}»`).join(', ');
-  /** Тексты отказов board.js по code: pe — раздел паспорта, ce — поле карты (t607, t610). @type {Record<string, Record<string, (f: string) => string>>} */
+  /** Причины отказов board.js по code: pe — раздел паспорта, ce — поле карты (t607, t610). Части одного сообщения refuse (t623); одно поле — единственное число, два и больше — множественное (t630). @type {Record<string, Record<string, (f: string, many: boolean) => string>>} */
   const REFUSE = {
     pe: {
-      fence: (fields) => T('pe.fenceOpen', 'Не сохранено: в разделе {fields} не закрыт блок кода ``` — закройте его и сохраните снова. Введённое на месте.', { fields }),
-      heading: (fields) => T('pe.heading', 'Не сохранено: в разделе {fields} строка с # или ## вне блока кода ``` — уберите её или поставьте в блок кода. Введённое на месте.', { fields }),
-      hidden: (fields) => T('pe.hidden', 'Не сохранено: раздел {fields} оказался внутри блока кода — выше в passport.md ``` без пары. Закройте блок в файле и сохраните снова. Введённое на месте.', { fields }),
+      fence: (fields, many) => (many ? T('pe.fenceOpenMany', 'в разделах {fields} не закрыты блоки кода ``` — закройте их', { fields })
+        : T('pe.fenceOpen', 'в разделе {fields} не закрыт блок кода ``` — закройте его', { fields })),
+      heading: (fields, many) => (many ? T('pe.headingMany', 'в разделах {fields} строки с # или ## вне блока кода ``` — уберите их или поставьте в блок кода', { fields })
+        : T('pe.heading', 'в разделе {fields} строка с # или ## вне блока кода ``` — уберите её или поставьте в блок кода', { fields })),
+      hidden: (fields, many) => (many ? T('pe.hiddenMany', 'разделы {fields} оказались внутри блока кода — выше в passport.md ``` без пары, закройте блок в файле', { fields })
+        : T('pe.hidden', 'раздел {fields} оказался внутри блока кода — выше в passport.md ``` без пары, закройте блок в файле', { fields })),
     },
     ce: {
-      fence: (fields) => T('ce.fenceOpen', 'Не сохранено: в поле {fields} не закрыт блок кода ``` — закройте его и сохраните снова. Введённое на месте.', { fields }),
-      heading: (fields) => T('ce.heading', 'Не сохранено: в поле {fields} строка с # или подписью поля вне блока кода ``` — уберите её или поставьте в блок кода. Введённое на месте.', { fields }),
-      hidden: (fields) => T('ce.hidden', 'Не сохранено: поле {fields} оказалось внутри блока кода — выше в файле ``` без пары. Закройте блок в файле и сохраните снова. Введённое на месте.', { fields }),
+      fence: (fields, many) => (many ? T('ce.fenceOpenMany', 'в полях {fields} не закрыты блоки кода ``` — закройте их', { fields })
+        : T('ce.fenceOpen', 'в поле {fields} не закрыт блок кода ``` — закройте его', { fields })),
+      heading: (fields, many) => (many ? T('ce.headingMany', 'в полях {fields} строки с # или подписью поля вне блока кода ``` — уберите их или поставьте в блок кода', { fields })
+        : T('ce.heading', 'в поле {fields} строка с # или подписью поля вне блока кода ``` — уберите её или поставьте в блок кода', { fields })),
+      hidden: (fields, many) => (many ? T('ce.hiddenMany', 'поля {fields} оказались внутри блока кода — выше в файле ``` без пары, закройте блок в файле', { fields })
+        : T('ce.hidden', 'поле {fields} оказалось внутри блока кода — выше в файле ``` без пары, закройте блок в файле', { fields })),
     },
   };
   /**
-   * Отказ board.js с code — своими словами на языке программы, по всем плохим полям (t615); отказ без code — null.
+   * Отказ board.js с code — одно сообщение на языке программы: все плохие поля по видам через «;», хвост один раз (t615, t623); отказ без code — null.
+   * Поля одного вида — ««А», «Б» и «В»» (t630).
    * @param {any} r @param {'pe' | 'ce'} pre @param {(ks: string[]) => string} q
    */
   const refusal = (r, pre, q) => {
     const list = r && r.code ? (Array.isArray(r.problems) ? r.problems : [{ code: r.code, fields: [r.field] }]) : [];
-    const out = list.map((/** @type {any} */ x) => (Object.hasOwn(REFUSE[pre], x.code) ? REFUSE[pre][x.code](q((x.fields || []).filter(Boolean))) : '')).filter(Boolean);
-    return out.length ? out.join(' ') : null;
+    const names = (/** @type {string[]} */ ks) => (ks.length > 1 ? `${q(ks.slice(0, -1))}${T('and', ' и ')}${q(ks.slice(-1))}` : q(ks));
+    const out = list.map((/** @type {any} */ x) => {
+      const ks = (x.fields || []).filter(Boolean);
+      return Object.hasOwn(REFUSE[pre], x.code) ? REFUSE[pre][x.code](names(ks), ks.length > 1) : '';
+    }).filter(Boolean);
+    return out.length ? T('refuse', 'Не сохранено: {list}. Введённое на месте — исправьте и сохраните снова.', { list: out.join('; ') }) : null;
   };
   const inp =(/** @type {string} */ k) => /** @type {any} */ (cardEl.querySelector(`[data-k="${k}"]`));
   const getV = (/** @type {string} */ k) => { const e = inp(k); return k === 'human' ? e.dataset.v || '' : e.value; };
@@ -819,6 +857,8 @@ function roadmapSetup(host) {
   const paintTemplate = () => {
     if (!pv) return;
     const t = pv.r && !pv.r.error ? pv.r.template : null;
+    // Промпт пересобрался с ошибкой, пока открыт шаблон (t627): шаблона нет — к промпту, там текст ошибки, а не пустой экран.
+    if (!t) { pv.tpl = false; paintPrompt(); return; }
     const kind = t ? /** @type {any} */ (RM_KIND)[t.kind] : '';
     const kt = t ? (kind ? T(`kind.${kind}`, t.kind) : t.kind) : '';
     let html = `<div class="ctop"><div class="cbar"><span class="back" data-pact="tback">‹ ${esc(T('passBackPrompt', 'промпт'))}</span>`
@@ -886,8 +926,12 @@ function roadmapSetup(host) {
   /** Паспорт открыт с экрана промпта карты (t579): «назад» ведёт в промпт, а не к доске. */
   let psBack = false;
   const PASS_KEYS = RM_PASSPORT.map((s) => s.key);
-  /** Текст раздела для сравнения — так же сверяет main.js: без \r и пробелов по краям, пустые строки внутри важны. @param {unknown} v */
-  const pnv = (v) => String(v === undefined || v === null ? '' : v).replace(/\r\n/g, '\n').trim();
+  /**
+   * Текст раздела для сравнения — так же сверяет main.js: без \r, пустых строк по краям и пробелов в конце; пустые строки внутри и отступ первой строки важны (t621).
+   * Одиночный \r — как \n: поле ввода сам делает из него \n, и нетронутый раздел иначе считался бы правкой (t600).
+   * @param {unknown} v
+   */
+  const pnv = (v) => edges(String(v === undefined || v === null ? '' : v).replace(/\r\n?/g, '\n'));
   /** Текст раздела в паспорте из board.js; раздела в файле нет — пусто. @param {any} p @param {string} k */
   const secVal = (p, k) => { const x = got(p && p.sections, k); return x ? String(x.text || '') : ''; };
   const secName = (/** @type {string} */ k) => { const s = RM_PASSPORT.find((x) => x.key === k); return s ? T(`pass.${k}`, s.ru) : k; };
