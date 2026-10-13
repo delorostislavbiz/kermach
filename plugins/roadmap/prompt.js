@@ -7,7 +7,7 @@
 //   Копии нет — встроенный prompt.md рядом с этим файлом. Копию человек кладёт сам: кнопки для неё нет (t547).
 // Задание «Составить роадмап» (t519, compose) — шаблон compose.md, своя копия в той же папке данных; пути FORMAT.md и образцов подставляются абсолютные.
 // «Свежее» (часть 5) — то, чего не было, когда карту писали (её created):
-//   карты этой фазы, закрытые позже (closed; нет поля — время правки файла), решения и тупики с датой не раньше дня карты
+//   карты этой фазы, закрытые позже (по closed; нет поля — только карта, заведённая позже, t537), решения и тупики с датой не раньше дня карты
 //   по тем же файлам (без файлов — по этой карте или карте той же фазы), открытые карты «Входящих» по тем же файлам.
 const fs = require('fs');
 const path = require('path');
@@ -104,10 +104,11 @@ const dayOf = (t) => { const d = new Date(t); return new Date(d.getFullYear(), d
 const flat = (s) => String(s || '').split('\n').map((l) => l.trim()).filter(Boolean).join(' ');
 
 /**
- * Часть 5 «свежее» для карты. mtime(c) — время правки файла карты в мс (запасное, если у закрытой карты нет closed).
- * @param {import('./board').Board} b @param {import('./board').Card} card @param {(c: import('./board').Card) => number} mtime
+ * Часть 5 «свежее» для карты. Когда закрыта карта — только по closed в её файле (t537): время правки файла после git clone
+ * или копирования доски у всех карт одно — время копии. Нет closed — карта свежая, только если заведена позже (created): закрыть её раньше нельзя.
+ * @param {import('./board').Board} b @param {import('./board').Card} card
  */
-function fresh(b, card, mtime) {
+function fresh(b, card) {
   const since = when(card.created);
   const own = paths(card.fields.files);
   const phaseCards = new Set(b.cards.filter((c) => card.phase && c.phase === card.phase).map((c) => c.id));
@@ -118,10 +119,9 @@ function fresh(b, card, mtime) {
   for (const c of b.cards) {
     if (c.id === card.id || c.status !== 'готово') continue;
     if (!card.phase || c.phase !== card.phase) { if (c.phase) skipped.push({ id: c.id, why: `закрыта в другой фазе ${c.phase}` }); continue; }
-    let t = when(c.closed);
-    const by = isNaN(t) ? 'время правки файла' : 'closed';
-    if (isNaN(t)) t = mtime(c);
-    if (!isNaN(since) && t > 0 && t <= since) { skipped.push({ id: c.id, why: `закрыта до карты (${by})` }); continue; }
+    const t = when(c.closed);
+    if (!isNaN(since) && !isNaN(t) && t <= since) { skipped.push({ id: c.id, why: 'закрыта до карты (closed)' }); continue; }
+    if (!isNaN(since) && isNaN(t) && !(when(c.created) > since)) { skipped.push({ id: c.id, why: 'нет closed, заведена не позже карты — когда закрыта, неизвестно' }); continue; }
     const proof = flat(c.fields.proof);
     const done = flat(c.fields.done).replace(/[.;]+$/, '');
     lines.push(`Закрыта ${c.id} (${c.agent || 'агент не указан'}): ${done || 'заметки «Что сделано» нет'}${proof ? `; доказательство: ${proof}` : '.'}`);
@@ -180,15 +180,13 @@ function cardText(b, c) {
 /**
  * Промпт карты. Возвращает части с подписями и весь текст; ошибка — { error }.
  * opts.board — уже прочитанная доска; opts.dataDir — папка данных плагина (своя копия шаблонов); opts.templates — файл шаблонов прямо (проба);
- * opts.mtime — время файла карты.
  * @param {string} project @param {string} ref
- * @param {{ board?: import('./board').Board, dataDir?: string, templates?: string, mtime?: (c: import('./board').Card) => number }} [opts]
+ * @param {{ board?: import('./board').Board, dataDir?: string, templates?: string }} [opts]
  */
 function build(project, ref, opts = {}) {
   const b = opts.board || board.read(project);
   const card = b.cards.find((c) => c.id === ref);
   if (!card) return { error: `карты ${ref} нет на доске или файл с ошибкой` };
-  const mtime = opts.mtime || ((/** @type {import('./board').Card} */ c) => { try { return fs.statSync(path.join(b.root, c.file)).mtimeMs; } catch { return 0; } });
   /** @type {string[]} */
   const warnings = [];
   const tf = opts.templates ? { file: opts.templates, own: false } : templateFile(opts.dataDir);
@@ -204,7 +202,7 @@ function build(project, ref, opts = {}) {
   const kindText = t.kinds[card.kind];
   if (!t.error && !kindText) warnings.push(`в prompt.md нет раздела «## Шаблон: ${card.kind}»`);
   const phase = b.phases.find((f) => f.id === card.phase);
-  const fr = fresh(b, card, mtime);
+  const fr = fresh(b, card);
   /** @type {Part[]} */
   const parts = [
     { n: 1, key: 'rules', title: 'Общие правила', note: 'один текст на все проекты', v: {}, text: subst(t.rules, vars) || '(общих правил нет)' },

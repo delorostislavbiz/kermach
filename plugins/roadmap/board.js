@@ -161,7 +161,8 @@ function sections(p) {
   const out = {};
   const { lines } = p;
   for (let i = p.headEnd; i < lines.length; i++) {
-    const m = /^##\s+(?:\d+[.)]?\s*)?(.+?)\s*$/.exec(lines[i]);
+    // Двоеточие в конце (`## Журнал:`) — тот же раздел, иначе «Сохранить» допишет в конец второй.
+    const m = /^##\s+(?:\d+[.)]?\s*)?(.+?)\s*:?\s*$/.exec(lines[i]);
     if (!m) continue;
     let end = i + 1;
     while (end < lines.length && !/^#{1,2}\s/.test(lines[end])) end++;
@@ -458,10 +459,12 @@ function update(project, ref, changes) {
       const s = sections(p)[key];
       const ls = v ? v.split('\n') : [];
       if (s) {
-        // Заменяем строки между заголовком и хвостом пустых строк раздела: отступ перед следующим разделом остаётся.
+        // Заменяем строки между пустыми строками после заголовка и хвостом пустых строк раздела: отступы остаются.
         let end = s.end;
         while (end > s.start + 1 && !lines[end - 1].trim()) end--;
-        lines.splice(s.start + 1, end - s.start - 1, ...ls);
+        let from = s.start + 1;
+        while (ls.length && from < end && !lines[from].trim()) from++;
+        lines.splice(from, end - from, ...ls);
       } else {
         while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
         lines.push('', `## ${PASSPORT[/** @type {keyof PASSPORT} */ (key)]}`, ...ls, '');

@@ -317,7 +317,12 @@ function roadmapSetup(host) {
   /** Статус фазы для показа: «готова» — только по phDone; в файле «готова», а отмечены не все признаки — «идёт». Файл не меняется. @param {any} f */
   const phStatus = (f) => (phDone(f) ? 'готова' : f.status === 'готова' ? 'идёт' : f.status);
   const HEALTH = { 'зелёный': ['g', 'zel', 'зелёная'], 'жёлтый': ['y', 'zhel', 'жёлтая'], 'красный': ['r', 'kras', 'красная'] };
-  /** Время правки файла карты: сегодня — ЧЧ:ММ, раньше — ДД.ММ. @param {number} at */
+  /** «ГГГГ-ММ-ДД[ ЧЧ:ММ]» из файла (closed) → мс по местному; нет или не время — 0. @param {string} s */
+  const stampAt = (s) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(String(s || '').trim());
+    return m ? new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)).getTime() : 0;
+  };
+  /** Время для строки карты: сегодня — ЧЧ:ММ, раньше — ДД.ММ. @param {number} at */
   const when = (at) => {
     if (!at) return '';
     const d = new Date(at);
@@ -362,8 +367,9 @@ function roadmapSetup(host) {
       if (wait.length) meta += ` · ${T('waits', 'ждёт {ids}', { ids: wait.join(', ') })}`;
     } else {
       if (c.agent) meta += ` · ${c.agent}`;
+      // «Готово» — closed из файла (t537): время файла после git clone у всех одно, нет closed — без времени.
       // Запущена кнопкой (t515) — время запуска; иначе время правки файла.
-      const t = when(c.run && c.run.started ? c.run.started : c.at);
+      const t = c.status === 'готово' ? when(stampAt(c.closed)) : when(c.run && c.run.started ? c.run.started : c.at);
       if (t) meta += ` · ${t}`;
     }
     if (c.status === 'ждёт ответа') tone = ' warn';
@@ -760,7 +766,8 @@ function roadmapSetup(host) {
     const unsaved = cur ? RM_KEYS.filter(dirty) : [];
     let html = `<div class="ctop"><div class="cbar"><span class="back" data-pact="back">‹ ${esc(T('promptBack', 'карта'))}</span>`
       + `<span class="crumb">/ ${esc(pv.id)} · ${esc(T('promptCrumb', 'промпт, только чтение'))}</span><span class="grow"></span><span class="saved">${esc(pv.copied)}</span>`
-      + `<span class="cbtns"><button type="button" class="btn pri" data-pact="copy"${!r || r.error ? ' disabled' : ''}>${esc(T('copy', 'Копировать'))}</button></span></div><div class="notes">`;
+      + `<span class="cbtns">${last && last.passport ? `<button type="button" class="btn" data-pact="passport" title="${esc(T('promptPassTitle', 'Паспорт проекта — вторая часть промпта. Правка там попадёт в промпт после «Сохранить»'))}">${esc(T('promptPass', 'Открыть паспорт'))}</button>` : ''}`
+      + `<button type="button" class="btn pri" data-pact="copy"${!r || r.error ? ' disabled' : ''}>${esc(T('copy', 'Копировать'))}</button></span></div><div class="notes">`;
     if (!r) html += `<div class="note info">${esc(T('promptLoading', 'Собираю промпт…'))}</div>`;
     else if (r.error) html += `<div class="note bad">${esc(T('promptFail', 'Промпт не собран: {why}', { why: r.error }))}</div>`;
     else {
@@ -812,6 +819,8 @@ function roadmapSetup(host) {
     const a = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-pact]'));
     if (!a || !pv) return;
     if (a.dataset.pact === 'back') { closePrompt(); return; }
+    // Паспорт с экрана промпта (t579, экран 09): карта и промпт остаются открытыми, «назад» из паспорта — сюда.
+    if (a.dataset.pact === 'passport') { if (last && last.passport) { psBack = true; promptEl.hidden = true; openPassport(); } return; }
     if (a.dataset.pact === 'copy' && pv.r && !pv.r.error) {
       host.bridge.clipWrite(pv.r.text);
       pv.copied = T('copied', 'скопировано');
@@ -827,6 +836,8 @@ function roadmapSetup(host) {
    *   notes: { clash: string[], upd: string[], err: string, gone: string, leave: null | (() => void) }, saved: string, busy: boolean }}
    */
   let ps = null;
+  /** Паспорт открыт с экрана промпта карты (t579): «назад» ведёт в промпт, а не к доске. */
+  let psBack = false;
   const PASS_KEYS = RM_PASSPORT.map((s) => s.key);
   /** Текст раздела для сравнения — так же сверяет main.js: без \r и пробелов по краям, пустые строки внутри важны. @param {unknown} v */
   const pnv = (v) => String(v === undefined || v === null ? '' : v).replace(/\r\n/g, '\n').trim();
@@ -846,7 +857,7 @@ function roadmapSetup(host) {
     if (!ps) return;
     const p = last && last.passport;
     const q = (/** @type {string} */ s) => /** @type {HTMLElement} */ (passEl.querySelector(s));
-    q('[data-sact="back"]').textContent = `‹ ${T('passBack', 'роадмап')}`;
+    q('[data-sact="back"]').textContent = `‹ ${psBack ? T('passBackPrompt', 'промпт') : T('passBack', 'роадмап')}`;
     q('.cbar .ttl').textContent = T('passport', 'Паспорт проекта');
     q('.pbadge').innerHTML = p ? passBadge(p) : '';
     const any = PASS_KEYS.some(pdirty);
@@ -928,6 +939,9 @@ function roadmapSetup(host) {
     ps = null;
     passEl.hidden = true;
     passEl.textContent = '';
+    const back = psBack;
+    psBack = false;
+    if (back && pv) { promptEl.hidden = false; paintPrompt(); return; }
     body.hidden = false;
     draw();
   };
