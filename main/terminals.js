@@ -193,7 +193,7 @@ const OWN_FLAGS = {
  * Свои флаги плагина (t279): только из этого списка, у каждого вида свой; флаг → проверка его значения. Остальное — отказ:
  * флаги прав (claude --dangerously-skip-permissions, codex -c, -s, -a, -p, --dangerously-bypass-approvals-and-sandbox) запретом по одному не закрыть.
  * Плагины шлют модель (ОТЧЁТ-t279-allow.md) и усилие (t536, «Роадмап»). Агенты из системы (agent:<id>, t576) — только модель и усилие тех, у кого флаги
- * известны по Орке (index.js, объект zNn): grok -m и --reasoning-effort (значения — models_cache.json grok 1.0.50; в команду не идут — checkExtra
+ * известны по Орке (index.js, объект zNn): grok -m и --reasoning-effort (значения — models_cache.json grok 1.0.50; в команду не идут — grokConfig
  * переносит их в GROK_CONFIG), gemini -m, antigravity --model
  * и --effort, cursor и omp --model. У остальных своих флагов нет: у каждого свои флаги прав.
  * Модель — алиас или полное имя, у Claude бывает с [1m]: без пробелов, кавычек и «-» в начале.
@@ -239,6 +239,39 @@ const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const brokenByPty = (a) => process.platform === 'win32' && a.length > 1 && a.startsWith('"') && a.endsWith('"') && /\s/.test(a);
 
 /**
+ * Grok (t576): флаги -m и --reasoning-effort он запоминает в ~\.grok\config.toml как свои по умолчанию (прогон real1, 13.10) —
+ * модель и усилие уходят наложением GROK_CONFIG (~\.grok\docs\user-guide\05-configuration.md: models в списке разрешённых), флагов в команде нет.
+ * Значения уже прошли ALLOW_FLAGS. GROK_CONFIG уже есть (env плагина или окружение программы) — models сливаются в его JSON; не JSON-объект — отказ.
+ * В записи вкладки (extra) остаются флаги, а не готовый JSON (t589): слияние — при каждом запуске, и revive берёт GROK_CONFIG программы на этот момент.
+ * @param {{ args?: string[], env?: Record<string, string> }} x
+ * @returns {{ env: Record<string, string> } | { error: string }}
+ */
+function grokConfig(x) {
+  /** @type {Record<string, string>} */
+  const models = {};
+  const args = x.args || [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const eq = a.startsWith('--') ? a.indexOf('=') : -1;
+    const f = eq > 0 ? a.slice(0, eq) : a;
+    const v = eq > 0 ? a.slice(eq + 1) : args[++i];
+    models[f === '--reasoning-effort' ? 'default_reasoning_effort' : 'default'] = v;
+  }
+  const was = (x.env && x.env.GROK_CONFIG) ?? process.env.GROK_CONFIG ?? '';
+  /** @type {any} */
+  let cfg = {};
+  if (was.trim()) {
+    try { cfg = JSON.parse(was); } catch { cfg = null; }
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg) || (cfg.models !== undefined && (!cfg.models || typeof cfg.models !== 'object' || Array.isArray(cfg.models)))) {
+      return { error: 'GROK_CONFIG в окружении — не JSON-объект: модель и усилие Grok добавить в него нельзя, уберите переменную или исправьте её' };
+    }
+  }
+  const json = JSON.stringify({ ...cfg, models: { ...cfg.models, ...models } });
+  if (json.length > 4096) return { error: 'GROK_CONFIG вместе с моделью и усилием длиннее 4096 знаков' };
+  return { env: { ...x.env, GROK_CONFIG: json } };
+}
+
+/**
  * Вкладка от плагина (t253): свои аргументы, папка, окружение, имя, первое сообщение. Проверка — у ядра: вид только из KINDS
  * и агентов каталога, программа — та, что нашёл launch; произвольной команды нет. Ошибка — строкой.
  * x — что повторит revive (в записи вкладки поле extra); первое сообщение и имя — только при создании.
@@ -282,32 +315,10 @@ function checkExtra(kind, o, p) {
     }
     if (e.length) x.env = Object.fromEntries(e);
   }
-  // Grok (t576): флаги -m и --reasoning-effort он запоминает в ~\.grok\config.toml как свои по умолчанию (прогон real1, 13.10) —
-  // модель и усилие уходят наложением GROK_CONFIG (~\.grok\docs\user-guide\05-configuration.md: models в списке разрешённых), флагов в команде нет.
-  // Значения уже прошли ALLOW_FLAGS. GROK_CONFIG уже есть (env плагина или окружение программы) — models сливаются в его JSON; не JSON-объект — отказ.
+  // Grok (t576): модель и усилие — не флагами, а наложением GROK_CONFIG (grokConfig). Отказ на битом GROK_CONFIG — здесь, до демона.
   if (kind === 'agent:grok' && x.args) {
-    /** @type {Record<string, string>} */
-    const models = {};
-    for (let i = 0; i < x.args.length; i++) {
-      const a = x.args[i];
-      const eq = a.startsWith('--') ? a.indexOf('=') : -1;
-      const f = eq > 0 ? a.slice(0, eq) : a;
-      const v = eq > 0 ? a.slice(eq + 1) : x.args[++i];
-      models[f === '--reasoning-effort' ? 'default_reasoning_effort' : 'default'] = v;
-    }
-    const was = (x.env && x.env.GROK_CONFIG) ?? process.env.GROK_CONFIG ?? '';
-    /** @type {any} */
-    let cfg = {};
-    if (was.trim()) {
-      try { cfg = JSON.parse(was); } catch { cfg = null; }
-      if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg) || (cfg.models !== undefined && (!cfg.models || typeof cfg.models !== 'object' || Array.isArray(cfg.models)))) {
-        return { error: 'GROK_CONFIG в окружении — не JSON-объект: модель и усилие Grok добавить в него нельзя, уберите переменную или исправьте её' };
-      }
-    }
-    const json = JSON.stringify({ ...cfg, models: { ...cfg.models, ...models } });
-    if (json.length > 4096) return { error: 'GROK_CONFIG вместе с моделью и усилием длиннее 4096 знаков' };
-    x.env = { ...x.env, GROK_CONFIG: json };
-    delete x.args;
+    const g = grokConfig(x);
+    if ('error' in g) return g;
   }
   let prompt = '';
   if (o.prompt !== undefined && o.prompt !== '') {
@@ -343,17 +354,26 @@ function checkExtra(kind, o, p) {
  * @param {string} kind @param {string | undefined} resume @param {string | undefined} hooksSettings
  * @param {{ args?: string[], cwd?: string, env?: Record<string, string> } | null} x @param {string} prompt
  * @param {{ name: string, mode: string } | null} [ag] агент Claude (t251)
- * @returns {{ file: string, args: string[], meta: Record<string, any> } | { error: string }}
+ * env — окружение вкладки для демона: env плагина, у Grok с GROK_CONFIG (grokConfig); в meta.extra — x как есть.
+ * @returns {{ file: string, args: string[], meta: Record<string, any>, env?: Record<string, string> } | { error: string }}
  */
 function launchWith(kind, resume, hooksSettings, x, prompt, ag) {
   const how = launch(kind, resume, hooksSettings, ag);
   if ('error' in how || !x && !prompt) return how;
+  let args = (x && x.args) || [];
+  let env = x ? x.env : undefined;
+  if (kind === 'agent:grok' && x && x.args) {
+    const g = grokConfig(x);
+    if ('error' in g) return g;
+    env = g.env;
+    args = [];
+  }
   // Агент из системы (t576): первое сообщение своим флагом перед текстом (agents.js, поле prompt). Флаг ставит ядро после проверки
   // аргументов плагина (checkExtra); без первого сообщения (revive) флага нет. Агента без задания при запуске отсёк checkExtra.
   const pf = prompt && kind.startsWith('agent:') ? agents.promptFlag(kind.slice(6)) : '';
-  const w = withExtra(how, [...(x && x.args) || [], ...pf ? [pf] : []], prompt);
+  const w = withExtra(how, [...args, ...pf ? [pf] : []], prompt);
   if ('error' in w) return w;
-  return { file: w.file, args: w.args, meta: x ? { ...how.meta, extra: x } : how.meta };
+  return { file: w.file, args: w.args, meta: x ? { ...how.meta, extra: x } : how.meta, env };
 }
 
 /**
@@ -506,7 +526,7 @@ async function revive(c, d, p, cols, rows) {
       if ('error' in how) { notices.set(t.sid, how.error); continue; }
       try {
         const s = (await d.request('create', {
-          file: how.file, args: how.args, cwd: (ex.x && ex.x.cwd) || p.path, env: browserCli.envFor(p, ex.x ? ex.x.env : undefined), cols, rows, project: p.path,
+          file: how.file, args: how.args, cwd: (ex.x && ex.x.cwd) || p.path, env: browserCli.envFor(p, how.env), cols, rows, project: p.path,
           // Тема — от прежнего разговора: новому её не переносить, вкладка снова «Claude 2», пока Claude не напишет свою.
           title: t.title, color: t.color, icon: t.icon, autoTitle: noConv ? '' : t.autoTitle, titleManual: t.titleManual === '1', meta: how.meta,
         })).session;
@@ -555,7 +575,7 @@ async function openTab(p, kind, o, cols, rows, wc) {
     const live = await projectSessions(d, p.id);
     // Папка — в написании из списка проектов: по ней окно потом находит свои терминалы.
     s = (await d.request('create', {
-      file: how.file, args: how.args, cwd: (ex.x && ex.x.cwd) || p.path, env: browserCli.envFor(p, ex.x ? ex.x.env : undefined), cols, rows,
+      file: how.file, args: how.args, cwd: (ex.x && ex.x.cwd) || p.path, env: browserCli.envFor(p, how.env), cols, rows,
       project: p.path, title: freeTitle(ex.title || (ex.ag && ex.ag.name) || (kind === 'shell' ? i18n.t('term.shell', 'Терминал') : k.title), live, tabs.titles(c.dataDir, p.id, c.log)), color: k.color, icon: k.icon, meta: how.meta,
     })).session;
     if (wc) await attachTo(d, wc, s.sid, cols, rows);

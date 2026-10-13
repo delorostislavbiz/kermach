@@ -148,30 +148,59 @@ function readdirBack() {
   if (!isMainThread && parentPort) parentPort.postMessage({ readdirBack: true });
 }
 
+/** Файл, который читался дольше этого, поиск называет в журнале по имени (t585). */
+const SLOW_FILE_MS = 1000;
+/** Вызовы диска одного файла при поиске в тексте — в порядке выполнения. */
+const STEPS = /** @type {const} */ (['lstat', 'open', 'stat', 'read', 'scan', 'close']);
+/**
+ * Замер поиска в тексте (t585): сколько всего ушло на каждый вид вызова и сколько шёл каждый файл.
+ * Время вызова включает ожидание свободного потока пула libuv: пул общий с главным процессом.
+ * @typedef {{ sum: Record<string, number>, per: number[], slow: { rel: string, ms: number, step: string }[] }} Prof
+ * @returns {Prof}
+ */
+function newProf() { return { sum: Object.fromEntries(STEPS.map((s) => [s, 0])), per: [], slow: [] }; }
+
 /**
  * Строка в тексте файла: номер строки и кусок вокруг первой находки; null — нет, файл большой или двоичный.
  * @param {string} full @param {string} low искомое в нижнем регистре
  * @param {{ left: number, cut: boolean }} budget сколько байт ещё можно прочитать этим поиском; файл не влез — cut, файл не читается
+ * @param {Prof} [prof] замер (t585): сюда прибавляется время вызовов этого файла
+ * @param {string} [rel] имя файла для prof.slow
  * @returns {Promise<{ line: number, text: string } | null>}
  */
-async function grepFile(full, low, budget) {
+async function grepFile(full, low, budget, prof, rel = full) {
   /** @type {fs.promises.FileHandle | null} */
   let fh = null;
+  const t0 = performance.now();
+  let t = t0;
+  /** Самый долгий вызов этого файла. */
+  let worst = { step: '', ms: 0 };
+  const lap = (/** @type {string} */ step) => {
+    const n = performance.now();
+    if (prof) { prof.sum[step] += n - t; if (n - t > worst.ms) worst = { step, ms: n - t }; }
+    t = n;
+  };
   try {
     // Файл-ссылка может вести за пределы проекта — не читаем (обход их и не видит, а git перечисляет).
-    if ((await fs.promises.lstat(full)).isSymbolicLink()) return null;
+    const ls = await fs.promises.lstat(full);
+    lap('lstat');
+    if (ls.isSymbolicLink()) return null;
     fh = await fs.promises.open(full, 'r');
+    lap('open');
     const st = await fh.stat();
+    lap('stat');
     if (!st.isFile() || st.size === 0 || st.size > TEXT_MAX) return null;
     // Проверка и списание — без await между ними: файлы читаются по TEXT_POOL сразу, но предел общий и не превышается.
     if (st.size > budget.left) { budget.cut = true; return null; }
     budget.left -= st.size;
     const buf = Buffer.alloc(st.size);
     const { bytesRead } = await fh.read(buf, 0, st.size, 0);
+    lap('read');
     const b = buf.subarray(0, bytesRead);
     if (b.subarray(0, SNIFF).includes(0)) return null;
     const text = b.toString('utf8');
     const at = text.toLowerCase().indexOf(low);
+    lap('scan');
     if (at < 0) return null;
     const line = text.slice(0, at).split('\n').length;
     const from = text.lastIndexOf('\n', at) + 1;
@@ -182,7 +211,29 @@ async function grepFile(full, low, budget) {
     // Длинная строка — кусок вокруг находки, чтобы она была видна в узкой панели.
     if (s.length > 160) { const a = Math.max(0, col - 50); s = (a ? '…' : '') + s.slice(a, a + 150) + (a + 150 < s.length ? '…' : ''); }
     return { line, text: s.trim() };
-  } catch { return null; } finally { if (fh) await fh.close().catch(() => {}); }
+  } catch { return null; } finally {
+    if (fh) { await fh.close().catch(() => {}); lap('close'); }
+    if (prof) {
+      const ms = performance.now() - t0;
+      prof.per.push(ms);
+      if (ms >= SLOW_FILE_MS) prof.slow.push({ rel, ms: Math.round(ms), step: worst.step });
+    }
+  }
+}
+
+/**
+ * Итог замера для журнала: медиана и 95 % времени на файл, самый долгий файл, суммы по видам вызовов, файлы дольше SLOW_FILE_MS (до 5).
+ * @param {Prof} prof @param {number} elu доля времени, когда поток поиска считал сам, а не ждал диск (0–1)
+ */
+function profSummary(prof, elu) {
+  const per = [...prof.per].sort((a, b) => a - b);
+  const q = (/** @type {number} */ p) => (per.length ? Math.round(per[Math.min(per.length - 1, Math.floor(per.length * p))] * 10) / 10 : 0);
+  return {
+    p50: q(0.5), p95: q(0.95), max: per.length ? Math.round(per[per.length - 1]) : 0,
+    sum: Object.fromEntries(STEPS.map((s) => [s, Math.round(prof.sum[s])])),
+    slow: prof.slow.sort((a, b) => b.ms - a.ms).slice(0, 5), slowN: prof.slow.length,
+    elu: Math.round(elu * 100),
+  };
 }
 
 /**
@@ -214,7 +265,11 @@ const breathe = () => new Promise((r) => setImmediate(r));
  *   pending — брошенное чтение ещё не вернулось (придёт сообщение readdirBack)
  */
 async function entriesOf(root, cancelled = () => false) {
+  // Этапы списка (t585): git ls-files, разбор путей, lstat папок (поиск ссылок); без git — обход.
+  let t = performance.now();
+  const lap = () => { const n = performance.now(); const d = Math.round(n - t); t = n; return d; };
   const raw = await gitFiles(root);
+  const stages = { git: lap(), parse: 0, links: 0, walk: 0 };
   const all = raw ? raw.split('\0') : [];
   // Пустой список — папка проекта внутри чужого репозитория и вписана в его .gitignore (или пустой репозиторий): тогда обход.
   if (all.some(Boolean)) {
@@ -233,6 +288,7 @@ async function entriesOf(root, cancelled = () => false) {
     }
     // Папка-ссылка (junction, symlink): git на Windows перечисляет файлы за ней как новые (проверено: jump\s.txt из папки снаружи).
     // Такие папки и всё под ними выкидываем, как и обход. Папок в списке в разы меньше, чем файлов, — lstat по ним дёшев.
+    stages.parse = lap();
     const links = new Set();
     const ds = [...dirs];
     for (let i = 0; i < ds.length; i += 64) {
@@ -243,12 +299,14 @@ async function entriesOf(root, cancelled = () => false) {
       files = files.filter((f) => !under(f));
       dirs = new Set([...dirs].filter((d) => !links.has(d) && !under(d)));
     }
-    return { entries: [...[...dirs].map((rel) => ({ rel, dir: true })), ...files.map((rel) => ({ rel, dir: false }))], git: true };
+    stages.links = lap();
+    return { entries: [...[...dirs].map((rel) => ({ rel, dir: true })), ...files.map((rel) => ({ rel, dir: false }))], git: true, stages };
   }
   /** @type {{ rel: string, dir: boolean }[]} */
   const entries = [];
   const w = await walk(root, (rel, _name, dir) => { entries.push({ rel, dir }); }, cancelled);
-  return { entries, git: false, cut: w.cut, seen: w.seen, hung: w.hung, pending: w.pending };
+  stages.walk = lap();
+  return { entries, git: false, cut: w.cut, seen: w.seen, hung: w.hung, pending: w.pending, stages };
 }
 
 /**
@@ -283,13 +341,15 @@ async function search(root, entries, query, o = {}) {
   // В тексте: файлы читаются по TEXT_POOL сразу; цикл ждёт, пока освободится место, и проверяет отмену перед каждым файлом.
   // Всего за поиск — не больше LIMITS.textBytes (t454): дальше поиск останавливается, окно пишет, что прочитано не всё.
   const budget = { left: LIMITS.textBytes, cut: false };
+  const prof = newProf();
+  const elu0 = performance.eventLoopUtilization();
   /** @type {Set<Promise<void>>} */
   const busy = new Set();
   for (const e of entries) {
     if (cancelled() || more || budget.cut) break;
     if (e.dir || BINARY.test(e.rel)) continue;
     files++;
-    const p = grepFile(path.join(root, e.rel), low, budget).then((m) => { if (m && !more && !cancelled()) add({ rel: e.rel, dir: false, line: m.line, text: m.text }); })
+    const p = grepFile(path.join(root, e.rel), low, budget, prof, e.rel).then((m) => { if (m && !more && !cancelled()) add({ rel: e.rel, dir: false, line: m.line, text: m.text }); })
       .finally(() => { busy.delete(p); progress(); });
     busy.add(p);
     if (busy.size >= TEXT_POOL) await Promise.race(busy);
@@ -297,9 +357,10 @@ async function search(root, entries, query, o = {}) {
   await Promise.all(busy);
   // Файлы читаются вперемешку — порядок находок по пути, как в дереве.
   items.sort(byPath);
-  return { items, more, files, ms: ms(), cancelled: cancelled(), read: LIMITS.textBytes - budget.left, textCut: budget.cut, cap: LIMITS.textBytes };
+  return { items, more, files, ms: ms(), cancelled: cancelled(), read: LIMITS.textBytes - budget.left, textCut: budget.cut, cap: LIMITS.textBytes,
+    prof: profSummary(prof, performance.eventLoopUtilization(elu0).utilization) };
 }
 
 const byPath = (/** @type {{ rel: string }} */ a, /** @type {{ rel: string }} */ b) => a.rel.localeCompare(b.rel, undefined, { sensitivity: 'base', numeric: true });
 
-module.exports = { within, resolveIn, listDir, entriesOf, search, SKIP, MAX_LIST, MAX_HITS, TEXT_MAX, LIMITS, GIT_MS };
+module.exports = { within, resolveIn, listDir, entriesOf, search, SKIP, MAX_LIST, MAX_HITS, TEXT_MAX, LIMITS, GIT_MS, SLOW_FILE_MS };

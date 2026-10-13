@@ -305,7 +305,10 @@ module.exports = (ctx) => {
     const sid = r.session.sid;
     // title и kind — чтобы узнать вкладку после revive демона, когда номер у неё новый (t577); title — ownTitle ядра, freeTitle делает его единственным в проекте.
     patchRuns({ [ref]: { sid, started: Date.now(), title: String(r.session.ownTitle || ''), kind } });
-    ctx.log(`${ref}: запущена во вкладке ${sid}, ${agent}${la.args.length ? ` ${la.args.join(' ')}` : ''}, промпт ${pr.text.length} знаков`);
+    // Grok (t587): модель и усилие ядро передаёт не флагами, а через GROK_CONFIG (terminals.js grokConfig) — журнал пишет так же. Флаги парами: -m X, --reasoning-effort Y.
+    const grok = agent === 'grok' ? la.args.map((a, i) => (i % 2 ? '' : `${a === '-m' ? 'модель' : 'усилие'} ${la.args[i + 1]}`)).filter(Boolean).join(', ') : '';
+    const how = grok ? `, ${grok} через GROK_CONFIG` : la.args.length ? ` ${la.args.join(' ')}` : '';
+    ctx.log(`${ref}: запущена во вкладке ${sid}, ${agent}${how}, промпт ${pr.text.length} знаков`);
     try {
       if (c.status === 'в работе') return { session: r.session, item: c, skipped: la.skipped };
       const w = writeStatus(ref, 'в работе');

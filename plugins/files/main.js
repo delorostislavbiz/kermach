@@ -89,6 +89,30 @@ function quit(c, log) {
 
 /** Список файлов для поиска живёт столько после того, как собран: набор букв подряд не перечитывает папку, а новый файл найдётся через несколько секунд. */
 const LIST_TTL_MS = 15000;
+/** Поиск в тексте дольше этого — строка журнала называет этапы и долгие файлы (t585); быстрый поиск — строка как раньше. */
+const SLOW_LOG_MS = 3000;
+
+/**
+ * Хвост строки журнала у медленного поиска в тексте (t585): на каком этапе ушло время.
+ * Как читать: медиана на файл высокая, а максимум близок к ней — медленно всё (антивирус на открытии, занятый пул libuv, ЦП);
+ * назван файл дольше 1 с — держал он; список долгий — git или обход.
+ * @param {{ fresh: boolean, listMs: number, stages?: Record<string, number>, textMs: number,
+ *   r: { ms: number, prof?: { p50: number, p95: number, max: number, sum: Record<string, number>, slow: { rel: string, ms: number, step: string }[], slowN: number, elu: number } } }} a
+ */
+function slowTail(a) {
+  const p = a.r.prof;
+  if (a.listMs + a.textMs < SLOW_LOG_MS && !(p && p.slowN)) return '';
+  const s = a.stages;
+  const list = a.fresh && s ? (s.walk ? `обход ${s.walk}` : `git ${s.git}, разбор ${s.parse}, ссылки ${s.links}`) : 'готовый';
+  const parts = [`список ${a.listMs} мс (${list})`, `поток ${a.textMs - a.r.ms} мс`, `чтение ${a.r.ms} мс`];
+  if (p) {
+    parts.push(`на файл медиана ${p.p50}, 95 % ${p.p95}, макс ${p.max} мс`);
+    parts.push(Object.entries(p.sum).map(([k, v]) => `${k} ${v}`).join(', '));
+    parts.push(`поток занят счётом ${p.elu} %`);
+    if (p.slowN) parts.push(`файлов дольше ${tree.SLOW_FILE_MS / 1000} с: ${p.slowN} — ${p.slow.map((f) => `${f.rel} ${f.ms} мс (${f.step})`).join('; ')}`);
+  }
+  return ` — медленно: ${parts.join('; ')}`;
+}
 /**
  * Сколько поиск ждёт список файлов (t466 д): git — до GIT_MS, потом обход — до LIMITS.walkMs, и 15 с на разбор путей. Сам поток держит эти пределы;
  * этот срок — на случай, когда поток завис там, где своих пределов нет (зависший вызов диска вне обхода). Дольше — поток останавливается, поиск — ошибка.
@@ -250,6 +274,9 @@ module.exports = (ctx) => {
         const q = typeof args[0] === 'string' ? args[0].slice(0, 200) : '';
         const text = !!(args[1] && args[1].text);
         const old = () => !list || (list.at && performance.now() - list.at > LIST_TTL_MS);
+        // Сроки этапов для журнала (t585): ожидание списка, поток поиска в тексте целиком.
+        const t0 = performance.now();
+        const fresh = old();
         if (old()) {
           // Прежнее чтение диска не вернулось (t463): новый обход не начинается — поиск идёт по прежнему списку, а без него отвечает ошибкой.
           // Застрявший поток уже есть — отказ сразу; нет — дожидаемся останавливаемых (до END_MS): не вышел — застрял (t485 — окно закрыли и открыли снова).
@@ -262,6 +289,7 @@ module.exports = (ctx) => {
         }
         const l = /** @type {NonNullable<typeof list>} */ (list);
         const got = await l.p;
+        const listMs = Math.round(performance.now() - t0);
         // Поток списка остановлен (окно закрыли) или упал — пустой ответ не запоминается.
         if (!got) { if (list === l) list = null; return cancelled() ? { cancelled: true } : { error: 'searchFailed' }; }
         if (cancelled()) return { cancelled: true };
@@ -273,13 +301,16 @@ module.exports = (ctx) => {
           if (cancelled()) return { cancelled: true };
           if (s) { tellStuck(s, 'поиск в тексте'); return { error: 'searchFailed' }; }
         }
+        const t1 = performance.now();
         const r = text ? await inText(my, entries, q) : await tree.search(root, entries, q, { cancelled });
+        const textMs = Math.round(performance.now() - t1);
         if (r === 'late') return cancelled() ? { cancelled: true } : { error: 'searchFailed', why: 'time' };
         if (!r) return cancelled() ? { cancelled: true } : { error: 'searchFailed' };
         if (r.cancelled || cancelled()) return { cancelled: true };
         const mb = (/** @type {number} */ b) => (b / 1048576).toFixed(1);
         if (text) ctx.log(`поиск в тексте: ${q.length} знаков, файлов ${r.files}, находок ${r.items.length}${r.more ? '+' : ''}, ${r.ms} мс${git ? ', по git ls-files' : ''}, прочитано ${mb(r.read || 0)} МБ`
-          + `${r.textCut ? ` — остановлен на пределе ${mb(r.cap)} МБ` : ''}${cut ? ', список файлов неполный' : ''}`);
+          + `${r.textCut ? ` — остановлен на пределе ${mb(r.cap)} МБ` : ''}${cut ? ', список файлов неполный' : ''}`
+          + slowTail({ fresh, listMs, stages: got.stages, textMs, r }));
         return { items: r.items, more: r.more, files: r.files, ms: r.ms, git, max: tree.MAX_HITS, cut: cut || null, textCut: !!r.textCut, read: r.read || 0 };
       }
       // Обновить — список для поиска собрать заново при следующем поиске. Поток ещё собирает — его список и останется: второй обход рядом не запускается.
