@@ -9,8 +9,41 @@
 // Своя папка данных (TERMINALUS_DATA) — тоже молчит, если не TERMINALUS_TOAST=1 (t681): её ставят только проверки и пробы (daemon\protocol.js),
 // а проба, запущенная руками без гейта, иначе вывела бы уведомление на экран.
 // Настройка «уведомления» (settings.js) читается на каждое событие: выключили — не показывает, мигание и звук живут своими.
+// Windows показывает уведомление, только если ID программы зарегистрирован (t712): register() при запуске, toast-reg.js.
 
+const path = require('path');
 const i18n = require('./i18n');
+const toastReg = require('./toast-reg');
+
+/**
+ * Постоянный CLSID «активатора» — COM-объекта, через который Windows передаёт программе щелчок из центра уведомлений.
+ * Без app.setToastActivatorCLSID Electron берёт случайный на каждый запуск и каждый раз пишет новый ключ
+ * HKCU\Software\Classes\CLSID\{…} (windows_toast_activator.cc, EnsureCLSIDRegistry) — ключи копятся.
+ */
+const TOAST_CLSID = '{602C9370-B98D-4766-9DF6-39345CD61D2F}';
+
+/**
+ * ID уведомлений — тот, что Electron 44 берёт сам: «electron.app.<ProductName из свойств exe>» (shell\common\application_info_win.cc).
+ * Electron ставит его процессу при первом уведомлении; app.setAppUserModelId не зовём: ID с первого окна поменял бы кнопку
+ * окна «Проекты» на панели задач и отвязал бы закреп (t396). ProductName exe и productName package.json — оба «Kermach».
+ * Под electron.exe из node_modules (пробы) Electron возьмёт «electron.app.Electron» — там уведомления молчат (testing).
+ */
+const toastId = () => `electron.app.${require('electron').app.getName()}`;
+
+/**
+ * Запуск программы, только Windows: постоянный CLSID и ключ ID уведомлений с именем и значком. До первого уведомления.
+ * В проверках ключ не пишется — только строка в журнал. @param {{ log: (msg: string) => void }} o
+ */
+function register({ log }) {
+  if (process.platform !== 'win32') return;
+  const { app } = require('electron');
+  try { app.setToastActivatorCLSID(TOAST_CLSID); } catch (e) { log(`уведомления: CLSID не задан: ${e instanceof Error ? e.message : e}`); }
+  const id = toastId();
+  if (testing()) { log(`уведомления: ID ${id}, ключ не пишу — проверка`); return; }
+  const icon = path.join(__dirname, '..', 'icons', 'tray@2x.png');
+  toastReg.add(id, { DisplayName: app.getName(), IconUri: icon, CustomActivator: TOAST_CLSID })
+    .then((why) => log(`уведомления: ID ${id}, ключ ${toastReg.keyOf(id)} ${why ? `не записан: ${why}` : 'записан'}`));
+}
 
 /** Слова состояния. Без «error» и «ошибка»: проверки считают такие строки main.log ошибками программы. */
 const BODY = {
@@ -95,4 +128,4 @@ function reopen(o, log) {
   } catch (e) { log(`уведомление: щелчок по ${o.sid} — окно не открылось: ${e instanceof Error ? e.message : e}`); }
 }
 
-module.exports = { show, open, forget, shownSize: () => shown.size };
+module.exports = { register, show, open, forget, shownSize: () => shown.size };

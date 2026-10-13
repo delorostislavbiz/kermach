@@ -166,12 +166,23 @@
 </div>
 <div id="main">
   <div id="side">
-    <div class="cap" data-i18n="page.vkladki">Вкладки</div>
+    <!-- Шапка панели (t655): плитка, имя и путь проекта — рисует paintProject. «Скрыть панель» (t678) — кнопка в шапке, «Показать» — #sideShow в начале полосы вкладок.
+         Видны только в теме Kermach и Termius Dark (ui-kermach-project.css). -->
+    <div id="sideHead">
+      <div class="tile"><i id="sideTint"></i><span id="sideIcon"></span></div>
+      <div class="pt"><div id="sideName"></div><div id="sidePath"></div></div>
+      <div id="sideHide" title="Скрыть панель" data-i18n-title="page.skrytPanel"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M9.5 4.5v15"/></svg></div>
+    </div>
+    <div class="cap" data-i18n="page.terminaly">Терминалы<span id="termCount"></span></div>
     <div id="list"></div>
+    <!-- Кнопки «+ Claude», «+ Codex», «+ Shell» (t677) — щелчок по тому же пункту меню «+»; остальные агенты — в меню «+». -->
+    <div id="sideAdds"><div data-for="addClaude"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Claude</div><div data-for="addCodex"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Codex</div><div data-for="addShell" data-i18n="page.shell"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Shell</div></div>
     <div id="sideFoot" hidden></div>
+    <!-- Строка «Настройки» (t660) — после #sideFoot: строки плагинов дописываются в его конец, а «Настройки» в макете последние. -->
+    <div id="sideSet" data-i18n="dialogs.nastroyki"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>Настройки</div>
   </div>
   <div id="center">
-    <div id="tabrow"><div id="tabs"></div><div id="plus" title="Новая вкладка" data-i18n-title="page.novayaVkladka"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div><div id="layoutBtn" title="Раскладка" data-i18n-title="layout.title"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg></div></div>
+    <div id="tabrow"><div id="sideShow" title="Показать панель" data-i18n-title="page.pokazatPanel"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M9.5 4.5v15"/></svg></div><div id="tabs"></div><div id="plus" title="Новая вкладка" data-i18n-title="page.novayaVkladka"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div><div id="layoutBtn" title="Раскладка" data-i18n-title="layout.title"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg></div></div>
     <div id="adds"><div class="item" id="addClaude" data-icon="bot" data-color="#2091F6">Claude</div><div class="item" id="addCodex" data-icon="cpu" data-color="#ECA855">Codex</div><div class="item" id="addShell" data-icon="terminal" data-color="#8D91A5" data-i18n="page.terminal">Терминал</div><div class="sep" id="addsSep" hidden></div><div class="item" id="addAgents" data-icon="bot" data-color="#2091F6" data-i18n="page.agenty" hidden>Агенты</div><div id="addsAgents" hidden></div></div>
     <div id="panes"><div id="empty" hidden><div class="ask" data-i18n="page.chtoZapustit">Что запустить?</div><div class="btns" id="emptyBtns"></div></div></div>
   </div>

@@ -553,14 +553,15 @@ async function openTab(p, kind, o, cols, rows, wc) {
 
 /**
  * Вкладка от главной части плагина (t256, ctx.openTab): окно проекта подхватит её по term:changed и покажет по term:show.
- * @param {{ id: string, path: string }} p @param {any} o { kind, args, cwd, env, title, prompt }
+ * focus: false — term:show не шлётся, выбранная вкладка окна остаётся (t706: волна «Роадмапа» не уводит человека с его вкладки).
+ * @param {{ id: string, path: string }} p @param {any} o { kind, args, cwd, env, title, prompt, focus }
  */
 async function openFromPlugin(p, o) {
   if (!ctx) return { error: 'терминалы ещё не готовы' };
   if (!o || typeof o !== 'object') return { error: 'параметры вкладки: ждал объект' };
-  const { kind, ...rest } = o;
+  const { kind, focus, ...rest } = o;
   const r = await openTab(p, kind, rest, 120, 30, null);
-  if ('session' in r) {
+  if ('session' in r && focus !== false) {
     const w = projectWindow.windowFor(p.id);
     if (w && !w.isDestroyed()) w.webContents.send('term:show', { sid: r.session.sid });
   }

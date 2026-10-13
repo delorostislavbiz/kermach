@@ -27,6 +27,11 @@
     $('pColor').style.background = pColor;
     $('pIcon').innerHTML = svg(p.icon, pColor, 14);
     $('pName').textContent = p.name;
+    // Шапка боковой панели (t655): плитка с тинтом цвета проекта, имя, путь.
+    $('sideTint').style.background = pColor;
+    $('sideIcon').innerHTML = svg(p.icon, pColor, 17);
+    $('sideName').textContent = p.name;
+    $('sidePath').textContent = $('sidePath').title = p.path || '';
     tilePNG(p.icon, p.color).then((png) => t.project.setIcon(png));
   }
   const p = await t.project.info();
@@ -114,6 +119,20 @@
   const fontPx = () => setg.termFont / (setg.uiZoom / 100);
   SD.onSettings((/** @type {any} */ s) => { setg = s; for (const tab of tabs.values()) if (tab.x) tab.x.setFont(fontPx()); });
   SD.zoomKeys(t, () => !!(document.activeElement && document.activeElement.closest('.pane:not(.page)')));
+  // Строка «Настройки» внизу левой панели (t660) — то же окошко, что кнопка в окне «Проекты».
+  $('sideSet').onclick = () => SD.settings(t);
+  // Кнопки «+ Claude», «+ Codex», «+ Shell» в панели (t677) — щелчок по тому же пункту меню «+», как у кнопок пустого окна.
+  for (const b of /** @type {HTMLElement[]} */ ([...$('sideAdds').children])) b.onclick = () => $(b.dataset.for || '').click();
+  // Скрыть и показать левую панель (t678). Видно только в теме Kermach и Termius Dark (класс side-off — ui-kermach-project.css);
+  // запоминается для проекта в localStorage окна, как ширина правой панели.
+  const SIDE_KEY = `terminalus.sideOff:${p.path}`;
+  const sideOff = (/** @type {boolean} */ off) => {
+    document.documentElement.classList.toggle('side-off', off);
+    if (off) localStorage.setItem(SIDE_KEY, '1'); else localStorage.removeItem(SIDE_KEY);
+  };
+  document.documentElement.classList.toggle('side-off', localStorage.getItem(SIDE_KEY) === '1');
+  $('sideHide').onclick = () => sideOff(true);
+  $('sideShow').onclick = () => sideOff(false);
 
   /** Новая вкладка со своим xterm; повторный вызов для того же sid вкладку не плодит. @param {any} s @returns {Tab} */
   function addTab(s) {
@@ -493,7 +512,7 @@
     saveLayout();
   }
 
-  /** Боковая панель и полоса вкладок — по таблице tabs. */
+  /** Боковая панель и полоса вкладок — по таблице tabs. Строка слева: плитка .tile (тинт — .strip с прозрачностью, t656), имя, метка. */
   function render() {
     // Раскладка (t397): вкладки из её файла, что уже пришли, — по частям; место частей; пришедшим — подгонка и фокус.
     const put = restoreStep();
@@ -517,10 +536,11 @@
     // Вкладка сайта (t172): вторая строка — адрес страницы без https://, а не метка состояния.
     const addr = (/** @type {Tab} */ x) => `<div class="st url" title="${esc(x.url || '')}">${esc((x.url || '').replace(/^https?:\/\//i, ''))}</div>`;
     $('list').innerHTML = list.map((x) => { const k = stateOf(x); return `<div class="term${x.page ? ' site' : ''}${cls(x, k)}" data-sid="${esc(x.sid)}">
-      <div class="strip" style="background:${x.color}"></div>${svg(x.icon, x.color, 18)}
+      <div class="tile"><div class="strip" style="background:${x.color}"></div>${svg(x.icon, x.color, 18)}</div>
       <div class="text"><div class="n">${esc(x.title)}</div>${x.page ? addr(x) : x.connecting ? `<div class="st">${I18n.t('page.podklyuchaetsya', 'подключается…')}</div>` : st(x, k)}</div></div>`; }).join('');
     $('tabs').innerHTML = list.map((x) => { const k = stateOf(x); return `<div class="tab${cls(x, k)}" data-sid="${esc(x.sid)}"${k ? ` data-state="${k}" title="${hint(x, k)}"` : ''}>
       ${svg(x.icon, x.color, 14)}<span>${esc(x.title)}</span>${k ? glyph(k) : ''}<span class="x" data-close title="${I18n.t('common.close', 'Закрыть')}">${svg('close', (window.Theme && Theme.color('muted')) || '#8D91A5', 12, 2)}</span><i style="background:${x.color}"></i></div>`; }).join('');
+    $('termCount').textContent = String(list.length);
     // Кнопки пустого окна — только после первого списка: до него вкладки ещё не пришли (t360).
     $('empty').hidden = list.length > 0 || !listed;
     if (!list.length && listed) paintEmpty();
@@ -671,6 +691,23 @@
     const r = await t.term.close(tab.sid);
     if (r.error) { closing.delete(tab.sid); tab.x.notice(r.error); return; }
     dropTab(tab.sid);
+  }
+
+  /**
+   * term.close из кода плагина (host.bridge, t705): без вопроса, но вкладка уходит из полосы, как у closeTab.
+   * Без closing выход терминала оставил бы её с надписью «завершился». Ответ — как у term.close: ошибку показывает сам плагин.
+   * @param {string} sid
+   */
+  async function closeFromPlugin(sid) {
+    // Вкладку-страницу демон не знает и ответил бы ok — она закрывается своим host.pages.removeTab.
+    const had = tabs.get(sid);
+    if (had && had.page) return { error: 'это вкладка-страница, а не терминал: закрывает host.pages.removeTab' };
+    const mine = tabs.has(sid) && !closing.has(sid);
+    if (mine) closing.add(sid);
+    const r = await t.term.close(sid);
+    if (r.error) { if (mine) closing.delete(sid); return r; }
+    dropTab(sid);
+    return r;
   }
 
   /** @param {Tab} tab @param {number} x @param {number} y */
@@ -869,10 +906,10 @@
   /**
    * Новый терминал вида kind — вкладкой, и сразу на него. Ответ — { session } или { error }.
    * opts — параметры вкладки: { agent } у пункта агента Claude (t251), { kind, args, … } от плагина (host.openTab, t253).
-   * fromPlugin — ошибка уходит плагину, а не во вкладку окна.
-   * @param {string} kind @param {any} [opts] @param {boolean} [fromPlugin]
+   * fromPlugin — ошибка уходит плагину, а не во вкладку окна. focus false — вкладка встаёт в полосу, выбранная остаётся (t706).
+   * @param {string} kind @param {any} [opts] @param {boolean} [fromPlugin] @param {boolean} [focus]
    */
-  async function create(kind, opts, fromPlugin) {
+  async function create(kind, opts, fromPlugin, focus) {
     creating++;
     try {
       const { cols, rows } = size();
@@ -886,7 +923,7 @@
         return r;
       }
       addTab(r.session);
-      show(r.session.sid);
+      if (focus === false && active) render(); else show(r.session.sid);
       return r;
     } finally {
       creating--;
@@ -1292,7 +1329,7 @@
   //   host.terminals() — терминалы окна: { sid, kind, title, color, icon, alive, state }, state — код из STATES или '';
   //   host.onTerminals(cb) — список изменился;
   //   host.project — { id, name, path, color, icon }; host.log(текст) — строка в main.log;
-  //   host.bridge — window.terminalus; host.pages — addTab, removeTab, setTab, show, isActive, addButton, removeButton (вкладка-страница в общей полосе и пункт меню «+», t220).
+  //   host.bridge — window.terminalus, term.close в нём убирает и вкладку из полосы (t705); host.pages — addTab, removeTab, setTab, show, isActive, addButton, removeButton (вкладка-страница в общей полосе и пункт меню «+», t220).
   //   host.call(cmd, ...args) — своя главная часть (поле main в plugin.json, t256), ответ или { error };
   //   host.on(event, cb) — её события ctx.send; подписки снимаются, когда плагин выключили.
   /** Адрес кода плагина → его имя: по нему ошибка в коде плагина попадает в журнал с именем. @type {Map<string, string>} */
@@ -1330,18 +1367,18 @@
         .map((x) => ({ sid: x.sid, kind: x.kind, title: x.title, color: x.color, icon: x.icon, alive: x.alive, state: stateOf(x) })),
       onTerminals: (/** @type {() => void} */ cb) => { if (typeof cb === 'function') watchers.push({ id, cb }); },
       log: (/** @type {string} */ m) => t.log(`плагин ${id}: ${m}`),
-      /** Мост окна (window.terminalus) и места для вкладок-страниц (t220): вкладка в полосе, пункт меню «+». */
-      bridge: t,
+      /** Мост окна (window.terminalus) и места для вкладок-страниц (t220): вкладка в полосе, пункт меню «+». term.close убирает и вкладку (t705). */
+      bridge: { ...t, term: { ...t.term, close: closeFromPlugin } },
       pages: pageApi,
       call: (/** @type {string} */ cmd, /** @type {any[]} */ ...args) => t.plugin.call(id, cmd, ...args),
       /**
-       * Открыть вкладку и сразу на неё (t253): { kind, args, cwd, env, title, prompt }. kind — claude, codex, shell или agent:<id>;
-       * prompt — первое сообщение аргументом командной строки. Проверяет главный процесс (terminals.js, checkExtra). Ответ { session } или { error }.
+       * Открыть вкладку и сразу на неё (t253): { kind, args, cwd, env, title, prompt, focus }. kind — claude, codex, shell или agent:<id>;
+       * prompt — первое сообщение аргументом командной строки; focus: false — без перехода на неё (t706). Проверяет главный процесс (terminals.js, checkExtra). Ответ { session } или { error }.
        */
       openTab: async (/** @type {any} */ o) => {
         if (!o || typeof o !== 'object') return { error: I18n.t('page.opentabZhdalObektKind', 'openTab: ждал объект { kind, ... }') };
-        const { kind, ...rest } = o;
-        return create(String(kind), rest, true);
+        const { kind, focus, ...rest } = o;
+        return create(String(kind), rest, true, focus !== false);
       },
       on: (/** @type {string} */ event, /** @type {(payload: any) => void} */ cb) => {
         const off = t.plugin.on(id, event, cb);

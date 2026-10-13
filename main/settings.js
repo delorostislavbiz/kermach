@@ -214,7 +214,11 @@ function dress(w) {
     w.setBackgroundColor(glass ? '#00000000' : background());
   } catch (e) { log(`тема: окно не перекрашено: ${e}`); }
 }
-/** Вид системных частей окна (полосы прокрутки, системные диалоги) — по «Оформлению». Termius Dark — тёмный, со светлой схемой плагина — светлый. */
+/**
+ * Вид системных частей окна (полосы прокрутки, системные диалоги, prefers-color-scheme сайтов во вкладке браузера) — по «Оформлению».
+ * Termius Dark — тёмный, со светлой схемой плагина — светлый. Не 'system' (t710): «Оформления» у Termius Dark нет, и вид держит схема,
+ * как «Тёмная» держит 'dark' — сайт во вкладке в тон окну, а не системе.
+ */
 function syncNative() {
   try {
     const want = cur.ui === 'rostyslav' ? 'system' : cur.ui === 'termius' ? ((look() || {}).kind === 'light' ? 'light' : 'dark') : /** @type {'system' | 'light' | 'dark'} */ (cur.appearance);
@@ -239,7 +243,8 @@ function set(patch) {
     && next.ui === cur.ui && next.appearance === cur.appearance
     && JSON.stringify(next.plugins) === JSON.stringify(cur.plugins) && JSON.stringify(next.agents) === JSON.stringify(cur.agents)
     && JSON.stringify(next.pluginSettings) === JSON.stringify(cur.pluginSettings) && JSON.stringify(next.layoutPresets) === JSON.stringify(cur.layoutPresets)) return get();
-  const restyle = next.ui !== cur.ui || next.appearance !== cur.appearance;
+  // Схема плагина «Темы» и его выключатель тоже меняют вид: у Termius Dark светлая схема — светлые системные части окна (t710).
+  const restyle = next.ui !== cur.ui || next.appearance !== cur.appearance || next.theme !== cur.theme || next.plugins.themes !== cur.plugins.themes;
   cur = next;
   save();
   log(`настройки: шрифт окон ${cur.uiZoom} %, шрифт терминала ${cur.termFont}, сдвиг Markdown ${cur.mdShift}, звук ${cur.sound ? 'вкл' : 'выкл'}, уведомления ${cur.notify ? 'вкл' : 'выкл'}, тема ${cur.theme || 'по умолчанию'}${cur.ui === 'termius' ? '' : `, интерфейс ${cur.ui} (${cur.appearance})`}, язык ${cur.lang || 'ru'}, выключены плагины: ${Object.keys(cur.plugins).filter((k) => !cur.plugins[k]).join(', ') || 'нет'}, включены агенты: ${Object.keys(cur.agents).filter((k) => cur.agents[k]).join(', ') || 'нет'}`);

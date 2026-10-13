@@ -6,7 +6,11 @@
 // Файл карты поправили снаружи, пока она открыта: нетронутые поля обновляются, тронутые не затираются — человек видит пометку и решает сам.
 // «Показать промпт» (t514) — промпт карты во всю панель, только чтение: пять частей с подписями, текст собирает главная часть (prompt.js) из файлов.
 // «Запустить» (t515) — вкладка агента карты в верхней полосе, первое сообщение — тот же промпт; статус карты дальше идёт за вкладкой (main.js, sync).
-// Окно зовёт sync на каждое изменение списка вкладок: так «пауза» приходит сразу, как вкладку закрыли. Волн и галочек выбора нет.
+// Окно зовёт sync на каждое изменение списка вкладок: так «пауза» приходит сразу, как вкладку закрыли.
+// Волна (t687): в заголовке фазы «Независимые», «Все», «Выделенные»; очередь ведёт главная часть, окно рисует строки волн и пометки карт («ждёт места»).
+// «Стоп» закрывает вкладки волны отсюда (событие waveClose → term.close): у главной части такой команды нет.
+// Выделение (t688) — только в одной фазе: Ctrl+щелчок, Shift+щелчок, рамка мышью; Esc или щелчок по пустому месту — снять. Обычный щелчок открывает карту.
+// Предел сессий проекта (t689) — строка над фазами, значение в мешке главной части.
 // Значки «Командный центр» и «Составить роадмап» в шапке неактивны, с подсказкой. На пустом проекте кнопка «Составить роадмап» (t519) открывает вкладку Claude с заданием.
 // Паспорт проекта (t569, экран 15): строка под «Входящими», если passport.md есть; щелчок — девять разделов во всю панель. Пустой раздел — жёлтой рамкой.
 // Разделы правятся в полях (t513): «Сохранить» пишет в passport.md только тронутые разделы; правка снаружи — как у карты, пометкой.
@@ -106,6 +110,34 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .ph .s { color: var(--muted); flex-shrink: 0; }
     #plugin-roadmap-panel .ph .h { flex-shrink: 0; }
     #plugin-roadmap-panel .ph .c { color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+    /* Волна (t687): кнопки в заголовке фазы — узкая панель переносит их под имя фазы. */
+    #plugin-roadmap-panel .ph { flex-wrap: wrap; row-gap: 4px; padding-top: 4px; padding-bottom: 4px; box-sizing: border-box; }
+    #plugin-roadmap-panel .ph .wbtns { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
+    #plugin-roadmap-panel .ph .wbtns button { height: 22px; padding: 0 8px; border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 4px; background: transparent; color: var(--text); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; }
+    #plugin-roadmap-panel .ph .wbtns button:hover:not(:disabled) { background: var(--hover); }
+    #plugin-roadmap-panel .ph .wbtns button:disabled { color: var(--muted); opacity: .55; cursor: default; }
+    #plugin-roadmap-panel .ph .seln { color: var(--rm-info); flex-shrink: 0; font-size: 11.5px; }
+    #plugin-roadmap-panel .wnote { padding: 0 12px 6px; font-size: 11.5px; line-height: 16px; color: var(--rm-warn); overflow-wrap: anywhere; }
+    #plugin-roadmap-panel .wave { margin: 2px 8px 4px; padding: 5px 8px; border-radius: 5px; background: color-mix(in srgb, var(--rm-info) 8%, transparent); display: flex; flex-direction: column; gap: 3px; }
+    #plugin-roadmap-panel .wave .wl { display: flex; align-items: center; gap: 6px; white-space: nowrap; min-height: 22px; }
+    #plugin-roadmap-panel .wave .wl b { font-weight: 600; }
+    #plugin-roadmap-panel .wave .wl .ws { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    #plugin-roadmap-panel .wave.run .wl .ws { color: var(--rm-info); }
+    #plugin-roadmap-panel .wave.stopped { background: color-mix(in srgb, var(--rm-warn) 9%, transparent); }
+    #plugin-roadmap-panel .wave.stopped .wl .ws { color: var(--rm-warn); }
+    #plugin-roadmap-panel .wave .bar { margin: 0; }
+    #plugin-roadmap-panel .wave .wx { color: var(--muted); font-size: 11.5px; line-height: 16px; overflow-wrap: anywhere; }
+    #plugin-roadmap-panel .wave .wx.warn { color: var(--rm-warn); }
+    #plugin-roadmap-panel .wave button { height: 22px; padding: 0 8px; border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 4px; background: transparent; color: var(--text); font: inherit; font-size: 11.5px; cursor: pointer; flex-shrink: 0; }
+    #plugin-roadmap-panel .wave button[data-wave="stop"] { color: var(--rm-bad); border-color: color-mix(in srgb, var(--rm-bad) 50%, transparent); }
+    #plugin-roadmap-panel .wave button[data-wave="stop"].sure { background: var(--rm-bad); color: var(--on-accent, #fff); }
+    #plugin-roadmap-panel .lim { display: flex; align-items: center; gap: 6px; padding: 0 4px; color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+    #plugin-roadmap-panel .lim select { height: 22px; padding: 0 2px; background: var(--input, transparent); border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 4px; font-size: 11.5px; }
+    /* Выделение (t688): карта подсвечена, рамка мышью — поверх панели. */
+    #plugin-roadmap-panel .card.sel { background: color-mix(in srgb, var(--rm-info) 16%, transparent); box-shadow: inset 2px 0 0 var(--rm-info); }
+    #plugin-roadmap-panel .card.sel:hover { background: color-mix(in srgb, var(--rm-info) 22%, transparent); }
+    #plugin-roadmap-panel .phase .cards { user-select: none; }
+    #plugin-roadmap-panel .band { position: fixed; z-index: 5; pointer-events: none; border: 1px solid var(--rm-info); background: color-mix(in srgb, var(--rm-info) 12%, transparent); }
     #plugin-roadmap-panel .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; border: 2px solid var(--muted); box-sizing: border-box; }
     #plugin-roadmap-panel .dot.g { background: var(--rm-ok); border-color: var(--rm-ok); }
     #plugin-roadmap-panel .dot.y { background: var(--rm-warn); border-color: var(--rm-warn); }
@@ -249,6 +281,7 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .rinbox .like { margin-left: auto; flex-shrink: 0; padding: 0 7px; border-radius: 9px; line-height: 18px; font-size: 11px; white-space: nowrap;
       color: var(--rm-warn); background: color-mix(in srgb, var(--rm-warn) 16%, transparent); }
     #plugin-roadmap-panel .rinbox .src { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+    #plugin-roadmap-panel .rinbox .lost { color: var(--rm-warn); font-size: 11.5px; line-height: 16px; overflow-wrap: anywhere; }
     #plugin-roadmap-panel .rinbox .iacts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     #plugin-roadmap-panel .rinbox .iacts select { height: 26px; min-width: 0; max-width: 100%; padding: 0 4px; font-weight: 600; background: var(--input, transparent); border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 5px; }
     #plugin-roadmap-panel .rinbox .iacts select:focus { outline: 0; border-color: var(--focus, var(--rm-info)); }
@@ -334,6 +367,14 @@ function roadmapSetup(host) {
   let said = '';
   /** Фазы и строки «готово», которые человек раскрыл или свернул сам: id → раскрыта. Живёт до закрытия окна. @type {Map<string, boolean>} */
   const folds = new Map();
+  /** Выделенные карты (t688): только в одной фазе; anchor — карта последнего Ctrl-щелчка, от неё Shift берёт диапазон. Живёт до закрытия окна. */
+  const sel = { phase: '', /** @type {Set<string>} */ ids: new Set(), anchor: '' };
+  /** Отказ последней кнопки волны (t687): строка под заголовком фазы до следующего нажатия. @type {{ phase: string, text: string } | null} */
+  let waveNote = null;
+  /** Карта → её место в волне (st, why, letter): последняя волна, где карта есть; идущая важнее законченной. Собирает draw. @type {Map<string, any>} */
+  let wItems = new Map();
+  /** «Стоп» нажат один раз: второй щелчок до until останавливает волну. @type {{ id: string, until: number } | null} */
+  let stopAsk = null;
   /**
    * Списки «агент · модель · усилие» — из главной части (agents.js, команда lists): те же, что возьмёт запуск вкладки (t515).
    * Пока не пришли — только агенты; значение из файла, которого в списке нет, встаёт в список как есть (FORMAT.md: модель и усилие — любые).
@@ -399,14 +440,19 @@ function roadmapSetup(host) {
   row.onmouseenter = () => { row.style.background = 'var(--hover)'; row.style.color = 'var(--text)'; };
   row.onmouseleave = paintRow;
 
-  /** Строка карты. @param {any} c @param {Map<string, any>} byId */
-  const cardRow = (c, byId) => {
+  /** Строка карты; pick — строка доски, где карту можно выделить (t688). @param {any} c @param {Map<string, any>} byId @param {boolean} [pick] */
+  const cardRow = (c, byId, pick = false) => {
     const m = got(RM_STATUS, c.status) || RM_STATUS['в очереди'];
     let meta = statusWord(c.status);
     let tone = '';
+    // Место в волне (t687): «ждёт места» — до старта; «вкладка закрыта, карта не готова» и «не запущена» — после.
+    const wi = wItems.get(c.id);
+    if (wi && wi.st === 'closed' && c.status !== 'готово') { meta += ` · ${T('wave.closed', 'вкладка закрыта, карта не готова')}`; tone = ' warn'; }
+    if (wi && wi.st === 'fail') { meta += ` · ${T('wave.fail', 'не запущена: {why}', { why: wi.why })}`; tone = ' warn'; }
     if (c.status === 'в очереди') {
       const wait = c.depends.filter((/** @type {string} */ d) => { const x = byId.get(d); return !x || x.status !== 'готово'; });
       if (wait.length) meta += ` · ${T('waits', 'ждёт {ids}', { ids: wait.join(', ') })}`;
+      else if (wi && wi.st === 'slot') meta += ` · ${T('wave.slot', 'ждёт места')}`;
     } else {
       if (c.agent) meta += ` · ${c.agent}`;
       // «Готово» — closed из файла (t537): время файла после git clone у всех одно, нет closed — без времени.
@@ -415,7 +461,8 @@ function roadmapSetup(host) {
       if (t) meta += ` · ${t}`;
     }
     if (c.status === 'ждёт ответа') tone = ' warn';
-    return `<div class="card" data-id="${esc(c.id)}"><span class="si ${m.tone}">${esc(m.icon)}</span><span class="num">${esc(c.id)}</span>`
+    const on = pick && sel.ids.has(c.id) ? ' sel' : '';
+    return `<div class="card${on}" data-id="${esc(c.id)}"><span class="si ${m.tone}">${esc(m.icon)}</span><span class="num">${esc(c.id)}</span>`
       + `<span class="tt">${esc(c.title || c.id)}</span><span class="meta${tone}">${esc(meta)}</span></div>`;
   };
 
@@ -444,6 +491,47 @@ function roadmapSetup(host) {
     if (!last || !Array.isArray(last.cards) || !Array.isArray(last.inbox)) return [];
     const ids = new Set(last.inbox);
     return last.cards.filter((/** @type {any} */ c) => ids.has(c.id) && c.status !== 'готово').reverse();
+  };
+
+  /**
+   * Кнопки волны в заголовке фазы (t687): фаза не готова и в ней есть карта «в очереди». «Выделенные» неактивна, пока в этой фазе ничего не выделено.
+   * @param {any} f @param {any[]} cards @param {number} nsel
+   */
+  const waveButtons = (f, cards, nsel) => {
+    if (phDone(f) || !cards.some((c) => c.status === 'в очереди')) return '';
+    const b = (/** @type {string} */ mode, /** @type {string} */ text, /** @type {string} */ title, off = false) =>
+      `<button type="button" data-wave="${mode}" data-ph="${esc(f.id)}" title="${esc(title)}"${off ? ' disabled' : ''}>${esc(text)}</button>`;
+    return `<span class="wbtns">${b('free', T('wave.free', 'Независимые'), T('wave.freeTitle', 'Запустить независимые: карты «в очереди», у которых все зависимости готовы'))}`
+      + b('all', T('wave.all', 'Все'), T('wave.allTitle', 'Запустить все карты фазы «в очереди»: у кого зависимости не готовы — ждут и стартуют сами'))
+      + b('sel', nsel ? T('wave.selN', 'Выделенные · {n}', { n: nsel }) : T('wave.sel', 'Выделенные'), T('wave.selTitle', 'Запустить выделенные карты. Выделить: Ctrl+щелчок, Shift+щелчок, рамка мышью; снять — Esc'), !nsel)
+      + '</span>';
+  };
+  /** Причины, по которым волна не взяла карту (код от главной части) → слова. @param {any} x */
+  const skipWhy = (x) => {
+    if (x.why === 'status') return statusWord(x.st || '');
+    /** @type {Record<string, string>} */
+    const WHY = { human: T('wave.why.human', 'нужен человек'), inbox: T('wave.why.inbox', 'во «Входящих»'), running: T('wave.why.running', 'уже запущена'),
+      wave: T('wave.why.wave', 'уже в другой волне'), phase: T('wave.why.phase', 'не в этой фазе') };
+    return got(WHY, x.why) || x.why;
+  };
+  /** Строка волны в фазе (t687): буква и вид, «идёт · N из M» / «завершена» / «остановлена человеком · время», полоска, пропуски и закрытые вкладки. @param {any} wv */
+  const waveLine = (wv) => {
+    const mode = got({ free: T('wave.mode.free', 'независимые'), all: T('wave.mode.all', 'все'), sel: T('wave.mode.sel', 'выделенные') }, wv.mode) || wv.mode;
+    const st = wv.state === 'run' ? T('wave.run', 'идёт · {done} из {all}', { done: wv.done, all: wv.all })
+      : wv.state === 'stopped' ? T('wave.stopped', 'остановлена человеком · {at}', { at: when(wv.ended) })
+        : T('wave.done', 'завершена · {done} из {all}', { done: wv.done, all: wv.all });
+    const sure = !!stopAsk && stopAsk.id === wv.id && stopAsk.until > Date.now();
+    const btn = wv.state === 'run'
+      ? `<button type="button" data-wave="stop" data-wid="${esc(wv.id)}" class="${sure ? 'sure' : ''}" title="${esc(T('wave.stopTitle', 'Остановить волну: вкладки её карт закроются сразу, правки в папке останутся, новых запусков не будет'))}">${esc(sure ? T('wave.stopSure', 'точно остановить?') : `■ ${T('wave.stop', 'стоп')}`)}</button>`
+      : `<button type="button" data-wave="drop" data-wid="${esc(wv.id)}" title="${esc(T('wave.dropTitle', 'Убрать строку волны'))}">${esc(T('wave.drop', 'убрать'))}</button>`;
+    let html = `<div class="wave ${esc(wv.state)}" data-wid="${esc(wv.id)}"><div class="wl"><b>${esc(T('wave.name', 'Волна {letter}', { letter: wv.letter }))}</b>`
+      + `<span class="ws">${esc(`${mode} · ${st}`)}</span><span class="grow"></span>${btn}</div>`;
+    if (wv.state === 'run') html += `<div class="bar"><i style="width:${wv.all ? Math.round((wv.done / wv.all) * 100) : 0}%"></i></div>`;
+    const skip = (Array.isArray(wv.skipped) ? wv.skipped : []).map((/** @type {any} */ x) => `${x.id} — ${skipWhy(x)}`);
+    if (skip.length) html += `<div class="wx">${esc(T('wave.skipped', 'пропущены: {list}', { list: skip.join(', ') }))}</div>`;
+    const closed = wv.items.filter((/** @type {any} */ x) => x.st === 'closed').map((/** @type {any} */ x) => x.id);
+    if (closed.length) html += `<div class="wx warn">${esc(T('wave.closedList', 'вкладка закрыта, карта не готова: {ids}', { ids: closed.join(', ') }))}</div>`;
+    return `${html}</div>`;
   };
 
   const draw = () => {
@@ -481,6 +569,22 @@ function roadmapSetup(host) {
     if (b.passport) html += `<div class="box inbox pass" data-do="passport"><span>${esc(T('passport', 'Паспорт проекта'))}</span>${passBadge(b.passport)}<span class="grow"></span>${chevron(false)}</div>`;
     // Записей нет — строки нет, как у паспорта: агент заводит d<N>.md файлом, строка появится сама (t517).
     if (b.decisions.length) html += `<div class="box inbox ibx" data-do="decs"><span>${esc(T('decs', 'Решения и тупики'))}</span><span class="badge">${b.decisions.length}</span><span class="grow"></span>${chevron(false)}</div>`;
+    // Предел сессий проекта (t689): занято сейчас и список 1…top. Главная часть до t689 slots не шлёт — строки нет.
+    if (b.slots && b.phases.length) {
+      const opts = Array.from({ length: Number(b.slots.top) || 8 }, (_, i) => i + 1).map((n) => `<option value="${n}"${n === b.slots.max ? ' selected' : ''}>${n}</option>`).join('');
+      html += `<div class="lim" title="${esc(T('lim.title', 'Сколько карт проекта работают одновременно — и запущенные волной, и кнопкой «Запустить». Сверх предела карты волны ждут места'))}">`
+        + `<span>${esc(T('lim.cap', 'Сессий одновременно: занято {used} из', { used: b.slots.used }))}</span><select data-do="lim">${opts}</select></div>`;
+    }
+    wItems = new Map();
+    for (const wv of Array.isArray(b.waves) ? b.waves : []) for (const it of wv.items) {
+      const was = wItems.get(it.id);
+      if (!was || wv.state === 'run' || was.state !== 'run') wItems.set(it.id, { ...it, state: wv.state, letter: wv.letter });
+    }
+    // Выделенной карты больше нет в её фазе (перенесли, удалили) — выделение с неё снимается.
+    if (sel.ids.size) {
+      const fz = b.phases.find((/** @type {any} */ x) => x.id === sel.phase);
+      for (const id of [...sel.ids]) if (!fz || !fz.cards.includes(id)) sel.ids.delete(id);
+    }
     const probs = [...b.errors.map((/** @type {any} */ e) => ({ ...e, warn: false })), ...b.warnings.map((/** @type {any} */ e) => ({ ...e, warn: true }))];
     if (probs.length) {
       html += `<div class="box errs"><div class="cap">${esc(b.errors.length ? T('errsCap', 'Файлы с ошибкой — не показаны: {n}', { n: b.errors.length }) : T('warnsCap', 'Замечания к файлам'))}</div>`;
@@ -499,17 +603,22 @@ function roadmapSetup(host) {
       if (fopen && hl) right += `<span class="h ${hl[0]}">${esc(T(`health.${hl[1]}`, hl[2]))}</span>`;
       if (!fopen || !hl) right += `<span class="s">${esc(phaseWord(phStatus(f)))}</span>`;
       if (cards.length) right += `<span class="c">${esc(T('count', '{done} из {all}', { done: done.length, all: cards.length }))}</span>`;
-      html += `<div class="box phase" data-phase="${esc(f.id)}"><div class="ph fold" data-fold="${esc(f.id)}"><span class="dot ${dot}"></span>`
-        + `<span class="n" data-ophase="${esc(f.id)}" title="${esc(T('fz.openTitle', 'Открыть фазу: цель, признаки готовности, здоровье'))}">${esc(T('phase', 'Фаза {n}', { n: f.num }))} · ${esc(f.title || f.id)}</span><span class="grow"></span>${right}</div>`;
+      const nsel = sel.phase === f.id ? sel.ids.size : 0;
+      if (nsel) right = `<span class="seln">${esc(T('wave.selCount', 'выделено {n}', { n: nsel }))}</span>${right}`;
+      html +=`<div class="box phase" data-phase="${esc(f.id)}"><div class="ph fold" data-fold="${esc(f.id)}"><span class="dot ${dot}"></span>`
+        + `<span class="n" data-ophase="${esc(f.id)}" title="${esc(T('fz.openTitle', 'Открыть фазу: цель, признаки готовности, здоровье'))}">${esc(T('phase', 'Фаза {n}', { n: f.num }))} · ${esc(f.title || f.id)}</span><span class="grow"></span>${right}`
+        + `${waveButtons(f, cards, nsel)}</div>`;
+      if (waveNote && waveNote.phase === f.id) html += `<div class="wnote">${esc(waveNote.text)}</div>`;
       if (!fopen) { html += '</div>'; continue; }
       if (cards.length) html += `<div class="bar"><i style="width:${Math.round((done.length / cards.length) * 100)}%"></i></div>`;
       if (hl && dot !== 'g' && f.healthWhy) html += `<div class="why">${esc([f.healthWhy, f.healthBy, f.healthAt].filter(Boolean).join(' · '))}</div>`;
+      for (const wv of Array.isArray(b.waves) ? b.waves : []) if (wv.phase === f.id) html += waveLine(wv);
       const live = cards.filter((/** @type {any} */ c) => c.status !== 'готово');
       html += '<div class="cards">';
-      for (const c of live) html += cardRow(c, byId);
+      for (const c of live) html += cardRow(c, byId, true);
       if (done.length && !hideDone) {
         const key = `${f.id}:done`;
-        if (folds.get(key)) for (const c of done) html += cardRow(c, byId);
+        if (folds.get(key)) for (const c of done) html += cardRow(c, byId, true);
         else {
           html += `<div class="card done-row fold" data-fold="${esc(key)}"><span class="si ok">✓</span><span class="tt">${esc(done.map((/** @type {any} */ c) => c.id).join(', '))}</span>`
             + `<span class="meta">${esc(T('doneFolded', 'готово · свёрнуто'))}</span></div>`;
@@ -1305,8 +1414,8 @@ function roadmapSetup(host) {
   /**
    * Открытый экран. pick — фаза, выбранная у карты: доска перерисовывает экран на каждое событие, выбор не должен сбрасываться.
    * busy — карты, у которых идёт запись. done — строки под списком «→ t33 · … перенесена в «…», номер тот же», пока экран открыт.
-   * err — запись не принята; clash — карту поменяли снаружи раньше, чем пришло событие: действие не записано.
-   * @type {null | { pick: Map<string, string>, busy: Set<string>, done: string[], err: string, clash: string }}
+   * err — запись не принята; clash — карту поменяли снаружи раньше, чем пришло событие: действие не записано. later — событие доски пришло, пока открыт список фаз (t711).
+   * @type {null | { pick: Map<string, string>, busy: Set<string>, done: string[], err: string, clash: string, later?: boolean }}
    */
   let ib = null;
   /** Карта открыта из «Входящих»: «назад» с карты ведёт туда, с тем же выбором фаз и строками под списком. @type {typeof ib} */
@@ -1341,15 +1450,19 @@ function roadmapSetup(host) {
       const lc = like ? byId.get(like) : null;
       const busy = st.busy.has(c.id) ? ' disabled' : '';
       const mine = st.pick.get(c.id);
-      const sel = ps.some((/** @type {any} */ f) => f.id === mine) ? mine : pick;
+      // Файл фазы карты с ошибкой (t709): своей фазы в списке нет — по умолчанию ничего не выбрано, «перенести» ждёт явного выбора.
+      const lost = got(last.lost, c.id);
+      const sel = ps.some((/** @type {any} */ f) => f.id === mine) ? mine : lost ? '' : pick;
       const src = [c.source, madeAt(c.created)].filter(Boolean).join(' · ');
       html += `<div class="box ibox" data-id="${id}"><div class="ih"><span class="num">${id}</span>`
         + `<span class="tt" data-iopen="${id}" title="${esc(T('ib.openTitle', 'Открыть карту: все поля'))}">${esc(c.title || c.id)}</span>`
         + (like ? `<span class="like" title="${esc(T('ib.likeTitle', 'Похожий заголовок у {id}: «{title}». Возможно, это та же задача', { id: like, title: lc ? lc.title : '' }))}">`
           + `${esc(T('ib.like', 'похоже на {id}', { id: like }))}</span>` : '')
-        + `</div>${src ? `<div class="src">${esc(src)}</div>` : ''}<div class="iacts">`
-        + (ps.length ? `<select data-ipick="${id}"${busy}>${ps.map((/** @type {any} */ f) => `<option value="${esc(f.id)}"${f.id === sel ? ' selected' : ''}>${esc(phaseName(f))}</option>`).join('')}</select>` : '')
-        + `<button type="button" class="btn" data-imove="${id}"${ps.length ? busy : ' disabled'} title="${esc(ps.length ? T('ib.moveTitle', 'Записать фазу в файл карты. Номер карты не меняется')
+        + `</div>${src ? `<div class="src">${esc(src)}</div>` : ''}`
+        + (lost ? `<div class="lost">${esc(T('ib.lost', 'Фаза {phase} не читается: в файле {phase}.md ошибка. Исправьте файл — карта вернётся в фазу сама', { phase: lost }))}</div>` : '')
+        + '<div class="iacts">'
+        + (ps.length ? `<select data-ipick="${id}"${busy}>${lost && !sel ? `<option value="" selected disabled>${esc(T('ib.lostPick', '{phase} — выберите фазу', { phase: lost }))}</option>` : ''}${ps.map((/** @type {any} */ f) => `<option value="${esc(f.id)}"${f.id === sel ? ' selected' : ''}>${esc(phaseName(f))}</option>`).join('')}</select>` : '')
+        + `<button type="button" class="btn" data-imove="${id}"${ps.length && sel ? busy : ' disabled'} title="${esc(ps.length ? T('ib.moveTitle', 'Записать фазу в файл карты. Номер карты не меняется')
           : T('ib.noPhase', 'Фаз пока нет: перенести некуда'))}">${esc(T('ib.move', 'перенести в фазу'))}</button>`
         + `<button type="button" class="btn cl" data-iclose="${id}"${busy} title="${esc(T('ib.closeTitle', 'Поставить карте статус «готово». Файл и номер остаются'))}">${esc(T('ib.close', 'закрыть'))}</button></div></div>`;
     }
@@ -1390,7 +1503,8 @@ function roadmapSetup(host) {
     const c = last && last.cards ? last.cards.find((/** @type {any} */ x) => x.id === id) : null;
     const ps = last && last.phases ? last.phases : [];
     const sel = ib && ib.pick.get(id);
-    const f = ps.find((/** @type {any} */ x) => x.id === sel) || ps.find((/** @type {any} */ x) => x.id === defPhase());
+    // Карта сломанной фазы (t709) — только в явно выбранную: фаза по умолчанию переписала бы её phase молча.
+    const f = ps.find((/** @type {any} */ x) => x.id === sel) || (got(last && last.lost, id) ? null : ps.find((/** @type {any} */ x) => x.id === defPhase()));
     if (!c || !f) return;
     // base — фаза из файла как есть: у карты с несуществующей фазой (f9) она не пустая.
     ibWrite(id, { phase: f.id }, { phase: c.phase }, T('ib.moved', '{id} · {title} перенесена в «{phase}», номер тот же', { id, title: c.title || id, phase: phaseName(f) }));
@@ -1419,8 +1533,25 @@ function roadmapSetup(host) {
   });
   inboxEl.addEventListener('change', (ev) => {
     const s = /** @type {HTMLSelectElement} */ (ev.target);
-    if (ib && s.dataset && s.dataset.ipick) ib.pick.set(s.dataset.ipick, s.value);
+    if (!ib || !s.dataset || !s.dataset.ipick) return;
+    ib.pick.set(s.dataset.ipick, s.value);
+    const mv = /** @type {HTMLButtonElement | null} */ (inboxEl.querySelector(`[data-imove="${CSS.escape(s.dataset.ipick)}"]`));
+    if (mv && s.value && !ib.busy.has(s.dataset.ipick)) mv.disabled = false;
   });
+  // Список фаз открыт (t711): доска с событием не перерисовывает экран — иначе список закрылся бы и сбросил фокус.
+  // Отложенное рисуем, когда фокус ушёл со списка, но не посреди щелчка: новая кнопка под мышью съела бы click.
+  let ibDown = false;
+  const inboxSoft = () => {
+    const a = document.activeElement;
+    if (ib && a && a.tagName === 'SELECT' && inboxEl.contains(a)) { ib.later = true; return; }
+    paintInbox();
+  };
+  const ibFlush = () => { if (ib && ib.later && !ibDown) { ib.later = false; paintInbox(); } };
+  inboxEl.addEventListener('focusout', () => setTimeout(ibFlush, 0));
+  inboxEl.addEventListener('pointerdown', () => { ibDown = true; });
+  const ibUp = () => { if (ibDown) setTimeout(() => { ibDown = false; ibFlush(); }, 0); };
+  document.addEventListener('pointerup', ibUp);
+  document.addEventListener('pointercancel', ibUp);
 
   // ——— «Решения и тупики» во всю панель (t517, экран 16): записи d<N>.md с фильтром по виду, карте и файлу ———
   /**
@@ -1748,7 +1879,119 @@ function roadmapSetup(host) {
     }
     draw();
   };
+  // ——— Волна (t687) и выделение (t688) ———
+  const clearSel = () => { sel.phase = ''; sel.ids = new Set(); sel.anchor = ''; };
+  /** Ctrl+щелчок — карта в выделение или из него; Shift+щелчок — диапазон от anchor по порядку строк фазы. Другая фаза — выделение начинается заново. @param {HTMLElement} c @param {boolean} shift @param {boolean} ctrl */
+  const pick = (c, shift, ctrl) => {
+    const phEl = /** @type {HTMLElement | null} */ (c.closest('.phase'));
+    const ph = (phEl && phEl.dataset.phase) || '';
+    const id = c.dataset.id || '';
+    if (!ph || !id) return;
+    if (sel.phase !== ph) { clearSel(); sel.phase = ph; }
+    const order = phEl ? [...phEl.querySelectorAll('.card[data-id]')].map((e) => /** @type {HTMLElement} */ (e).dataset.id || '') : [];
+    const a = order.indexOf(sel.anchor);
+    const z = order.indexOf(id);
+    if (shift && a >= 0 && z >= 0) {
+      if (!ctrl) sel.ids = new Set();
+      for (let i = Math.min(a, z); i <= Math.max(a, z); i++) sel.ids.add(order[i]);
+    } else {
+      if (sel.ids.has(id)) sel.ids.delete(id); else sel.ids.add(id);
+      sel.anchor = id;
+    }
+    draw();
+  };
+  /** Кнопка волны: free, all, sel — новая волна; stop — со второго щелчка за 3 с; drop — убрать строку законченной волны. @param {HTMLElement} btn */
+  const waveClick = (btn) => {
+    const mode = btn.dataset.wave || '';
+    const wid = btn.dataset.wid || '';
+    if (mode === 'stop') {
+      if (stopAsk && stopAsk.id === wid && stopAsk.until > Date.now()) {
+        stopAsk = null;
+        api('waveStop', wid).then((/** @type {any} */ r) => { if (r && r.error) host.log(`волна: «стоп» не принят: ${r.error}`); });
+      } else {
+        stopAsk = { id: wid, until: Date.now() + 3000 };
+        setTimeout(() => { if (stopAsk && stopAsk.id === wid) { stopAsk = null; if (!stopped && open) draw(); } }, 3100);
+      }
+      draw();
+      return;
+    }
+    if (mode === 'drop') { api('waveDrop', wid); return; }
+    const ph = btn.dataset.ph || '';
+    waveNote = null;
+    const ids = mode === 'sel' && sel.phase === ph ? [...sel.ids] : [];
+    api('wave', ph, mode, ids).then((/** @type {any} */ r) => {
+      if (stopped) return;
+      if (!r || r.error) {
+        const why = (r && r.error) || '?';
+        const skip = r && Array.isArray(r.skipped) ? r.skipped.map((/** @type {any} */ x) => `${x.id} — ${skipWhy(x)}`).join(', ') : '';
+        waveNote = { phase: ph, text: why === 'нечего запускать' ? `${T('wave.nothing', 'Нечего запускать')}${skip ? `: ${skip}` : ''}` : T('wave.failAll', 'Волна не запущена: {why}', { why }) };
+        host.log(`волна в ${ph} (${mode}) не запущена: ${why}${skip ? `; ${skip}` : ''}`);
+      } else if (mode === 'sel') clearSel();
+      draw();
+    });
+  };
+  /** Рамка мышью (t688): от нажатия на месте карт фазы; сдвиг больше 4 px — рамка, иначе обычный щелчок. Ctrl — добавить к выделенному. */
+  /** @type {null | { x: number, y: number, phase: string, base: Set<string>, on: boolean, el: HTMLElement | null }} */
+  let band = null;
+  /** Когда рамка кончилась: щелчок сразу после неё — конец рамки, а не открытие карты или сворачивание. */
+  let bandEnd = 0;
+  body.addEventListener('mousedown', (ev) => {
+    if (ev.button !== 0) return;
+    const t = /** @type {HTMLElement} */ (ev.target);
+    const phEl = /** @type {HTMLElement | null} */ (t.closest('.phase'));
+    if (!phEl || t.closest('.ph, button, select, .wave, .wnote')) return;
+    const ph = phEl.dataset.phase || '';
+    band = { x: ev.clientX, y: ev.clientY, phase: ph, base: (ev.ctrlKey || ev.metaKey) && sel.phase === ph ? new Set(sel.ids) : new Set(), on: false, el: null };
+  });
+  /** @param {MouseEvent} ev */
+  const bandMove = (ev) => {
+    if (!band || stopped) return;
+    if (!(ev.buttons & 1)) { bandStop(); return; }
+    if (!band.on && Math.abs(ev.clientX - band.x) + Math.abs(ev.clientY - band.y) <= 4) return;
+    band.on = true;
+    if (!band.el) { band.el = document.createElement('div'); band.el.className = 'band'; panel.appendChild(band.el); }
+    const x1 = Math.min(band.x, ev.clientX), x2 = Math.max(band.x, ev.clientX), y1 = Math.min(band.y, ev.clientY), y2 = Math.max(band.y, ev.clientY);
+    Object.assign(band.el.style, { left: `${x1}px`, top: `${y1}px`, width: `${x2 - x1}px`, height: `${y2 - y1}px` });
+    if (sel.phase !== band.phase) { clearSel(); sel.phase = band.phase; }
+    const ids = new Set(band.base);
+    for (const e of body.querySelectorAll('.phase .card[data-id]')) {
+      const el = /** @type {HTMLElement} */ (e);
+      const inPhase = /** @type {HTMLElement | null} */ (el.closest('.phase'))?.dataset.phase === band.phase;
+      const r = el.getBoundingClientRect();
+      if (inPhase && r.left < x2 && r.right > x1 && r.top < y2 && r.bottom > y1) ids.add(el.dataset.id || '');
+      el.classList.toggle('sel', inPhase && ids.has(el.dataset.id || ''));
+    }
+    sel.ids = ids;
+  };
+  const bandStop = () => {
+    if (!band) return;
+    const was = band;
+    band = null;
+    if (was.el) was.el.remove();
+    if (was.on) { bandEnd = Date.now(); draw(); }
+  };
+  document.addEventListener('mousemove', bandMove);
+  document.addEventListener('mouseup', bandStop);
+  /** Esc снимает выделение, если ввод не в поле и не в терминале (у xterm свой textarea). @param {KeyboardEvent} ev */
+  const onKey = (ev) => {
+    if (ev.key !== 'Escape' || stopped || !sel.ids.size || panel.hidden || body.hidden) return;
+    const t = /** @type {HTMLElement | null} */ (ev.target);
+    if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    const a = document.activeElement;
+    if (a && a !== document.body && !panel.contains(a)) return;
+    clearSel();
+    draw();
+  };
+  document.addEventListener('keydown', onKey);
+  body.addEventListener('change', (ev) => {
+    const s = /** @type {HTMLSelectElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('select[data-do="lim"]'));
+    if (s) api('setState', { maxRuns: Number(s.value) });
+  });
   body.addEventListener('click', (ev) => {
+    if (Date.now() - bandEnd < 300) return;
+    const wb = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-wave]'));
+    if (wb) { if (!(/** @type {HTMLButtonElement} */ (wb)).disabled) waveClick(wb); return; }
+    if (/** @type {HTMLElement} */ (ev.target).closest('.lim, .wave, .wnote')) return;
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="compose"]')) { composeRun(); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="passport"]')) { openPassport(); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="inbox"]')) { openInbox(); return; }
@@ -1759,7 +2002,10 @@ function roadmapSetup(host) {
     if (to) { host.pages.show(to.dataset.sid || ''); return; }
     const f = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-fold]'));
     const c = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('.card[data-id]'));
+    if (!f && c && (ev.ctrlKey || ev.metaKey || ev.shiftKey)) { pick(c, ev.shiftKey, ev.ctrlKey || ev.metaKey); return; }
     if (!f && c) { openCard(c.dataset.id || ''); return; }
+    // Щелчок по пустому месту доски — снять выделение (t688).
+    if (!f && sel.ids.size) { clearSel(); draw(); return; }
     if (!f || !last || !last.phases) return;
     const id = f.dataset.fold || '';
     if (id.endsWith(':done')) folds.set(id, !folds.get(id));
@@ -1781,7 +2027,15 @@ function roadmapSetup(host) {
     if (!syncTimer) syncTimer = setTimeout(() => { syncTimer = null; if (!stopped) api('sync'); }, 300);
   });
   // Правка файлов доски снаружи: главная часть прислала новую доску.
-  host.on('board', (/** @type {any} */ b) => { if (stopped || !b) return; last = b; if (open) draw(); refreshPassport(); refreshPhase(); paintInbox(); paintDecs(); if (cur) refreshCard(); if (pv) loadPrompt(); });
+  host.on('board', (/** @type {any} */ b) => { if (stopped || !b) return; last = b; if (open) draw(); refreshPassport(); refreshPhase(); inboxSoft(); paintDecs(); if (cur) refreshCard(); if (pv) loadPrompt(); });
+  // «Стоп» волны (t687): главная часть назвала вкладки, окно их закрывает — без вопроса, как term.close; статус «пауза» поставит sync.
+  host.on('waveClose', (/** @type {any} */ x) => {
+    const term = host.bridge && host.bridge.term;
+    for (const sid of x && Array.isArray(x.sids) ? x.sids : []) {
+      if (!term || typeof term.close !== 'function') { host.log(`волна: вкладку ${sid} закрыть нечем — нет term.close`); continue; }
+      Promise.resolve(term.close(String(sid))).then((/** @type {any} */ r) => host.log(r && r.error ? `волна: вкладка ${sid} не закрыта: ${r.error}` : `волна: вкладка ${sid} закрыта по «стоп»`));
+    }
+  });
 
   labels();
   paintRow();
@@ -1796,10 +2050,15 @@ function roadmapSetup(host) {
     hideDone = !!s.hideDone;
     if (s.open) setOpen(true, false);
   });
-  const offLang = w.I18n ? w.I18n.onChange(() => { labels(); draw(); if (cur) { cardLabels(); refreshCard(); } if (pv) paintPrompt(); paintPassport(); paintPhase(); paintInbox(); if (dc) decsFrame(); }) : null;
+  const offLang = w.I18n ? w.I18n.onChange(() => { labels(); if (open) draw(); if (cur) { cardLabels(); refreshCard(); } if (pv) paintPrompt(); paintPassport(); paintPhase(); paintInbox(); if (dc) decsFrame(); }) : null;
   return () => {
     stopped = true;
     if (syncTimer) clearTimeout(syncTimer);
+    document.removeEventListener('mousemove', bandMove);
+    document.removeEventListener('mouseup', bandStop);
+    document.removeEventListener('keydown', onKey);
+    document.removeEventListener('pointerup', ibUp);
+    document.removeEventListener('pointercancel', ibUp);
     if (offLang) offLang();
     // Вкладку снять до панели: close вернёт панель в колонку, и она уйдёт вместе с колонкой ниже.
     closeFull();

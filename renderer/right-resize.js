@@ -5,7 +5,8 @@
 (() => {
   const KEY = 'terminalus.rightWidth';
   const DEFAULT_W = 350;
-  const PANEL_MIN = 160;
+  // 150, а не 160: левая панель Kermach с отступом — 252 (t655), и в окне 1024 при 125 % вкладке иначе остаётся 397.
+  const PANEL_MIN = 150;
   const TAB_MIN = 400;
   const main = /** @type {HTMLElement} */ (document.getElementById('main'));
   const side = /** @type {HTMLElement} */ (document.getElementById('side'));
@@ -17,11 +18,16 @@
   let want = Number(localStorage.getItem(KEY)) || DEFAULT_W;
 
   /** Самая большая ширина панели, при которой вкладке остаётся TAB_MIN; не меньше PANEL_MIN. */
-  const most = () => Math.max(PANEL_MIN, main.clientWidth - side.offsetWidth - TAB_MIN);
+  // Ширина левой панели — с её внешними отступами: в теме Kermach панель плавающая, отступ 8 слева (t655).
+  // Скрытая панель (t678, display: none) — 0, её отступы тоже не в счёт.
+  const sideW = () => { if (!side.offsetWidth) return 0; const cs = getComputedStyle(side); return side.offsetWidth + (parseFloat(cs.marginLeft) || 0) + (parseFloat(cs.marginRight) || 0); };
+  const most = () => Math.max(PANEL_MIN, main.clientWidth - sideW() - TAB_MIN);
   const apply = () => { right.style.width = `${Math.round(Math.min(want, most()))}px`; };
 
   apply();
   new ResizeObserver(apply).observe(main);
+  // Левую панель скрыли или показали (класс side-off, t678) или сменили тему (у панели другая ширина и отступ): #main той же ширины, наблюдатель за ним молчит.
+  new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-ui'] });
 
   grip.addEventListener('pointerdown', (ev) => {
     if (ev.button !== 0) return;

@@ -1,1 +1,63 @@
-/* Kermach, окно проекта — пачка 2 этапа d1 (t655–t661, t673). Пока пусто: файл подключён в ui.css пачкой 1 (t651), чтобы пачки не правили один файл. */
+/* Kermach, окно проекта — пачка 2 этапа d1 (t655–t661, t673). Файл подключён в ui.css пачкой 1 (t651), чтобы пачки не правили один файл.
+   Селекторы новой темы — под html:is([data-ui="kermach"], [data-ui="termius"]); README макета говорит --sel, у нас это --selected. */
+
+/* Новые элементы боковой панели в старых темах (Скло, Студія, Пульт) не видны: там панель как раньше.
+   Плитка строки .tile там — display: contents, полоса .strip и значок остаются прямыми детьми строки. */
+#sideHead, #sideSet, #termCount, #sideAdds, #sideShow { display: none; }
+.term .tile { display: contents; }
+
+/* --- Боковая панель — плавающая плашка (t655): 244 px, отступ 8 от краёв окна, фон --side, рамка --line, радиус 10. --- */
+html:is([data-ui="kermach"], [data-ui="termius"]) #side { width: 244px; margin: 8px 0 8px 8px; padding: 0; background: var(--side); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+
+/* Шапка: плитка 30×30 радиус 8 с тинтом цвета проекта (подложка <i> с прозрачностью --tint-a), значок 17; имя 13/600, путь 11. */
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideHead { display: flex; align-items: center; gap: 10px; padding: 12px 10px 12px 12px; flex-shrink: 0; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideHead .tile { position: relative; width: 30px; height: 30px; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideHead .tile i { position: absolute; inset: 0; opacity: var(--tint-a, .18); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideIcon { position: relative; display: flex; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideHead .pt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideName { font-size: 13px; font-weight: 600; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sidePath { font-size: var(--fs-cap); line-height: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* «Скрыть панель» — 28×28, включит t678 (снимет hidden). */
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideHide { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--muted); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideHide:hover { background: var(--selected); color: var(--text); }
+
+/* Подпись «Терминалы» и число строк справа. */
+html:is([data-ui="kermach"], [data-ui="termius"]) #side .cap { display: flex; align-items: center; padding: 6px 14px 4px; font-size: var(--fs-cap); font-weight: 600; color: var(--muted); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #termCount { display: block; margin-left: auto; font-weight: 400; }
+
+/* --- Строка терминала (t656): 42 px, радиус 7, отступ 0 8; плитка 26×26 радиус 7 с тинтом цвета терминала и значком 16. ---
+   Тинт — .strip на всю плитку с прозрачностью --tint-a: её фон остаётся цветом терминала, по нему проверки узнают цвет (step3-10). */
+html:is([data-ui="kermach"], [data-ui="termius"]) .term { height: 42px; gap: 10px; padding: 0 8px; border-radius: 7px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .term .tile { position: relative; width: 26px; height: 26px; border-radius: 7px; overflow: hidden; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .term .tile .strip { position: absolute; inset: 0; width: auto; height: auto; border-radius: 0; opacity: var(--tint-a, .18); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .term .tile svg { position: relative; width: 16px; height: 16px; }
+
+/* --- Низ панели (t660): рамка сверху --line, строки 30 px, значки --muted; цвет — только у проектов и терминалов. ---
+   Строки плагинов несут свой style (34 px, рамка, отступы, цвет под мышью из кода) — поэтому !important; файлы плагинов не трогаем. */
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideFoot { display: flex; flex-direction: column; gap: 1px; padding: 6px 6px 0; border-top: 1px solid var(--line); flex-shrink: 0; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideFoot > * { margin: 0 !important; height: 30px !important; gap: 10px !important; padding: 0 8px !important; border-top: 0 !important; border-radius: 6px;
+  font-size: var(--fs-base) !important; color: var(--text) !important; background: transparent !important; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideFoot > :hover { background: var(--selected) !important; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideFoot > * > svg { width: 16px; height: 16px; color: var(--muted); }
+/* «Настройки» — последняя строка низа. Плагинов нет (#sideFoot скрыт) — рамка сверху у неё самой. */
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideSet { position: relative; display: flex; align-items: center; gap: 10px; height: 30px; margin: 1px 6px 6px; padding: 0 8px; border-radius: 6px; flex-shrink: 0;
+  font-size: var(--fs-base); color: var(--text); cursor: default; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideSet:hover { background: var(--selected); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideSet svg { color: var(--muted); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideFoot[hidden] + #sideSet { margin-top: 7px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideFoot[hidden] + #sideSet::before { content: ''; position: absolute; left: -6px; right: -6px; top: -7px; height: 1px; background: var(--line); }
+
+/* --- Кнопки «+ Claude», «+ Codex», «+ Shell» под списком (t677): три в ряд, 28 px, рамка --line. --- */
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideAdds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 8px; margin-bottom: auto; flex-shrink: 0; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideAdds > div { height: 28px; display: flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid var(--line); border-radius: 6px;
+  font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; cursor: default; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideAdds > div:hover { background: var(--selected); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #sideAdds svg { flex-shrink: 0; }
+/* Список забирает свободное место — кнопки сразу под последней строкой, низ панели прижат к низу. */
+html:is([data-ui="kermach"], [data-ui="termius"]) #side #list { flex: 0 1 auto; }
+
+/* --- Скрыть и показать панель (t678): класс side-off на <html> ставит project-page.js. «Показать» — в начале полосы вкладок. --- */
+html.side-off:is([data-ui="kermach"], [data-ui="termius"]) #side { display: none; }
+html.side-off:is([data-ui="kermach"], [data-ui="termius"]) #sideShow { display: flex; align-items: center; justify-content: center; align-self: center; width: 28px; height: 28px; margin: 0 2px 0 8px;
+  border-radius: 6px; flex-shrink: 0; color: var(--muted); }
+html.side-off:is([data-ui="kermach"], [data-ui="termius"]) #sideShow:hover { background: var(--selected); color: var(--text); }

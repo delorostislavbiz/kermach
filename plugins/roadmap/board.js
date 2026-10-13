@@ -58,7 +58,7 @@ const HEAD_KEYS = {
  * @typedef {{ file: string, sections: Record<string, { title: string, text: string, empty: boolean }>, missing: string[], hidden: string[] }} Passport
  * hidden — разделы, которые спрятала в блок кода ``` без пары (hiddenKeys, t614): окно их не видит, запись отказывает.
  * @typedef {{ root: string, exists: boolean, passport: Passport | null, phases: Phase[], cards: Card[], inbox: string[], decisions: Decision[],
- *   counter: { t: number, d: number }, alike: Record<string, string>, errors: Problem[], warnings: Problem[] }} Board
+ *   counter: { t: number, d: number }, alike: Record<string, string>, lost: Record<string, string>, errors: Problem[], warnings: Problem[] }} Board
  * counter — последние выданные номера с учётом файлов: следующий номер карты — counter.t + 1.
  * alike — карта «Входящих» → номер карты с таким же или очень похожим заголовком (t516): пометка «похоже на tNN».
  */
@@ -427,7 +427,7 @@ function maxNum(byId, kind) {
 function read(project) {
   const dir = root(project);
   /** @type {Board} */
-  const b = { root: dir, exists: false, passport: null, phases: [], cards: [], inbox: [], decisions: [], counter: { t: 0, d: 0 }, alike: {}, errors: [], warnings: [] };
+  const b = { root: dir, exists: false, passport: null, phases: [], cards: [], inbox: [], decisions: [], counter: { t: 0, d: 0 }, alike: {}, lost: {}, errors: [], warnings: [] };
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return b;
   try { ownRoot(project, dir); } catch (e) { b.errors.push({ file: DIR, reason: e instanceof Error ? e.message : String(e) }); return b; }
   b.exists = true;
@@ -461,9 +461,14 @@ function read(project) {
   b.phases.sort(byNum); b.cards.sort(byNum); b.decisions.sort(byNum);
   const phases = new Map(b.phases.map((f) => [f.id, f]));
   const cards = new Set(b.cards.map((t) => t.id));
+  // Фазы, чей файл есть, но не прочитан (t709): их карта во «Входящих» с пометкой (lost), и перенос не ставит её на чужую фазу сам.
+  const badF = new Set(b.errors.map((e) => NAME_RE.exec(e.file)).filter((m) => m && m[1] === 'f').map((m) => `f${Number(/** @type {RegExpExecArray} */ (m)[2])}`));
   for (const t of b.cards) {
     const f = t.phase ? phases.get(t.phase) : undefined;
-    if (t.phase && !f) b.warnings.push({ file: t.file, reason: `фазы ${t.phase} нет — карта показана во «Входящих»` });
+    if (t.phase && !f && badF.has(t.phase)) {
+      b.lost[t.id] = t.phase;
+      b.warnings.push({ file: t.file, reason: `файл фазы ${t.phase} с ошибкой — карта показана во «Входящих», фаза в её файле не меняется` });
+    } else if (t.phase && !f) b.warnings.push({ file: t.file, reason: `фазы ${t.phase} нет — карта показана во «Входящих»` });
     if (f) f.cards.push(t.id); else b.inbox.push(t.id);
     for (const d of t.depends) if (!cards.has(d)) b.warnings.push({ file: t.file, reason: `зависит от ${d}, а карты ${d} нет` });
   }

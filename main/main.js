@@ -26,6 +26,7 @@ const plugins = require('./plugins');
 const pasteFiles = require('./paste-files');
 const codexLimits = require('./codex-limits');
 const sound = require('./sound');
+const notify = require('./notify');
 const settings = require('./settings');
 const agents = require('./agents');
 const tabs = require('./tabs');
@@ -89,6 +90,8 @@ function start(asked) {
 
   // Настройки (шрифты, звук; t181): до окон и звука, чтобы первое окно сразу взяло масштаб.
   settings.register({ dataDir: DATA_DIR, log });
+  // Windows: ID уведомлений в реестре и постоянный CLSID (t712) — до первого уведомления. ID процесса и окон не меняется.
+  notify.register({ log });
   // Агенты из системы (t183): список для настроек и меню «+»; включены ли — по настройкам.
   agents.register({ log });
 

@@ -15,7 +15,8 @@
 //   readTab(sid, format) — вывод вкладки проекта (команда read демона),
 //   writeTab(sid, data) — записать байты во вкладку проекта, Enter — '\r' (t276); terminals() — живые вкладки проекта со state (t276);
 //   onState(cb) — смена состояния вкладки проекта { sid, state, by, at }, ответ — отписка; при остановке экземпляра отписка сама (t276),
-//   openTab({ kind, args, cwd, env, title, prompt }) — открыть и показать вкладку (t253, terminals.js checkExtra);
+//   openTab({ kind, args, cwd, env, title, prompt, focus }) — открыть и показать вкладку (t253, terminals.js checkExtra);
+//   focus: false — открыть, не переводя на неё окно (t706);
 //   agents() — найденные и включённые агенты { id, title, prompt } для вида claude, codex или agent:<id> (t576).
 //
 // Кто может звать: любой код страницы окна проекта, с любым id. Код всех плагинов работает в одной странице и видит один мост
@@ -129,8 +130,8 @@ function instOf(pl, p) {
       return () => { off(); const i = inst.offs.indexOf(off); if (i >= 0) inst.offs.splice(i, 1); };
     },
     /**
-     * Вкладка проекта (t253): { kind, args, cwd, env, title, prompt } — вид из KINDS или agent:<id>, папка внутри проекта,
-     * prompt — первое сообщение аргументом. Окно покажет её сразу. Ответ { session } или { error }.
+     * Вкладка проекта (t253): { kind, args, cwd, env, title, prompt, focus } — вид из KINDS или agent:<id>, папка внутри проекта,
+     * prompt — первое сообщение аргументом. Окно покажет её сразу; focus: false — нет, выбранная вкладка остаётся (t706). Ответ { session } или { error }.
      * @param {any} opts
      */
     openTab: async (opts) => (insts.get(key) !== inst ? { error: 'плагин остановлен' } : require('./terminals').openFromPlugin(p, opts)),

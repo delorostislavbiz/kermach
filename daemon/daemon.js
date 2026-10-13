@@ -74,23 +74,32 @@ const CODEX_ASK = /^(Approval requested|Codex wants to edit |Plan mode prompt: |
 // Codex: строка хода над полем ввода «Working (12s • esc to interrupt)» — видна весь ход и пропадает с его концом (t609).
 // Со второго хода это единственный признак начала хода: кадр спиннера в заголовке codex ставит только до темы разговора.
 // В живой строке «esc» жирный, скобка перед ним тусклая — копия строки в тексте ответа не такая. Запуск MCP рисует ту же строку — это не ход.
-// Живая строка начинается словом «Working» с первой клетки, а всё, что codex рисует в разговоре, — со значка или отступа («  └», «• », вывод команды — 4 пробела):
+// Живая строка начинается с буквы в первой клетке, а всё, что codex рисует в разговоре, — со значка или отступа («  └», «• », «› », вывод команды — 4 пробела):
 // так копия строки с оформлением (вывод команды cat записанного экрана) не ставит «работает» (t626, t637, spikes\t626-codex-busy\col0.txt).
-// Слово без границы: после разрешения xterm показывает испорченную перерисовку «Workingr(4s…» — это тоже живая строка.
+// Слово не любое «Working»: codex пишет туда и заголовок рассуждения («Planning the fix (12s • esc to interrupt)»), новая версия может сменить слово (t682).
+// Запуск MCP («Starting MCP servers…», «Booting MCP server…») рисует ту же строку — это не ход (t637).
+// После разрешения xterm показывает испорченную перерисовку «Workingr(4s…» — это тоже живая строка.
 // Счётчик секунд не опора: codex перерисовывает строку по событиям, без них по 3–4 с (spikes\t609-codex-turn\replay-all.txt).
 // Строку шире панели codex обрезает сам и ставит «…» в последнюю клетку: в 28 колонках «Working (6s • esc to interr…»
 // (spikes\t637-daemon\narrow28-mid-ansi-draft.txt). Такая строка тоже живая, если доходит до края и «esc» в ней начат (t635).
 // Без «…» — тоже: так выглядит перенос или обрезка самим xterm (spikes\t637-daemon\hour-*.txt).
 const CODEX_BUSY = /\((\d[\dhms ]*s) • (esc to interrupt\)|(e[a-z ]*)…?$)/;
 const CODEX_BUSY_TAIL = 'esc to interrupt)';
-const CODEX_BUSY_START = /^Working/;
+// Первое слово хода может быть любым, в том числе «Starting the implementation (12s • esc to interrupt)» — отсекается только запуск MCP (t726).
+const CODEX_BUSY_START = /^(?!(?:Starting|Booting) MCP\b)[\p{L}\p{N}]/u;
+// Esc посреди хода: codex сразу печатает «■ Conversation interrupted - use /feedback if something went wrong» с первой клетки; надпись кончается
+// на ряду, где стояла строка хода, или ниже. Прежние такие надписи уходят вверх вместе с разговором, выше строки хода (spikes\t648-codex-esc\emu-draft.txt).
+// Тогда «готов» — без порога тишины (t648).
+const CODEX_STOPPED = /^■ Conversation interrupted/;
+// Сколько рядов надпись занимает самое большее: 66 знаков в панели от 26 колонок (уже — начало надписи не узнаётся).
+const CODEX_STOPPED_ROWS = 4;
 // «Готов» → «работает»: строка видна не меньше BUSY_ON_MS (после Esc на вопросе она мелькает на миг).
 // «Работает» → «готов» без OSC 9 (Esc посреди хода): строки нет BUSY_OFF_MS и вывода нет BUSY_QUIET_MS.
 // Пока codex выводит ответ, строки нет весь вывод (40 строк — 3,8 с; абзац на 1500 знаков — до 25 с). Паузы между кусками: в столбике до 0,7 с
 // (spikes\t609-codex-turn\gaps.txt), в длинном абзаце без переносов — 2,64 с (spikes\t637-daemon\long-gaps.txt): тишина 2 с дала
 // ложное «готов» посреди ответа (t634). Тишина 6 с — запас больше двух раз; цена — после Esc «готов» на 6 с, а не на 3 с.
 // После Esc — одна строка и тишина. Предела «строки нет N с — готов и при выводе» нет: длинный ответ без строки — всё ещё ход (t626).
-// «Работает» снимают: конец хода — OSC 9, прерванный ход — тишина, выход codex — onExit; без хода codex вывода не шлёт.
+// «Работает» снимают: конец хода — OSC 9, прерванный ход — строка «interrupted» или тишина, выход codex — onExit; без хода codex вывода не шлёт.
 // Остаётся «работает» только у codex, который завис со строкой хода на экране, — это видит и человек.
 // Экран смотрится не чаще раза в BUSY_LOOK_MS.
 const BUSY_ON_MS = 1000;
@@ -272,6 +281,8 @@ class Session {
     this.busyOn = 0;
     this.busyOff = 0;
     this.busySeen = false;
+    // Ряд экрана, где строку хода видели последний раз (-1 — не видели после сброса или смены размера): ниже него — только новое «interrupted» (t648).
+    this.busyRow = -1;
     // Когда был последний вывод (мс): пока codex выводит ответ, строки хода нет, а вывод идёт.
     this.dataAt = 0;
     /** @type {NodeJS.Timeout | null} */
@@ -416,6 +427,7 @@ class Session {
     this.busyOn = 0;
     this.busyOff = 0;
     this.busySeen = false;
+    this.busyRow = -1;
   }
 
   /**
@@ -438,9 +450,9 @@ class Session {
   /**
    * Состояние Codex по строке хода (CODEX_BUSY). «Готов» → «работает»: строка видна BUSY_ON_MS — ход, начатый текстом после конца прошлого.
    * «Работает» → «готов»: строки нет BUSY_OFF_MS и вывода нет BUSY_QUIET_MS, а в этом «работает» её видели —
-   * ход прервали (Esc, Ctrl+C), OSC 9 тогда нет.
+   * ход прервали (Esc, Ctrl+C), OSC 9 тогда нет. На месте строки «■ Conversation interrupted» — сразу (t648).
    * «Состояния нет» → «работает» — так же, как из «готов»: вид вкладки сменили на codex посреди хода (t628 сбросил состояние в ''),
-   * а спиннера в заголовке со второго хода нет (t637). Запуск MCP рисует строку со словом «Starting» — она не считается (CODEX_BUSY_START).
+   * а спиннера в заголовке со второго хода нет (t637). Запуск MCP рисует строку «Starting MCP servers…» — она не считается (CODEX_BUSY_START).
    * «Ждёт» строка не меняет: при вопросе её нет.
    */
   busyState() {
@@ -453,7 +465,7 @@ class Session {
       else if (this.busySeen) {
         const off = now - this.busyOff;
         const quiet = now - this.dataAt;
-        if (off >= BUSY_OFF_MS && quiet >= BUSY_QUIET_MS) this.setState('done', 'screen');
+        if (this.busyStopped() || (off >= BUSY_OFF_MS && quiet >= BUSY_QUIET_MS)) this.setState('done', 'screen');
         else wait = Math.max(BUSY_OFF_MS - off, BUSY_QUIET_MS - quiet);
       }
     } else if ((this.state === 'done' || !this.state) && on) {
@@ -464,7 +476,26 @@ class Session {
     if (wait >= 0) this.lookBusy(Math.max(wait, 50));
   }
 
-  /** Есть ли на экране живая строка хода Codex: снизу вверх первая подходящая, «Working» с первой клетки, «esc» жирный, скобка тусклая; шире панели — обрезана у края. @returns {boolean} */
+  /**
+   * Ход прервали: надпись «■ Conversation interrupted …» (CODEX_STOPPED) доходит до ряда строки хода или ниже.
+   * В узкой панели надпись переносится на несколько рядов и начинается выше: в 28 колонках — три ряда, строка хода была на последнем
+   * (spikes\t648-codex-esc\esc28-screen-draft.txt). Конец надписи — последний непустой ряд подряд: в разговоре codex отделяет записи пустым рядом.
+   * @returns {boolean}
+   */
+  busyStopped() {
+    if (this.busyRow < 0) return false;
+    const b = this.term.buffer.active;
+    const text = (/** @type {number} */ y) => b.getLine(b.baseY + y)?.translateToString(true) || '';
+    for (let y = this.term.rows - 1; y >= 0 && y >= this.busyRow - CODEX_STOPPED_ROWS; y--) {
+      if (!CODEX_STOPPED.test(text(y))) continue;
+      let end = y;
+      while (end + 1 < this.term.rows && end - y < CODEX_STOPPED_ROWS && text(end + 1).trim()) end++;
+      if (end >= this.busyRow) return true;
+    }
+    return false;
+  }
+
+  /** Есть ли на экране живая строка хода Codex: снизу вверх первая подходящая, с буквы в первой клетке, «esc» жирный, скобка тусклая; шире панели — обрезана у края. @returns {boolean} */
   busyLine() {
     const b = this.term.buffer.active;
     const cell = b.getNullCell();
@@ -480,6 +511,7 @@ class Session {
       const esc = x + m[1].length + 4;
       if (line.getCell(x, cell)?.getChars() !== '(' || !cell.isDim()) continue;
       if (line.getCell(esc, cell)?.getChars() !== 'e' || !cell.isBold()) continue;
+      this.busyRow = y - b.baseY;
       return true;
     }
     return false;
@@ -607,6 +639,8 @@ class Session {
     if (!cols || !rows || (cols === this.cols && rows === this.rows)) return;
     this.cols = cols;
     this.rows = rows;
+    // Ряды сдвинулись: прежнее «interrupted» может встать ниже старого ряда строки хода (t648).
+    this.busyRow = -1;
     // Процесс уже вышел, а exit ещё не пришёл — resize у pty бросает ошибку, и attach обрывался без снимка (t88).
     if (!this.ptyExited) {
       try { this.pty.resize(cols, rows); } catch (e) { log(`терминал ${this.sid}: resize не прошёл: ${/** @type {any} */ (e).message || e}`); }

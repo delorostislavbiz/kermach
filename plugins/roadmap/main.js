@@ -20,6 +20,12 @@
 // «Составить роадмап» (t519) — команда compose: доски нет — вкладка Claude с заданием из compose.md (prompt.compose), доску заводит агент.
 // Её номер — в мешке, compose[ключ проекта] = { sid, started, title } (t568): экземпляр гаснет с окном, а вкладка живёт у демона. После revive номер новый — вкладку узнаём по title (ownTitle ядра); её нет — sync забывает запись.
 // Файл карты есть, но не читается (агент пишет его не разом, опечатка в шапке) — запись держим: забываем, только когда карты нет на доске (t553).
+// Волна (t687) — команда wave: карты одной фазы («независимые», «все», «выделенные») запускаются тем же run по очереди. Очередь — только в памяти экземпляра:
+// окно закрыли или программу перезапустили — волн нет, само ничего не стартует. Шаг волны (pump) — в том же цикле sync после сверки статусов.
+// Путь «готово»: агент пишет статус в файл карты → board.watch (опрос, pin) → колбэк слежения → sync → pump → зависимая карта стартует.
+// Выход вкладки место освобождает, но «готово» не ставит: такая карта в волне «вкладка закрыта, карта не готова», её зависимые ждут.
+// «Стоп» (команда waveStop) — новых запусков нет, вкладки волны закрывает окно по событию waveClose: команды закрыть вкладку у ctx нет, у окна есть (term.close).
+// Предел (t689) — maxRuns в мешке: сколько запусков карт проекта живут одновременно, ручные «Запустить» тоже. Ручной запуск пределом не задерживается, но место занимает.
 const fs = require('fs');
 const path = require('path');
 const board = require('./board');
@@ -55,6 +61,8 @@ const valueOf = (ref, o, k, raw = false) => {
 const why = (e) => String((e && /** @type {any} */ (e).message) || e);
 /** Статусы, которые ставит запуск: только их программа меняет дальше сама. */
 const OWN = ['в работе', 'ждёт ответа'];
+/** Карту проверяют, вкладка запуска ещё жива (t707): запись держим — место занято, но статус по вкладке не пишем; вкладку закрыли — запись забываем без «паузы». */
+const HOLD = ['на проверке', 'на ревью'];
 /**
  * Состояние агента во вкладке (STATES ядра) → статус карты. done — агент закончил ход и стоит у приглашения: ход за человеком, как при вопросе.
  * error — агент жив, но ход оборвался ошибкой (StopFailure): тоже ждёт человека. Пустое — агент ещё не начал, статус не трогаем.
@@ -66,6 +74,11 @@ const BY_STATE = { working: 'в работе', waiting: 'ждёт ответа',
  * Промпт длиннее идёт файлом в папке проекта, первое сообщение — короткая просьба прочитать файл. Молча не обрезаем.
  */
 const PROMPT_MAX = 16000;
+/** Предел запусков на проект (t689): по умолчанию и наибольший в списке панели. */
+const MAX_RUNS = 3;
+const MAX_RUNS_TOP = 8;
+/** Состояния карты в волне, после которых волна её больше не ведёт. */
+const WAVE_END = ['done', 'fail', 'closed', 'off'];
 /** Папка длинных промптов в проекте; своя .gitignore со «*» — файлы не попадают в git. */
 const LONG_DIR = path.join('.kermach', 'prompts');
 /**
@@ -221,7 +234,8 @@ module.exports = (ctx) => {
       unread.delete(id);
       if (run.started >= asked) continue;
       const own = c && (run.gone ? c.status === 'пауза' : OWN.includes(c.status));
-      if (!c || !own) { ch[id] = null; continue; }
+      const hold = c && !run.gone && HOLD.includes(c.status);
+      if (!c || (!own && !hold)) { ch[id] = null; continue; }
       if (run.gone) continue;
       // После revive демона у вкладки новый номер (t577): узнаём её по заголовку открытия, запись получает новый номер — это не «пауза».
       const t = runTabOf(r.tabs, run);
@@ -229,6 +243,10 @@ module.exports = (ctx) => {
       if (!t && wait.has(run.sid)) continue;
       const moved = t && t.sid !== run.sid ? { ...run, sid: t.sid } : null;
       if (moved && t) ctx.log(`${id}: вкладка ${run.sid} запущена заново — теперь ${t.sid}`);
+      if (hold) {
+        if (!t) { ch[id] = null; ctx.log(`${id}: вкладка ${run.sid} закрыта, статус «${c.status}» не меняю — место свободно`); } else if (moved) ch[id] = moved;
+        continue;
+      }
       const rec = moved || run;
       const want = t ? BY_STATE[t.state] || '' : 'пауза';
       if (!want) { if (moved) ch[id] = moved; continue; }
@@ -240,11 +258,142 @@ module.exports = (ctx) => {
     }
     if (Object.keys(ch).length) patchRuns(ch);
   };
+  // ——— Волна (t687) и предел (t689) ———
+  /**
+   * Волны этого окна в порядке запуска: раньше запущенная раньше получает место. Карта волны: st — wait (ждёт зависимость, why — какие),
+   * slot (ждёт места), run (запущена), done («готово» в файле), closed (вкладка закрыта, карта не готова), off (статус поставили другой, why — какой), fail (не запустилась, why).
+   * skipped — карты, которые волна не взяла: why — код причины (human, status со статусом в st, inbox, running, wave, phase), слова — в окне на языке программы.
+   * @type {{ id: string, letter: string, phase: string, mode: string, state: string, started: number, ended: number, skipped: { id: string, why: string, st?: string }[],
+   *   items: { id: string, st: string, why: string, launched: boolean }[] }[]}
+   */
+  const waves = [];
+  let waveSeq = 0;
+  /** Панель открыта (команда board): закрыли — слежение снимается, но только когда нет идущих волн. */
+  let panelOn = false;
+  /** Подпись волн и предела, которую окно видело последней: изменилась — окну новая доска. */
+  let waveSig = '';
+  const maxOf = () => { const v = Number(ctx.settings.get().maxRuns); return Number.isInteger(v) && v >= 1 && v <= MAX_RUNS_TOP ? v : MAX_RUNS; };
+  /** Занятые места: живые записи запусков (без gone) и запуски, которые ещё ждут вкладку. */
+  const usedOf = () => Object.values(runsOf()).filter((r) => r && !r.gone).length + starting.size;
+  const active = () => waves.filter((w) => w.state === 'run');
+  /** Карты, которые ведёт идущая волна: вторая волна их не берёт. */
+  const inWaves = () => new Set(active().flatMap((w) => w.items.filter((it) => !WAVE_END.includes(it.st)).map((it) => it.id)));
+  /** Волна для окна: без launched. @param {(typeof waves)[number]} w */
+  const waveView = (w) => ({ id: w.id, letter: w.letter, phase: w.phase, mode: w.mode, state: w.state, started: w.started, ended: w.ended,
+    done: w.items.filter((it) => it.st === 'done').length, all: w.items.length, skipped: w.skipped, items: w.items.map((it) => ({ id: it.id, st: it.st, why: it.why })) });
+  const letterOf = (/** @type {number} */ n) => String.fromCharCode(65 + (n % 26)) + (n >= 26 ? String(Math.floor(n / 26) + 1) : '');
+  /**
+   * Новая волна по фазе. mode: free — независимые (все зависимости «готово»), all — все запускаемые карты фазы, sel — ids, выбранные человеком.
+   * Запускается только карта «в очереди» без живого запуска и не в другой идущей волне. «Нужен человек» — all и free пропускают с пометкой, sel запускает.
+   * @param {string} phase @param {string} mode @param {unknown} ids
+   */
+  const waveStart = (phase, mode, ids) => {
+    if (!['free', 'all', 'sel'].includes(mode)) return { error: `нет такого вида волны: ${mode}` };
+    const b = board.read(project);
+    const f = b.phases.find((x) => x.id === phase);
+    if (!f) return { error: `фазы ${phase} нет на доске` };
+    const byId = new Map(b.cards.map((c) => [c.id, c]));
+    const want = mode === 'sel' ? new Set(Array.isArray(ids) ? ids.map(String) : []) : null;
+    if (want && !want.size) return { error: 'не выделено ни одной карты' };
+    const mine = runsOf();
+    const busy = inWaves();
+    /** @type {{ id: string, why: string, st?: string }[]} */
+    const skipped = [];
+    /** @type {(typeof waves)[number]['items']} */
+    const items = [];
+    for (const id of f.cards) {
+      if (want && !want.has(id)) continue;
+      const c = byId.get(id);
+      if (!c) continue;
+      const why = c.status !== 'в очереди' ? 'status' : b.inbox.includes(id) ? 'inbox' : (mine[id] && !mine[id].gone) || starting.has(id) ? 'running' : busy.has(id) ? 'wave' : '';
+      // Готовые и идущие карты в «все» и «независимые» — не пропуск, а не их случай: в пометку только выделенные.
+      if (why) { if (want) skipped.push(why === 'status' ? { id, why, st: c.status } : { id, why }); continue; }
+      if (mode !== 'sel' && c.human === 'нужен человек') { skipped.push({ id, why: 'human' }); continue; }
+      if (mode === 'free' && c.depends.some((d) => { const x = byId.get(d); return !x || x.status !== 'готово'; })) continue;
+      items.push({ id, st: 'slot', why: '', launched: false });
+    }
+    if (want) for (const id of want) if (!f.cards.includes(id)) skipped.push({ id, why: 'phase' });
+    if (!items.length) return { error: 'нечего запускать', skipped };
+    const w = { id: `w${++waveSeq}`, letter: letterOf(waveSeq - 1), phase, mode, state: 'run', started: Date.now(), ended: 0, skipped, items };
+    waves.push(w);
+    ctx.log(`волна ${w.letter} (${phase}, ${mode}): ${items.map((it) => it.id).join(', ')}${skipped.length ? `; пропущены ${skipped.map((s) => `${s.id} — ${s.why}${s.st ? ` «${s.st}»` : ''}`).join(', ')}` : ''}; предел ${maxOf()}, занято ${usedOf()}`);
+    sync();
+    return { wave: waveView(w) };
+  };
+  /** «Стоп»: новых запусков нет, живые вкладки волны закрывает окно (waveClose). @param {string} id */
+  const waveStop = (id) => {
+    const w = waves.find((x) => x.id === id);
+    if (!w) return { error: `волны ${id} нет` };
+    if (w.state !== 'run') return { wave: waveView(w) };
+    w.state = 'stopped';
+    w.ended = Date.now();
+    const mine = runsOf();
+    const sids = w.items.filter((it) => it.launched && it.st === 'run' && mine[it.id] && !mine[it.id].gone).map((it) => mine[it.id].sid);
+    ctx.log(`волна ${w.letter}: остановлена человеком${sids.length ? `, закрываю вкладки ${sids.join(', ')}` : ''}`);
+    if (sids.length) ctx.send('waveClose', { sids });
+    sendIfChanged();
+    return { wave: waveView(w), sids };
+  };
+  /** Доска окну, если поменялись волны или занятые места. */
+  const sendIfChanged = () => {
+    // Панель не открывали или закрыли — окну не шлём: откроют — возьмёт доску командой board.
+    if (!panelOn) return;
+    const sig = JSON.stringify([waves.map(waveView), usedOf(), maxOf()]);
+    if (sig === waveSig || stopped) return;
+    waveSig = sig;
+    ctx.send('board', snapshot());
+  };
+  /** Шаг волн: состояние запущенных карт по файлу и записям, затем старты по очереди, пока есть места. Зовётся только из sync — по одному. */
+  const pump = async () => {
+    const act = active();
+    if (act.length) {
+      let b = board.read(project);
+      if (b.errors.some((e) => e.file === board.DIR)) return;
+      for (const w of act) {
+        for (const it of w.items) {
+          if (stopped || w.state !== 'run') break;
+          const c = b.cards.find((x) => x.id === it.id);
+          const rec = runsOf()[it.id];
+          if (c && c.status === 'готово') { it.st = 'done'; it.why = ''; continue; }
+          // Карту запустили вручную, пока она ждала, — волна ведёт её как свою.
+          if (!it.launched && rec && !rec.gone) it.launched = true;
+          if (it.launched) {
+            // Карту отдали на проверку: волна её больше не ведёт, а место занято, пока жива вкладка (t707, usedOf).
+            if (c && HOLD.includes(c.status)) { it.st = 'off'; it.why = c.status; }
+            else if (rec && !rec.gone) { it.st = 'run'; it.why = ''; }
+            else if (rec) { it.st = 'closed'; it.why = ''; }
+            else { it.st = 'off'; it.why = c ? c.status : 'карты нет на доске'; }
+            continue;
+          }
+          if (it.st === 'fail') continue;
+          if (!c) { it.st = 'fail'; it.why = 'карты нет на доске'; continue; }
+          if (c.status !== 'в очереди') { it.st = 'off'; it.why = c.status; continue; }
+          const wait = c.depends.filter((d) => { const x = b.cards.find((y) => y.id === d); return !x || x.status !== 'готово'; });
+          if (wait.length) { it.st = 'wait'; it.why = wait.join(', '); continue; }
+          if (usedOf() >= maxOf()) { it.st = 'slot'; it.why = ''; continue; }
+          it.st = 'run'; it.why = ''; it.launched = true;
+          sendIfChanged();
+          const r = await run(it.id, { quiet: true });
+          if (!r || 'error' in r) { it.st = 'fail'; it.why = r ? String(r.error) : 'нет ответа'; it.launched = false; ctx.log(`волна ${w.letter}: ${it.id} не запущена: ${it.why}`); }
+          // «Стоп» нажали, пока вкладка открывалась: закрываем и её — тем же путём, что «стоп».
+          else if (w.state !== 'run' && r.session) { ctx.log(`волна ${w.letter}: ${it.id} открылась после «стоп» — закрываю ${r.session.sid}`); ctx.send('waveClose', { sids: [r.session.sid] }); }
+          b = board.read(project);
+        }
+        if (w.state === 'run' && w.items.every((it) => WAVE_END.includes(it.st))) {
+          w.state = 'done'; w.ended = Date.now();
+          ctx.log(`волна ${w.letter}: завершена, готово ${w.items.filter((it) => it.st === 'done').length} из ${w.items.length}`);
+        }
+      }
+    }
+    sendIfChanged();
+    if (!panelOn && !active().length) unwatch();
+  };
+
   const sync = async () => {
     if (syncing) { again = true; return; }
     syncing = true;
     try {
-      do { again = false; await syncOnce(); } while (again && !stopped);
+      do { again = false; await syncOnce(); await pump(); } while (again && !stopped);
     } catch (e) { ctx.log(`статусы по вкладкам: ${why(e)}`); } finally { syncing = false; }
   };
   // Мост без onState (ядро до t276) — статус идёт только по вызовам sync из окна.
@@ -253,9 +402,10 @@ module.exports = (ctx) => {
 
   /**
    * Запустить карту: проверки, промпт, вкладка, затем статус «в работе» и запись запуска. Вкладка не открылась — статус не трогаем.
-   * @param {string} ref
+   * Волна открывает вкладку без фокуса (quiet): человек остаётся в своей вкладке; одиночный «Запустить» — с фокусом.
+   * @param {string} ref @param {{ quiet?: boolean }} [opt]
    */
-  const run = async (ref) => {
+  const run = async (ref, opt) => {
     const b = board.read(project);
     const c = b.cards.find((x) => x.id === ref);
     if (!c) return { error: `карты ${ref} нет на доске или файл с ошибкой` };
@@ -267,7 +417,7 @@ module.exports = (ctx) => {
     // До первого await: второй вызов, пока первый ждёт демона или вкладку, видит флаг (t554).
     if (starting.has(ref)) return { error: `карта ${ref} уже запускается` };
     starting.add(ref);
-    try { return await start(ref, c, agent); } finally { starting.delete(ref); }
+    try { return await start(ref, c, agent, !!(opt && opt.quiet)); } finally { starting.delete(ref); }
   };
   /**
    * Вкладка с первым сообщением text. Длиннее PROMPT_MAX — сразу файлом и ссылкой (t545).
@@ -305,8 +455,8 @@ module.exports = (ctx) => {
     if (typeof ctx.agents !== 'function') return null;
     try { return ctx.agents(); } catch (e) { ctx.log(`список агентов не получен: ${why(e)}`); return null; }
   };
-  /** Запуск после проверок карты; run держит флаг «запуск идёт». @param {string} ref @param {any} c @param {string} agent */
-  const start = async (ref, c, agent) => {
+  /** Запуск после проверок карты; run держит флаг «запуск идёт». @param {string} ref @param {any} c @param {string} agent @param {boolean} quiet */
+  const start = async (ref, c, agent, quiet) => {
     const prev = runsOf()[ref];
     if (prev && !prev.gone) {
       const r = await ctx.terminals();
@@ -320,7 +470,7 @@ module.exports = (ctx) => {
     if (la.skipped) ctx.log(`${ref}: ${la.skipped}`);
     const title = `${ref} · ${c.title || ''}`.trim().slice(0, 64);
     const kind = agents.kindOf(agent);
-    const r = await openWith({ kind, args: la.args, title }, ref, ref, pr.text, 'промпт');
+    const r = await openWith({ kind, args: la.args, title, ...(quiet ? { focus: false } : {}) }, ref, ref, pr.text, 'промпт');
     if (!r || 'error' in r) {
       const e = r ? r.error : 'нет ответа';
       ctx.log(`${ref}: вкладка не открылась: ${e}`);
@@ -404,18 +554,22 @@ module.exports = (ctx) => {
     // Вкладка составления (t568): окно рисует над доской строку «составляется…», пока вкладка с этим номером жива в окне.
     const cp = composeOf();
     /** @type {any} */ (b).compose = cp ? { sid: cp.sid } : null;
+    // Волны окна (t687) и занятые места (t689): окно рисует строки волн и пометки «ждёт места» у карт.
+    /** @type {any} */ (b).waves = waves.map(waveView);
+    /** @type {any} */ (b).slots = { used: usedOf(), max: maxOf(), top: MAX_RUNS_TOP };
     return b;
   };
   const startWatch = () => {
     if (watcher || stopped) return;
-    watcher = board.watch(project, () => { if (!stopped) ctx.send('board', snapshot()); }, { log: ctx.log, pin: () => pins });
+    // Смена файла — и окну доска, и sync: «готово» в файле карты волны запускает её зависимые (t687), даже когда панель закрыта.
+    watcher = board.watch(project, () => { if (!stopped) { ctx.send('board', snapshot()); sync(); } }, { log: ctx.log, pin: () => pins });
     ctx.log(`слежение за ${board.DIR} включено`);
   };
   const unwatch = () => { if (watcher) { watcher.close(); watcher = null; ctx.log(`слежение за ${board.DIR} закрыто`); } };
 
   return {
     handle(cmd, ...args) {
-      if (cmd === 'board') { startWatch(); sync(); return snapshot(); }
+      if (cmd === 'board') { panelOn = true; startWatch(); sync(); return snapshot(); }
       if (cmd === 'prompt') { try { return prompt.build(project, String(args[0] || ''), { dataDir: ctx.dataDir }); } catch (e) { return { error: String((e && /** @type {any} */ (e).message) || e) }; } }
       // Поля по имени (t541): весь модуль с функцией launchArgs IPC не клонирует.
       // READY — агенты, найденные и включённые в системе (t576, ctx.agents); ядро без ctx.agents — null, окно берёт встроенные AGENTS.
@@ -423,12 +577,21 @@ module.exports = (ctx) => {
       if (cmd === 'run') return run(String(args[0] || ''));
       if (cmd === 'compose') return compose(String(args[0] || ''));
       if (cmd === 'sync') { sync(); return {}; }
+      if (cmd === 'wave') return waveStart(String(args[0] || ''), String(args[1] || ''), args[2]);
+      if (cmd === 'waveStop') return waveStop(String(args[0] || ''));
+      // Убрать строку законченной волны; идущую — только через «стоп».
+      if (cmd === 'waveDrop') {
+        const i = waves.findIndex((w) => w.id === String(args[0] || '') && w.state !== 'run');
+        if (i >= 0) waves.splice(i, 1);
+        sendIfChanged();
+        return {};
+      }
       if (cmd === 'state') {
         const s = ctx.settings.get();
         // Старое общее open — только пока openIn пуст: одноразовый переход со старого вида (t547). Дальше проекта нет в openIn — панель закрыта.
         const openIn = s.openIn && typeof s.openIn === 'object' ? s.openIn : {};
         const open = Object.keys(openIn).length ? Object.hasOwn(openIn, key) && !!openIn[key] : !!s.open;
-        return { open, hideDone: !!s.hideDone };
+        return { open, hideDone: !!s.hideDone, maxRuns: maxOf() };
       }
       if (cmd === 'update') {
         const [ref, changes, base] = args;
@@ -458,9 +621,14 @@ module.exports = (ctx) => {
         const next = { ...ctx.settings.get() };
         // Старое общее open не трогаем: пока openIn пуст, по нему открываются все проекты (state).
         if ('open' in a) next.openIn = { ...(next.openIn && typeof next.openIn === 'object' ? next.openIn : {}), [key]: !!a.open };
-        if ('open' in a && !a.open) unwatch();
+        // Панель закрыли, а волна идёт — слежение остаётся: «готово» в файле должно запустить зависимые. Снимет его pump, когда волн не останется.
+        if ('open' in a && !a.open) { panelOn = false; if (!active().length) unwatch(); }
         if ('hideDone' in a) next.hideDone = !!a.hideDone;
+        // Предел (t689) — один на программу, считается по каждому проекту отдельно. Подняли — ждущие места карты стартуют сразу.
+        const lim = Number(a.maxRuns);
+        if ('maxRuns' in a && Number.isInteger(lim) && lim >= 1 && lim <= MAX_RUNS_TOP) next.maxRuns = lim;
         ctx.settings.set(next);
+        if ('maxRuns' in a) sync();
         return {};
       }
       return { error: `нет команды ${cmd}` };
