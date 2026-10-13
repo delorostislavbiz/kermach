@@ -20,7 +20,7 @@
   [hidden] { display: none !important; }
 
   /* Заголовок окна: за него окно перетаскивается, кнопки — нет. */
-  #title { height: 36px; display: flex; align-items: center; padding-left: 14px; flex-shrink: 0; -webkit-app-region: drag; }
+  #title { order: -1; height: 36px; display: flex; align-items: center; padding-left: 14px; flex-shrink: 0; -webkit-app-region: drag; }
   #title .name { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; font-size: 12px; white-space: nowrap; }
   #title .name .muted { color: var(--muted); }
   #pColor { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
@@ -156,14 +156,6 @@
 <link rel="stylesheet" href="ui.css">
 </head>
 <body>
-<div id="title">
-  <div class="name"><span id="pColor"></span><span id="pIcon"></span><span id="pName"></span><span class="muted">— Kermach</span></div>
-  <div class="btns">
-    <div id="min" title="Свернуть" data-i18n-title="common.minimize"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" stroke-width="1"/></svg></div>
-    <div id="max" title="Развернуть" data-i18n-title="common.maximize"><svg width="10" height="10" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg></div>
-    <div id="close" title="Закрыть" data-i18n-title="common.close"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1"/></svg></div>
-  </div>
-</div>
 <div id="main">
   <div id="side">
     <!-- Шапка панели (t655): плитка, имя и путь проекта — рисует paintProject. «Скрыть панель» (t678) — кнопка в шапке, «Показать» — #sideShow в начале полосы вкладок.
@@ -190,6 +182,16 @@
   <div id="right" hidden></div>
 </div>
 <div id="bottom" hidden></div>
+<!-- Шапка — последней в разметке (t761): Chromium собирает области перетаскивания по порядку документа, и drag полосы вкладок и правой панели,
+     стоящих позже, перекрывал no-drag кнопок окна. На экране шапка сверху: order −1 в классическом виде, position absolute в Kermach и Termius Dark. -->
+<div id="title">
+  <div class="name"><span id="pColor"></span><span id="pIcon"></span><span id="pName"></span><span class="muted">— Kermach</span></div>
+  <div class="btns">
+    <div id="min" title="Свернуть" data-i18n-title="common.minimize"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" stroke-width="1"/></svg></div>
+    <div id="max" title="Развернуть" data-i18n-title="common.maximize"><svg width="10" height="10" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg></div>
+    <div id="close" title="Закрыть" data-i18n-title="common.close"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1"/></svg></div>
+  </div>
+</div>
 <script src="icons.js"></script>
 <script src="states.js"></script>
 <script src="keys.js"></script>

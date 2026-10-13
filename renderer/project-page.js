@@ -540,7 +540,7 @@
     $('list').innerHTML = list.map((x) => { const k = stateOf(x); return `<div class="term${x.page ? ' site' : ''}${cls(x, k)}" data-sid="${esc(x.sid)}">
       <div class="tile"><div class="strip" style="background:${x.color}"></div>${svg(x.icon, x.color, 18)}</div>
       <div class="text"><div class="n">${esc(x.title)}</div>${x.page ? addr(x) : x.connecting ? `<div class="st">${I18n.t('page.podklyuchaetsya', 'подключается…')}</div>` : st(x, k)}</div></div>`; }).join('');
-    $('tabs').innerHTML = list.map((x) => { const k = stateOf(x); return `<div class="tab${cls(x, k)}" data-sid="${esc(x.sid)}"${k ? ` data-state="${k}" title="${hint(x, k)}"` : ''}>
+    $('tabs').innerHTML = list.map((x) => { const k = stateOf(x); return `<div class="tab${cls(x, k)}" data-sid="${esc(x.sid)}" style="--c:${x.color}"${k ? ` data-state="${k}" title="${hint(x, k)}"` : ''}>
       <div class="tt"><b style="background:${x.color}"></b>${svg(x.icon, x.color, 14)}</div><span>${esc(x.title)}</span>${k ? glyph(k) : ''}<span class="x" data-close title="${I18n.t('common.close', 'Закрыть')}">${svg('close', (window.Theme && Theme.color('muted')) || '#8D91A5', 12, 2)}</span><i style="background:${x.color}"></i></div>`; }).join('');
     // Шапка карточки терминала (Д-9): точка цвета, имя, «· состояние». Видна только в новом виде (ui-kermach-project.css).
     for (const x of list) {

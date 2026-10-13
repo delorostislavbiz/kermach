@@ -74,7 +74,7 @@ html.side-off:is([data-ui="kermach"], [data-ui="termius"]) #sideShow:hover { bac
    Окно тянут за пустое место полосы (drag). Двойной щелчок и прилипание к краю делает система — своего dblclick нет. */
 /* body:has(#tabrow) — только окно проекта и сильнее правила #title окна «Проекты» (ui-kermach-projects.css: высота 40, отступ 16), которое подключено и здесь. */
 html:is([data-ui="kermach"], [data-ui="termius"]) body:has(#tabrow) #title { position: absolute; top: 0; right: 0; height: 48px; padding: 0; align-items: flex-start; z-index: 20; }
-html:is([data-ui="kermach"], [data-ui="termius"]) #title .name { display: none; }
+html:is([data-ui="kermach"], [data-ui="termius"]) body:has(#tabrow) #title .name { display: none; }
 html:is([data-ui="kermach"], [data-ui="termius"]) #title .btns { height: 34px; }
 html:is([data-ui="kermach"], [data-ui="termius"]) #title .btns div { width: 44px; }
 html:is([data-ui="kermach"], [data-ui="termius"]) #title .btns div:hover { background: var(--selected); }
@@ -105,11 +105,16 @@ html:is([data-ui="kermach"], [data-ui="termius"]) .tab.on:not(.need) { backgroun
 html:is([data-ui="kermach"], [data-ui="termius"]) .tab .tt { position: relative; display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; overflow: hidden; flex-shrink: 0; }
 html:is([data-ui="kermach"], [data-ui="termius"]) .tab .tt b { display: block; position: absolute; inset: 0; opacity: var(--tint-a, .18); }
 html:is([data-ui="kermach"], [data-ui="termius"]) .tab .tt svg { position: relative; width: 13px; height: 13px; }
-/* Полоса снизу — только у работающего: 2 px цвета терминала, 40 % ширины, бежит 1.8 s (kSweep; стоит при скрытом окне). */
+/* Полоса снизу — только у работающего: бледная дорожка цвета терминала во всю ширину (i) и по ней бежит отрезок 40 % (::after, kSweep 1.8 s; стоит при скрытом окне, t765).
+   Цвет отрезка — --c у вкладки (project-page.js). «Уменьшить движение» в системе — отрезка нет, дорожка сплошная (t766). */
 html:is([data-ui="kermach"], [data-ui="termius"]) .tab i { display: none; }
-html:is([data-ui="kermach"], [data-ui="termius"]) .tab[data-state="working"] i { display: block; right: auto; width: 40%; animation: kSweep 1.8s linear infinite; }
-html.k-hidden .tab i { animation-play-state: paused; }
-@media (prefers-reduced-motion: reduce) { html:is([data-ui="kermach"], [data-ui="termius"]) .tab[data-state="working"] i { animation: none; } }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tab[data-state="working"] i { display: block; opacity: .3; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tab[data-state="working"]::after { content: ''; position: absolute; left: 0; bottom: 0; width: 40%; height: 2px; background: var(--c); animation: kSweep 1.8s linear infinite; pointer-events: none; }
+html.k-hidden .tab[data-state="working"]::after { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  html:is([data-ui="kermach"], [data-ui="termius"]) .tab[data-state="working"] i { opacity: 1; }
+  html:is([data-ui="kermach"], [data-ui="termius"]) .tab[data-state="working"]::after { content: none; animation: none; }
+}
 
 /* --- Карточка терминала (Д-9): фон --term, рамка --line, радиус 10, 8 px от краёв и между частями. ---
    #panes — 4 px от краёв (сверху −4: карточка сразу под полосой, как в макете), часть — ещё 4 (--pane-pad: inset у .pane и отступ части в раскладке, panePad() в project-page.js).

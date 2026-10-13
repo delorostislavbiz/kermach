@@ -6,12 +6,14 @@
 /* Termius Dark без схемы плагина «Темы» (look() = null): цвета макета сверх theme.css (README, «Токены тем») и форма — как shape('termius') в main\ui-themes.js.
    Со схемой на <html> есть data-theme, и переменные ставит renderer\theme.js из схемы. */
 html[data-ui="termius"]:not([data-theme]) {
-  --side: #1A1D2F; --tab-active: #23273C; --menu: #20243A; --line: rgba(141,145,165,.16); --hover: rgba(141,145,165,.13);
-  --selected: rgba(141,145,165,.13); --card: #1A1D2F; --term: #11142A; --line-strong: rgba(141,145,165,.26); --off: rgba(141,145,165,.3);
+  --side: #1A1D2F; --tab-active: #1E2A33; --menu: #20243A; --line: rgba(33,181,104,.16); --hover: rgba(141,145,165,.13);
+  --selected: rgba(141,145,165,.13); --card: #1A1D2F; --term: #11142A; --line-strong: rgba(33,181,104,.26); --off: rgba(141,145,165,.3);
   --knob: #C9D0DC; --tint-a: .18; --ok: #41D68A;
   /* Текст окна — цвет текста терминала (t753, Ростислав: «шрифт везде должен быть зелёным, таким, какой он в терминале»).
-     Приглушённые подписи (--muted, --tab-fg, --status-fg) остаются серыми, как серые подсказки в терминале. */
+     Приглушённые подписи и линии — приглушённый зелёный (t764, вариант 1 из ОБРАЗЕЦ-termius-зелёный.html, выбор Ростислава 14.10).
+     Подсветка под мышью, выбранное, выключатель (--hover, --selected, --off, --knob) — прежние серые: в образце их не было. */
   --text: var(--term-fg); --tab-active-fg: var(--term-fg);
+  --muted: #5E9C7E; --muted-rgb: 94,156,126; --tab-fg: #5E9C7E; --status-fg: #5E9C7E; --faint: #3F6B57;
   --font-ui: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-label: var(--font-ui); --r-sm: 6px; --r-md: 8px; --r-lg: 10px;
 }
