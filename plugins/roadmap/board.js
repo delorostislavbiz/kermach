@@ -189,6 +189,32 @@ function criteria(v) {
   return out;
 }
 
+/**
+ * Признаки по одной строке (t513): число признаков в поле совпало с новым списком — каждая строка признака сравнивается со своим.
+ * Текст тот же — меняется только отметка в скобках, другой — строка пишется заново. Не совпало число — false, поле пишется целиком.
+ * @param {string[]} lines @param {Span} sp @param {{ text: string, done: boolean }[]} list
+ */
+function markCriteria(lines, sp, list) {
+  const RE = /^[-*]\s*\[([ xXхХ]?)\]\s*(.*)$/;
+  /** @type {number[]} */
+  const at = [];
+  for (let i = sp.start; i < sp.end; i++) {
+    // В строке подписи признак может стоять после двоеточия: «Признаки готовности: - [ ] …».
+    const l = i === sp.start ? lines[i].slice(lines[i].indexOf(':') + 1) : lines[i];
+    if (RE.test(l.trim())) at.push(i);
+  }
+  if (at.length !== list.length) return false;
+  at.forEach((i, n) => {
+    const head = i === sp.start ? lines[i].slice(0, lines[i].indexOf(':') + 1) : '';
+    const l = lines[i].slice(head.length);
+    const m = /** @type {RegExpExecArray} */ (RE.exec(l.trim()));
+    const want = list[n];
+    if (m[2].trim() !== want.text.trim()) lines[i] = `${head}${head ? ' ' : ''}- [${want.done ? 'x' : ' '}] ${want.text.trim()}`;
+    else if ((m[1].trim() !== '') !== !!want.done) lines[i] = head + l.replace(/\[([ xXхХ]?)\]/, want.done ? '[x]' : '[ ]');
+  });
+  return true;
+}
+
 /** Шапка как объект. @param {Parsed} p */
 const headObj = (p) => Object.fromEntries((p.head || []).map((h) => [h.key, h.value]));
 
@@ -414,7 +440,9 @@ function update(project, ref, changes) {
         : bodyLines(value, fields);
       const sp = spans(p, fields)[key];
       const first = key === 'criteria' ? [`${fields[key]}:`, ...ls] : [`${fields[key]}: ${ls[0]}`, ...ls.slice(1)];
-      if (sp) {
+      // Признаков столько же, сколько в файле (щелчок по одному, t513) — меняем только строки, где признак другой; «* [X]» и строки без признака остаются как были.
+      if (key === 'criteria' && sp && markCriteria(lines, sp, /** @type {any[]} */ (value))) { /* строки уже на месте */ }
+      else if (sp) {
         // Подпись оставляем как написал человек (регистр), меняем только текст после двоеточия.
         first[0] = first[0].replace(/^[^:]*:/, lines[sp.start].slice(0, lines[sp.start].indexOf(':') + 1));
         lines.splice(sp.start, sp.end - sp.start, ...first);

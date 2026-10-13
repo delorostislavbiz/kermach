@@ -5,6 +5,7 @@
 // Слежение — опрос папки (board.watch, t533): папку проекта можно переименовать, пока панель открыта.
 // «Панель открыта» — у каждого проекта своя (t525): мешок ctx.settings один на программу, поэтому openIn[ключ проекта]. openIn пуст — старое общее open (t547).
 // Правка карты в панели (t512) — команда update: board.update меняет в файле только присланные поля; отказ приходит окну строкой error.
+// Той же командой — разделы паспорта и признаки фазы (t513): base сверяется и у них, чужая правка в файле не затирается.
 // Статус стал «готово» — заодно closed: время закрытия, по нему промпт берёт свежие заметки фазы (t514).
 // «Показать промпт» (t514) — команда prompt: текст собирает prompt.js из файлов доски и шаблонов при каждом вызове (своя копия prompt.md в ctx.dataDir, нет — встроенный); lists — списки моделей из agents.js.
 // «Запустить» (t515) — команда run: вкладка агента карты через ctx.openTab, первое сообщение — тот же prompt.build, агент, модель и усилие — agents.launchArgs.
@@ -29,6 +30,27 @@ const agents = require('./agents');
 const field = (c, k) => String((k in board.CARD_FIELDS ? c.fields[k] : c[k]) || '');
 /** Для сравнения: строки без пробелов по краям и пустых, прочерк — пусто (как пишет board.update). @param {unknown} v */
 const same = (v) => { const s = String(v === undefined || v === null ? '' : v).split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join('\n'); return /^[—–-]$/.test(s) ? '' : s; };
+/** Предмет доски по ссылке (t513): passport — паспорт, f<N> — фаза, остальное — карта. @param {any} b @param {string} ref */
+const itemOf = (b, ref) => (ref === 'passport' ? b.passport : ref.startsWith('f') ? b.phases.find((/** @type {any} */ x) => x.id === ref) : b.cards.find((/** @type {any} */ x) => x.id === ref));
+/** Признаки готовности строкой для сравнения: отметка и текст, по признаку на строку. @param {unknown} v */
+const crit = (v) => (Array.isArray(v) ? v : []).map((c) => `[${c && c.done ? 'x' : ' '}] ${String((c && c.text) || '').trim()}`).join('\n');
+/** Ключи шапки фазы → поле предмета из board.js. */
+const PHASE_KEY = { health_why: 'healthWhy', health_by: 'healthBy', health_at: 'healthAt' };
+/**
+ * Значение поля для сверки base (t513). raw — o это { [k]: значение от окна }, иначе предмет из board.js.
+ * Раздел паспорта — текст как есть (пустые строки внутри важны), без пробелов по краям; остальное — как same.
+ * @param {string} ref @param {any} o @param {string} k @param {boolean} [raw]
+ */
+const valueOf = (ref, o, k, raw = false) => {
+  if (k === 'criteria') return crit(raw ? o[k] : o.criteria);
+  if (ref === 'passport') {
+    const v = raw ? o[k] : o.sections && Object.hasOwn(o.sections, k) ? o.sections[k].text : '';
+    return String(v === undefined || v === null ? '' : v).replace(/\r\n/g, '\n').trim();
+  }
+  if (raw) return same(o[k]);
+  if (ref.startsWith('f')) return same(o[Object.hasOwn(PHASE_KEY, k) ? /** @type {Record<string, string>} */ (PHASE_KEY)[k] : k]);
+  return same(field(o, k));
+};
 /** Ошибка строкой. @param {unknown} e */
 const why = (e) => String((e && /** @type {any} */ (e).message) || e);
 /** Статусы, которые ставит запуск: только их программа меняет дальше сама. */
@@ -410,10 +432,13 @@ module.exports = (ctx) => {
         const [ref, changes, base] = args;
         if (!changes || typeof changes !== 'object' || !Object.keys(changes).length) return { error: 'нечего сохранять' };
         try {
-          // base — значения, на которых стоит форма. Поле в файле успели поменять снаружи (слежение ещё не донесло) — не пишем, отдаём карту из файла.
-          const c = board.read(project).cards.find((x) => x.id === ref);
+          // base — значения, на которых стоит форма. Поле в файле успели поменять снаружи (слежение ещё не донесло) — не пишем, отдаём предмет из файла.
+          // Сверка — у карты, фазы и паспорта (t513): предмет ищем по виду ссылки, значение поля — valueOf.
+          const b = board.read(project);
+          const it = itemOf(b, String(ref));
+          const c = String(ref).startsWith('t') ? it : null;
           if (base && typeof base === 'object') {
-            if (c && Object.keys(changes).some((k) => k in base && same(field(c, k)) !== same(base[k]))) return { clash: true, item: c };
+            if (it && Object.keys(changes).some((k) => k in base && valueOf(String(ref), it, k) !== valueOf(String(ref), { [k]: base[k] }, k, true))) return { clash: true, item: it };
           }
           const all = changes.status === 'готово' && c && c.status !== 'готово' && !('closed' in changes) ? { ...changes, closed: board.stamp() } : changes;
           const item = board.update(project, ref, all);

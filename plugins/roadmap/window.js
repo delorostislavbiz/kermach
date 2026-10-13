@@ -8,8 +8,13 @@
 // «Запустить» (t515) — вкладка агента карты в верхней полосе, первое сообщение — тот же промпт; статус карты дальше идёт за вкладкой (main.js, sync).
 // Окно зовёт sync на каждое изменение списка вкладок: так «пауза» приходит сразу, как вкладку закрыли. Волн и галочек выбора нет.
 // Значки «Командный центр» и «Составить роадмап» в шапке неактивны, с подсказкой. На пустом проекте кнопка «Составить роадмап» (t519) открывает вкладку Claude с заданием.
-// Паспорт проекта (t569, экран 15): строка под «Входящими», если passport.md есть; щелчок — девять разделов во всю панель, только чтение. Пустой раздел — жёлтой рамкой.
+// Паспорт проекта (t569, экран 15): строка под «Входящими», если passport.md есть; щелчок — девять разделов во всю панель. Пустой раздел — жёлтой рамкой.
+// Разделы правятся в полях (t513): «Сохранить» пишет в passport.md только тронутые разделы; правка снаружи — как у карты, пометкой.
+// Фаза во всю панель (t513, экран 12): щелчок по имени фазы — цель, признаки готовности, здоровье, прогресс и карты фазы.
+// Признак отмечается щелчком и сразу пишется в файл фазы одной строкой. Фаза «готова», когда отмечены все признаки; признаков нет — по статусу в файле.
 // Рядом с «Файлами» и Git: панели в одной колонке, каждая своей строкой; «Роадмап» под «Файлами», над списком Git.
+// «Во всё окно» (t526, экран 17): та же панель переезжает во вкладку «Роадмап · проект» верхней полосы (host.pages) — с открытой картой и вводом.
+// Вкладку закрыли или нажали «свернуть» — панель возвращается в колонку на своё место. Вкладка одна: повторный вызов её показывает.
 // Уже 480 px строка карты — в две строки (container query): заголовок, под ним статус · агент · время. За наведением ничего не прячется.
 // Цвета — переменные темы окна; зелёного и фиолетового в теме нет, они запасными значениями.
 /** Значок статуса карты и его цвет — по легенде прототипа (экран 19). */
@@ -57,6 +62,10 @@ function roadmapSetup(host) {
   const I_BOARD = '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16M4 14h16M9 9v11"/>';
   const I_CENTER = '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M12 4v16M4 12h16"/>';
   const I_COMPOSE = '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/>';
+  const I_FULL = '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>';
+  const I_SHRINK = '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>';
+  /** Цвет вкладки «Роадмап · проект» — синий из легенды статусов (rm-info). */
+  const TAB_COLOR = '#5B8DEF';
   const chevron = (/** @type {boolean} */ open) => `<svg width="10" height="10" viewBox="0 0 10 10" style="flex-shrink:0;transform:rotate(${open ? 90 : 0}deg)"><path d="M3 1.5L6.5 5 3 8.5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>`;
 
   const style = document.createElement('style');
@@ -72,6 +81,10 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .rh label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; flex-shrink: 0; }
     #plugin-roadmap-panel .rbtn { width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; border-radius: 4px; color: var(--muted); flex-shrink: 0; }
     #plugin-roadmap-panel .rbtn[aria-disabled="true"] { color: var(--disabled, var(--muted)); opacity: .55; }
+    #plugin-roadmap-panel .rbtn[data-act="full"] { cursor: pointer; }
+    #plugin-roadmap-panel .rbtn[data-act="full"]:hover { background: var(--hover); color: var(--text); }
+    /* Во вкладке (t526): панель — всё место вкладки, без рамки фокуса. */
+    .pane.page > #plugin-roadmap-panel { outline: 0; }
     #plugin-roadmap-panel .rbody { flex: 1; min-height: 0; overflow: auto; padding: 8px 8px 12px; display: flex; flex-direction: column; gap: 8px; }
     #plugin-roadmap-panel .box { border: 1px solid var(--line, rgba(141,145,165,.14)); border-radius: 6px; background: var(--raised, transparent); }
     #plugin-roadmap-panel .inbox { min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-weight: 600; }
@@ -200,6 +213,29 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .rpass .psec .pv { margin: 0; line-height: 17px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
     #plugin-roadmap-panel .rpass .psec .pv.mono { font-family: var(--font-mono, Consolas, ui-monospace, monospace); font-size: 12px; }
     #plugin-roadmap-panel .rpass .psec .pv.none { color: var(--muted); }
+    /* Правка паспорта (t513, экран 15): раздел — поле ввода; пустой — жёлтой рамкой и подсказкой в поле; значение файла при расхождении — под полем. */
+    #plugin-roadmap-panel .rpass .psec textarea::placeholder { color: var(--muted); }
+    #plugin-roadmap-panel .rpass .psec.clash textarea { border-color: var(--rm-warn); }
+    #plugin-roadmap-panel .rpass .ext { color: var(--rm-warn); font-size: 11.5px; line-height: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    /* Фаза во всю панель (t513, экран 12): имя фазы в списке открывает вид; признак — строка-кнопка с отметкой. */
+    #plugin-roadmap-panel .ph .n[data-ophase] { cursor: pointer; border-radius: 3px; }
+    #plugin-roadmap-panel .ph .n[data-ophase]:hover { text-decoration: underline; }
+    #plugin-roadmap-panel .rphase { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 12px; display: flex; flex-direction: column; gap: 8px; }
+    #plugin-roadmap-panel .rphase .ttl { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+    #plugin-roadmap-panel .rphase .pill.fst { color: var(--rm-info); border-color: color-mix(in srgb, var(--rm-info) 50%, transparent); }
+    #plugin-roadmap-panel .rphase .pill.fst.ok { color: var(--rm-ok); border-color: color-mix(in srgb, var(--rm-ok) 50%, transparent); }
+    #plugin-roadmap-panel .rphase .f .tx { padding-top: 6px; line-height: 17px; overflow-wrap: anywhere; white-space: pre-wrap; }
+    #plugin-roadmap-panel .rphase .crit { display: flex; align-items: flex-start; gap: 8px; padding: 4px 4px; border-radius: 4px; line-height: 17px; cursor: pointer; overflow-wrap: anywhere; }
+    #plugin-roadmap-panel .rphase .crit:hover { background: var(--hover); }
+    #plugin-roadmap-panel .rphase .crit[aria-disabled="true"] { cursor: default; opacity: .6; }
+    #plugin-roadmap-panel .rphase .crit .si { margin-top: -1px; }
+    #plugin-roadmap-panel .rphase .crit:not(.on) .ct { color: var(--muted); }
+    #plugin-roadmap-panel .rphase .hl { display: flex; align-items: center; gap: 6px; padding-top: 5px; font-weight: 600; }
+    #plugin-roadmap-panel .rphase .hwhy { color: var(--text); font-size: 11.5px; line-height: 16px; }
+    #plugin-roadmap-panel .rphase .hby { color: var(--muted); font-size: 11.5px; }
+    #plugin-roadmap-panel .rphase .prog { display: flex; align-items: center; gap: 10px; padding-top: 6px; color: var(--muted); font-size: 11.5px; }
+    #plugin-roadmap-panel .rphase .prog .bar { flex: 1; margin: 0; }
+    #plugin-roadmap-panel .rphase .cards { padding: 0; }
     @container rmp (max-width: 479px) {
       #plugin-roadmap-panel .card:not(.done-row) { flex-wrap: wrap; row-gap: 1px; padding-top: 4px; padding-bottom: 4px; }
       #plugin-roadmap-panel .card:not(.done-row) .meta { flex-basis: 100%; margin-left: 0; padding-left: 26px; white-space: normal; }
@@ -227,8 +263,8 @@ function roadmapSetup(host) {
   panel.hidden = true;
   panel.innerHTML = `<div class="rh"><div class="t"><b></b><span></span></div>
     <label class="hd"><input type="checkbox"><span></span></label>
-    <div class="rbtn" data-act="center" aria-disabled="true">${ICON(I_CENTER)}</div><div class="rbtn" data-act="compose" aria-disabled="true">${ICON(I_COMPOSE)}</div></div>
-    <div class="rbody"></div><div class="rcard" hidden></div><div class="rprompt" hidden></div><div class="rpass" hidden></div>`;
+    <div class="rbtn" data-act="center" aria-disabled="true">${ICON(I_CENTER)}</div><div class="rbtn" data-act="compose" aria-disabled="true">${ICON(I_COMPOSE)}</div><div class="rbtn" data-act="full"></div></div>
+    <div class="rbody"></div><div class="rcard" hidden></div><div class="rprompt" hidden></div><div class="rpass" hidden></div><div class="rphase" hidden></div>`;
   // Под «Файлами», если они уже в колонке; список Git (appendChild) встаёт ниже.
   const files = host.right.querySelector('#plugin-files-panel');
   host.right.insertBefore(panel, files ? files.nextSibling : host.right.firstChild);
@@ -237,9 +273,14 @@ function roadmapSetup(host) {
   const cardEl = $('.rcard');
   const promptEl = $('.rprompt');
   const passEl = $('.rpass');
+  const phaseEl = $('.rphase');
   const hideBox = /** @type {HTMLInputElement} */ ($('.hd input'));
 
+  panel.tabIndex = -1;
+
   let open = false;
+  /** Вкладка «во всё окно» (t526): панель сейчас в ней; null — панель в колонке. @type {{ sid: string } | null} */
+  let tab = null;
   let hideDone = false;
   let stopped = false;
   /** Последняя доска от главной части. @type {any} */
@@ -266,13 +307,15 @@ function roadmapSetup(host) {
   const tuneOf = (a) => got(lists.TUNE, a) || { model: false, effort: false };
   /** Открытый промпт карты: номер карты и последний ответ prompt; null — промпт не открыт. @type {{ id: string, r: any, copied: string, at: string } | null} */
   let pv = null;
-  /** Паспорт открыт во всю панель (t569). */
-  let passOpen = false;
 
   const api =(/** @type {string} */ cmd, /** @type {any[]} */ ...a) => host.call(cmd, ...a).catch((/** @type {any} */ e) => ({ error: String((e && e.message) || e) }));
 
   const statusWord = (/** @type {string} */ s) => { const m = got(RM_STATUS, s); return m ? T(`st.${m.key}`, s) : s; };
   const phaseWord = (/** @type {string} */ s) => T(`ph.${s === 'идёт' ? 'run' : s === 'готова' ? 'done' : 'plan'}`, s);
+  /** Фаза готова (t513, FORMAT.md): признаки есть — когда отмечены все; признаков нет — по статусу в файле. @param {any} f */
+  const phDone = (f) => (f.criteria && f.criteria.length ? !!f.ready : f.status === 'готова');
+  /** Статус фазы для показа: «готова» — только по phDone; в файле «готова», а отмечены не все признаки — «идёт». Файл не меняется. @param {any} f */
+  const phStatus = (f) => (phDone(f) ? 'готова' : f.status === 'готова' ? 'идёт' : f.status);
   const HEALTH = { 'зелёный': ['g', 'zel', 'зелёная'], 'жёлтый': ['y', 'zhel', 'жёлтая'], 'красный': ['r', 'kras', 'красная'] };
   /** Время правки файла карты: сегодня — ЧЧ:ММ, раньше — ДД.ММ. @param {number} at */
   const when = (at) => {
@@ -291,8 +334,21 @@ function roadmapSetup(host) {
     $('.hd span').textContent = T('hideDone', 'скрыть сделанное');
     $('[data-act="center"]').title = T('centerSoon', 'Командный центр — все проекты сразу. Появится в следующих шагах плагина');
     $('[data-act="compose"]').title = T('composeSoon', 'Составить роадмап — агент предложит паспорт, фазы и карты. Появится в следующих шагах плагина');
+    paintFull();
+    if (tab) host.pages.setTab(tab.sid, { title: tabTitle() });
   };
-  const paintRow = () => { row.classList.toggle('on', open); row.style.background = open ? 'var(--hover)' : ''; row.style.color = open ? 'var(--text)' : 'var(--muted)'; };
+  const tabTitle = () => `${I18n.t('plugin.roadmap', 'Роадмап')} · ${host.project.name || ''}`;
+  /** Кнопка шапки: в колонке — «во всё окно», во вкладке — «свернуть». Ядро без host.pages — кнопки нет. */
+  const paintFull = () => {
+    const b = $('[data-act="full"]');
+    b.hidden = !host.pages;
+    b.innerHTML = ICON(tab ? I_SHRINK : I_FULL);
+    b.title = tab ? T('fullBack', 'Свернуть в колонку справа') : T('full', 'Во всё окно — доска вкладкой в верхней полосе');
+  };
+  const paintRow = () => {
+    const on = open || !!tab;
+    row.classList.toggle('on', on); row.style.background = on ? 'var(--hover)' : ''; row.style.color = on ? 'var(--text)' : 'var(--muted)';
+  };
   row.onmouseenter = () => { row.style.background = 'var(--hover)'; row.style.color = 'var(--text)'; };
   row.onmouseleave = paintRow;
 
@@ -375,17 +431,17 @@ function roadmapSetup(host) {
     for (const f of b.phases) {
       const cards = f.cards.map((/** @type {string} */ id) => byId.get(id)).filter(Boolean);
       const done = cards.filter((/** @type {any} */ c) => c.status === 'готово');
-      if (hideDone && f.status === 'готова') continue;
-      const busy = f.status === 'идёт' || cards.some((/** @type {any} */ c) => RM_ACTIVE.has(c.status));
+      if (hideDone && phDone(f)) continue;
+      const busy = phStatus(f) === 'идёт' || cards.some((/** @type {any} */ c) => RM_ACTIVE.has(c.status));
       const fopen = folds.has(f.id) ? !!folds.get(f.id) : busy;
       const hl = got(HEALTH, f.health);
       const dot = hl ? hl[0] : '';
       let right = '';
       if (fopen && hl) right += `<span class="h ${hl[0]}">${esc(T(`health.${hl[1]}`, hl[2]))}</span>`;
-      if (!fopen || !hl) right += `<span class="s">${esc(phaseWord(f.status))}</span>`;
+      if (!fopen || !hl) right += `<span class="s">${esc(phaseWord(phStatus(f)))}</span>`;
       if (cards.length) right += `<span class="c">${esc(T('count', '{done} из {all}', { done: done.length, all: cards.length }))}</span>`;
       html += `<div class="box phase" data-phase="${esc(f.id)}"><div class="ph fold" data-fold="${esc(f.id)}"><span class="dot ${dot}"></span>`
-        + `<span class="n">${esc(T('phase', 'Фаза {n}', { n: f.num }))} · ${esc(f.title || f.id)}</span><span class="grow"></span>${right}</div>`;
+        + `<span class="n" data-ophase="${esc(f.id)}" title="${esc(T('fz.openTitle', 'Открыть фазу: цель, признаки готовности, здоровье'))}">${esc(T('phase', 'Фаза {n}', { n: f.num }))} · ${esc(f.title || f.id)}</span><span class="grow"></span>${right}</div>`;
       if (!fopen) { html += '</div>'; continue; }
       if (cards.length) html += `<div class="bar"><i style="width:${Math.round((done.length / cards.length) * 100)}%"></i></div>`;
       if (hl && dot !== 'g' && f.healthWhy) html += `<div class="why">${esc([f.healthWhy, f.healthBy, f.healthAt].filter(Boolean).join(' · '))}</div>`;
@@ -763,42 +819,322 @@ function roadmapSetup(host) {
     }
   });
 
-  // ——— Паспорт во всю панель (t569, экран 15): девять разделов по FORMAT.md, только чтение ———
+  // ——— Паспорт во всю панель (t569, экран 15): девять разделов по FORMAT.md; правка разделов (t513) ———
+  /**
+   * Открытый паспорт — как карта (t512). base — текст разделов из файла, на котором стоит форма; ext — текст файла, разошедшийся с правкой человека.
+   * notes — clash и upd (файл изменился снаружи), err (запись не принята), gone (файла нет или он с ошибкой), leave (уйти с несохранённым).
+   * @type {null | { base: Record<string, string>, ext: Record<string, string>,
+   *   notes: { clash: string[], upd: string[], err: string, gone: string, leave: null | (() => void) }, saved: string, busy: boolean }}
+   */
+  let ps = null;
+  const PASS_KEYS = RM_PASSPORT.map((s) => s.key);
+  /** Текст раздела для сравнения — так же сверяет main.js: без \r и пробелов по краям, пустые строки внутри важны. @param {unknown} v */
+  const pnv = (v) => String(v === undefined || v === null ? '' : v).replace(/\r\n/g, '\n').trim();
+  /** Текст раздела в паспорте из board.js; раздела в файле нет — пусто. @param {any} p @param {string} k */
+  const secVal = (p, k) => { const x = got(p && p.sections, k); return x ? String(x.text || '') : ''; };
+  const secName = (/** @type {string} */ k) => { const s = RM_PASSPORT.find((x) => x.key === k); return s ? T(`pass.${k}`, s.ru) : k; };
+  const pquote = (/** @type {string[]} */ ks) => ks.map((k) => `«${secName(k)}»`).join(', ');
+  const pin = (/** @type {string} */ k) => /** @type {HTMLTextAreaElement} */ (passEl.querySelector(`textarea[data-s="${k}"]`));
+  const pdirty = (/** @type {string} */ k) => !!ps && !!pin(k) && pnv(pin(k).value) !== pnv(ps.base[k]);
+  /** Каркас вида — один раз при открытии: ввод живёт в полях, перерисовка трогает только подписи и пометки. */
+  const passHtml = () => '<div class="ctop"><div class="cbar"><span class="back" data-sact="back"></span><span class="ttl"></span><span class="pbadge"></span>'
+    + '<span class="grow"></span><span class="saved"></span><span class="cbtns"><button type="button" class="btn pri" data-sact="save"></button></span></div><div class="notes"></div></div>'
+    + RM_PASSPORT.map((s, i) => `<div class="box psec" data-sec="${esc(s.key)}"><div class="phd"><span class="pn">${String(i + 1).padStart(2, '0')}</span>`
+      + `<span class="pt" data-pt="${esc(s.key)}"></span><span class="pnote warn" hidden></span></div>`
+      + `<textarea data-s="${esc(s.key)}" rows="1" spellcheck="false"${s.mono ? ' class="mono"' : ''}></textarea><div class="ext" hidden></div></div>`).join('');
   const paintPassport = () => {
+    if (!ps) return;
     const p = last && last.passport;
-    if (!passOpen || !p) return;
-    let html = `<div class="ctop"><div class="cbar"><span class="back" data-sact="back">‹ ${esc(T('passBack', 'роадмап'))}</span>`
-      + `<span class="ttl">${esc(T('passport', 'Паспорт проекта'))}</span>${passBadge(p)}</div>`
-      + `<div class="pinfo">${esc(T('passHint', 'Только чтение. Правка — в файле {file}', { file: `.kermach\\roadmap\\${p.file}` }))}</div></div>`;
-    RM_PASSPORT.forEach((s, i) => {
-      const x = got(p.sections, s.key);
-      const empty = !x || x.empty;
-      html += `<div class="box psec${empty ? ' empty-sec' : ''}" data-sec="${esc(s.key)}"><div class="phd"><span class="pn">${String(i + 1).padStart(2, '0')}</span>`
-        + `<span class="pt">${esc(T(`pass.${s.key}`, s.ru))}</span>${empty ? `<span class="pnote warn">● ${esc(T('passNotFilled', 'не заполнено'))}</span>` : ''}</div>`
-        + (empty ? `<div class="pv none">${esc(T('passEmptySec', 'раздел пуст — агент не узнает об этом'))}</div>`
-          : `<div class="pv${s.mono ? ' mono' : ''}">${esc(x.text)}</div>`) + '</div>';
-    });
-    passEl.innerHTML = html;
+    const q = (/** @type {string} */ s) => /** @type {HTMLElement} */ (passEl.querySelector(s));
+    q('[data-sact="back"]').textContent = `‹ ${T('passBack', 'роадмап')}`;
+    q('.cbar .ttl').textContent = T('passport', 'Паспорт проекта');
+    q('.pbadge').innerHTML = p ? passBadge(p) : '';
+    const any = PASS_KEYS.some(pdirty);
+    const sb = /** @type {HTMLButtonElement} */ (q('[data-sact="save"]'));
+    sb.textContent = T('save', 'Сохранить');
+    sb.title = T('pe.saveTitle', 'Записать в passport.md разделы, которые вы поменяли. Остальные строки файла не меняются');
+    sb.disabled = ps.busy || !any || !p;
+    q('.cbar .saved').textContent = any ? '' : ps.saved;
+    // Пустой раздел — по тому, что сейчас в поле: очистили — сразу жёлтый, вписали — уже нет.
+    for (const s of RM_PASSPORT) {
+      const box = q(`[data-sec="${s.key}"]`);
+      const e = pin(s.key);
+      const empty = !pnv(e.value);
+      const has = s.key in ps.ext;
+      box.classList.toggle('empty-sec', empty);
+      box.classList.toggle('clash', has);
+      q(`[data-pt="${s.key}"]`).textContent = secName(s.key);
+      const mark = /** @type {HTMLElement} */ (box.querySelector('.pnote'));
+      mark.hidden = !empty;
+      mark.textContent = `● ${T('passNotFilled', 'не заполнено')}`;
+      e.placeholder = T('passEmptySec', 'раздел пуст — агент не узнает об этом');
+      const x = /** @type {HTMLElement} */ (box.querySelector('.ext'));
+      x.hidden = !has;
+      x.textContent = has ? T('inFile', 'в файле: {v}', { v: ps.ext[s.key] || '—' }) : '';
+    }
+    const n = ps.notes;
+    const acts = (/** @type {[string, string][]} */ list) => `<div class="acts">${list.map(([a, t]) => `<button type="button" class="btn" data-snote="${a}">${esc(t)}</button>`).join('')}</div>`;
+    let html = '';
+    if (n.gone) html += `<div class="note bad">${esc(n.gone)}</div>`;
+    if (n.err) html += `<div class="note bad" data-n="err">${esc(n.err)}</div>`;
+    if (n.clash.length) {
+      html += `<div class="note warn" data-n="clash">! ${esc(T('pe.clash', 'Файл паспорта изменился снаружи. Вы правили {fields}, а в файле теперь другое — оно показано под разделом.', { fields: pquote(n.clash) }))}`
+        + `${n.upd.length ? ` ${esc(T('pe.updAlso', 'Нетронутые разделы обновлены: {fields}.', { fields: pquote(n.upd) }))}` : ''}`
+        + acts([['take', T('takeFile', 'Взять из файла')], ['mine', T('keepMine', 'Оставить моё')]]) + '</div>';
+    } else if (n.upd.length) {
+      html += `<div class="note info" data-n="upd">${esc(T('pe.upd', 'Файл паспорта изменился снаружи: обновлены {fields}.', { fields: pquote(n.upd) }))}${acts([['ok', T('gotIt', 'Понятно')]])}</div>`;
+    }
+    if (n.leave) {
+      html += `<div class="note warn" data-n="leave">${esc(T('leave', 'Не сохранено: {fields}.', { fields: pquote(PASS_KEYS.filter(pdirty)) }))}`
+        + acts([['drop', T('dropLeave', 'Выйти без сохранения')], ['stay', T('stay', 'Остаться')]]) + '</div>';
+    }
+    q('.notes').innerHTML = html;
+  };
+  /** Новый паспорт из файла: нетронутый раздел берёт текст файла, тронутый остаётся, текст файла — в ext. Как sync у карты. @param {any} p */
+  const psync = (p) => {
+    if (!ps) return;
+    const n = ps.notes;
+    for (const k of PASS_KEYS) {
+      const fv = secVal(p, k);
+      if (pnv(fv) === pnv(ps.base[k])) { delete ps.ext[k]; continue; }
+      const e = pin(k);
+      if (!pdirty(k)) {
+        ps.base[k] = fv;
+        delete ps.ext[k];
+        e.value = fv;
+        grow(e);
+        if (!n.upd.includes(k)) n.upd.push(k);
+      } else if (pnv(fv) === pnv(e.value)) {
+        ps.base[k] = fv;
+        delete ps.ext[k];
+      } else ps.ext[k] = fv;
+    }
+    const ext = ps.ext;
+    n.clash = PASS_KEYS.filter((k) => k in ext);
+    n.upd = n.upd.filter((k) => !n.clash.includes(k));
   };
   const openPassport = () => {
     if (!last || !last.passport) return;
-    passOpen = true;
+    ps = { base: {}, ext: {}, notes: { clash: [], upd: [], err: '', gone: '', leave: null }, saved: '', busy: false };
+    passEl.innerHTML = passHtml();
+    for (const k of PASS_KEYS) { ps.base[k] = secVal(last.passport, k); pin(k).value = ps.base[k]; }
     body.hidden = true;
     passEl.hidden = false;
     passEl.scrollTop = 0;
     paintPassport();
+    for (const e of passEl.querySelectorAll('textarea')) grow(/** @type {HTMLTextAreaElement} */ (e));
   };
   const closePassport = () => {
-    passOpen = false;
+    ps = null;
     passEl.hidden = true;
     passEl.textContent = '';
     body.hidden = false;
     draw();
   };
-  /** Доска пришла заново: паспорт перерисовать; файла нет или он с ошибкой — назад к доске, там видна строка ошибки. */
-  const refreshPassport = () => { if (!passOpen) return; if (last && last.passport) paintPassport(); else closePassport(); };
+  /** Доска пришла заново: разделы сверить. Файла нет или он с ошибкой: без правок — назад к доске, с правками — пометка, ввод на месте. */
+  const refreshPassport = () => {
+    if (!ps) return;
+    const p = last && last.passport;
+    if (p) { ps.notes.gone = ''; psync(p); paintPassport(); return; }
+    if (!PASS_KEYS.some(pdirty)) { closePassport(); return; }
+    const e = last && last.errors ? last.errors.find((/** @type {any} */ x) => x.file === 'passport.md') : null;
+    ps.notes.gone = e ? T('pe.goneBad', 'Файл passport.md с ошибкой: {why}. Ваши правки на месте; сохранить получится, когда файл исправят.', { why: e.reason })
+      : T('pe.goneNone', 'Файла passport.md больше нет в папке доски. Ваши правки на месте, но сохранить их некуда.');
+    paintPassport();
+  };
+  /** Уйти из паспорта: есть несохранённое — сначала спросить пометкой. @param {() => void} then */
+  const pleave = (then) => {
+    if (!ps || !PASS_KEYS.some(pdirty)) { then(); return; }
+    ps.notes.leave = then;
+    paintPassport();
+    passEl.scrollTop = 0;
+  };
+  /** «Сохранить»: в passport.md уходят только тронутые разделы; base — проверка, что их не поменяли снаружи. */
+  const psave = async () => {
+    if (!ps || ps.busy) return;
+    const ks = PASS_KEYS.filter(pdirty);
+    if (!ks.length) return;
+    if (Object.keys(ps.ext).length) {
+      ps.notes.err = T('pe.saveClash', 'Не сохранено: сначала решите, что оставить в разделах {fields} — из файла или своё.', { fields: pquote(Object.keys(ps.ext)) });
+      paintPassport();
+      return;
+    }
+    /** @type {Record<string, string>} */
+    const changes = {};
+    /** @type {Record<string, string>} */
+    const base = {};
+    for (const k of ks) { changes[k] = pin(k).value; base[k] = ps.base[k]; }
+    ps.busy = true;
+    paintPassport();
+    const r = await api('update', 'passport', changes, base);
+    if (!ps) return;
+    ps.busy = false;
+    if (r && r.clash && r.item) { psync(r.item); ps.notes.err = ''; paintPassport(); return; }
+    if (!r || r.error || !r.item) {
+      ps.notes.err = T('saveFail', 'Не сохранено: {why}. Введённое на месте.', { why: (r && r.error) || '?' });
+      paintPassport();
+      return;
+    }
+    // Записанное — новая основа сразу, до события board: иначе своя запись выглядела бы правкой снаружи.
+    for (const k of ks) ps.base[k] = secVal(r.item, k);
+    ps.notes.err = '';
+    ps.notes.leave = null;
+    psync(r.item);
+    const d = new Date();
+    ps.saved = T('savedAt', 'сохранено {t}', { t: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` });
+    if (last) last.passport = r.item;
+    paintPassport();
+  };
+  passEl.addEventListener('input', (ev) => {
+    const t = /** @type {HTMLElement} */ (ev.target);
+    if (t.tagName === 'TEXTAREA') grow(/** @type {HTMLTextAreaElement} */ (t));
+    if (ps) { ps.saved = ''; if (ps.notes.leave && !PASS_KEYS.some(pdirty)) ps.notes.leave = null; }
+    paintPassport();
+  });
   passEl.addEventListener('click', (ev) => {
-    if (/** @type {HTMLElement} */ (ev.target).closest('[data-sact="back"]')) closePassport();
+    const t = /** @type {HTMLElement} */ (ev.target);
+    if (!ps) return;
+    const a = /** @type {HTMLElement | null} */ (t.closest('[data-sact]'));
+    if (a && a.dataset.sact === 'back') { pleave(closePassport); return; }
+    if (a && a.dataset.sact === 'save') { psave(); return; }
+    const note = /** @type {HTMLElement | null} */ (t.closest('[data-snote]'));
+    if (!note) return;
+    const n = ps.notes;
+    const x = note.dataset.snote;
+    if (x === 'take') { for (const [k, v] of Object.entries(ps.ext)) { ps.base[k] = v; const e = pin(k); e.value = v; grow(e); } ps.ext = {}; n.clash = []; n.upd = []; n.err = ''; }
+    else if (x === 'mine') { for (const [k, v] of Object.entries(ps.ext)) ps.base[k] = v; ps.ext = {}; n.clash = []; n.upd = []; n.err = ''; }
+    else if (x === 'ok') n.upd = [];
+    else if (x === 'drop') { const then = n.leave; n.leave = null; if (then) then(); return; }
+    else if (x === 'stay') n.leave = null;
+    paintPassport();
+  });
+
+  // ——— Фаза во всю панель (t513, экран 12): цель, признаки готовности, здоровье, прогресс, карты фазы ———
+  /**
+   * Открытая фаза. seen — что видно в виде, строкой: изменилась не от своей записи — пометка upd.
+   * Признак пишется сразу щелчком, несохранённого нет. clash — признаки поменяли снаружи раньше, чем пришло событие: отметка не записана.
+   * @type {null | { id: string, file: string, seen: string, notes: { clash: boolean, upd: boolean, err: string, gone: string }, busy: boolean }}
+   */
+  let fz = null;
+  /** Карта открыта из вида фазы: «назад» с карты ведёт в фазу. */
+  let fzBack = '';
+  /** @param {any} f */
+  const fzSeen = (f) => JSON.stringify([f.title, f.goal, f.status, f.health, f.healthWhy, f.healthBy, f.healthAt, f.criteria]);
+  const fzPhase = () => { const id = fz && fz.id; return id && last && last.phases ? last.phases.find((/** @type {any} */ x) => x.id === id) : null; };
+  const paintPhase = () => {
+    if (!fz) return;
+    const f = fzPhase();
+    const n = fz.notes;
+    const ok = `<div class="acts"><button type="button" class="btn" data-znote="ok">${esc(T('gotIt', 'Понятно'))}</button></div>`;
+    let html = `<div class="ctop"><div class="cbar"><span class="back" data-zact="back">‹ ${esc(T('back', 'роадмап'))}</span>`;
+    if (f) {
+      const st = phStatus(f);
+      html += `<span class="ttl">${esc(T('phase', 'Фаза {n}', { n: f.num }))} · ${esc(f.title || f.id)}</span>`
+        + `<span class="pill fst${st === 'готова' ? ' ok' : ''}">${st === 'идёт' ? '▶ ' : st === 'готова' ? '✓ ' : ''}${esc(phaseWord(st))}</span>`;
+    }
+    html += '</div><div class="notes">';
+    if (n.gone) html += `<div class="note bad">${esc(n.gone)}</div>`;
+    if (n.err) html += `<div class="note bad" data-n="err">${esc(n.err)}</div>`;
+    if (n.clash) html += `<div class="note warn" data-n="clash">! ${esc(T('fz.clash', 'Признаки фазы изменились снаружи, пока вы отмечали. Показано как в файле, ваша отметка не записана — щёлкните ещё раз.'))}${ok}</div>`;
+    else if (n.upd) html += `<div class="note info" data-n="upd">${esc(T('fz.upd', 'Файл фазы изменился снаружи: показано как в файле.'))}${ok}</div>`;
+    html += '</div></div>';
+    if (f) {
+      /** @type {Map<string, any>} */
+      const byId = new Map((last && last.cards ? last.cards : []).map((/** @type {any} */ x) => [x.id, x]));
+      const cards = f.cards.map((/** @type {string} */ id) => byId.get(id)).filter(Boolean);
+      const done = cards.filter((/** @type {any} */ c) => c.status === 'готово');
+      const hl = got(HEALTH, f.health);
+      const row2 = (/** @type {string} */ lb, /** @type {string} */ v) => `<div class="f"><span class="lb">${esc(lb)}</span><div class="v">${v}</div></div>`;
+      const none = (/** @type {string} */ s) => `<div class="tx none">${esc(s)}</div>`;
+      const crit = f.criteria.length ? f.criteria.map((/** @type {any} */ c, /** @type {number} */ i) => `<div class="crit${c.done ? ' on' : ''}" data-crit="${i}" role="checkbox" aria-checked="${c.done}"`
+        + ` aria-disabled="${fz && fz.busy}" title="${esc(T('fz.critTitle', 'Щелчок — отметить или снять. Сразу пишется в файл фазы'))}">`
+        + `<span class="si ${c.done ? 'ok' : 'muted'}">${c.done ? '✓' : '·'}</span><span class="ct">${esc(c.text)}</span></div>`).join('')
+        : none(T('fz.noCrit', 'признаков нет — фаза готова по статусу в файле'));
+      let health = hl ? `<div class="hl h ${hl[0]}"><span class="dot ${hl[0]}"></span>${esc(T(`health.${hl[1]}`, hl[2]))}</div>` : none(f.health || T('fz.noHealth', 'не задано'));
+      if (f.healthWhy) health += `<div class="hwhy">${esc(T('fz.why', 'почему: {why}', { why: f.healthWhy }))}</div>`;
+      const by = [f.healthBy ? T('fz.by', 'поставил {by}', { by: f.healthBy }) : '', f.healthAt].filter(Boolean).join(' · ');
+      if (by) health += `<div class="hby">${esc(by)}</div>`;
+      const pct = cards.length ? Math.round((done.length / cards.length) * 100) : 0;
+      html += '<div class="box cbox">'
+        + row2(T('fz.goal', 'цель'), f.goal ? `<div class="tx">${esc(f.goal)}</div>` : none(T('fz.noGoal', 'не задана')))
+        + row2(T('fz.crit', 'признаки готовности'), crit)
+        + row2(T('fz.health', 'здоровье'), health)
+        + row2(T('fz.progress', 'прогресс'), `<div class="prog"><div class="bar"><i style="width:${pct}%"></i></div>`
+          + `<span>${esc(I18n.n('roadmap.fz.doneOf', cards.length, ['готово {done} из {n} карты', 'готово {done} из {n} карт', 'готово {done} из {n} карт'], { done: done.length }))}</span></div>`)
+        + '</div>'
+        + `<div class="box cbox"><div class="cap">${esc(T('fz.cards', 'Карты'))}</div><div class="cards">`
+        + (cards.length ? cards.map((/** @type {any} */ c) => cardRow(c, byId)).join('') : `<div class="none">${esc(T('noCards', 'В фазе пока нет карт'))}</div>`) + '</div></div>';
+    }
+    phaseEl.innerHTML = html;
+  };
+  /** @param {string} id */
+  const openPhase = (id) => {
+    const f = last && last.phases ? last.phases.find((/** @type {any} */ x) => x.id === id) : null;
+    if (!f) return false;
+    fz = { id, file: f.file, seen: fzSeen(f), notes: { clash: false, upd: false, err: '', gone: '' }, busy: false };
+    body.hidden = true;
+    phaseEl.hidden = false;
+    phaseEl.scrollTop = 0;
+    paintPhase();
+    return true;
+  };
+  const hidePhase = () => { fz = null; phaseEl.hidden = true; phaseEl.textContent = ''; };
+  const closePhase = () => { hidePhase(); body.hidden = false; draw(); };
+  /** Доска пришла заново: показать фазу как в файле; изменилась не от своей записи — пометка. Своя запись идёт — сверит её ответ. */
+  const refreshPhase = () => {
+    if (!fz) return;
+    const f = fzPhase();
+    if (f) {
+      fz.file = f.file;
+      fz.notes.gone = '';
+      const s = fzSeen(f);
+      if (!fz.busy && s !== fz.seen) { fz.seen = s; if (!fz.notes.clash) fz.notes.upd = true; }
+    } else {
+      const file = fz.file;
+      const e = last && last.errors ? last.errors.find((/** @type {any} */ x) => x.file === file) : null;
+      fz.notes.gone = e ? T('fz.goneBad', 'Файл {file} с ошибкой: {why}', { file, why: e.reason }) : T('fz.goneNone', 'Файла {file} больше нет в папке доски.', { file });
+    }
+    paintPhase();
+  };
+  /** Щелчок по признаку: в файл фазы уходит весь список, board.update меняет только строку с другой отметкой; base — список, который видел человек. @param {number} i */
+  const toggleCrit = async (i) => {
+    const f = fzPhase();
+    if (!fz || fz.busy || !f || !f.criteria[i]) return;
+    const id = fz.id;
+    const base = f.criteria;
+    const list = base.map((/** @type {any} */ c, /** @type {number} */ j) => (j === i ? { ...c, done: !c.done } : c));
+    fz.busy = true;
+    fz.notes.err = '';
+    fz.notes.clash = false;
+    paintPhase();
+    const r = await api('update', id, { criteria: list }, { criteria: base });
+    if (!fz || fz.id !== id) return;
+    fz.busy = false;
+    // Ответ — фаза после разбора файла; карты фазы считает доска, их не трогаем.
+    const put = (/** @type {any} */ item) => { if (last && last.phases) last.phases = last.phases.map((/** @type {any} */ x) => (x.id === id ? { ...x, ...item, cards: x.cards } : x)); };
+    if (r && r.clash && r.item) { put(r.item); fz.notes.clash = true; fz.notes.upd = false; }
+    else if (!r || r.error || !r.item) {
+      fz.notes.err = T('fz.saveFail', 'Отметка не записана: {why}', { why: (r && r.error) || '?' });
+      host.log(`${id}: признак не записан: ${(r && r.error) || '?'}`);
+    } else put(r.item);
+    const now = fzPhase();
+    if (now) fz.seen = fzSeen(now);
+    draw();
+    paintPhase();
+  };
+  phaseEl.addEventListener('click', (ev) => {
+    const t = /** @type {HTMLElement} */ (ev.target);
+    if (!fz) return;
+    if (t.closest('[data-zact="back"]')) { closePhase(); return; }
+    const c = /** @type {HTMLElement | null} */ (t.closest('[data-crit]'));
+    if (c) { toggleCrit(Number(c.dataset.crit)); return; }
+    if (t.closest('[data-znote="ok"]')) { fz.notes.upd = false; fz.notes.clash = false; paintPhase(); return; }
+    const card = /** @type {HTMLElement | null} */ (t.closest('.card[data-id]'));
+    if (!card) return;
+    fzBack = fz.id;
+    hidePhase();
+    openCard(card.dataset.id || '');
+    if (!cur) { fzBack = ''; body.hidden = false; draw(); }
   });
 
   const closeCard = () => {
@@ -806,6 +1142,10 @@ function roadmapSetup(host) {
     cur = null;
     cardEl.hidden = true;
     cardEl.textContent = '';
+    // Карту открыли из вида фазы — назад в фазу; фазы больше нет — к доске.
+    const back = fzBack;
+    fzBack = '';
+    if (back && openPhase(back)) return;
     body.hidden = false;
     draw();
   };
@@ -952,21 +1292,55 @@ function roadmapSetup(host) {
     if (r && r.error) { if (r.error !== said) { said = r.error; host.log(`доска не прочитана: ${r.error}`); } last = { error: r.error }; } else last = r;
     draw();
     refreshPassport();
+    refreshPhase();
     if (cur) { refreshCard(); growAll(); }
     // Панель снова открыта: шаблон в ctx.dataDir или файлы доски могли поменяться, пока слежение было снято (t546).
     if (pv) loadPrompt();
   };
 
+  /** Правая колонка видна, пока в ней есть видимая панель: свою «Роадмап» уносит во вкладку — колонка пересчитывается. */
+  const paintRight = () => { host.right.hidden = ![...host.right.children].some((c) => !(/** @type {HTMLElement} */ (c)).hidden); };
   /** @param {boolean} on @param {boolean} [save] */
   const setOpen = (on, save = true) => {
     open = on;
-    panel.hidden = !on;
-    host.right.hidden = ![...host.right.children].some((c) => !(/** @type {HTMLElement} */ (c)).hidden);
+    if (!tab) panel.hidden = !on;
+    paintRight();
     paintRow();
     if (save) api('setState', { open: on });
     if (on) load();
   };
-  row.onclick = () => setOpen(!open);
+  /** Панель — в колонку: под «Файлами», если они там, иначе первой; видна, если открыта. Список Git ниже. */
+  const toRight = () => {
+    const files = host.right.querySelector('#plugin-files-panel');
+    host.right.insertBefore(panel, files ? files.nextSibling : host.right.firstChild);
+    panel.hidden = !open;
+  };
+  /** Панель переехала: колонка, строка слева, кнопка шапки; поля карты — по новой ширине. */
+  const moved = () => { paintRight(); paintRow(); paintFull(); if (cur) growAll(); };
+  /** «Во всё окно» (t526): панель — во вкладку «Роадмап · проект»; вкладка уже есть — показать её, второй не будет. */
+  const openFull = () => {
+    if (!host.pages) return;
+    if (tab) { host.pages.show(tab.sid); return; }
+    const sid = `roadmap:${crypto.randomUUID()}`;
+    const t = host.pages.addTab({
+      sid, kind: 'roadmap', title: tabTitle(), icon: 'grid', color: TAB_COLOR,
+      focus: () => panel.focus({ preventScroll: true }),
+      // Крестик вкладки, «свернуть» и остановка плагина: панель — обратно в колонку, ввод карты с ней. Вопроса нет: ничего не теряется.
+      close: () => { if (tab && tab.sid === sid) { tab = null; toRight(); moved(); } return true; },
+    });
+    tab = { sid };
+    t.pane.appendChild(panel);
+    panel.hidden = false;
+    moved();
+    host.pages.show(sid);
+  };
+  const closeFull = () => { if (tab) host.pages.removeTab(tab.sid); };
+  panel.querySelector('.rh')?.addEventListener('click', (ev) => {
+    if (!(/** @type {HTMLElement} */ (ev.target).closest('[data-act="full"]'))) return;
+    if (tab) closeFull(); else openFull();
+  });
+  // Доска во вкладке — строка слева показывает вкладку, а не прячет панель.
+  row.onclick = () => { if (tab && host.pages) host.pages.show(tab.sid); else setOpen(!open); };
   hideBox.addEventListener('change', () => { hideDone = hideBox.checked; api('setState', { hideDone }); draw(); });
   /** «Составить роадмап» (t519): вкладку открывает главная часть. Доска появится — слежение пришлёт её, пустой экран уйдёт сам. */
   const composeRun = async () => {
@@ -993,6 +1367,8 @@ function roadmapSetup(host) {
   body.addEventListener('click', (ev) => {
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="compose"]')) { composeRun(); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="passport"]')) { openPassport(); return; }
+    const op = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-ophase]'));
+    if (op) { openPhase(op.dataset.ophase || ''); return; }
     const to = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-do="toTab"]'));
     if (to) { host.pages.show(to.dataset.sid || ''); return; }
     const f = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-fold]'));
@@ -1019,7 +1395,7 @@ function roadmapSetup(host) {
     if (!syncTimer) syncTimer = setTimeout(() => { syncTimer = null; if (!stopped) api('sync'); }, 300);
   });
   // Правка файлов доски снаружи: главная часть прислала новую доску.
-  host.on('board', (/** @type {any} */ b) => { if (stopped || !b) return; last = b; if (open) draw(); refreshPassport(); if (cur) refreshCard(); if (pv) loadPrompt(); });
+  host.on('board', (/** @type {any} */ b) => { if (stopped || !b) return; last = b; if (open) draw(); refreshPassport(); refreshPhase(); if (cur) refreshCard(); if (pv) loadPrompt(); });
 
   labels();
   paintRow();
@@ -1034,11 +1410,13 @@ function roadmapSetup(host) {
     hideDone = !!s.hideDone;
     if (s.open) setOpen(true, false);
   });
-  const offLang = w.I18n ? w.I18n.onChange(() => { labels(); draw(); if (cur) { cardLabels(); refreshCard(); } if (pv) paintPrompt(); paintPassport(); }) : null;
+  const offLang = w.I18n ? w.I18n.onChange(() => { labels(); draw(); if (cur) { cardLabels(); refreshCard(); } if (pv) paintPrompt(); paintPassport(); paintPhase(); }) : null;
   return () => {
     stopped = true;
     if (syncTimer) clearTimeout(syncTimer);
     if (offLang) offLang();
+    // Вкладку снять до панели: close вернёт панель в колонку, и она уйдёт вместе с колонкой ниже.
+    closeFull();
     row.remove();
     panel.remove();
     style.remove();
