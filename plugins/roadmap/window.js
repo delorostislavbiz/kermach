@@ -985,7 +985,11 @@ function roadmapSetup(host) {
     ps.busy = false;
     if (r && r.clash && r.item) { psync(r.item); ps.notes.err = ''; paintPassport(); return; }
     if (!r || r.error || !r.item) {
-      ps.notes.err = T('saveFail', 'Не сохранено: {why}. Введённое на месте.', { why: (r && r.error) || '?' });
+      // Отказ board.js с code — своими словами на языке программы (t607); набранное остаётся в полях.
+      const fields = r && r.field ? pquote([r.field]) : '';
+      ps.notes.err = r && r.code === 'fence' ? T('pe.fenceOpen', 'Не сохранено: в разделе {fields} не закрыт блок кода ``` — закройте его и сохраните снова. Введённое на месте.', { fields })
+        : r && r.code === 'heading' ? T('pe.heading', 'Не сохранено: в разделе {fields} строка с # или ## вне блока кода ``` — уберите её или поставьте в блок кода. Введённое на месте.', { fields })
+          : T('saveFail', 'Не сохранено: {why}. Введённое на месте.', { why: (r && r.error) || '?' });
       paintPassport();
       return;
     }

@@ -320,11 +320,12 @@ class Session {
   }
 
   /**
-   * OSC 9 — уведомление Codex (флаги tui.* в main\terminals.js, проба t26). Вид ConEmu «9;4;…» (прогресс) — не уведомление.
+   * OSC 9 — уведомление Codex (флаги tui.* в main\terminals.js, проба t26). Виды ConEmu «код;параметры» — не уведомление:
+   * 9;4;… прогресс, 9;9;путь папка, 9;1;мс, 9;2;текст. Конец хода — текст ответа: ответ «1572» — тоже конец хода (t580).
    * @param {string} d @returns {boolean}
    */
   onOsc9(d) {
-    if (this.agent !== 'codex' || /^\d+(;|$)/.test(d)) return false;
+    if (this.agent !== 'codex' || /^\d{1,2};/.test(d)) return false;
     this.settleUntil = Date.now() + SETTLE_MS;
     this.setState(CODEX_ASK.test(d) ? 'waiting' : 'done', 'osc9');
     return true;

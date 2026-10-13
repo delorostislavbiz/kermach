@@ -751,6 +751,8 @@
  "roadmap.pe.updAlso": "Untouched sections updated: {fields}.",
  "roadmap.pe.upd": "The passport file changed outside: updated {fields}.",
  "roadmap.pe.saveClash": "Not saved: first decide what to keep in sections {fields} — from the file or yours.",
+ "roadmap.pe.fenceOpen": "Not saved: a ``` code block is not closed in section {fields} — close it and save again. Your input is kept.",
+ "roadmap.pe.heading": "Not saved: section {fields} has a line with # or ## outside a ``` code block — remove it or put it in a code block. Your input is kept.",
  "roadmap.pe.goneBad": "File passport.md has an error: {why}. Your edits are still here; you can save once the file is fixed.",
  "roadmap.pe.goneNone": "File passport.md is no longer in the board folder. Your edits are still here, but there is nowhere to save them.",
  "states.gotov": "ready",

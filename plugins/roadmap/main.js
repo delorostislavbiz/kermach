@@ -444,7 +444,11 @@ module.exports = (ctx) => {
           const item = board.update(project, ref, all);
           ctx.log(`${ref}: сохранено ${Object.keys(all).join(', ')}`);
           return { item };
-        } catch (e) { return { error: String((e && /** @type {any} */ (e).message) || e) }; }
+        } catch (e) {
+          const x = /** @type {any} */ (e);
+          // code и field — у отказов, которые окно объясняет своими словами (t607).
+          return { error: String((x && x.message) || e), ...(x && x.code ? { code: x.code, field: x.field } : {}) };
+        }
       }
       // set заменяет весь мешок (t502): прежние поля сливаются с новыми.
       if (cmd === 'setState') {

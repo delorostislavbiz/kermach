@@ -751,6 +751,8 @@
  "roadmap.pe.updAlso": "Unberührte Abschnitte aktualisiert: {fields}.",
  "roadmap.pe.upd": "Die Passdatei wurde außerhalb geändert: aktualisiert {fields}.",
  "roadmap.pe.saveClash": "Nicht gespeichert: Entscheiden Sie zuerst, was in den Abschnitten {fields} bleibt — aus der Datei oder Ihres.",
+ "roadmap.pe.fenceOpen": "Nicht gespeichert: Im Abschnitt {fields} ist ein ```-Codeblock nicht geschlossen — schließen Sie ihn und speichern Sie erneut. Ihre Eingabe bleibt.",
+ "roadmap.pe.heading": "Nicht gespeichert: Abschnitt {fields} hat eine Zeile mit # oder ## außerhalb eines ```-Codeblocks — entfernen Sie sie oder setzen Sie sie in einen Codeblock. Ihre Eingabe bleibt.",
  "roadmap.pe.goneBad": "Datei passport.md hat einen Fehler: {why}. Ihre Änderungen sind noch da; speichern geht, sobald die Datei korrigiert ist.",
  "roadmap.pe.goneNone": "Datei passport.md ist nicht mehr im Board-Ordner. Ihre Änderungen sind noch da, aber es gibt keinen Ort zum Speichern.",
  "states.gotov": "bereit",

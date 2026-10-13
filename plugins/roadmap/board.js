@@ -155,17 +155,38 @@ function spans(p, fields) {
   return out;
 }
 
-/** Разделы паспорта «## …»: раздел до следующего заголовка. @param {Parsed} p */
+/**
+ * Строки внутри блоков кода ``` (t607): true — строка блока, вместе с ограждениями. Блок закрывает строка из ``` не короче открывшей.
+ * Незакрытый ``` блоком не считается: иначе одна лишняя строка спрячет всё ниже, и «Сохранить» допишет второй раздел.
+ * @param {string[]} lines @param {number} [from]
+ */
+function codeMask(lines, from = 0) {
+  const out = lines.map(() => false);
+  const FENCE = /^ {0,3}(`{3,})(?![^`]*`)/;
+  let open = -1, len = 0;
+  for (let i = from; i < lines.length; i++) {
+    const m = FENCE.exec(lines[i]);
+    if (open < 0) { if (m) { open = i; len = m[1].length; } continue; }
+    if (m && m[1].length >= len && !lines[i].slice(lines[i].indexOf(m[1]) + m[1].length).trim()) {
+      for (let k = open; k <= i; k++) out[k] = true;
+      open = -1;
+    }
+  }
+  return out;
+}
+
+/** Разделы паспорта «## …»: раздел до следующего заголовка. Заголовки внутри блоков кода — текст раздела (t607). @param {Parsed} p */
 function sections(p) {
   /** @type {Record<string, Span & { title: string }>} */
   const out = {};
   const { lines } = p;
+  const code = codeMask(lines, p.headEnd);
   for (let i = p.headEnd; i < lines.length; i++) {
     // Двоеточие в конце (`## Журнал:`) — тот же раздел, иначе «Сохранить» допишет в конец второй.
-    const m = /^##\s+(?:\d+[.)]?\s*)?(.+?)\s*:?\s*$/.exec(lines[i]);
+    const m = code[i] ? null : /^##\s+(?:\d+[.)]?\s*)?(.+?)\s*:?\s*$/.exec(lines[i]);
     if (!m) continue;
     let end = i + 1;
-    while (end < lines.length && !/^#{1,2}\s/.test(lines[end])) end++;
+    while (end < lines.length && (code[end] || !/^#{1,2}\s/.test(lines[end]))) end++;
     const key = Object.keys(PASSPORT).find((k) => norm(PASSPORT[/** @type {keyof PASSPORT} */ (k)]) === norm(m[1]));
     if (key && !out[key]) out[key] = { key, title: m[1], start: i, end, value: lines.slice(i + 1, end).join('\n').trim() };
     i = end - 1;
@@ -179,36 +200,43 @@ function titleLine(p) {
   return -1;
 }
 
-/** Признаки готовности из значения поля. @param {string} v @returns {Criterion[]} */
-function criteria(v) {
-  /** @type {Criterion[]} */
+const CRIT_RE = /^[-*]\s*\[([ xXхХ]?)\]\s*(.*)$/;
+/**
+ * Строки признаков поля в файле — одно правило для чтения и щелчка (t607): строки внутри блоков кода ``` не признаки.
+ * В строке подписи признак может стоять после двоеточия: «Признаки готовности: - [ ] …».
+ * @param {Parsed} p @param {Span} sp @returns {{ i: number, text: string, done: boolean }[]}
+ */
+function critLines(p, sp) {
+  const code = codeMask(p.lines, p.headEnd);
   const out = [];
-  for (const l of v.split('\n')) {
-    const m = /^[-*]\s*\[([ xXхХ]?)\]\s*(.*)$/.exec(l.trim());
-    if (m) out.push({ text: m[2].trim(), done: m[1].trim() !== '' });
+  for (let i = sp.start; i < sp.end; i++) {
+    if (code[i]) continue;
+    const l = i === sp.start ? p.lines[i].slice(p.lines[i].indexOf(':') + 1) : p.lines[i];
+    const m = CRIT_RE.exec(l.trim());
+    if (m) out.push({ i, text: m[2].trim(), done: m[1].trim() !== '' });
   }
   return out;
+}
+
+/** Признаки готовности поля. @param {Parsed} p @param {Span} sp @returns {Criterion[]} */
+function criteria(p, sp) {
+  return critLines(p, sp).map(({ text, done }) => ({ text, done }));
 }
 
 /**
  * Признаки по одной строке (t513): число признаков в поле совпало с новым списком — каждая строка признака сравнивается со своим.
  * Текст тот же — меняется только отметка в скобках, другой — строка пишется заново. Не совпало число — false, поле пишется целиком.
- * @param {string[]} lines @param {Span} sp @param {{ text: string, done: boolean }[]} list
+ * Строки признаков — те же, что показало окно (critLines): признак в блоке кода не отмечается.
+ * @param {Parsed} p @param {Span} sp @param {{ text: string, done: boolean }[]} list
  */
-function markCriteria(lines, sp, list) {
-  const RE = /^[-*]\s*\[([ xXхХ]?)\]\s*(.*)$/;
-  /** @type {number[]} */
-  const at = [];
-  for (let i = sp.start; i < sp.end; i++) {
-    // В строке подписи признак может стоять после двоеточия: «Признаки готовности: - [ ] …».
-    const l = i === sp.start ? lines[i].slice(lines[i].indexOf(':') + 1) : lines[i];
-    if (RE.test(l.trim())) at.push(i);
-  }
+function markCriteria(p, sp, list) {
+  const { lines } = p;
+  const at = critLines(p, sp).map((c) => c.i);
   if (at.length !== list.length) return false;
   at.forEach((i, n) => {
     const head = i === sp.start ? lines[i].slice(0, lines[i].indexOf(':') + 1) : '';
     const l = lines[i].slice(head.length);
-    const m = /** @type {RegExpExecArray} */ (RE.exec(l.trim()));
+    const m = /** @type {RegExpExecArray} */ (CRIT_RE.exec(l.trim()));
     const want = list[n];
     if (m[2].trim() !== want.text.trim()) lines[i] = `${head}${head ? ' ' : ''}- [${want.done ? 'x' : ' '}] ${want.text.trim()}`;
     else if ((m[1].trim() !== '') !== !!want.done) lines[i] = head + l.replace(/\[([ xXхХ]?)\]/, want.done ? '[x]' : '[ ]');
@@ -270,7 +298,7 @@ function item(kind, num, file, text) {
     const health = hv ? canon(HEALTH, hv.replace(/ая$/, 'ый').replace(/яя$/, 'ий')) : '';
     if (hv && !health) return { error: `здоровье «${hv}»: допустимы ${HEALTH.join(', ')} или пусто` };
     const sp = spans(p, PHASE_FIELDS);
-    const crit = sp.criteria ? criteria(sp.criteria.value) : [];
+    const crit = sp.criteria ? criteria(p, sp.criteria) : [];
     return { item: { id, num, file, title, status, health, healthWhy: h.health_why || '', healthBy: h.health_by || '', healthAt: h.health_at || '',
       goal: sp.goal ? blank(sp.goal.value) : '', criteria: crit, ready: crit.length > 0 && crit.every((c) => c.done), cards: [], extra } };
   }
@@ -442,7 +470,7 @@ function update(project, ref, changes) {
       const sp = spans(p, fields)[key];
       const first = key === 'criteria' ? [`${fields[key]}:`, ...ls] : [`${fields[key]}: ${ls[0]}`, ...ls.slice(1)];
       // Признаков столько же, сколько в файле (щелчок по одному, t513) — меняем только строки, где признак другой; «* [X]» и строки без признака остаются как были.
-      if (key === 'criteria' && sp && markCriteria(lines, sp, /** @type {any[]} */ (value))) { /* строки уже на месте */ }
+      if (key === 'criteria' && sp && markCriteria(p, sp, /** @type {any[]} */ (value))) { /* строки уже на месте */ }
       else if (sp) {
         // Подпись оставляем как написал человек (регистр), меняем только текст после двоеточия.
         first[0] = first[0].replace(/^[^:]*:/, lines[sp.start].slice(0, lines[sp.start].indexOf(':') + 1));
@@ -455,7 +483,12 @@ function update(project, ref, changes) {
       }
     } else if (kind === 'passport' && key in PASSPORT) {
       const v = String(value === undefined || value === null ? '' : value).replace(/\r\n/g, '\n').trim();
-      if (v.split('\n').some((l) => /^#{1,2}\s/.test(l))) throw new Error('в тексте раздела не может быть заголовков # и ##');
+      // Заголовки внутри блока кода — текст раздела (t607). Незакрытый ``` сцепился бы с блоком соседнего раздела — не пишем.
+      const vl = v.split('\n');
+      const vc = codeMask(vl);
+      // code и field — окну для понятного сообщения на языке программы.
+      if (vl.some((l, i) => !vc[i] && /^#{1,2}\s/.test(l))) throw Object.assign(new Error('в тексте раздела не может быть заголовков # и ## вне блока кода ```'), { code: 'heading', field: key });
+      if (vl.filter((l, i) => !vc[i] && /^ {0,3}`{3,}(?![^`]*`)/.test(l)).length) throw Object.assign(new Error('в тексте раздела блок кода ``` не закрыт'), { code: 'fence', field: key });
       const s = sections(p)[key];
       const ls = v ? v.split('\n') : [];
       if (s) {
