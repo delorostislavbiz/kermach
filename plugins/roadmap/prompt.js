@@ -32,6 +32,25 @@ const FRESH_NOTE = 'заметки карт этой фазы, закрытых 
 
 /** Сравнение подписей: без регистра, «ё» как «е». @param {string} s */
 const norm = (s) => s.trim().toLowerCase().replace(/ё/g, 'е');
+/** Название раздела шаблона: двоеточие в конце (`## Общие правила:`) — тот же раздел, как в паспорте (t599, t603). @param {string} s */
+const headName = (s) => s.trim().replace(/\s*:$/, '');
+
+/**
+ * Разделы «## …» шаблона: название и строки до следующего заголовка. «## » внутри блока кода ``` — текст раздела (t612),
+ * правило блоков то же, что у доски (board.codeMask). @param {string} text @returns {{ head: string, at: number, lines: string[] }[]}
+ */
+function heads(text) {
+  const lines = text.split('\n');
+  const code = board.codeMask(lines);
+  /** @type {{ head: string, at: number, lines: string[] }[]} */
+  const out = [];
+  lines.forEach((l, i) => {
+    const m = code[i] ? null : /^## +(.*)$/.exec(l);
+    if (m) out.push({ head: m[1], at: i, lines: [] });
+    else if (out.length) out[out.length - 1].lines.push(l);
+  });
+  return out;
+}
 
 /** Файл не больше предела, не ссылка. @param {string} file @param {number} max */
 function readSmall(file, max) {
@@ -42,7 +61,7 @@ function readSmall(file, max) {
 }
 
 /**
- * Общие правила и шаблоны видов работы из prompt.md: разделы «## Общие правила» и «## Шаблон: <вид>».
+ * Общие правила и шаблоны видов работы из prompt.md: разделы «## Общие правила» и «## Шаблон: <вид>», с двоеточием в конце или без.
  * Текст до первого «## » — пояснение для человека, в промпт не идёт. @param {string} [file]
  */
 function templates(file = TEMPLATES) {
@@ -50,11 +69,9 @@ function templates(file = TEMPLATES) {
   const out = { rules: '', kinds: {}, error: '' };
   let text;
   try { text = readSmall(file, MAX_TEMPLATES); } catch (e) { out.error = `шаблоны не прочитаны: ${e instanceof Error ? e.message : e}`; return out; }
-  const parts = text.split(/^## +/m).slice(1);
-  for (const p of parts) {
-    const nl = p.indexOf('\n');
-    const head = (nl < 0 ? p : p.slice(0, nl)).trim();
-    const body = nl < 0 ? '' : p.slice(nl + 1).trim();
+  for (const p of heads(text)) {
+    const head = headName(p.head);
+    const body = p.lines.join('\n').trim();
     if (norm(head) === norm(RULES)) out.rules = body;
     const m = KIND_RE.exec(head);
     if (m) { const k = board.KINDS.find((x) => norm(x) === norm(m[1])); if (k) out.kinds[k] = body; }
@@ -212,7 +229,9 @@ function build(project, ref, opts = {}) {
     { n: 5, key: 'fresh', title: 'Свежее', note: FRESH_NOTE, v: {}, text: fr.text },
   ];
   const text = parts.map((p) => `## ${p.n}. ${p.title}\n${p.text}`).join('\n\n') + '\n';
-  return { card: card.id, title: card.title, kind: card.kind, parts, text, chars: text.length, warnings, skipped: fr.skipped, templates: tf };
+  // template — раздел «## Шаблон: <вид>» как в файле, без подстановок: его показывает «Открыть шаблон» (t604).
+  return { card: card.id, title: card.title, kind: card.kind, parts, text, chars: text.length, warnings, skipped: fr.skipped, templates: tf,
+    template: { kind: card.kind, text: kindText || '', file: tf.file, own: tf.own } };
 }
 
 /**
@@ -227,7 +246,8 @@ function compose(project, opts = {}) {
   /** @type {string | null} */
   let text = '';
   // null — в файле нет строки «## », '' — строка есть, а после неё пусто (t571: это разные предупреждения).
-  const read = (/** @type {string} */ f) => { const s = readSmall(f, MAX_TEMPLATES); const m = /^## .*$/m.exec(s); return m ? s.slice(m.index + m[0].length).trim() : null; };
+  // Первый «## » вне блока кода ``` (t612): пример с «## » в пояснении выше задания его не обрезает.
+  const read = (/** @type {string} */ f) => { const s = readSmall(f, MAX_TEMPLATES); const h = heads(s); return h.length ? s.split('\n').slice(h[0].at + 1).join('\n').trim() : null; };
   const lack = (/** @type {string | null} */ t) => t === null ? 'нет заголовка «## »' : 'после заголовка «## » пусто';
   try { text = read(tf.file); } catch (e) { if (!tf.own) return { error: `задание не прочитано: ${e instanceof Error ? e.message : e}` }; warnings.push(`своя копия ${tf.file}: ${e instanceof Error ? e.message : e} — взят встроенный текст`); }
   // Своя копия не читается, в ней нет «## » или после него пусто — встроенный текст и предупреждение, как у шаблонов карты.

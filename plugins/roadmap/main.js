@@ -446,8 +446,8 @@ module.exports = (ctx) => {
           return { item };
         } catch (e) {
           const x = /** @type {any} */ (e);
-          // code и field — у отказов, которые окно объясняет своими словами (t607).
-          return { error: String((x && x.message) || e), ...(x && x.code ? { code: x.code, field: x.field } : {}) };
+          // code и field — у отказов, которые окно объясняет своими словами (t607); problems — все плохие поля по code (t615).
+          return { error: String((x && x.message) || e), ...(x && x.code ? { code: x.code, field: x.field, problems: x.problems } : {}) };
         }
       }
       // set заменяет весь мешок (t502): прежние поля сливаются с новыми.

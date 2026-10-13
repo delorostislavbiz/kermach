@@ -305,7 +305,7 @@ function roadmapSetup(host) {
   const readyOf = (a) => (lists.READY ? lists.READY.find((x) => x.id === a) : lists.AGENTS.includes(a) ? { id: a, title: a, prompt: true } : undefined);
   /** Что агент берёт из карты: модель, усилие. @param {string} a */
   const tuneOf = (a) => got(lists.TUNE, a) || { model: false, effort: false };
-  /** Открытый промпт карты: номер карты и последний ответ prompt; null — промпт не открыт. @type {{ id: string, r: any, copied: string, at: string } | null} */
+  /** Открытый промпт карты: номер карты и последний ответ prompt; tpl — показан шаблон вида работы (t604); null — промпт не открыт. @type {{ id: string, r: any, copied: string, at: string, tpl?: boolean } | null} */
   let pv = null;
 
   const api =(/** @type {string} */ cmd, /** @type {any[]} */ ...a) => host.call(cmd, ...a).catch((/** @type {any} */ e) => ({ error: String((e && e.message) || e) }));
@@ -491,7 +491,29 @@ function roadmapSetup(host) {
     return f ? T(`f.${k}`, f.ru) : k;
   };
   const quote = (/** @type {string[]} */ ks) => ks.map((k) => `«${fieldName(k)}»`).join(', ');
-  const inp = (/** @type {string} */ k) => /** @type {any} */ (cardEl.querySelector(`[data-k="${k}"]`));
+  /** Тексты отказов board.js по code: pe — раздел паспорта, ce — поле карты (t607, t610). @type {Record<string, Record<string, (f: string) => string>>} */
+  const REFUSE = {
+    pe: {
+      fence: (fields) => T('pe.fenceOpen', 'Не сохранено: в разделе {fields} не закрыт блок кода ``` — закройте его и сохраните снова. Введённое на месте.', { fields }),
+      heading: (fields) => T('pe.heading', 'Не сохранено: в разделе {fields} строка с # или ## вне блока кода ``` — уберите её или поставьте в блок кода. Введённое на месте.', { fields }),
+      hidden: (fields) => T('pe.hidden', 'Не сохранено: раздел {fields} оказался внутри блока кода — выше в passport.md ``` без пары. Закройте блок в файле и сохраните снова. Введённое на месте.', { fields }),
+    },
+    ce: {
+      fence: (fields) => T('ce.fenceOpen', 'Не сохранено: в поле {fields} не закрыт блок кода ``` — закройте его и сохраните снова. Введённое на месте.', { fields }),
+      heading: (fields) => T('ce.heading', 'Не сохранено: в поле {fields} строка с # или подписью поля вне блока кода ``` — уберите её или поставьте в блок кода. Введённое на месте.', { fields }),
+      hidden: (fields) => T('ce.hidden', 'Не сохранено: поле {fields} оказалось внутри блока кода — выше в файле ``` без пары. Закройте блок в файле и сохраните снова. Введённое на месте.', { fields }),
+    },
+  };
+  /**
+   * Отказ board.js с code — своими словами на языке программы, по всем плохим полям (t615); отказ без code — null.
+   * @param {any} r @param {'pe' | 'ce'} pre @param {(ks: string[]) => string} q
+   */
+  const refusal = (r, pre, q) => {
+    const list = r && r.code ? (Array.isArray(r.problems) ? r.problems : [{ code: r.code, fields: [r.field] }]) : [];
+    const out = list.map((/** @type {any} */ x) => (Object.hasOwn(REFUSE[pre], x.code) ? REFUSE[pre][x.code](q((x.fields || []).filter(Boolean))) : '')).filter(Boolean);
+    return out.length ? out.join(' ') : null;
+  };
+  const inp =(/** @type {string} */ k) => /** @type {any} */ (cardEl.querySelector(`[data-k="${k}"]`));
   const getV = (/** @type {string} */ k) => { const e = inp(k); return k === 'human' ? e.dataset.v || '' : e.value; };
   const dirty = (/** @type {string} */ k) => !!cur && nv(getV(k)) !== nv(cur.base[k]);
   /** Высота поля по тексту: без своей прокрутки, текст виден целиком. @param {HTMLTextAreaElement} e */
@@ -762,11 +784,13 @@ function roadmapSetup(host) {
    */
   const paintPrompt = () => {
     if (!pv) return;
+    if (pv.tpl) { paintTemplate(); return; }
     const r = pv.r;
     const unsaved = cur ? RM_KEYS.filter(dirty) : [];
     let html = `<div class="ctop"><div class="cbar"><span class="back" data-pact="back">‹ ${esc(T('promptBack', 'карта'))}</span>`
       + `<span class="crumb">/ ${esc(pv.id)} · ${esc(T('promptCrumb', 'промпт, только чтение'))}</span><span class="grow"></span><span class="saved">${esc(pv.copied)}</span>`
-      + `<span class="cbtns">${last && last.passport ? `<button type="button" class="btn" data-pact="passport" title="${esc(T('promptPassTitle', 'Паспорт проекта — вторая часть промпта. Правка там попадёт в промпт после «Сохранить»'))}">${esc(T('promptPass', 'Открыть паспорт'))}</button>` : ''}`
+      + `<span class="cbtns">${r && !r.error && r.template ? `<button type="button" class="btn" data-pact="template" title="${esc(T('promptTplTitle', 'Шаблон вида работы — третья часть промпта. Он общий для всех проектов'))}">${esc(T('promptTpl', 'Открыть шаблон'))}</button>` : ''}`
+      + `${last && last.passport ? `<button type="button" class="btn" data-pact="passport" title="${esc(T('promptPassTitle', 'Паспорт проекта — вторая часть промпта. Правка там попадёт в промпт после «Сохранить»'))}">${esc(T('promptPass', 'Открыть паспорт'))}</button>` : ''}`
       + `<button type="button" class="btn pri" data-pact="copy"${!r || r.error ? ' disabled' : ''}>${esc(T('copy', 'Копировать'))}</button></span></div><div class="notes">`;
     if (!r) html += `<div class="note info">${esc(T('promptLoading', 'Собираю промпт…'))}</div>`;
     else if (r.error) html += `<div class="note bad">${esc(T('promptFail', 'Промпт не собран: {why}', { why: r.error }))}</div>`;
@@ -786,6 +810,27 @@ function roadmapSetup(host) {
           + `<span class="pnote">${esc(note)}</span></div><pre class="box">${esc(p.text)}</pre></div>`;
       }
     }
+    promptEl.innerHTML = html;
+  };
+  /**
+   * Шаблон вида работы карты (t604, экран 09) — на месте промпта, только чтение: раздел «## Шаблон: <вид>» как в файле и путь файла.
+   * Не правится здесь: шаблоны общие для всех проектов, правка из панели одного проекта поменяла бы промпт всех; свою копию человек кладёт сам (t547).
+   */
+  const paintTemplate = () => {
+    if (!pv) return;
+    const t = pv.r && !pv.r.error ? pv.r.template : null;
+    const kind = t ? /** @type {any} */ (RM_KIND)[t.kind] : '';
+    const kt = t ? (kind ? T(`kind.${kind}`, t.kind) : t.kind) : '';
+    let html = `<div class="ctop"><div class="cbar"><span class="back" data-pact="tback">‹ ${esc(T('passBackPrompt', 'промпт'))}</span>`
+      + `<span class="crumb">/ ${esc(pv.id)} · ${esc(T('tplCrumb', 'шаблон «{kind}», только чтение', { kind: kt }))}</span><span class="grow"></span></div><div class="notes">`
+      + `<div class="note warn" data-n="shared">${esc(T('tplShared', 'Шаблон общий для всех проектов: правка файла меняет промпт всех карт этого вида во всех проектах.'))}</div>`;
+    if (t) {
+      html += `<div class="pinfo">${esc(t.own ? T('promptTplOwn', 'Шаблоны — своя копия: {file}', { file: t.file }) : T('tplBuilt', 'Шаблоны — встроенные в плагин: {file}', { file: t.file }))}</div>`;
+      if (!t.text) html += `<div class="note warn">${esc(T('tplNone', 'В файле шаблонов нет раздела «{head}».', { head: '## Шаблон: ' + t.kind }))}</div>`;
+    }
+    html += '</div></div>';
+    if (t && t.text) html += `<div class="psec" data-part="template"><div class="phd"><span class="pn">3</span><span class="pt">${esc(T('part.kind', 'Шаблон вида работы'))}</span>`
+      + `<span class="pnote">${esc(kt)}</span></div><pre class="box">${esc(t.text)}</pre></div>`;
     promptEl.innerHTML = html;
   };
   /** Собрать промпт открытой карты заново: при открытии и когда файлы доски поменялись. */
@@ -819,6 +864,8 @@ function roadmapSetup(host) {
     const a = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-pact]'));
     if (!a || !pv) return;
     if (a.dataset.pact === 'back') { closePrompt(); return; }
+    // Шаблон с экрана промпта (t604): та же панель, «‹ промпт» — к промпту той же карты.
+    if (a.dataset.pact === 'template' || a.dataset.pact === 'tback') { pv.tpl = a.dataset.pact === 'template'; promptEl.scrollTop = 0; paintPrompt(); return; }
     // Паспорт с экрана промпта (t579, экран 09): карта и промпт остаются открытыми, «назад» из паспорта — сюда.
     if (a.dataset.pact === 'passport') { if (last && last.passport) { psBack = true; promptEl.hidden = true; openPassport(); } return; }
     if (a.dataset.pact === 'copy' && pv.r && !pv.r.error) {
@@ -876,8 +923,10 @@ function roadmapSetup(host) {
       box.classList.toggle('clash', has);
       q(`[data-pt="${s.key}"]`).textContent = secName(s.key);
       const mark = /** @type {HTMLElement} */ (box.querySelector('.pnote'));
-      mark.hidden = !empty;
-      mark.textContent = `● ${T('passNotFilled', 'не заполнено')}`;
+      // Раздел спрятала ``` без пары (t614): он есть в файле, но внутри блока кода — «не заполнено» было бы неправдой.
+      const hid = !!p && Array.isArray(p.hidden) && p.hidden.includes(s.key);
+      mark.hidden = !empty && !hid;
+      mark.textContent = `● ${hid ? T('passHidden', 'в файле внутри блока кода: выше ``` без пары') : T('passNotFilled', 'не заполнено')}`;
       e.placeholder = T('passEmptySec', 'раздел пуст — агент не узнает об этом');
       const x = /** @type {HTMLElement} */ (box.querySelector('.ext'));
       x.hidden = !has;
@@ -985,11 +1034,8 @@ function roadmapSetup(host) {
     ps.busy = false;
     if (r && r.clash && r.item) { psync(r.item); ps.notes.err = ''; paintPassport(); return; }
     if (!r || r.error || !r.item) {
-      // Отказ board.js с code — своими словами на языке программы (t607); набранное остаётся в полях.
-      const fields = r && r.field ? pquote([r.field]) : '';
-      ps.notes.err = r && r.code === 'fence' ? T('pe.fenceOpen', 'Не сохранено: в разделе {fields} не закрыт блок кода ``` — закройте его и сохраните снова. Введённое на месте.', { fields })
-        : r && r.code === 'heading' ? T('pe.heading', 'Не сохранено: в разделе {fields} строка с # или ## вне блока кода ``` — уберите её или поставьте в блок кода. Введённое на месте.', { fields })
-          : T('saveFail', 'Не сохранено: {why}. Введённое на месте.', { why: (r && r.error) || '?' });
+      // Отказ board.js с code — своими словами на языке программы (t607), все плохие разделы (t615); набранное остаётся в полях.
+      ps.notes.err = refusal(r, 'pe', pquote) || T('saveFail', 'Не сохранено: {why}. Введённое на месте.', { why: (r && r.error) || '?' });
       paintPassport();
       return;
     }
@@ -1206,7 +1252,8 @@ function roadmapSetup(host) {
       return;
     }
     if (!r || r.error || !r.item) {
-      cur.notes.err = T('saveFail', 'Не сохранено: {why}. Введённое на месте.', { why: (r && r.error) || '?' });
+      // Отказ board.js с code — своими словами (t610, t617); набранное остаётся в полях.
+      cur.notes.err = refusal(r, 'ce', quote) || T('saveFail', 'Не сохранено: {why}. Введённое на месте.', { why: (r && r.error) || '?' });
       paintNotes();
       return;
     }

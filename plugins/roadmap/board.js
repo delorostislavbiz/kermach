@@ -53,7 +53,8 @@ const HEAD_KEYS = {
  * ready — отмечены все признаки готовности (и они есть).
  * @typedef {{ id: string, num: number, file: string, title: string, type: string, card: string, files: string[], date: string, agent: string, text: string,
  *   extra: Record<string, string> }} Decision
- * @typedef {{ file: string, sections: Record<string, { title: string, text: string, empty: boolean }>, missing: string[] }} Passport
+ * @typedef {{ file: string, sections: Record<string, { title: string, text: string, empty: boolean }>, missing: string[], hidden: string[] }} Passport
+ * hidden — разделы, которые спрятала в блок кода ``` без пары (hiddenKeys, t614): окно их не видит, запись отказывает.
  * @typedef {{ root: string, exists: boolean, passport: Passport | null, phases: Phase[], cards: Card[], inbox: string[], decisions: Decision[],
  *   counter: { t: number, d: number }, errors: Problem[], warnings: Problem[] }} Board
  * counter — последние выданные номера с учётом файлов: следующий номер карты — counter.t + 1.
@@ -130,6 +131,16 @@ function parse(text) {
   return p;
 }
 
+/**
+ * Ограждение блока кода: строка из трёх и больше ` (отступ до 3 пробелов). Дальше в строке ` нет:
+ * строка «```npm test``` — команда» — код внутри строки, а не начало блока (t615, как в CommonMark).
+ */
+const FENCE = /^ {0,3}(`{3,})(?![^`]*`)/;
+/** Пустые строки по краям — прочь, отступ первой строки остаётся: им начинается блок кода с отступом (t616). @param {string} s */
+const edges = (s) => s.replace(/^(?:[ \t]*\n)+/, '').trimEnd();
+/** Значение поля карты или фазы: прочерк и пустое — пустое, отступ строки блока кода в начале остаётся. @param {string} v */
+const fieldValue = (v) => (/^[—–-]?$/.test(v.trim()) ? '' : edges(v));
+
 /** Подпись в начале строки: ключ поля и остаток строки. @param {Record<string, string>} fields @param {string} line */
 function label(fields, line) {
   const i = line.indexOf(':');
@@ -139,30 +150,37 @@ function label(fields, line) {
   return null;
 }
 
-/** Поля тела с подписями: поле до следующей подписи, пустой строки или заголовка. Первое вхождение подписи главное. @param {Parsed} p @param {Record<string, string>} fields */
+/**
+ * Поля тела с подписями: поле до следующей подписи, пустой строки или заголовка. Первое вхождение подписи главное.
+ * Строки блока кода ``` — текст поля как есть (t610): подпись, «#» и пустая строка в блоке поле не кончают и полем не становятся.
+ * @param {Parsed} p @param {Record<string, string>} fields
+ */
 function spans(p, fields) {
   /** @type {Record<string, Span>} */
   const out = {};
   const { lines } = p;
+  const code = codeMask(lines, p.headEnd);
   for (let i = p.headEnd; i < lines.length; i++) {
-    const m = label(fields, lines[i]);
+    const m = code[i] ? null : label(fields, lines[i]);
     if (!m) continue;
     let end = i + 1;
-    while (end < lines.length && lines[end].trim() && !lines[end].startsWith('#') && !label(fields, lines[end])) end++;
-    if (!out[m.key]) out[m.key] = { key: m.key, start: i, end, value: [m.rest, ...lines.slice(i + 1, end).map((l) => l.trim())].filter(Boolean).join('\n') };
+    while (end < lines.length && (code[end] || (lines[end].trim() && !lines[end].startsWith('#') && !label(fields, lines[end])))) end++;
+    // n-я строка списка — строка файла i + n (нулевая — остаток строки подписи, она не в блоке).
+    const vals = [m.rest, ...lines.slice(i + 1, end).map((l, n) => (code[i + 1 + n] ? l : l.trim()))];
+    if (!out[m.key]) out[m.key] = { key: m.key, start: i, end, value: vals.filter((l, n) => l || code[i + n]).join('\n') };
     i = end - 1;
   }
   return out;
 }
 
 /**
- * Строки внутри блоков кода ``` (t607): true — строка блока, вместе с ограждениями. Блок закрывает строка из ``` не короче открывшей.
+ * Строки внутри блоков кода ``` (t607): code[i] true — строка блока, вместе с ограждениями. Блок закрывает строка из ``` не короче открывшей.
  * Незакрытый ``` блоком не считается: иначе одна лишняя строка спрячет всё ниже, и «Сохранить» допишет второй раздел.
+ * loose — строка последней ``` без пары или -1.
  * @param {string[]} lines @param {number} [from]
  */
-function codeMask(lines, from = 0) {
+function fences(lines, from = 0) {
   const out = lines.map(() => false);
-  const FENCE = /^ {0,3}(`{3,})(?![^`]*`)/;
   let open = -1, len = 0;
   for (let i = from; i < lines.length; i++) {
     const m = FENCE.exec(lines[i]);
@@ -172,7 +190,17 @@ function codeMask(lines, from = 0) {
       open = -1;
     }
   }
-  return out;
+  return { code: out, loose: open };
+}
+
+/** Маска строк блоков кода, как в fences. @param {string[]} lines @param {number} [from] */
+const codeMask = (lines, from = 0) => fences(lines, from).code;
+
+/** Заголовок раздела паспорта «## …»: ключ ('' — раздел не наш) и название. Двоеточие в конце (`## Журнал:`) — тот же раздел (t599). @param {string} line */
+function secHead(line) {
+  const m = /^##\s+(?:\d+[.)]?\s*)?(.+?)\s*:?\s*$/.exec(line);
+  if (!m) return null;
+  return { key: Object.keys(PASSPORT).find((k) => norm(PASSPORT[/** @type {keyof PASSPORT} */ (k)]) === norm(m[1])) || '', title: m[1] };
 }
 
 /** Разделы паспорта «## …»: раздел до следующего заголовка. Заголовки внутри блоков кода — текст раздела (t607). @param {Parsed} p */
@@ -183,21 +211,45 @@ function sections(p) {
   const code = codeMask(lines, p.headEnd);
   for (let i = p.headEnd; i < lines.length; i++) {
     // Двоеточие в конце (`## Журнал:`) — тот же раздел, иначе «Сохранить» допишет в конец второй.
-    const m = code[i] ? null : /^##\s+(?:\d+[.)]?\s*)?(.+?)\s*:?\s*$/.exec(lines[i]);
+    const m = code[i] ? null : secHead(lines[i]);
     if (!m) continue;
     let end = i + 1;
     while (end < lines.length && (code[end] || !/^#{1,2}\s/.test(lines[end]))) end++;
-    const key = Object.keys(PASSPORT).find((k) => norm(PASSPORT[/** @type {keyof PASSPORT} */ (k)]) === norm(m[1]));
-    if (key && !out[key]) out[key] = { key, title: m[1], start: i, end, value: lines.slice(i + 1, end).join('\n').trim() };
+    const { key } = m;
+    if (key && !out[key]) out[key] = { key, title: m.title, start: i, end, value: edges(lines.slice(i + 1, end).join('\n')) };
     i = end - 1;
   }
   return out;
 }
 
-/** Заголовок «# …»: номер строки или -1. @param {Parsed} p */
+/** Заголовок «# …»: номер строки или -1. «# …» внутри блока кода ``` — не заголовок (t611). @param {Parsed} p */
 function titleLine(p) {
-  for (let i = p.headEnd; i < p.lines.length; i++) if (/^#\s+\S/.test(p.lines[i])) return i;
+  const code = codeMask(p.lines, p.headEnd);
+  for (let i = p.headEnd; i < p.lines.length; i++) if (!code[i] && /^#\s+\S/.test(p.lines[i])) return i;
   return -1;
+}
+
+/**
+ * Разделы паспорта или поля карты и фазы, которые спрятала в блок кода ``` без пары (t614).
+ * По правилу Markdown одиночная ``` берёт в пару ближайшую ``` ниже, и всё между ними — текст блока: окно раздела не видит,
+ * а «Сохранить» дописало бы в конец второй раздел с тем же именем. Признак: в файле есть ``` без пары, а заголовок или подпись — только внутри блока.
+ * Все ``` в паре — заголовок в блоке считаем образцом (пример паспорта в разделе), и такой раздел дописывается как обычно.
+ * @param {string} kind @param {Parsed} p @returns {string[]}
+ */
+function hiddenKeys(kind, p) {
+  if (kind !== 'passport' && kind !== 't' && kind !== 'f') return [];
+  const { code, loose } = fences(p.lines, p.headEnd);
+  if (loose < 0) return [];
+  const fields = kind === 't' ? CARD_FIELDS : PHASE_FIELDS;
+  const has = kind === 'passport' ? sections(p) : spans(p, fields);
+  /** @type {string[]} */
+  const out = [];
+  for (let i = p.headEnd; i < p.lines.length; i++) {
+    if (!code[i]) continue;
+    const m = kind === 'passport' ? secHead(p.lines[i]) : label(fields, p.lines[i]);
+    if (m && m.key && !has[m.key] && !out.includes(m.key)) out.push(m.key);
+  }
+  return out;
 }
 
 const CRIT_RE = /^[-*]\s*\[([ xXхХ]?)\]\s*(.*)$/;
@@ -262,7 +314,7 @@ function item(kind, num, file, text) {
     /** @type {Passport['sections']} */
     const out = {};
     for (const [k, s] of Object.entries(secs)) out[k] = { title: s.title, text: s.value, empty: !s.value };
-    return { item: { file, sections: out, missing: Object.keys(PASSPORT).filter((k) => !secs[k]) } };
+    return { item: { file, sections: out, missing: Object.keys(PASSPORT).filter((k) => !secs[k]), hidden: hiddenKeys(kind, p) } };
   }
   if (!p.head) return { error: 'нет шапки: файл начинается со строки ---' };
   const id = `${kind}${num}`;
@@ -287,7 +339,7 @@ function item(kind, num, file, text) {
     const sp = spans(p, CARD_FIELDS);
     /** @type {Record<string, string>} */
     const fields = {};
-    for (const k of Object.keys(CARD_FIELDS)) fields[k] = sp[k] ? blank(sp[k].value) : '';
+    for (const k of Object.keys(CARD_FIELDS)) fields[k] = sp[k] ? fieldValue(sp[k].value) : '';
     return { item: { id, num, file, title, phase, status, kind: kindOf, agent: blank(h.agent || ''), model: blank(h.model || ''), effort: blank(h.effort || ''),
       depends, human, created: h.created || '', closed: blank(h.closed || ''), source: blank(h.source || ''), fields, extra } };
   }
@@ -300,7 +352,7 @@ function item(kind, num, file, text) {
     const sp = spans(p, PHASE_FIELDS);
     const crit = sp.criteria ? criteria(p, sp.criteria) : [];
     return { item: { id, num, file, title, status, health, healthWhy: h.health_why || '', healthBy: h.health_by || '', healthAt: h.health_at || '',
-      goal: sp.goal ? blank(sp.goal.value) : '', criteria: crit, ready: crit.length > 0 && crit.every((c) => c.done), cards: [], extra } };
+      goal: sp.goal ? fieldValue(sp.goal.value) : '', criteria: crit, ready: crit.length > 0 && crit.every((c) => c.done), cards: [], extra } };
   }
   const type = canon(DTYPES, h.type || '');
   if (!type) return { error: `type «${h.type || ''}»: допустимы ${DTYPES.join(', ')}` };
@@ -374,9 +426,14 @@ function read(project) {
   }
   if (fs.existsSync(path.join(dir, 'passport.md'))) todo.push(['passport', 0, 'passport.md']);
   for (const [kind, num, name] of todo) {
-    let r;
-    try { r = item(kind, num, name, readSmall(inside(dir, name))); } catch (e) { r = { error: e instanceof Error ? e.message : String(e) }; }
+    let r, text = '';
+    try { text = readSmall(inside(dir, name)); r = item(kind, num, name, text); } catch (e) { r = { error: e instanceof Error ? e.message : String(e) }; }
     if ('error' in r) { b.errors.push({ file: name, reason: r.error }); continue; }
+    // Раздел или поле ушли в блок кода из-за ``` без пары (t614) — замечание к файлу: иначе они пропадают из окна молча.
+    for (const k of text.includes('```') ? hiddenKeys(kind, parse(text)) : []) {
+      const t = kind === 'passport' ? PASSPORT[/** @type {keyof PASSPORT} */ (k)] : (kind === 't' ? CARD_FIELDS : PHASE_FIELDS)[k];
+      b.warnings.push({ file: name, reason: `«${t}» внутри блока кода: выше в файле \`\`\` без пары. Окно ${kind === 'passport' ? 'этот раздел' : 'это поле'} не показывает, «Сохранить» его не запишет — закройте блок в файле` });
+    }
     if (kind === 't') b.cards.push(/** @type {Card} */ (r.item));
     else if (kind === 'f') b.phases.push(/** @type {Phase} */ (r.item));
     else if (kind === 'd') b.decisions.push(/** @type {Decision} */ (r.item));
@@ -428,11 +485,62 @@ function headValue(v) {
   return s;
 }
 
-/** Строки значения поля тела: без пустых, пустое — прочерк. @param {unknown} v @param {Record<string, string>} fields */
-function bodyLines(v, fields) {
-  const ls = String(v === undefined || v === null ? '' : v).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  for (const l of ls.slice(1)) if (l.startsWith('#') || label(fields, l)) throw new Error(`строка «${l.slice(0, 40)}» внутри значения читалась бы как новое поле`);
-  return ls.length ? ls : ['—'];
+/**
+ * Строки значения поля тела, как они лягут в файл: без пустых и пробелов по краям, пустое — прочерк.
+ * Строки блока кода ``` — как есть, с отступом и пустыми (t617): «# тесты» в блоке ```bash — не новое поле.
+ * code: 'heading' — строка вне блока читалась бы как новое поле или заголовок; 'fence' — блок ``` не закрыт. Проверка — по тем строкам, что уйдут в файл.
+ * @param {unknown} v @param {Record<string, string>} fields @returns {{ ls: string[], code: string, line: string }}
+ */
+function bodyText(v, fields) {
+  const raw = String(v === undefined || v === null ? '' : v).split(/\r?\n/);
+  const rc = codeMask(raw);
+  const ls = raw.map((l, i) => (rc[i] ? l : l.trim())).filter((l, i) => l || rc[i]);
+  const c = codeMask(ls);
+  const head = ls.find((l, i) => i > 0 && !c[i] && (l.startsWith('#') || label(fields, l)));
+  if (head !== undefined) return { ls, code: 'heading', line: head };
+  const open = ls.find((l, i) => !c[i] && FENCE.test(l));
+  if (open !== undefined) return { ls, code: 'fence', line: open };
+  return { ls: ls.length ? ls : ['—'], code: '', line: '' };
+}
+
+/** Строки значения поля; ошибка — отказ с code для окна. @param {unknown} v @param {Record<string, string>} fields @param {string} [key] */
+function bodyLines(v, fields, key = '') {
+  const r = bodyText(v, fields);
+  if (r.code) throw refuse({ [r.code]: [key] }, r.line);
+  return r.ls;
+}
+
+/** Строки поля в файле: подпись и первая строка значения; блок кода ``` начинается с новой строки — после подписи ограждение не работает. @param {string} title @param {string[]} ls */
+const fieldHead = (title, ls) => (FENCE.test(ls[0]) ? [`${title}:`, ...ls] : [`${title}: ${ls[0]}`, ...ls.slice(1)]);
+
+/**
+ * Текст раздела паспорта, как он ляжет в файл: пустые строки по краям — прочь, отступ первой строки остаётся (t616).
+ * code: 'heading' — # или ## вне блока кода, 'fence' — блок ``` не закрыт (сцепился бы с блоком соседнего раздела, t607).
+ * @param {unknown} value @returns {{ v: string, code: string }}
+ */
+function secText(value) {
+  const v = edges(String(value === undefined || value === null ? '' : value).replace(/\r\n/g, '\n'));
+  const vl = v.split('\n');
+  const vc = codeMask(vl);
+  if (vl.some((l, i) => !vc[i] && /^#{1,2}\s/.test(l))) return { v, code: 'heading' };
+  if (vl.some((l, i) => !vc[i] && FENCE.test(l))) return { v, code: 'fence' };
+  return { v, code: '' };
+}
+
+/** Тексты отказов по code — для журнала; окно пишет свои по code на языке программы. */
+const REFUSE = {
+  heading: 'вне блока кода ``` строка читалась бы как заголовок или новое поле',
+  fence: 'блок кода ``` не закрыт',
+  hidden: 'в файле есть ``` без пары, и это место оказалось бы внутри блока кода',
+};
+/**
+ * Отказ записи, который окно объясняет своими словами (t607): problems — все плохие поля по code (t615), code и field — первые.
+ * @param {Record<string, string[]>} bad code → ключи полей @param {string} [line] строка, на которой споткнулись
+ */
+function refuse(bad, line = '') {
+  const problems = Object.entries(bad).map(([code, fields]) => ({ code, fields }));
+  const msg = problems.map((x) => `${x.fields.join(', ')}: ${REFUSE[/** @type {keyof REFUSE} */ (x.code)]}`).join('; ');
+  return Object.assign(new Error(`${msg}${line ? ` (строка «${line.trim().slice(0, 40)}»)` : ''}`), { code: problems[0].code, field: problems[0].fields[0], problems });
 }
 
 /**
@@ -450,6 +558,19 @@ function update(project, ref, changes) {
   const p = parse(old);
   const lines = p.lines;
   const fields = kind === 't' ? CARD_FIELDS : kind === 'f' ? PHASE_FIELDS : {};
+  // Все поля проверяем до правки: отказ называет каждое плохое поле, а не первое (t615). Поле, спрятанное ``` без пары, не дописываем вторым (t614).
+  /** @type {Record<string, string[]>} */
+  const bad = {};
+  const hid = hiddenKeys(kind, p);
+  const has = kind === 'passport' ? sections(p) : spans(p, fields);
+  for (const [key, value] of Object.entries(changes)) {
+    const own = kind === 'passport' ? key in PASSPORT : key in fields;
+    const c = !own ? '' : hid.includes(key) && !has[key] ? 'hidden' : key === 'criteria' ? '' : kind === 'passport' ? secText(value).code : bodyText(value, fields).code;
+    if (c) (bad[c] = bad[c] || []).push(key);
+  }
+  if (Object.keys(bad).length) throw refuse(bad);
+  /** Что должно прочитаться после записи: поле → значение. @type {Record<string, string>} */
+  const want = {};
   for (const [key, value] of Object.entries(changes)) {
     if (key === 'id') throw new Error('номер не меняется');
     if (key === 'title') {
@@ -466,9 +587,10 @@ function update(project, ref, changes) {
     } else if (key in fields) {
       const ls = key === 'criteria'
         ? (Array.isArray(value) ? value : []).map((c) => { const t = String(c && c.text || '').trim(); if (!t || /[\r\n]/.test(t)) throw new Error('признак — одна непустая строка'); return `- [${c.done ? 'x' : ' '}] ${t}`; })
-        : bodyLines(value, fields);
+        : bodyLines(value, fields, key);
+      if (key !== 'criteria') want[key] = fieldValue(ls.join('\n'));
       const sp = spans(p, fields)[key];
-      const first = key === 'criteria' ? [`${fields[key]}:`, ...ls] : [`${fields[key]}: ${ls[0]}`, ...ls.slice(1)];
+      const first = key === 'criteria' ? [`${fields[key]}:`, ...ls] : fieldHead(fields[key], ls);
       // Признаков столько же, сколько в файле (щелчок по одному, t513) — меняем только строки, где признак другой; «* [X]» и строки без признака остаются как были.
       if (key === 'criteria' && sp && markCriteria(p, sp, /** @type {any[]} */ (value))) { /* строки уже на месте */ }
       else if (sp) {
@@ -482,13 +604,9 @@ function update(project, ref, changes) {
         lines.splice(at, 0, ...first);
       }
     } else if (kind === 'passport' && key in PASSPORT) {
-      const v = String(value === undefined || value === null ? '' : value).replace(/\r\n/g, '\n').trim();
-      // Заголовки внутри блока кода — текст раздела (t607). Незакрытый ``` сцепился бы с блоком соседнего раздела — не пишем.
-      const vl = v.split('\n');
-      const vc = codeMask(vl);
-      // code и field — окну для понятного сообщения на языке программы.
-      if (vl.some((l, i) => !vc[i] && /^#{1,2}\s/.test(l))) throw Object.assign(new Error('в тексте раздела не может быть заголовков # и ## вне блока кода ```'), { code: 'heading', field: key });
-      if (vl.filter((l, i) => !vc[i] && /^ {0,3}`{3,}(?![^`]*`)/.test(l)).length) throw Object.assign(new Error('в тексте раздела блок кода ``` не закрыт'), { code: 'fence', field: key });
+      // Заголовки внутри блока кода — текст раздела (t607); незакрытый ``` и заголовки вне блока отклонены выше.
+      const { v } = secText(value);
+      want[key] = v;
       const s = sections(p)[key];
       const ls = v ? v.split('\n') : [];
       if (s) {
@@ -508,6 +626,10 @@ function update(project, ref, changes) {
   const text = p.bom + lines.join(p.eol);
   const after = item(kind, num, path.basename(file), text);
   if ('error' in after) throw new Error(`правка не принята: ${after.error}`);
+  // Записанное читается тем же текстом. Иначе ``` без пары выше в файле взяла бы в пару ограждение нового блока — не пишем.
+  const got = kind === 'passport' ? sections(p) : spans(p, fields);
+  const off = Object.keys(want).filter((k) => (got[k] ? (kind === 'passport' ? got[k].value : fieldValue(got[k].value)) : '') !== want[k]);
+  if (off.length) throw refuse({ hidden: off });
   if (text !== old) save(file, text);
   return after.item;
 }
@@ -546,8 +668,8 @@ function create(project, what, data) {
   const head = { ...defaults };
   for (const k of HEAD_KEYS[kind]) if (data[k] !== undefined) head[k] = data[k];
   const body = ['---', '---', `# ${title}`];
-  if (kind === 't') for (const [k, l] of Object.entries(CARD_FIELDS)) { const ls = bodyLines(data[k], CARD_FIELDS); body.push(`${l}: ${ls[0]}`, ...ls.slice(1)); }
-  if (kind === 'f') { const ls = bodyLines(data.goal, PHASE_FIELDS); body.push(`Цель: ${ls[0]}`, ...ls.slice(1), 'Признаки готовности:'); }
+  if (kind === 't') for (const [k, l] of Object.entries(CARD_FIELDS)) body.push(...fieldHead(l, bodyLines(data[k], CARD_FIELDS, k)));
+  if (kind === 'f') body.push(...fieldHead('Цель', bodyLines(data.goal, PHASE_FIELDS, 'goal')), 'Признаки готовности:');
   if (kind === 'd') body.push(String(data.text || '').trim());
   const headLines = Object.entries(head).map(([k, v]) => { const s = headValue(v); return s ? `${k}: ${s}` : `${k}:`; });
   const textOf = (/** @type {string} */ id) => [body[0], `id: ${id}`, ...headLines, ...body.slice(1)].join('\n') + '\n';
@@ -676,4 +798,4 @@ async function ownRootAsync(project, dir) {
   if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`папка доски ведёт за пределы проекта: ${real}`);
 }
 
-module.exports = { DIR, MAX_SIZE, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, update, nextId, create, watch };
+module.exports = { DIR, MAX_SIZE, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, update, nextId, create, watch, codeMask };
