@@ -8,6 +8,7 @@
 // Статус стал «готово» — заодно closed: время закрытия, по нему промпт берёт свежие заметки фазы (t514).
 // «Показать промпт» (t514) — команда prompt: текст собирает prompt.js из файлов доски и шаблонов при каждом вызове (своя копия prompt.md в ctx.dataDir, нет — встроенный); lists — списки моделей из agents.js.
 // «Запустить» (t515) — команда run: вкладка агента карты через ctx.openTab, первое сообщение — тот же prompt.build, агент, модель и усилие — agents.launchArgs.
+// Агент — любой из каталога ядра (t576): claude и codex — свой вид вкладки, остальные — agent:<id> (agents.kindOf); список для окна — ctx.agents().
 // Запуски — в мешке ctx.settings: runs[ключ проекта][карта] = { sid, started, title, kind, gone, st, at }; в файл карты — только статус (файл под git, номер вкладки ему не нужен).
 // title и kind (t577) — заголовок открытия (ownTitle ядра) и агент: после revive демона номер вкладки новый, вкладку узнаём по ним, запись получает новый номер.
 // st и at — статус, который записала сама программа, и время правки файла сразу после записи (t551): окно по ним отличает свою запись от правки снаружи.
@@ -137,6 +138,12 @@ module.exports = (ctx) => {
    * Вкладка запуска карты среди живых (t577): по номеру, после revive демона — того же агента с тем же заголовком открытия.
    * Запись до t577 (без title) — только по номеру. @param {any[]} tabs @param {{ sid: string, title?: string, kind?: string }} rec
    */
+  /**
+   * Старые номера вкладок, которые revive ещё поднимет (t582, поле waiting ядра). Revive идёт по одной вкладке, а сверка приходит на каждое изменение:
+   * вкладки нет, но её номер здесь — она не закрыта, а ещё «подключается». Старое ядро поля не знает — пустой набор, как раньше.
+   * @param {any} r ответ ctx.terminals() @returns {Set<string>}
+   */
+  const waitingOf = (r) => new Set(r && Array.isArray(r.waiting) ? r.waiting.map(String) : []);
   const runTabOf = (tabs, rec) => tabs.find((t) => t.sid === rec.sid) || (rec.title ? tabs.find((t) => t.kind === rec.kind && t.ownTitle === rec.title) : undefined);
   /** Записать или забыть (null) вкладку составления — на свежем мешке, только свой ключ (как patchRuns). @param {{ sid: string, started: number, title: string } | null} v */
   const setCompose = (v) => {
@@ -164,9 +171,11 @@ module.exports = (ctx) => {
     const r = await ctx.terminals();
     if (stopped || !r || 'error' in r) return;
     // Вкладки составления нет у демона — забываем (t568); после revive — новый номер. Запись новее вопроса не трогаем, как запуски ниже.
+    const wait = waitingOf(r);
     const cp = composeOf();
     const ct = cp && cp.started < asked ? composeTabOf(r.tabs, cp) : null;
-    if (cp && cp.started < asked && (!ct || ct.sid !== cp.sid)) {
+    // Вкладки нет, а revive её ещё поднимет (t582) — не забываем: следующая сверка найдёт её по заголовку.
+    if (cp && cp.started < asked && (!ct || ct.sid !== cp.sid) && (ct || !wait.has(cp.sid))) {
       setCompose(ct ? { ...cp, sid: ct.sid } : null);
       ctx.log(ct ? `составить роадмап: вкладка ${cp.sid} запущена заново — теперь ${ct.sid}` : `составить роадмап: вкладки ${cp.sid} нет у демона — запись забыта`);
       if (!stopped) ctx.send('board', snapshot());
@@ -194,6 +203,8 @@ module.exports = (ctx) => {
       if (run.gone) continue;
       // После revive демона у вкладки новый номер (t577): узнаём её по заголовку открытия, запись получает новый номер — это не «пауза».
       const t = runTabOf(r.tabs, run);
+      // Вкладка ещё «подключается» после перезапуска демона (t582) — это не «пауза»: статус и запись не трогаем до сверки после revive.
+      if (!t && wait.has(run.sid)) continue;
       const moved = t && t.sid !== run.sid ? { ...run, sid: t.sid } : null;
       if (moved && t) ctx.log(`${id}: вкладка ${run.sid} запущена заново — теперь ${t.sid}`);
       const rec = moved || run;
@@ -227,8 +238,8 @@ module.exports = (ctx) => {
     if (!c) return { error: `карты ${ref} нет на доске или файл с ошибкой` };
     if (!c.phase) return { error: 'карта во «Входящих»: запускаются только карты фазы' };
     if (c.status === 'готово') return { error: 'карта уже готова' };
+    // Любой агент каталога ядра (t576): не установлен, выключен, неизвестен, не берёт задание при запуске — причину называет ядро в ответе openTab.
     const agent = c.agent || 'claude';
-    if (!agents.AGENTS.includes(agent)) return { error: `запуск — только ${agents.AGENTS.join(' и ')}, а в карте агент ${agent}` };
     // До первого await: второй вызов, пока первый ждёт демона или вкладку, видит флаг (t554).
     if (starting.has(ref)) return { error: `карта ${ref} уже запускается` };
     starting.add(ref);
@@ -265,6 +276,11 @@ module.exports = (ctx) => {
     ctx.log(`${who}: повтор со ссылкой на файл тоже не открылся: ${again ? again.error : 'нет ответа'}`);
     return r;
   };
+  /** Агенты для списка «агент» карты: { id, title, prompt }[]; ядро без ctx.agents (до t576) — null. */
+  const ready = () => {
+    if (typeof ctx.agents !== 'function') return null;
+    try { return ctx.agents(); } catch (e) { ctx.log(`список агентов не получен: ${why(e)}`); return null; }
+  };
   /** Запуск после проверок карты; run держит флаг «запуск идёт». @param {string} ref @param {any} c @param {string} agent */
   const start = async (ref, c, agent) => {
     const prev = runsOf()[ref];
@@ -272,13 +288,15 @@ module.exports = (ctx) => {
       const r = await ctx.terminals();
       const t = r && 'tabs' in r ? runTabOf(r.tabs, prev) : undefined;
       if (t) return { error: `карта уже запущена: вкладка ${t.sid}` };
+      if (waitingOf(r).has(prev.sid)) return { error: `карта уже запущена: её вкладка ещё подключается после перезапуска` };
     }
     const pr = prompt.build(project, ref, { dataDir: ctx.dataDir });
     if ('error' in pr) return { error: `промпт не собран: ${pr.error}` };
     const la = agents.launchArgs(agent, c.model, c.effort);
     if (la.skipped) ctx.log(`${ref}: ${la.skipped}`);
     const title = `${ref} · ${c.title || ''}`.trim().slice(0, 64);
-    const r = await openWith({ kind: agent, args: la.args, title }, ref, ref, pr.text, 'промпт');
+    const kind = agents.kindOf(agent);
+    const r = await openWith({ kind, args: la.args, title }, ref, ref, pr.text, 'промпт');
     if (!r || 'error' in r) {
       const e = r ? r.error : 'нет ответа';
       ctx.log(`${ref}: вкладка не открылась: ${e}`);
@@ -286,7 +304,7 @@ module.exports = (ctx) => {
     }
     const sid = r.session.sid;
     // title и kind — чтобы узнать вкладку после revive демона, когда номер у неё новый (t577); title — ownTitle ядра, freeTitle делает его единственным в проекте.
-    patchRuns({ [ref]: { sid, started: Date.now(), title: String(r.session.ownTitle || ''), kind: agent } });
+    patchRuns({ [ref]: { sid, started: Date.now(), title: String(r.session.ownTitle || ''), kind } });
     ctx.log(`${ref}: запущена во вкладке ${sid}, ${agent}${la.args.length ? ` ${la.args.join(' ')}` : ''}, промпт ${pr.text.length} знаков`);
     try {
       if (c.status === 'в работе') return { session: r.session, item: c, skipped: la.skipped };
@@ -323,6 +341,7 @@ module.exports = (ctx) => {
           if (t.sid !== was.sid) { setCompose({ ...was, sid: t.sid }); ctx.log(`составить роадмап: вкладка ${was.sid} запущена заново — теперь ${t.sid}`); }
           return { error: `вкладка составления уже открыта: ${t.sid}`, sid: t.sid };
         }
+        if (waitingOf(r).has(was.sid)) return { error: 'вкладка составления уже открыта: она ещё подключается после перезапуска' };
         ctx.log(`составить роадмап: вкладки ${was.sid} нет у демона — открываю новую`);
       }
       const pr = prompt.compose(project, { dataDir: ctx.dataDir });
@@ -372,7 +391,8 @@ module.exports = (ctx) => {
       if (cmd === 'board') { startWatch(); sync(); return snapshot(); }
       if (cmd === 'prompt') { try { return prompt.build(project, String(args[0] || ''), { dataDir: ctx.dataDir }); } catch (e) { return { error: String((e && /** @type {any} */ (e).message) || e) }; } }
       // Поля по имени (t541): весь модуль с функцией launchArgs IPC не клонирует.
-      if (cmd === 'lists') return { AGENTS: agents.AGENTS, MODELS: agents.MODELS, EFFORT: agents.EFFORT, EFFORTS: agents.EFFORTS };
+      // READY — агенты, найденные и включённые в системе (t576, ctx.agents); ядро без ctx.agents — null, окно берёт встроенные AGENTS.
+      if (cmd === 'lists') return { AGENTS: agents.AGENTS, MODELS: agents.MODELS, EFFORT: agents.EFFORT, EFFORTS: agents.EFFORTS, TUNE: agents.TUNE, READY: ready() };
       if (cmd === 'run') return run(String(args[0] || ''));
       if (cmd === 'compose') return compose(String(args[0] || ''));
       if (cmd === 'sync') { sync(); return {}; }

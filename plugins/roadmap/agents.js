@@ -6,13 +6,40 @@
 //   Какой объект чей — 11891: `claude:Fe,codex:Ie`.
 // Модель и усилие в файле карты — любые (FORMAT.md): значение не из списка окно показывает и сохраняет как есть.
 // Ядро пропускает модель и усилие (t536): terminals.js ALLOW_FLAGS — `--model`, `--effort` (claude), `--model`, `-m`, `-c model_reasoning_effort=…` (codex).
+// Агенты из системы (t576): список — ctx.agents() (найдены и включены), вид вкладки — agent:<id>. Модель и усилие — только у тех, чьи флаги
+// известны по Орке (ref\orca-out\main\index.js, объект zNn) и разрешены в ALLOW_FLAGS ядра; у остальных окно пишет «не передаётся».
+// grok: модели и усилия — ~\.grok\models_cache.json (grok 1.0.50, 13.10); у grok-4.5 «очень высокого» нет — его отклонит сам grok, проверять не стали.
+// gemini и cursor: модели — списки Орки; antigravity и omp: модель любая строкой, списка нет.
 
+/** Встроенные агенты: окно знает их и без ядра с ctx.agents (до t576). */
 const AGENTS = ['claude', 'codex'];
 /** Модели агента по порядку списка; первым в окне стоит «по умолчанию агента» (пустое значение). */
 const MODELS = {
   claude: ['fable', 'opus', 'sonnet', 'haiku'],
   codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2-codex'],
+  grok: ['grok-4.7', 'grok-4.7-build-fast', 'grok-4.6', 'grok-4.5'],
+  gemini: ['gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+  cursor: ['auto', 'gpt-5.3-codex', 'claude-opus-4-8'],
+  antigravity: [],
+  omp: [],
 };
+/**
+ * Флаги модели и усилия по агентам; нет агента — модель и усилие ему не передаются. Флаги — те же, что пропускает ядро (ALLOW_FLAGS).
+ * @type {Record<string, { model: string, effort?: (flag: string) => string[] }>}
+ */
+const FLAGS = {
+  claude: { model: '--model', effort: (f) => ['--effort', f] },
+  codex: { model: '-m', effort: (f) => ['-c', `model_reasoning_effort=${f}`] },
+  grok: { model: '-m', effort: (f) => ['--reasoning-effort', f] },
+  gemini: { model: '-m' },
+  antigravity: { model: '--model', effort: (f) => ['--effort', f] },
+  cursor: { model: '--model' },
+  omp: { model: '--model' },
+};
+/** Что окно может выбрать у агента: модель, усилие. Поля по имени для команды lists — функции IPC не клонирует (t541). @type {Record<string, { model: boolean, effort: boolean }>} */
+const TUNE = Object.fromEntries(Object.entries(FLAGS).map(([k, v]) => [k, { model: true, effort: !!v.effort }]));
+/** Вид вкладки ядра для агента карты. @param {string} agent */
+const kindOf = (agent) => (AGENTS.includes(agent) ? agent : `agent:${agent}`);
 /**
  * Усилие: значение в файле (по-русски) → флаг агента и ключ подписи в словаре (roadmap.eff.<key>).
  * @type {Record<string, { flag: string, key: string }>}
@@ -33,9 +60,11 @@ const EFFORT = {
 const EFFORTS = {
   claude: ['низкое', 'среднее', 'высокое', 'очень высокое', 'максимальное'],
   codex: ['низкое', 'среднее', 'высокое', 'очень высокое'],
+  grok: ['низкое', 'среднее', 'высокое', 'очень высокое'],
+  antigravity: ['низкое', 'среднее', 'высокое'],
 };
 /** @type {Record<string, string[]>} Модели без усилия: флаг усилия им не передаём. Сверка по вхождению: haiku и claude-haiku-4-5 — одна модель. */
-const NO_EFFORT = { claude: ['haiku'], codex: [] };
+const NO_EFFORT = { claude: ['haiku'] };
 
 /**
  * Аргументы вкладки агента из карты (t536, для запуска t515): модель — как есть, проверяет её ядро; усилие — словом из EFFORT во флаг агента.
@@ -48,15 +77,19 @@ function launchArgs(agent, model, effort) {
   const args = [];
   const m = String(model || '').trim();
   const e = String(effort || '').trim();
-  if (!AGENTS.includes(agent)) return { args, skipped: e ? `усилие «${e}» пропущено: агент ${agent} не из списка` : '' };
-  if (m) args.push(agent === 'codex' ? '-m' : '--model', m);
+  const fl = Object.hasOwn(FLAGS, agent) ? FLAGS[agent] : null;
+  if (!fl) {
+    const what = [m && `модель «${m}»`, e && `усилие «${e}»`].filter(Boolean);
+    return { args, skipped: what.length ? `${what.join(' и ')} не ${what.length > 1 ? 'передаются' : 'передаётся'}: флаги агента ${agent} программе неизвестны` : '' };
+  }
+  if (m) args.push(fl.model, m);
   if (!e) return { args, skipped: '' };
-  const how = Object.prototype.hasOwnProperty.call(EFFORT, e) ? EFFORT[e] : null;
+  const how = Object.hasOwn(EFFORT, e) ? EFFORT[e] : null;
+  if (!fl.effort) return { args, skipped: `усилие «${e}» не передаётся: у ${agent} флага усилия нет` };
   if (!how || !EFFORTS[agent].includes(e)) return { args, skipped: `усилие «${e}» пропущено: у ${agent} такого нет` };
-  if (NO_EFFORT[agent].some((x) => m.toLowerCase().includes(x))) return { args, skipped: `усилие «${e}» пропущено: у модели ${m} усилия нет` };
-  if (agent === 'codex') args.push('-c', `model_reasoning_effort=${how.flag}`);
-  else args.push('--effort', how.flag);
+  if ((NO_EFFORT[agent] || []).some((x) => m.toLowerCase().includes(x))) return { args, skipped: `усилие «${e}» пропущено: у модели ${m} усилия нет` };
+  args.push(...fl.effort(how.flag));
   return { args, skipped: '' };
 }
 
-module.exports = { AGENTS, MODELS, EFFORT, EFFORTS, launchArgs };
+module.exports = { AGENTS, MODELS, EFFORT, EFFORTS, TUNE, kindOf, launchArgs };

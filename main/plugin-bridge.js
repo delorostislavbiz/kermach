@@ -15,7 +15,8 @@
 //   readTab(sid, format) — вывод вкладки проекта (команда read демона),
 //   writeTab(sid, data) — записать байты во вкладку проекта, Enter — '\r' (t276); terminals() — живые вкладки проекта со state (t276);
 //   onState(cb) — смена состояния вкладки проекта { sid, state, by, at }, ответ — отписка; при остановке экземпляра отписка сама (t276),
-//   openTab({ kind, args, cwd, env, title, prompt }) — открыть и показать вкладку (t253, terminals.js checkExtra).
+//   openTab({ kind, args, cwd, env, title, prompt }) — открыть и показать вкладку (t253, terminals.js checkExtra);
+//   agents() — найденные и включённые агенты { id, title, prompt } для вида claude, codex или agent:<id> (t576).
 //
 // Кто может звать: любой код страницы окна проекта, с любым id. Код всех плагинов работает в одной странице и видит один мост
 // (main\sender.js), поэтому «только свой id» главный процесс проверить не может — такое ограничение было бы видимостью.
@@ -108,6 +109,15 @@ function instOf(pl, p) {
       const r = await require('./terminals').writeTab(p.id, String(sid), data);
       log(`запись во вкладку ${sid}: ${typeof data === 'string' ? data.length : 0} знаков${'error' in r ? ` — отказ: ${r.error}` : ''}`);
       return r;
+    },
+    /**
+     * Агенты, которых можно открыть вкладкой (t576): найдены в системе и включены (claude и codex — всегда, если найдены).
+     * Вид вкладки — claude, codex или agent:<id>; prompt — берёт ли первое сообщение при запуске.
+     * @returns {{ id: string, title: string, prompt: boolean }[]}
+     */
+    agents: () => {
+      const ag = require('./agents');
+      return ag.list().filter((a) => a.found && a.enabled).map((a) => ({ id: a.id, title: a.title, prompt: ag.promptFlag(a.id) !== false }));
     },
     /** Живые вкладки проекта со state (t276): { tabs } или { error }. */
     terminals: async () => (insts.get(key) !== inst ? { error: 'плагин остановлен' } : require('./terminals').projectTabs(p.id)),

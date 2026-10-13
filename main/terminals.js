@@ -100,6 +100,13 @@ const fresh = new Map();
 const reviving = new Map();
 /** Вкладки проекта, которые revive ещё не запустил заново (t192): id проекта → старые sid. Окно видит их как «подключается». @type {Map<string, Set<string>>} */
 const reviveLeft = new Map();
+/**
+ * Окна, в которых revive уже начат (t582): первый term:list с open. До него вкладки окна без живого терминала ещё будут запущены заново —
+ * плагин видит их в waiting, а не как закрытые. Номер webContents окна, а не проект: открыли окно проекта снова — новый номер, revive снова. @type {Set<number>}
+ */
+const reviveBegun = new Set();
+/** Отметить окно в reviveBegun; окно закрыли — номер убирается. @param {Electron.WebContents} wc */
+const beginRevive = (wc) => { if (reviveBegun.has(wc.id)) return; const id = wc.id; reviveBegun.add(id); wc.once('destroyed', () => reviveBegun.delete(id)); };
 /** Терминалы, запущенные для вкладки, которую закрыли раньше (t192): гасятся, в файл вкладок не попадают. */
 const abandoned = new Set();
 /**
@@ -185,7 +192,10 @@ const OWN_FLAGS = {
 /**
  * Свои флаги плагина (t279): только из этого списка, у каждого вида свой; флаг → проверка его значения. Остальное — отказ:
  * флаги прав (claude --dangerously-skip-permissions, codex -c, -s, -a, -p, --dangerously-bypass-approvals-and-sandbox) запретом по одному не закрыть.
- * Плагины шлют модель (ОТЧЁТ-t279-allow.md) и усилие (t536, «Роадмап»). Агенты из системы (agent:<id>) своих флагов не имеют: у каждого свои флаги прав.
+ * Плагины шлют модель (ОТЧЁТ-t279-allow.md) и усилие (t536, «Роадмап»). Агенты из системы (agent:<id>, t576) — только модель и усилие тех, у кого флаги
+ * известны по Орке (index.js, объект zNn): grok -m и --reasoning-effort (значения — models_cache.json grok 1.0.50; в команду не идут — checkExtra
+ * переносит их в GROK_CONFIG), gemini -m, antigravity --model
+ * и --effort, cursor и omp --model. У остальных своих флагов нет: у каждого свои флаги прав.
  * Модель — алиас или полное имя, у Claude бывает с [1m]: без пробелов, кавычек и «-» в начале.
  * Усилие — только известные значения, флаги как в Орке: claude --effort (значения из claude --help); codex -c model_reasoning_effort=… — значения из ответа сервера
  * (spikes\t536-effort\minimal-400.txt): minimal и ultra клиент знает, сервер отвечает 400.
@@ -196,6 +206,11 @@ const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}$/;
 const ALLOW_FLAGS = {
   claude: { '--model': MODEL_RE, '--effort': /^(low|medium|high|xhigh|max)$/ },
   codex: { '--model': MODEL_RE, '-m': MODEL_RE, '-c': /^model_reasoning_effort=(none|low|medium|high|xhigh|max)$/ },
+  'agent:grok': { '--model': MODEL_RE, '-m': MODEL_RE, '--reasoning-effort': /^(low|medium|high|xhigh)$/ },
+  'agent:gemini': { '--model': MODEL_RE, '-m': MODEL_RE },
+  'agent:antigravity': { '--model': MODEL_RE, '--effort': /^(low|medium|high)$/ },
+  'agent:cursor': { '--model': MODEL_RE },
+  'agent:omp': { '--model': MODEL_RE },
 };
 
 /**
@@ -267,9 +282,40 @@ function checkExtra(kind, o, p) {
     }
     if (e.length) x.env = Object.fromEntries(e);
   }
+  // Grok (t576): флаги -m и --reasoning-effort он запоминает в ~\.grok\config.toml как свои по умолчанию (прогон real1, 13.10) —
+  // модель и усилие уходят наложением GROK_CONFIG (~\.grok\docs\user-guide\05-configuration.md: models в списке разрешённых), флагов в команде нет.
+  // Значения уже прошли ALLOW_FLAGS. GROK_CONFIG уже есть (env плагина или окружение программы) — models сливаются в его JSON; не JSON-объект — отказ.
+  if (kind === 'agent:grok' && x.args) {
+    /** @type {Record<string, string>} */
+    const models = {};
+    for (let i = 0; i < x.args.length; i++) {
+      const a = x.args[i];
+      const eq = a.startsWith('--') ? a.indexOf('=') : -1;
+      const f = eq > 0 ? a.slice(0, eq) : a;
+      const v = eq > 0 ? a.slice(eq + 1) : x.args[++i];
+      models[f === '--reasoning-effort' ? 'default_reasoning_effort' : 'default'] = v;
+    }
+    const was = (x.env && x.env.GROK_CONFIG) ?? process.env.GROK_CONFIG ?? '';
+    /** @type {any} */
+    let cfg = {};
+    if (was.trim()) {
+      try { cfg = JSON.parse(was); } catch { cfg = null; }
+      if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg) || (cfg.models !== undefined && (!cfg.models || typeof cfg.models !== 'object' || Array.isArray(cfg.models)))) {
+        return { error: 'GROK_CONFIG в окружении — не JSON-объект: модель и усилие Grok добавить в него нельзя, уберите переменную или исправьте её' };
+      }
+    }
+    const json = JSON.stringify({ ...cfg, models: { ...cfg.models, ...models } });
+    if (json.length > 4096) return { error: 'GROK_CONFIG вместе с моделью и усилием длиннее 4096 знаков' };
+    x.env = { ...x.env, GROK_CONFIG: json };
+    delete x.args;
+  }
   let prompt = '';
   if (o.prompt !== undefined && o.prompt !== '') {
-    if (kind !== 'claude' && kind !== 'codex') return { error: 'первое сообщение — только у Claude и Codex' };
+    if (kind !== 'claude' && kind !== 'codex' && !kind.startsWith('agent:')) return { error: 'первое сообщение — только у агентов: у «Терминала» его нет' };
+    // Агент из системы (t576): берёт ли задание при запуске — поле prompt каталога (agents.js); флаг перед текстом ставит launchWith.
+    if (agents.promptFlag(kind.slice(6)) === false) {
+      return { error: i18n.t('term.noPrompt', '{title} не берёт первое сообщение при запуске: задание вводят во вкладке после старта.', { title: agents.extra(kind.slice(6))?.title || kind }) };
+    }
     if (typeof o.prompt !== 'string' || o.prompt.length > 16000 || o.prompt.includes('\0')) return { error: 'prompt: строка до 16000 знаков' };
     if (o.prompt.startsWith('-')) return { error: 'первое сообщение не может начинаться с «-»: программа примет его за флаг' };
     if (brokenByPty(o.prompt)) return { error: 'первое сообщение целиком в кавычках и с пробелом node-pty передать не может — уберите внешние кавычки' };
@@ -302,7 +348,10 @@ function checkExtra(kind, o, p) {
 function launchWith(kind, resume, hooksSettings, x, prompt, ag) {
   const how = launch(kind, resume, hooksSettings, ag);
   if ('error' in how || !x && !prompt) return how;
-  const w = withExtra(how, (x && x.args) || [], prompt);
+  // Агент из системы (t576): первое сообщение своим флагом перед текстом (agents.js, поле prompt). Флаг ставит ядро после проверки
+  // аргументов плагина (checkExtra); без первого сообщения (revive) флага нет. Агента без задания при запуске отсёк checkExtra.
+  const pf = prompt && kind.startsWith('agent:') ? agents.promptFlag(kind.slice(6)) : '';
+  const w = withExtra(how, [...(x && x.args) || [], ...pf ? [pf] : []], prompt);
   if ('error' in w) return w;
   return { file: w.file, args: w.args, meta: x ? { ...how.meta, extra: x } : how.meta };
 }
@@ -627,11 +676,26 @@ async function writeTab(projectId, sid, data) {
   } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; }
 }
 
-/** Живые вкладки проекта для главной части плагина (t276, ctx.terminals): то же, что окно получает о терминале (pick). @param {string} projectId */
+/**
+ * Живые вкладки проекта для главной части плагина (t276, ctx.terminals): то же, что окно получает о терминале (pick).
+ * waiting (t582) — старые sid вкладок, которые revive ещё запустит заново: идёт revive — его очередь; окно ещё не просило список — вкладки из файла без живого терминала;
+ * иначе пусто. Неудачный запуск уходит из очереди (revive, finally), и вкладка для плагина закрыта. @param {string} projectId
+ */
 async function projectTabs(projectId) {
   const r = await daemon();
   if (!r.c) return { error: r.error || 'нет связи с демоном' };
-  try { return { tabs: (await projectSessions(r.c, projectId)).map(pick) }; } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; }
+  try {
+    const live = await projectSessions(r.c, projectId);
+    const left = reviveLeft.get(projectId);
+    const w = projectWindow.windowFor(projectId);
+    let waiting = left ? [...left] : [];
+    if (!left && w && !w.isDestroyed() && !reviveBegun.has(w.webContents.id)) {
+      const c = /** @type {Ctx} */ (ctx);
+      const sids = new Set(live.map((/** @type {any} */ s) => s.sid));
+      waiting = tabs.load(c.dataDir, projectId, c.log).tabs.filter((t) => !sids.has(t.sid)).map((t) => t.sid);
+    }
+    return { tabs: live.map(pick), waiting };
+  } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; }
 }
 
 /** Подписки на смену состояния (t276, ctx.onState): номер проекта и обработчик. @type {Set<{ projectId: string, cb: (m: any) => void }>} */
@@ -724,8 +788,9 @@ function register(c) {
     if (!sender.allowed(e, 'term:list')) return sender.refused();
     const p = projectWindow.projectOf(e.sender);
     if (!p) return { error: 'окно без проекта' };
+    // Первый список окна не удался — окно его не повторяет (project-page.js, first.error): revive в этом окне не будет, вкладки для плагина закрыты (t582).
     const r = await daemon();
-    if (!r.c) return r;
+    if (!r.c) { if (o && o.open) beginRevive(e.sender); return r; }
     try {
       let job = reviving.get(p.id);
       if (!job && o && o.open) {
@@ -735,6 +800,8 @@ function register(c) {
         job = revive(c, r.c, p, Number(o.cols) || 80, Number(o.rows) || 24).catch((err) => { log(`запуск вкладок заново в ${p.path}: ${err}`); }).finally(() => { reviving.delete(p.id); reviveLeft.delete(p.id); });
         reviving.set(p.id, job);
       }
+      // В том же такте, что очередь reviveLeft: projectTabs не видит промежутка «окно начало, очереди нет» (t582).
+      if (o && o.open) beginRevive(e.sender);
       // Не ждём (t192): окно получает список сразу, вкладки без терминала — «подключается»; каждая запущенная шлёт term:changed.
       const live = (await projectSessions(r.c, p.id)).filter((/** @type {any} */ x) => !abandoned.has(x.sid));
       const bySid = new Map(live.map((s) => [s.sid, s]));
@@ -745,7 +812,7 @@ function register(c) {
       const savedPick = (/** @type {string} */ sid) => { const t = /** @type {import('./tabs').TabEntry} */ (saved.get(sid)); return left && left.has(sid) ? pickConnecting(t) : pickSaved(t); };
       agents.pokeShells();
       return { sessions: order.map((x) => (x.live ? pickLive(bySid.get(x.sid)) : savedPick(x.sid))) };
-    } catch (err) { return { error: String(err) }; }
+    } catch (err) { if (o && o.open) beginRevive(e.sender); return { error: String(err) }; }
   });
 
   // Новая вкладка: терминал у демона и сразу подключение окна к нему. opts — от плагина (host.openTab, t253), у меню «+» нет.

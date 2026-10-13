@@ -19,18 +19,22 @@ const i18n = require('./i18n');
 /**
  * Известные агенты. cmd — имена программы по порядку (у Kimi запасное имя), args — что Орка добавляет при запуске.
  * pics — понимает картинку по пути в строке ввода: ему уходят снимок и выбранный элемент со страницы (t38, t39, t416).
- * @typedef {{ id: string, title: string, cmd: string[], args: string[], builtin?: boolean, pics?: boolean }} Agent
+ * prompt — как агент берёт первое сообщение при запуске (t576, promptInjectionMode в tui-agent-config Орки): нет поля — последним аргументом;
+ * строка — флагом перед текстом; false — только вводом после старта, задание при запуске ядро ему не передаёт. «--» перед текстом
+ * (у Орки — grok, prime-agent) не ставим: ядро не пускает первое сообщение с «-» (terminals.js checkExtra), а grok берёт текст аргументом и без него
+ * (~\.grok\docs\user-guide\01-getting-started.md: grok "fix the failing auth test").
+ * @typedef {{ id: string, title: string, cmd: string[], args: string[], builtin?: boolean, pics?: boolean, prompt?: string | false }} Agent
  * @type {Agent[]}
  */
 const CATALOG = [
   { id: 'claude', title: 'Claude', cmd: ['claude'], args: [], builtin: true, pics: true },
   { id: 'codex', title: 'Codex', cmd: ['codex'], args: [], builtin: true, pics: true },
-  { id: 'gemini', title: 'Gemini', cmd: ['gemini'], args: [] },
-  { id: 'antigravity', title: 'Antigravity', cmd: ['agy'], args: [] },
-  { id: 'amp', title: 'Amp', cmd: ['amp'], args: [] },
-  { id: 'opencode', title: 'OpenCode', cmd: ['opencode'], args: [] },
-  { id: 'opencode2', title: 'OpenCode 2', cmd: ['opencode2'], args: ['--standalone'] },
-  { id: 'mimo-code', title: 'MiMo Code', cmd: ['mimo'], args: [] },
+  { id: 'gemini', title: 'Gemini', cmd: ['gemini'], args: [], prompt: '--prompt-interactive' },
+  { id: 'antigravity', title: 'Antigravity', cmd: ['agy'], args: [], prompt: '--prompt-interactive' },
+  { id: 'amp', title: 'Amp', cmd: ['amp'], args: [], prompt: false },
+  { id: 'opencode', title: 'OpenCode', cmd: ['opencode'], args: [], prompt: '--prompt' },
+  { id: 'opencode2', title: 'OpenCode 2', cmd: ['opencode2'], args: ['--standalone'], prompt: '--prompt' },
+  { id: 'mimo-code', title: 'MiMo Code', cmd: ['mimo'], args: [], prompt: '--prompt' },
   { id: 'cursor', title: 'Cursor', cmd: ['cursor-agent'], args: [] },
   { id: 'pi', title: 'Pi', cmd: ['pi'], args: [] },
   { id: 'omp', title: 'OMP', cmd: ['omp'], args: [] },
@@ -38,12 +42,13 @@ const CATALOG = [
   { id: 'droid', title: 'Droid', cmd: ['droid'], args: [] },
   { id: 'command-code', title: 'Command Code', cmd: ['command-code'], args: ['--trust'] },
   { id: 'grok', title: 'Grok', cmd: ['grok'], args: [], pics: true },
-  { id: 'copilot', title: 'GitHub Copilot', cmd: ['copilot'], args: [] },
-  { id: 'hermes', title: 'Hermes', cmd: ['hermes'], args: ['--tui'] },
-  { id: 'devin', title: 'Devin', cmd: ['devin'], args: [] },
-  { id: 'kimi', title: 'Kimi', cmd: ['kimi', 'kimi-code'], args: [] },
-  { id: 'muse', title: 'Muse', cmd: ['muse'], args: ['--trust-workspace'] },
-  { id: 'zcode', title: 'ZCode', cmd: ['zcode'], args: [] },
+  { id: 'copilot', title: 'GitHub Copilot', cmd: ['copilot'], args: [], prompt: '-i' },
+  // hermes у Орки собирает команду сам (hermes-query) — как он берёт задание, не проверено.
+  { id: 'hermes', title: 'Hermes', cmd: ['hermes'], args: ['--tui'], prompt: false },
+  { id: 'devin', title: 'Devin', cmd: ['devin'], args: [], prompt: false },
+  { id: 'kimi', title: 'Kimi', cmd: ['kimi', 'kimi-code'], args: [], prompt: false },
+  { id: 'muse', title: 'Muse', cmd: ['muse'], args: ['--trust-workspace'], prompt: false },
+  { id: 'zcode', title: 'ZCode', cmd: ['zcode'], args: [], prompt: false },
 ];
 const BY_ID = new Map(CATALOG.map((a) => [a.id, a]));
 
@@ -67,6 +72,12 @@ const enabled = (a) => !!a.builtin || settings.agentOn(a.id);
 
 /** Список для настроек, меню «+» и подсказок браузера (pics, t438): весь каталог, найден ли каждый сейчас. @returns {{ id: string, title: string, found: boolean, enabled: boolean, builtin: boolean, pics: boolean }[]} */
 const list = () => CATALOG.map((a) => ({ id: a.id, title: a.title, found: !!find(a), enabled: enabled(a), builtin: !!a.builtin, pics: !!a.pics }));
+
+/**
+ * Как передать первое сообщение агенту из каталога (t576): '' — последним аргументом, строка — флаг перед текстом,
+ * false — не берёт при запуске. Неизвестный id — '' (вид проверяет launch). @param {string} id @returns {string | false}
+ */
+const promptFlag = (id) => { const a = BY_ID.get(id); return a && a.prompt !== undefined ? a.prompt : ''; };
 
 /**
  * Как запустить вкладку агента (не Claude и не Codex). Выключен или не найден — ошибка строкой, окно её покажет.
@@ -546,4 +557,4 @@ function register(c) {
   });
 }
 
-module.exports = { register, list, takesPics, launchOf, extra, named, LOOK, CATALOG, NAME_RE, watchShells, pokeShell, pokeShells, runningIn, onRunning, agentNow, isShell, agentOfProcess };
+module.exports = { register, list, promptFlag, takesPics, launchOf, extra, named, LOOK, CATALOG, NAME_RE, watchShells, pokeShell, pokeShells, runningIn, onRunning, agentNow, isShell, agentOfProcess };

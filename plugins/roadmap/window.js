@@ -254,9 +254,16 @@ function roadmapSetup(host) {
   /**
    * Списки «агент · модель · усилие» — из главной части (agents.js, команда lists): те же, что возьмёт запуск вкладки (t515).
    * Пока не пришли — только агенты; значение из файла, которого в списке нет, встаёт в список как есть (FORMAT.md: модель и усилие — любые).
-   * @type {{ AGENTS: string[], MODELS: Record<string, string[]>, EFFORT: Record<string, { flag: string, key: string }>, EFFORTS: Record<string, string[]> }}
+   * READY (t576) — агенты, найденные и включённые в системе (ctx.agents); null — ядро списка не даёт, проверки «установлен» нет.
+   * TUNE — у каких агентов программа передаёт модель и усилие; у остальных поля показывают «не передаётся».
+   * @type {{ AGENTS: string[], MODELS: Record<string, string[]>, EFFORT: Record<string, { flag: string, key: string }>, EFFORTS: Record<string, string[]>,
+   *   TUNE: Record<string, { model: boolean, effort: boolean }>, READY: { id: string, title: string, prompt: boolean }[] | null }}
    */
-  let lists = { AGENTS: ['claude', 'codex'], MODELS: {}, EFFORT: {}, EFFORTS: {} };
+  let lists = { AGENTS: ['claude', 'codex'], MODELS: {}, EFFORT: {}, EFFORTS: {}, TUNE: { claude: { model: true, effort: true }, codex: { model: true, effort: true } }, READY: null };
+  /** Агент в списке программы: { title, prompt }; нет — не установлен или выключен. Ядро без списка — встроенные считаются готовыми. @param {string} a */
+  const readyOf = (a) => (lists.READY ? lists.READY.find((x) => x.id === a) : lists.AGENTS.includes(a) ? { id: a, title: a, prompt: true } : undefined);
+  /** Что агент берёт из карты: модель, усилие. @param {string} a */
+  const tuneOf = (a) => got(lists.TUNE, a) || { model: false, effort: false };
   /** Открытый промпт карты: номер карты и последний ответ prompt; null — промпт не открыт. @type {{ id: string, r: any, copied: string, at: string } | null} */
   let pv = null;
   /** Паспорт открыт во всю панель (t569). */
@@ -314,7 +321,7 @@ function roadmapSetup(host) {
     if (!ids.length) return null;
     return host.terminals().find((/** @type {any} */ t) => t.alive && ids.includes(t.sid)) || null;
   };
-  /** Строка «составляется…» над доской (экран 02): щелчок — к вкладке. @param {any} t */
+  /** Строка «составляется…» на пустом экране, пока доски нет (экран 02, t583): щелчок — к вкладке. @param {any} t */
   const composeLine = (t) => `<div class="box inbox composing" data-do="toTab" data-sid="${esc(t.sid)}"><span class="spin"></span><span>${esc(T('composing', 'составляется…'))}</span>`
     + `<span class="grow"></span><span class="ctab">${esc(T('composingTab', 'вкладка «{title}»', { title: t.title || '' }))}</span></div>`;
 
@@ -329,10 +336,11 @@ function roadmapSetup(host) {
 
   const draw = () => {
     if (stopped) return;
-    const ct = composeTab();
+    const b = last;
+    // Строка «составляется…» — только на пустом экране (t583); на доске shown пустой, и смена вкладки составления её не перерисовывает.
+    const ct = b && !b.error && !b.exists ? composeTab() : null;
     comp.shown = ct ? `${ct.sid} ${ct.title}` : '';
     hideBox.checked = hideDone;
-    const b = last;
     const center = $('[data-act="center"]');
     const compose = $('[data-act="compose"]');
     const label = /** @type {HTMLElement} */ ($('.hd'));
@@ -354,7 +362,8 @@ function roadmapSetup(host) {
     label.hidden = false; compose.hidden = false; center.hidden = false;
     /** @type {Map<string, any>} */
     const byId = new Map(b.cards.map((/** @type {any} */ c) => [c.id, c]));
-    let html = `${ct ? composeLine(ct) : ''}<div class="box inbox"><span>${esc(T('inbox', 'Входящие'))}</span><span class="badge">${b.inbox.length}</span><span class="grow"></span>${chevron(false)}</div>`;
+    // Над доской строки «составляется…» нет (t583): доска заведена — составление кончилось, хоть вкладка и жива.
+    let html = `<div class="box inbox"><span>${esc(T('inbox', 'Входящие'))}</span><span class="badge">${b.inbox.length}</span><span class="grow"></span>${chevron(false)}</div>`;
     // Паспорта нет — строки нет: пустой блок «паспорт» на доске без паспорта ничего не говорит.
     if (b.passport) html += `<div class="box inbox pass" data-do="passport"><span>${esc(T('passport', 'Паспорт проекта'))}</span>${passBadge(b.passport)}<span class="grow"></span>${chevron(false)}</div>`;
     const probs = [...b.errors.map((/** @type {any} */ e) => ({ ...e, warn: false })), ...b.warnings.map((/** @type {any} */ e) => ({ ...e, warn: true }))];
@@ -430,9 +439,20 @@ function roadmapSetup(host) {
   /** Подпись пункта списка. @param {string} k @param {string} v */
   const optText = (k, v) => {
     if (k === 'status') return got(RM_STATUS, v) ? statusWord(v) : v;
-    if (k === 'agent') return v || T('agentNone', 'агент не задан');
-    if (k === 'model') return v || T('modelDefault', 'модель по умолчанию');
-    if (k === 'effort') { const e = got(lists.EFFORT, v); return !v ? T('effortDefault', 'усилие по умолчанию') : e ? T(`eff.${e.key}`, v) : v; }
+    if (k === 'agent') {
+      if (!v) return T('agentNone', 'агент не задан');
+      const a = readyOf(v);
+      if (!a) return T('agentMissing', '{a} — не установлен', { a: v });
+      return a.prompt ? a.title : T('agentNoPrompt', '{a} — не принимает задание при запуске', { a: a.title });
+    }
+    const a = getV('agent');
+    const off = !!a && !tuneOf(a)[k];
+    if (k === 'model') return !v ? (off ? T('modelOff', 'модель не передаётся') : T('modelDefault', 'модель по умолчанию')) : off ? T('offValue', '{v} — не передаётся', { v }) : v;
+    if (k === 'effort') {
+      const e = got(lists.EFFORT, v);
+      const w = e ? T(`eff.${e.key}`, v) : v;
+      return !v ? (off ? T('effortOff', 'усилие не передаётся') : T('effortDefault', 'усилие по умолчанию')) : off ? T('offValue', '{v} — не передаётся', { v: w }) : w;
+    }
     return v;
   };
   /** Пункты списка: свои значения плюс значения из файла и формы, которых в списке нет. @param {string} k @param {string[]} vals */
@@ -441,15 +461,20 @@ function roadmapSetup(host) {
     const keep = e.value;
     const all = [...vals];
     for (const v of [keep, cur ? cur.base[k] : '', cur ? cur.ext[k] : undefined]) if (v !== undefined && !all.includes(v) && (v || k !== 'status')) all.push(v);
-    e.innerHTML = all.map((v) => `<option value="${esc(v)}">${esc(optText(k, v))}</option>`).join('');
+    // Агент без задания при запуске — пункт неактивен (t576): выбрать его нельзя. Агент из файла карты и выбранный сейчас — активны, значение видно как есть.
+    const dis = (/** @type {string} */ v) => (k === 'agent' && v && v !== keep && !(cur && cur.base[k] === v) && readyOf(v) && !(/** @type {any} */ (readyOf(v))).prompt ? ' disabled' : '');
+    e.innerHTML = all.map((v) => `<option value="${esc(v)}"${dis(v)}>${esc(optText(k, v))}</option>`).join('');
     e.value = keep;
   };
-  const modelList = (/** @type {string} */ agent) => ['', ...got(lists.MODELS, agent) || []];
-  /** Усилия агента; агент не задан — все, какие знает программа. @param {string} agent */
-  const effortList = (agent) => ['', ...got(lists.EFFORTS, agent) || Object.keys(lists.EFFORT)];
+  /** Агенты списка: встроенные и все готовые из системы, по порядку ядра. */
+  const agentList = () => [...new Set([...lists.AGENTS, ...(lists.READY || []).map((a) => a.id)])];
+  /** Модели агента; модель ему не передаётся — только пустое значение (t576). @param {string} agent */
+  const modelList = (agent) => ['', ...(agent && !tuneOf(agent).model ? [] : got(lists.MODELS, agent) || [])];
+  /** Усилия агента; агент не задан — все, какие знает программа; усилие не передаётся — только пустое. @param {string} agent */
+  const effortList = (agent) => ['', ...(agent && !tuneOf(agent).effort ? [] : got(lists.EFFORTS, agent) || Object.keys(lists.EFFORT))];
   const paintOpts = () => {
     fillOpts('status', Object.keys(RM_STATUS));
-    fillOpts('agent', lists.AGENTS);
+    fillOpts('agent', agentList());
     fillOpts('model', modelList(getV('agent')));
     fillOpts('effort', effortList(getV('agent')));
   };
@@ -592,6 +617,11 @@ function roadmapSetup(host) {
     if (cur.starting) return T('runStarting', 'Вкладка открывается…');
     if (!c.phase) return T('runInbox', 'Карты «Входящих» не запускаются: сначала перенесите карту в фазу');
     if (c.status === 'готово') return T('runDone', 'Карта готова');
+    // Агент из файла карты (t576): не установлен или выключен, не берёт задание при запуске — запуск не откроет вкладку, причина видна заранее.
+    const ag = c.agent || 'claude';
+    const ra = readyOf(ag);
+    if (!ra) return T('runNoAgent', 'Агент {a} не установлен или выключен: «Настройки» → «Агенты…»', { a: ag });
+    if (!ra.prompt) return T('runNoPrompt', '{a} не принимает задание при запуске: выберите другого агента', { a: ra.title });
     if (c.run && !c.run.gone) return T('runLive', 'Карта уже запущена: её вкладка в верхней полосе');
     if (RM_KEYS.some(dirty)) return T('runUnsaved', 'Сначала сохраните: агент получит промпт из файла карты');
     return '';
@@ -984,7 +1014,7 @@ function roadmapSetup(host) {
   if (typeof host.onTerminals === 'function') host.onTerminals(() => {
     if (stopped) return;
     // Вкладка составления закрылась, появилась или сменила заголовок — перерисовать строку «составляется…» (t568). Остальные события доску не меняют.
-    const ct = composeTab();
+    const ct = last && !last.error && !last.exists ? composeTab() : null;
     if (open && (ct ? `${ct.sid} ${ct.title}` : '') !== comp.shown) draw();
     if (!syncTimer) syncTimer = setTimeout(() => { syncTimer = null; if (!stopped) api('sync'); }, 300);
   });
@@ -995,8 +1025,9 @@ function roadmapSetup(host) {
   paintRow();
   api('lists').then((/** @type {any} */ l) => {
     if (stopped || !l || l.error || !Array.isArray(l.AGENTS)) return;
-    lists = l;
-    if (cur) paintOpts();
+    // Главная часть до t576 не шлёт TUNE и READY — остаются встроенные claude и codex.
+    lists = { ...lists, ...l, TUNE: l.TUNE || lists.TUNE, READY: Array.isArray(l.READY) ? l.READY : null };
+    if (cur) { paintOpts(); paintRun(); }
   });
   api('state').then((/** @type {any} */ s) => {
     if (stopped || !s || s.error) return;
