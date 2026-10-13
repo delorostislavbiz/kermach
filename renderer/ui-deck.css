@@ -262,16 +262,6 @@ html[data-ui="deck"] .dlg .stepper input:focus { outline: 0; border-color: var(-
 html[data-ui="deck"] .dlg .stepper .hint { font-family: var(--font-label); font-size: 10.5px; }
 html[data-ui="deck"] .dlg .chk { gap: 9px; font-size: 12.5px; }
 html[data-ui="deck"] .dlg .chk input { width: 14px; height: 14px; accent-color: var(--accent); }
-/* «Настройки» → «Тема программы»: карточки с образцом. */
-html[data-ui="deck"] .dlg .uicards { gap: 6px; }
-html[data-ui="deck"] .dlg .uicard { gap: 5px; padding: 5px 5px 7px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--bg); cursor: default; }
-html[data-ui="deck"] .dlg .uicard:hover { background: var(--hover); border-color: var(--dk-line-strong); }
-html[data-ui="deck"] .dlg .uicard.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px rgba(var(--accent-rgb), .14); }
-html[data-ui="deck"] .dlg .uicard .pv { border-radius: var(--r-sm); box-shadow: 0 0 0 1px var(--line); }
-html[data-ui="deck"] .dlg .uicard .nm { padding: 0 2px; font-size: 12px; font-weight: 600; }
-html[data-ui="deck"] .dlg .uicard .by { padding: 0 2px; font-family: var(--font-label); font-size: 9.5px; }
-html[data-ui="deck"] .dlg .uicard.on .nm { color: var(--accent); }
-html[data-ui="deck"] .dlg .uinote { font-family: var(--font-label); font-size: 10.5px; line-height: 15px; }
 /* «Агенты». */
 html[data-ui="deck"] .dlg .agt .open, html[data-ui="deck"] .dlg .agt .how button { height: 28px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--dk-block); font: 500 12.5px var(--font-ui); cursor: default; }
 html[data-ui="deck"] .dlg .agt .open:hover, html[data-ui="deck"] .dlg .agt .how button:hover { background: var(--hover); border-color: var(--dk-line-strong); }

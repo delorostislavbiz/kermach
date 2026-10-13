@@ -300,6 +300,8 @@
    * Панели по частям раскладки (t397): видимым — место части, остальным — без инлайн-размеров, как в «Одна»; пустым частям — список вкладок.
    * В «Одна» ничего не делает, пока раскладку не меняли: окно в точности как до t397.
    */
+  // Отступ терминала внутри части — как inset у .pane: 16 в старых темах, в новом виде своё (--pane-pad, ui-kermach-project.css).
+  const panePad = () => { const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--pane-pad')); return Number.isFinite(v) ? v : 16; };
   function paint() {
     const box = $('panes');
     if (!lay) {
@@ -318,7 +320,7 @@
       const j = lay.parts.indexOf(x.sid);
       x.pane.classList.toggle('on', j >= 0);
       x.pane.classList.toggle('focus', j >= 0 && j === lay.focus);
-      if (j >= 0) L.put(x.pane, rs[j], x.page ? 0 : 16); else L.clear(x.pane);
+      if (j >= 0) L.put(x.pane, rs[j], x.page ? 0 : panePad()); else L.clear(x.pane);
     }
     slots(rs);
     const sig = `${lay.kind}:${lay.fr.join(',')}`;
@@ -539,7 +541,15 @@
       <div class="tile"><div class="strip" style="background:${x.color}"></div>${svg(x.icon, x.color, 18)}</div>
       <div class="text"><div class="n">${esc(x.title)}</div>${x.page ? addr(x) : x.connecting ? `<div class="st">${I18n.t('page.podklyuchaetsya', 'подключается…')}</div>` : st(x, k)}</div></div>`; }).join('');
     $('tabs').innerHTML = list.map((x) => { const k = stateOf(x); return `<div class="tab${cls(x, k)}" data-sid="${esc(x.sid)}"${k ? ` data-state="${k}" title="${hint(x, k)}"` : ''}>
-      ${svg(x.icon, x.color, 14)}<span>${esc(x.title)}</span>${k ? glyph(k) : ''}<span class="x" data-close title="${I18n.t('common.close', 'Закрыть')}">${svg('close', (window.Theme && Theme.color('muted')) || '#8D91A5', 12, 2)}</span><i style="background:${x.color}"></i></div>`; }).join('');
+      <div class="tt"><b style="background:${x.color}"></b>${svg(x.icon, x.color, 14)}</div><span>${esc(x.title)}</span>${k ? glyph(k) : ''}<span class="x" data-close title="${I18n.t('common.close', 'Закрыть')}">${svg('close', (window.Theme && Theme.color('muted')) || '#8D91A5', 12, 2)}</span><i style="background:${x.color}"></i></div>`; }).join('');
+    // Шапка карточки терминала (Д-9): точка цвета, имя, «· состояние». Видна только в новом виде (ui-kermach-project.css).
+    for (const x of list) {
+      if (x.page || !x.pane) continue;
+      const k = stateOf(x);
+      let h = /** @type {HTMLElement | null} */ (x.pane.querySelector(':scope > .phead'));
+      if (!h) { h = document.createElement('div'); h.className = 'phead'; x.pane.prepend(h); }
+      h.innerHTML = `<i style="background:${x.color}"></i><b>${esc(x.title)}</b>${k ? `<span>·</span><span>${esc(STATES[k].word)}</span>` : ''}`;
+    }
     $('termCount').textContent = String(list.length);
     // Кнопки пустого окна — только после первого списка: до него вкладки ещё не пришли (t360).
     $('empty').hidden = list.length > 0 || !listed;
@@ -733,7 +743,7 @@
         const look = await D.colorIcon({ name: tab.title, sub: k ? `● ${STATES[k].word}` : '', subColor: k ? STATES[k].color : '', color: tab.color, icon: tab.icon });
         if (look) await update(tab, look);
       } else if (pick === 'rename') {
-        const title = await D.rename({ value: tab.title });
+        const title = await D.rename({ value: tab.title, icon: tab.icon, color: tab.color });
         // Имя не поменяли — ничего не шлём: иначе тема Claude в поле стала бы ручным именем и перестала обновляться.
         if (title && title !== tab.title) await update(tab, { title });
       } else if (pick === 'close') await closeTab(tab);
@@ -968,6 +978,8 @@
   wireItem($('addClaude'), () => create('claude'));
   wireItem($('addCodex'), () => create('codex'));
   wireItem($('addShell'), () => create('shell'));
+  // «Браузер» в полосе вкладок (Д-7) — тот же пункт меню «+», что ставит плагин браузера (addButton('addBrowser')); нет пункта — нет и кнопки.
+  $('tbBrowser').onclick = () => { const b = document.getElementById('addBrowser'); if (b) b.click(); };
   wireItem(agentsItem, () => {});
   // Пустое окно (t360): «Что запустить?» и кнопки — пункты меню «+», второго списка нет. На виду Claude, Codex, Терминал;
   // остальное (агенты из системы, «Агенты ›», пункты плагинов) — кнопкой «Другие ›»: она открывает само меню «+» под собой.
@@ -1282,6 +1294,7 @@
     removeButton: (/** @type {string} */ id) => {
       const b = document.getElementById(id);
       if (b) b.remove();
+      if (id === 'addBrowser') $('tbBrowser').hidden = true;
       if (!$('adds').querySelector(':scope > .item:not(#addClaude):not(#addCodex):not(#addShell):not([hidden])')) $('addsSep').hidden = true;
     },
     /** @param {string} sid @param {{ title?: string, url?: string, color?: string, icon?: string }} f */
@@ -1319,6 +1332,7 @@
       wireItem(b, onClick);
       $('adds').appendChild(b);
       $('addsSep').hidden = false;
+      if (id === 'addBrowser') $('tbBrowser').hidden = false;
     },
   };
 

@@ -20,23 +20,30 @@
   const NO_GROUP = '_none';
   /** Номер проекта, добавленного последним, — его строка подсвечивается. */
   let fresh = '';
+  /** Ключ группы, которую только что свернули или развернули щелчком, — её стрелка поворачивается анимацией (t664). */
+  let turned = '';
+  /** Список уже показывали — каскад появления только в первый раз (t664). */
+  let shownOnce = false;
 
   // Имена и пути — из файла пользователя, в разметку только через замену опасных знаков.
   const esc = (/** @type {string} */ s) => String(s).replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
   /** 1 проект, 2 проекта, 5 проектов; на en и de — 1 project, 2 projects (правило языка — I18n.form, t328). @param {number} n @param {[string, string, string]} w */
   const plural = (n, w) => w[I18n.form(n)];
 
-  // Цвет значка по схеме плагина «Темы» (t185, renderer\theme.js); без темы — прежний цвет Termius dark.
-  const tc = (/** @type {string} */ name, /** @type {string} */ base) => { const T = /** @type {any} */ (window).Theme; return (T && T.color(name)) || base; };
+  // Цвет значка по схеме плагина «Темы» (t185, renderer\theme.js); без темы — переменная окна --text или --muted (у Termius Dark текст зелёный, t753), её нет — base.
+  const tc = (/** @type {string} */ name, /** @type {string} */ base) => { const T = /** @type {any} */ (window).Theme; return (T && T.color(name)) || getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim() || base; };
   const topIcons = () => {
     $('appIcon').innerHTML = svg('terminal', tc('accent', '#21B568'), 14);
     $('searchIcon').innerHTML = svg('search', tc('muted', '#8D91A5'), 15);
     $('plusIcon').innerHTML = svg('plus', tc('accent', '#21B568'), 14);
     $('stopIcon').innerHTML = svg('power', tc('danger', '#F24E50'), 14);
     $('autosIcon').innerHTML = svg('clock', tc('accent', '#21B568'), 14);
+    // Значок «Настройки» виден только в новом виде (t663): там у кнопок справа нет подписей.
+    $('setIcon').innerHTML = svg('gear', tc('text', '#C9D0DC'), 14);
   };
   topIcons();
-  const chevron = (/** @type {boolean} */ shut) => `<svg width="12" height="12" viewBox="0 0 12 12"><path d="${shut ? 'M4.5 2.5L8 6l-3.5 3.5' : 'M2.5 4.5L6 8l3.5-3.5'}" fill="none" stroke="${tc('muted', '#8D91A5')}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  // Стрелка — один путь «вправо»; у раскрытой группы её поворачивает стиль (.group:not(.shut) .chev), в новом виде — с поворотом за .25 s (t664).
+  const chevron = () => `<svg class="chev" width="12" height="12" viewBox="0 0 12 12"><path d="M4.5 2.5L8 6l-3.5 3.5" fill="none" stroke="${tc('muted', '#8D91A5')}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   // Две стрелки вверх — «свернуть», вниз — «развернуть».
   const foldIcon = (/** @type {boolean} */ up) => `<svg width="12" height="12" viewBox="0 0 12 12"><path d="${up ? 'M3 6.5L6 3.5l3 3M3 9.5L6 6.5l3 3' : 'M3 2.5L6 5.5l3-3M3 5.5L6 8.5l3-3'}" fill="none" stroke="${tc('text', '#C9D0DC')}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   $('min').onclick = () => t.win.minimize();
@@ -106,7 +113,7 @@
     // Цвет — только вида #rrggbb, иначе серый (так же делает svg()).
     const color = /^#[0-9a-f]{6}$/i.test(p.color) ? p.color : DEFAULT_COLOR;
     return `<div class="row${p.id === fresh ? ' fresh' : ''}${needOf(p.id) ? ' need' : ''}" data-id="${esc(p.id)}" title="${esc(p.path)}">
-      <div class="strip" style="background:${color}"></div>${svg(p.icon, color, 18)}
+      <div class="pic"><div class="strip" style="background:${color}"></div>${svg(p.icon, color, 18)}</div>
       <div class="text"><div class="n">${esc(p.name)}</div><div class="p">${esc(p.path)}</div></div>${status}</div>`;
   }
 
@@ -146,22 +153,32 @@
     const parts = [{ key: '', name: I18n.t('projects.zakreplennye', 'Закреплённые'), items: shown.filter((p) => p.pinned) },
       ...state.groups.map((g) => ({ key: g.id, name: g.name, items: rest.filter((p) => p.group === g.id) })),
       { key: NO_GROUP, name: I18n.t('projects.bezGruppy', 'Без группы'), items: rest.filter((p) => !p.group || !known.has(p.group)) }].filter((g) => g.items.length);
-    const html = parts.map((g) => {
+    // Каскад появления блоков (k-in, шаг 40 мс) — только при первом показе и только в видном окне: render() идёт на каждый ответ агента,
+    // список «вспыхивал» бы; в скрытом окне проверок анимация стоит, и блоки остались бы прозрачными на снимке (t664).
+    // Окно показывается по ready-to-show (projects-window.js), первый список может прийти ещё в скрытое — тогда каскад у первого списка в видном окне.
+    const cascade = !shownOnce && document.visibilityState === 'visible';
+    if (cascade) shownOnce = true;
+    const html = parts.map((g, i) => {
       const shut = !q && !!g.key && shutKeys.has(g.key);
       // Свёрнутая группа, где кто-то требует ответа, выделена так же, как строка: проект внутри не видно, а ждать он не должен.
       const need = shut && g.items.some((p) => needOf(p.id));
-      const head = `<div class="group${shut ? ' shut' : ''}${need ? ' need' : ''}"${g.key && !q ? ` data-key="${esc(g.key)}" title="${shut ? I18n.t('common.maximize', 'Развернуть') : I18n.t('common.minimize', 'Свернуть')}"` : ''}>`
-        + `${g.key ? chevron(shut) : svg('pin', tc('muted', '#8D91A5'), 12)}<span class="gn">${esc(g.name)}</span>${shut ? summary(g.items) : `<span class="gc">${g.items.length}</span>`}</div>`;
-      if (shut) return head;
+      const head = `<div class="group${shut ? ' shut' : ''}${need ? ' need' : ''}${g.key && g.key === turned ? ' turn' : ''}"${g.key && !q ? ` data-key="${esc(g.key)}" title="${shut ? I18n.t('common.maximize', 'Развернуть') : I18n.t('common.minimize', 'Свернуть')}"` : ''}>`
+        + `${g.key ? chevron() : svg('pin', tc('muted', '#8D91A5'), 12)}<span class="gn">${esc(g.name)}</span>${shut ? summary(g.items) : `<span class="gc">${g.items.length}</span>`}</div>`;
+      // Блок — обёртка .gcard: в новом виде карточка, в старых темах её нет (display: contents). Заголовок — первым в ней: t164-pin ищет блок строки через previousElementSibling.
+      const open = `<div class="gcard${cascade ? ' k-in' : ''}"${cascade ? ` style="animation-delay:${i * 40}ms"` : ''}>`;
+      if (shut) return `${open}${head}</div>`;
       const items = recent(g.items);
-      return head + (tiles ? `<div class="tiles">${items.map(tile).join('')}</div>` : items.map(row).join(''));
+      return open + head + (tiles ? `<div class="tiles">${items.map(tile).join('')}</div>` : items.map(row).join('')) + '</div>';
     }).join('');
+    turned = '';
     $('list').innerHTML = html || `<div id="empty">${total ? I18n.t('projects.nichegoNeNaydeno', 'Ничего не найдено') : I18n.t('projects.proektovNetDobavtePapku', 'Проектов нет. Добавьте папку.')}</div>`;
     // Кнопка — по незакреплённым блокам, где есть проекты: свёрнуты все — «Развернуть все», иначе «Свернуть незакреплённые».
     const keys = parts.filter((g) => g.key).map((g) => g.key);
     const allShut = keys.length > 0 && keys.every((k) => shutKeys.has(k));
     const fold = /** @type {HTMLButtonElement} */ ($('fold'));
     fold.innerHTML = `${foldIcon(!allShut)}<span>${allShut ? I18n.t('projects.razvernutVse', 'Развернуть все') : I18n.t('projects.svernutNezakreplennye', 'Свернуть незакреплённые')}</span>`;
+    // Что сделает щелчок — флагом на кнопке, а не по надписи: надпись на языке программы (t731).
+    fold.dataset.allShut = allShut ? '1' : '';
     fold.disabled = !!q || !keys.length;
     fold.title = q ? I18n.t('projects.pokaIdetPoiskGruppy', 'Пока идёт поиск, группы не сворачиваются') : '';
     $('vList').innerHTML = listIcon(tiles ? tc('muted', '#8D91A5') : tc('text', '#C9D0DC'));
@@ -184,6 +201,8 @@
     const r = await t.projects.collapse(keys, shut);
     if (r.error) return showError(r.error);
     state.collapsed = r.collapsed;
+    // Одна группа (щелчок по заголовку) — её стрелка поворачивается анимацией: список рисуется заново, transition не сыграет.
+    turned = keys.length === 1 ? keys[0] : '';
     render();
   }
 
@@ -235,6 +254,16 @@
 
   $('q').addEventListener('input', render);
   $('q').addEventListener('keydown', (e) => { if (e.key === 'Escape') { /** @type {HTMLInputElement} */ ($('q')).value = ''; render(); } });
+  // Ctrl K (на macOS Cmd K) — в поиск, текст выделен (t679). Открыто окошко (настройки, меню, вопрос) — клавиша его, не поиска.
+  const mac = /** @type {any} */ (window).Keys.mac;
+  $('qKbd').textContent = mac ? '⌘K' : 'Ctrl K';
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'KeyK' || e.shiftKey || !/** @type {any} */ (window).Keys.mod(e, mac) || document.querySelector('.dlg, .dlg-menu')) return;
+    e.preventDefault();
+    const q = /** @type {HTMLInputElement} */ ($('q'));
+    q.focus();
+    q.select();
+  });
   // Кнопка «Автоматизации N» (t252): окно автоматизаций; число — свои автоматизации, зелёное — есть прогон, который не открывали.
   // Плагин выключен в «Настройках» — кнопки нет, задачи Планировщика остаются. Подпись — кодом: разметку, которую меняет JS, data-i18n не переводит (t287).
   $('autos').onclick = () => t.auto.open({});
@@ -272,7 +301,7 @@
   // «Свернуть незакреплённые» сворачивает все группы и «Без группы», даже пустые сейчас: видны остаются только закреплённые.
   $('fold').onclick = () => {
     const all = [...state.groups.map((g) => g.id), NO_GROUP];
-    collapse(all, $('fold').textContent !== 'Развернуть все');
+    collapse(all, !$('fold').dataset.allShut);
   };
   // «Остановить всё» (t147): демон со всеми вкладками и программа. Вопрос, если агент работает или ждёт ответа, задаёт главный процесс.
   // true — остановка идёт, окно скоро закроется; false — человек отказался; { error } — вызов отклонён.

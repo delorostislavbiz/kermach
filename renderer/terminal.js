@@ -3,8 +3,9 @@
 // Настройки — как у терминала в Орке Termius (orca-data.json), цвета — termius-dark.yaml. Вид одобрен 03.10 (журнал 16:50).
 // Клавиши копирования и вставки — как в Орке (разбор её кода — журнал 16:12).
 
+// Фон — --term макета Termius Dark (#11142A, ui-kermach.css), а не --bg окна #141729 из termius-dark.yaml (t693).
 const THEME = {
-  background: '#141729',
+  background: '#11142A',
   foreground: '#21B568',
   cursor: '#21B568',
   black: '#1A1D2F',

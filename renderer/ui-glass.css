@@ -269,14 +269,6 @@ html[data-ui="glass"] .dlg .stepper > input { height: 28px; border: 1px solid va
 html[data-ui="glass"] .dlg .stepper > input:focus { outline: 0; border-color: var(--focus); box-shadow: var(--g-ring); }
 html[data-ui="glass"] .dlg select { border-radius: var(--r-sm) !important; border-color: var(--line) !important; background: var(--input); color: var(--text); font: 13px var(--font-ui); height: 28px !important; }
 html[data-ui="glass"] .dlg .chk { gap: 9px; }
-/* Карточки «Тема программы». */
-html[data-ui="glass"] .dlg .uicards { gap: 10px; }
-html[data-ui="glass"] .dlg .uicard { padding: 6px 6px 8px; gap: 6px; border: 0; border-radius: 10px; background: var(--input); box-shadow: inset 0 0 0 1px var(--line); }
-html[data-ui="glass"] .dlg .uicard:hover { background: var(--hover); }
-html[data-ui="glass"] .dlg .uicard.on { background: var(--accent-bg); box-shadow: inset 0 0 0 2px var(--accent); }
-html[data-ui="glass"] .dlg .uicard .pv { border-radius: 6px; height: 50px; }
-html[data-ui="glass"] .dlg .uicard .nm { padding: 0 2px; font-weight: 600; }
-html[data-ui="glass"] .dlg .uicard .by { padding: 0 2px; }
 html[data-ui="glass"] .dlg .agt .open, html[data-ui="glass"] .dlg .agt .how button:not(.link) { height: 28px; border: 0; border-radius: var(--r-sm); background: var(--g-btn); box-shadow: var(--g-btn-shadow); font: 500 13px var(--font-ui); }
 html[data-ui="glass"] .dlg .agt .how button:not(.link) { height: 24px; font-size: 12px; }
 html[data-ui="glass"] .dlg .agt .open:hover, html[data-ui="glass"] .dlg .agt .how button:not(.link):hover { background: var(--g-btn-hover); }

@@ -23,9 +23,11 @@
     const l = lum(parseInt(m[1], 16));
     return (l + 0.05) / (lum(0x141729) + 0.05) >= 1.05 / (l + 0.05) ? '#141729' : '#FFFFFF';
   };
-  // Цвет значка по схеме плагина «Темы» (t185, renderer\theme.js); без темы — прежний цвет Termius dark.
-  const tc = (/** @type {string} */ name, /** @type {string} */ base) => { const T = /** @type {any} */ (window).Theme; return (T && T.color(name)) || base; };
+  // Цвет значка по схеме плагина «Темы» (t185, renderer\theme.js); без темы — переменная окна --text или --muted (у Termius Dark текст зелёный, t753), её нет — base.
+  const tc = (/** @type {string} */ name, /** @type {string} */ base) => { const T = /** @type {any} */ (window).Theme; return (T && T.color(name)) || getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim() || base; };
   const CROSS = '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1"/></svg>';
+  // Признак вида Kermach и Termius Dark (этап d1, пачка 1): правила окошек под ним, старые темы — как были.
+  const K = 'html:is([data-ui="kermach"], [data-ui="termius"])';
 
   // Размеры и цвета — экран 3 макета design\TERMINALUS.dc.html. Затемнение — no-drag: иначе под ним заголовок окна
   // продолжал бы перетаскивать окно (в Electron область перетаскивания работает и под перекрывшим её элементом).
@@ -33,7 +35,7 @@
   style.textContent = `
   .dlg-back, .dlg-menu-back { position: fixed; inset: 0; z-index: 1000; -webkit-app-region: no-drag; }
   .dlg-back { background: var(--overlay); display: flex; align-items: center; justify-content: center; }
-  .dlg { max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); background: var(--bg); border: 1px solid rgba(var(--muted-rgb),.22); border-radius: 8px;
+  .dlg { width: var(--w); max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); background: var(--bg); border: 1px solid rgba(var(--muted-rgb),.22); border-radius: 8px;
     display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,.45); outline: 0; color: var(--text); font: 13px 'Segoe UI', system-ui, sans-serif; }
   .dlg-title { height: 36px; display: flex; align-items: center; padding-left: 14px; flex-shrink: 0; }
   .dlg-title .t { flex: 1; font-size: 12px; }
@@ -69,6 +71,9 @@
   .dlg .grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; overflow-y: auto; min-height: 0; }
   .dlg .g { height: 44px; display: flex; align-items: center; justify-content: center; border-radius: 4px; outline-offset: -1px; }
   .dlg .g:hover, .dlg .g.on { background: var(--hover); }
+  .dlg .g.on { outline: 1px solid var(--c); }
+  /* Плитка значка в заголовке «Переименовать», подсказка клавиш, «+» у «Свой цвет» — только в виде Kermach (ниже). */
+  .dlg-title .pic, .dlg .rn-hint, .dlg .own .plus { display: none; }
   .dlg .none { grid-column: 1 / -1; padding: 14px 0; text-align: center; color: var(--muted); font-size: 12px; }
   .dlg .field { height: 32px; padding: 0 10px; font-size: 13px; background: var(--hover); border: 1px solid rgba(var(--muted-rgb),.18); border-radius: 4px; }
   .dlg .field:focus { border-color: rgba(var(--muted-rgb),.4); }
@@ -84,21 +89,6 @@
   .dlg .btns .danger { background: var(--danger); border-color: var(--danger); color: #fff; }
   .dlg .btns .danger:hover { background: var(--danger-hover); border-color: var(--danger-hover); }
   .dlg .seg { display: flex; gap: 8px; }
-  /* Тема программы (t506, t651): три карточки макета с образцом окна — Светлая, Тёмная, Termius Dark (цвета README: фон, панель, терминал, акцент). */
-  .dlg .uicards { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px; }
-  .dlg .uicard { display: flex; flex-direction: column; gap: 6px; padding: 6px; border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 8px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
-  .dlg .uicard:hover { background: var(--hover); }
-  .dlg .uicard.on { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(var(--accent-rgb),.35); }
-  .dlg .uicard .pv { height: 46px; border-radius: 5px; display: grid; grid-template-columns: 32% 1fr; overflow: hidden; }
-  .dlg .uicard .pv i { display: block; }
-  .dlg .uicard .nm { font-size: 12px; font-weight: 600; line-height: 1.25; }
-  .dlg .uicard .by { font-size: 10.5px; line-height: 1.25; color: var(--muted); }
-  .dlg .uicard .pv i:first-child { margin: 4px 0 4px 4px; border-radius: 4px; }
-  .dlg .uicard .pv i:last-child { margin: 4px; border-radius: 4px; box-shadow: inset 6px -8px 0 -4px var(--pv-a); }
-  .dlg .uicard .pv.light { --pv-a: #0A7AFF; background: #F2F2F4; } .dlg .uicard .pv.light i:first-child { background: #E8E8EB; } .dlg .uicard .pv.light i:last-child { background: #FFFFFF; border: 1px solid rgba(0,0,0,.08); }
-  .dlg .uicard .pv.dark { --pv-a: #0A84FF; background: #1E1E20; } .dlg .uicard .pv.dark i:first-child { background: #29292C; } .dlg .uicard .pv.dark i:last-child { background: #161618; border: 1px solid rgba(255,255,255,.08); }
-  .dlg .uicard .pv.termius { --pv-a: #21B568; background: #141729; } .dlg .uicard .pv.termius i:first-child { background: #1A1D2F; } .dlg .uicard .pv.termius i:last-child { background: #11142A; border: 1px solid rgba(141,145,165,.16); }
-  .dlg .uinote { font-size: 11px; color: var(--muted); }
   .dlg .seg button:disabled { opacity: .45; cursor: default; }
   .dlg .seg button, .dlg .stepper button, .dlg .stepper input { height: 30px; border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 4px; background: none; color: var(--text); font: 13px 'Segoe UI', system-ui, sans-serif; outline-offset: 2px; }
   .dlg .seg button { flex: 1; }
@@ -140,6 +130,70 @@
   .dlg-menu .item:hover { background: rgba(var(--muted-rgb),.14); }
   .dlg-menu .item.danger { color: var(--danger-hover); }
   .dlg-menu .sep { height: 1px; margin: 4px 6px; background: rgba(var(--muted-rgb),.14); }
+
+  /* Kermach и Termius Dark (этап d1, пачка 4: t666–t668) — ряд «Окошки» макета Claude Design (template.html 318–396). Теней нет: глубина фоном и рамкой.
+     Цвет --c ставит окошко: выбранный цвет в «Цвет и значок», цвет терминала в «Переименовать»; тинт — доля --tint-a, как в макете. */
+  ${K} .dlg { border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: none; }
+  ${K} .dlg.ci { width: 560px; }
+  ${K} .dlg:is(.rn, .q) { width: 440px; }
+  ${K} .dlg-title { height: 48px; gap: 10px; padding: 0 8px 0 20px; }
+  ${K} .dlg-title .t { font-size: var(--fs-title); font-weight: 600; }
+  ${K} .dlg-title .x { width: 30px; height: 30px; border-radius: 15px; color: var(--muted); }
+  ${K} .dlg-title .x:hover { background: var(--hover); color: var(--text); }
+  ${K} .dlg-title .pic { display: flex; width: 32px; height: 32px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px;
+    background: color-mix(in srgb, var(--c) calc(var(--tint-a, .18) * 100%), transparent); }
+  ${K} .dlg-body { gap: 18px; padding: 0 20px 20px; }
+  ${K} .dlg:is(.rn, .q) .dlg-body { gap: 14px; }
+  ${K} .dlg .cap { font-weight: 600; padding: 0 2px; }
+  ${K} .dlg .sec:has(> .prev) { gap: 6px; }
+  ${K} .dlg .prev { height: 54px; gap: 12px; padding: 0 12px; margin-top: 0; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  ${K} .dlg .prev .strip { order: 2; width: 4px; height: 30px; }
+  ${K} .dlg .prev .pic { width: 32px; height: 32px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 8px;
+    background: color-mix(in srgb, var(--c) calc(var(--tint-a, .18) * 100% + 4%), transparent); }
+  ${K} .dlg .prev .n { font-size: var(--fs-name); font-weight: 500; }
+  /* «Свой цвет» — капсула справа от подписи «Цвет», как в макете; в разметке она осталась в .pal, ставится поверх строки подписи. */
+  ${K} .dlg .sec:has(> .pal) { position: relative; }
+  ${K} .dlg .sec:has(> .pal) > .cap { height: 24px; display: flex; align-items: center; }
+  ${K} .dlg .pal { grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 8px; }
+  ${K} .dlg .sw { width: auto; height: auto; aspect-ratio: 1; border-radius: 50%; transition: transform .2s cubic-bezier(.3,1.6,.5,1); }
+  ${K} .dlg .sw:hover { transform: scale(1.15); }
+  ${K} .dlg .own { position: absolute; top: 0; right: 2px; margin: 0; height: 24px; padding: 0 10px; border: 1px solid var(--line); border-radius: 12px; }
+  ${K} .dlg .own.on { border-color: var(--text); }
+  ${K} .dlg .own i { border-radius: 50%; width: 14px; height: 14px; }
+  ${K} .dlg .own .plus { display: flex; }
+  ${K} .dlg .own.on .plus { display: none; }
+  ${K} .dlg .head { gap: 10px; }
+  ${K} .dlg .find { width: 220px; height: 30px; padding: 0 10px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+  ${K} .dlg .find:focus-within { border-color: var(--accent); }
+  ${K} .dlg .find input { font-size: var(--fs-btn); }
+  /* Сетка значков: 9 колонок, 272 px с прокруткой; в низком окне сжимается, а не выталкивает кнопки. */
+  ${K} .dlg .grid { grid-template-columns: repeat(9, minmax(0, 1fr)); flex: 0 1 272px; min-height: 96px; align-content: start; }
+  ${K} .dlg .g { border-radius: 8px; transition: background .15s, transform .2s cubic-bezier(.3,1.6,.5,1); }
+  ${K} .dlg .g.on { outline-width: 1.5px; background: color-mix(in srgb, var(--c) calc(var(--tint-a, .18) * 100%), transparent); }
+  ${K} .dlg .g:hover { background: var(--hover); transform: scale(1.08); }
+  /* «Переименовать» (t668): поле 36 px с рамкой 2 px акцентом, выделение — акцент 28 %. */
+  ${K} .dlg.rn .field { flex: none; height: 36px; border: 2px solid var(--accent); box-shadow: none; background: var(--card); font-size: var(--fs-name); }
+  ${K} .dlg.rn .field::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; }
+  ${K} .dlg .rn-hint { display: block; margin-top: -6px; font-size: var(--fs-desc); color: var(--muted); }
+  ${K} .dlg .btns { padding-top: 0; }
+  ${K} .dlg .btns button { padding: 0 18px; font-size: var(--fs-base); }
+  ${K} .dlg .btns :is(.ok, .danger) { padding: 0 20px; font-weight: 500; }
+  /* Меню правого щелчка (t666): 220 px, пункт 30 px; под мышью — акцент; опасный пункт — --danger. Значки красятся цветом текста пункта.
+     Подсказка клавиш — из data-kbd через ::after: textContent пункта остаётся подписью (по ней ищут пункт проверки t164-pin). */
+  ${K} .dlg-menu { min-width: 220px; padding: 5px; display: flex; flex-direction: column; gap: 1px; background: var(--menu); border: 1px solid var(--line-strong); border-radius: 10px;
+    box-shadow: none; font-family: var(--font-ui); }
+  ${K} .dlg-menu .item { padding: 0 10px; border-radius: 6px; }
+  ${K} .dlg-menu .item > svg { flex-shrink: 0; stroke: currentColor; color: currentColor; }
+  ${K} .dlg-menu .item:hover { background: var(--accent); color: var(--on-accent); }
+  ${K} .dlg-menu .item.danger { color: var(--danger); }
+  ${K} .dlg-menu .item.danger:hover { background: var(--danger); color: #fff; }
+  ${K} .dlg-menu .item[data-kbd]::after { content: attr(data-kbd); margin-left: auto; padding-left: 16px; font-size: var(--fs-cap); color: var(--muted); }
+  ${K} .dlg-menu .item:is(:hover, .danger)[data-kbd]::after { color: inherit; opacity: .7; }
+  ${K} .dlg-menu .sep { margin: 4px 6px; background: var(--line); }
+  /* Появление меню: прозрачность и масштаб от угла у курсора, .18 s. Сдвига на 4 px из макета нет: он заводил бы меню на точку щелчка (step3-10). */
+  @keyframes dlgPop { from { opacity: 0; transform: scale(.95); } to { opacity: 1; transform: none; } }
+  ${K} .dlg-menu.pop { animation: dlgPop .18s var(--ease-in) backwards; }
+  @media (prefers-reduced-motion: reduce) { ${K} .dlg-menu.pop { animation: none; } }
   `;
   document.head.appendChild(style);
 
@@ -149,7 +203,8 @@
   /**
    * Меню правого щелчка в точке x, y. Esc, щелчок мимо или второй правый щелчок — закрыть без выбора.
    * @param {number} x @param {number} y
-   * @param {({ id: string, label: string, icon?: string, danger?: boolean } | '-')[]} items
+   * kbd — подсказка клавиши справа от подписи («F2»), видна в виде Kermach.
+   * @param {({ id: string, label: string, icon?: string, danger?: boolean, kbd?: string } | '-')[]} items
    * @returns {Promise<string | null>} id выбранного пункта
    */
   function menu(x, y, items) {
@@ -158,15 +213,21 @@
       const back = document.createElement('div');
       back.className = 'dlg-menu-back';
       back.innerHTML = `<div class="dlg-menu">${items.map((it) => (it === '-' ? '<div class="sep"></div>'
-        : `<div class="item${it.danger ? ' danger' : ''}" data-id="${esc(it.id)}">${it.icon ? svg(it.icon, it.danger ? tc('dangerHover', '#F46E70') : tc('muted', '#8D91A5'), 14) : ''}<span>${esc(it.label)}</span></div>`)).join('')}</div>`;
+        : `<div class="item${it.danger ? ' danger' : ''}" data-id="${esc(it.id)}"${it.kbd ? ` data-kbd="${esc(it.kbd)}"` : ''}>${it.icon ? svg(it.icon, it.danger ? tc('dangerHover', '#F46E70') : tc('muted', '#8D91A5'), 14) : ''}<span>${esc(it.label)}</span></div>`)).join('')}</div>`;
       document.body.appendChild(back);
       const m = /** @type {HTMLElement} */ (back.firstElementChild);
       // Меню не должно уходить за край окна: снизу места нет — открывается вверх от курсора, справа нет — влево, как в Windows.
-      const r = m.getBoundingClientRect();
-      const left = x + r.width + 4 > innerWidth ? x - r.width : x;
-      const top = y + r.height + 4 > innerHeight ? y - r.height : y;
+      // Размер — до анимации появления: в её первом кадре меню сжато до 95 %.
+      const r = { width: m.offsetWidth, height: m.offsetHeight };
+      const toLeft = x + r.width + 4 > innerWidth;
+      const up = y + r.height + 4 > innerHeight;
+      const left = toLeft ? x - r.width : x;
+      const top = up ? y - r.height : y;
       m.style.left = `${Math.max(4, Math.min(left, innerWidth - r.width - 4))}px`;
       m.style.top = `${Math.max(4, Math.min(top, innerHeight - r.height - 4))}px`;
+      // Растёт из угла у курсора: так меню и в первом кадре не накрывает точку щелчка.
+      m.style.transformOrigin = `${up ? 'bottom' : 'top'} ${toLeft ? 'right' : 'left'}`;
+      m.classList.add('pop');
       const key = (/** @type {KeyboardEvent} */ e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(null); } };
       /** @param {string | null} v */
       const done = (v) => { back.remove(); document.removeEventListener('keydown', key, true); closeOpen = null; resolve(v); };
@@ -187,14 +248,17 @@
    * @template T
    * @param {string} title @param {number} width @param {string} body разметка тела
    * @param {(dlg: HTMLElement, done: (v: T | null) => void) => (() => void) | null} setup
+   * kind — класс окошка для вида Kermach (ci, rn, q): там своя ширина; pic — разметка плитки перед заголовком.
+   * @param {string} [kind] @param {string} [pic]
    * @returns {Promise<T | null>}
    */
-  function modal(title, width, body, setup) {
+  function modal(title, width, body, setup, kind = '', pic = '') {
     if (closeOpen) closeOpen();
     return new Promise((resolve) => {
       const back = document.createElement('div');
       back.className = 'dlg-back';
-      back.innerHTML = `<div class="dlg" tabindex="-1" style="width:${width}px"><div class="dlg-title"><div class="t">${esc(title)}</div><div class="x" title="${I18n.t('common.close', 'Закрыть')}">${CROSS}</div></div><div class="dlg-body">${body}</div></div>`;
+      // Ширина — переменной, а не свойством: вид Kermach ставит свою ширину классом окошка (инлайн-width правило темы не перебило бы).
+      back.innerHTML = `<div class="dlg${kind ? ` ${kind}` : ''}" tabindex="-1" style="--w:${width}px"><div class="dlg-title">${pic}<div class="t">${esc(title)}</div><div class="x" title="${I18n.t('common.close', 'Закрыть')}">${CROSS}</div></div><div class="dlg-body">${body}</div></div>`;
       document.body.appendChild(back);
       const dlg = /** @type {HTMLElement} */ (back.firstElementChild);
       const key = (/** @type {KeyboardEvent} */ e) => {
@@ -225,7 +289,7 @@
         <div class="prev"><div class="strip"></div><span class="pic"></span><div class="text"><div class="n">${esc(o.name)}</div><div class="s" style="color:${colorOf(o.subColor || tc('muted', '#8D91A5'))}">${esc(o.sub)}</div></div></div></div>
       <div class="sec"><div class="cap">${I18n.t('dialogs.cvet', 'Цвет')}</div>
         <div class="pal">${PALETTE.map((/** @type {string} */ c) => `<div class="sw" data-c="${c}" style="background:${c}" title="${c}"></div>`).join('')}
-          <label class="own" title="${I18n.t('dialogs.vybratLyuboyCvet', 'Выбрать любой цвет')}"><i></i><span>${I18n.t('dialogs.svoyCvet', 'Свой цвет')}</span><input type="color" tabindex="-1"></label></div></div>
+          <label class="own" title="${I18n.t('dialogs.vybratLyuboyCvet', 'Выбрать любой цвет')}"><b class="plus">${svg('plus', tc('text', '#C9D0DC'), 12)}</b><i></i><span>${I18n.t('dialogs.svoyCvet', 'Свой цвет')}</span><input type="color" tabindex="-1"></label></div></div>
       <div class="sec"><div class="head"><div class="cap">${I18n.t('dialogs.znachok', 'Значок')}</div><label class="find">${svg('search', tc('muted', '#8D91A5'), 13)}<input placeholder="${I18n.t('dialogs.poiskZnachka', 'Поиск значка')}" spellcheck="false"></label></div>
         <div class="grid"></div></div>
       <div class="btns"><button class="cancel">${I18n.t('common.cancel', 'Отмена')}</button><button class="ok">${I18n.t('common.done', 'Готово')}</button></div>`;
@@ -233,6 +297,7 @@
       const q = /** @type {HTMLInputElement} */ (dlg.querySelector('.find input'));
       const own = /** @type {HTMLInputElement} */ (dlg.querySelector('.own input'));
       const paint = () => {
+        dlg.style.setProperty('--c', color);
         /** @type {HTMLElement} */ (dlg.querySelector('.prev .strip')).style.background = color;
         /** @type {HTMLElement} */ (dlg.querySelector('.prev .pic')).innerHTML = svg(icon, color, 18);
         let inPalette = false;
@@ -251,7 +316,7 @@
         const f = q.value.trim().toLowerCase();
         const shown = f ? GRID.filter((/** @type {string} */ n) => n.includes(f) || String(/** @type {any} */ (window).Icons.TITLES[n] || '').toLowerCase().includes(f)) : GRID;
         /** @type {HTMLElement} */ (dlg.querySelector('.grid')).innerHTML = shown.length
-          ? shown.map((/** @type {string} */ n) => `<div class="g${n === icon ? ' on' : ''}" data-n="${n}" title="${esc(/** @type {any} */ (window).Icons.TITLES[n] || n)}"${n === icon ? ` style="outline:1px solid ${color}"` : ''}>${svg(n, n === icon ? color : tc('text', '#C9D0DC'), 18)}</div>`).join('')
+          ? shown.map((/** @type {string} */ n) => `<div class="g${n === icon ? ' on' : ''}" data-n="${n}" title="${esc(/** @type {any} */ (window).Icons.TITLES[n] || n)}">${svg(n, n === icon ? color : tc('text', '#C9D0DC'), 18)}</div>`).join('')
           : `<div class="none">${I18n.t('dialogs.takogoZnachkaNet', 'Такого значка нет')}</div>`;
       };
       /** @type {HTMLElement} */ (dlg.querySelector('.pal')).addEventListener('click', (e) => {
@@ -269,17 +334,18 @@
       /** @type {HTMLElement} */ (dlg.querySelector('.btns .ok')).onclick = ok;
       paint();
       return ok;
-    });
+    }, 'ci');
   }
 
   /**
-   * Новое имя. Пустое не принимается.
-   * @param {{ title?: string, value: string, max?: number }} o
+   * Новое имя. Пустое не принимается. icon и color — плитка значка перед заголовком (вид Kermach); без icon плитки нет.
+   * @param {{ title?: string, value: string, max?: number, icon?: string, color?: string }} o
    * @returns {Promise<string | null>} null — отмена или имя не поменялось
    */
   function rename(o) {
     const max = o.max || 60;
     const body = `<input class="field" spellcheck="false" maxlength="${max}" value="${esc(o.value)}">
+      <div class="rn-hint">${I18n.t('dialogs.enterSohranitEsc', 'Enter — сохранить, Esc — отмена')}</div>
       <div class="btns"><button class="cancel">${I18n.t('common.cancel', 'Отмена')}</button><button class="ok">${I18n.t('common.done', 'Готово')}</button></div>`;
     return modal(o.title || I18n.t('common.rename', 'Переименовать'), 400, body, (dlg, done) => {
       const input = /** @type {HTMLInputElement} */ (dlg.querySelector('.field'));
@@ -291,10 +357,11 @@
         done(v === o.value ? null : v);
       };
       okBtn.onclick = ok;
+      if (o.icon) dlg.style.setProperty('--c', colorOf(o.color || ''));
       input.focus();
       input.select();
       return ok;
-    });
+    }, 'rn', o.icon && GRID.includes(o.icon) ? `<span class="pic">${svg(o.icon, colorOf(o.color || ''), 18)}</span>` : '');
   }
 
   /**
@@ -309,7 +376,7 @@
       /** @type {HTMLElement} */ (dlg.querySelector('.btns .yes')).onclick = () => done(true);
       /** @type {HTMLElement} */ (dlg.querySelector('.btns .cancel')).focus();
       return null;
-    });
+    }, 'q');
     return r === true;
   }
 
@@ -411,48 +478,8 @@
   }
 
   /**
-   * Схема плагина «Темы» (t185): список схем из themes.json плагина (renderer\theme.js Theme.list()), выбор пишет поле theme в settings.json.
-   * Строка своим блоком под разделом «Плагины», как размеры видов браузера; видна, пока «Темы» включены и схемы прочитаны.
-   * Отвечает функцией, которая перерисовывает строку: её зовёт paint при каждом изменении настроек.
-   * @param {any} t window.terminalus @param {HTMLElement} plg раздел «Плагины» @param {Tx} tx надпись на текущем языке
-   */
-  function themeRow(t, plg, tx) {
-    const box = document.createElement('div');
-    box.className = 'sec thm';
-    box.style.marginTop = '-10px';
-    plg.after(box);
-    const row = document.createElement('div');
-    row.className = 'stepper';
-    row.style.marginLeft = '22px';
-    const cap = document.createElement('span');
-    cap.style.cssText = 'flex:none;width:72px';
-    tx(cap, 'dialogs.shema', 'Схема');
-    const sel = document.createElement('select');
-    sel.style.cssText = 'flex:1;min-width:0;height:26px;padding:0 6px;border-radius:6px;border:1px solid var(--line, rgba(141,145,165,.14));'
-      + 'background:var(--hover);color:var(--text);font:inherit;outline:0';
-    sel.addEventListener('change', () => change(t, { theme: sel.value }));
-    row.append(cap, sel);
-    box.appendChild(row);
-    // Список схем — свежий с диска: новую схему могли положить файлом, пока это окно открыто.
-    const T0 = /** @type {any} */ (window).Theme;
-    if (T0 && typeof T0.refresh === 'function') T0.refresh();
-    return () => {
-      const T = /** @type {any} */ (window).Theme;
-      /** @type {{ id: string, name: string }[]} */
-      const list = T ? T.list() : [];
-      box.style.display = list.length ? '' : 'none';
-      const ids = list.map((x) => x.id).join('\n');
-      if (sel.dataset.ids !== ids) {
-        sel.dataset.ids = ids;
-        sel.replaceChildren(...list.map((x) => { const o = document.createElement('option'); o.value = x.id; o.textContent = x.name; return o; }));
-      }
-      if (list.length) sel.value = T.id();
-    };
-  }
-
-  /**
    * Толщина рамки плагина «Рамка проекта» (t484): 4, 6 или 8 px (по умолчанию 6; сохранённые раньше 2 и 3 — тоже 6), пишется в pluginSettings.frame.width — окна проектов перекрашивают рамку сразу.
-   * Строка — сразу под выключателем «Рамка проекта», внутри раздела «Плагины»: блоком под разделом, как «Схема», она встала бы
+   * Строка — сразу под выключателем «Рамка проекта», внутри раздела «Плагины»: блоком под разделом, как строка языка, она встала бы
    * под размерами видов и читалась бы как настройка «Браузера». Видна, пока плагин включён.
    * @param {any} t window.terminalus @param {HTMLElement} lab строка выключателя плагина @param {Tx} tx надпись на текущем языке
    * @param {(s: any) => boolean} isOn включён ли плагин по настройкам
@@ -493,7 +520,7 @@
   /**
    * Строка «Язык программы» модуля «Перевод программы» (t184): «Русский» — встроенный, первый; дальше языки включённых плагинов
    * (поле lang plugin.json, main\plugins.js list — код и имя языка на нём самом; словари окно не читает). Новый язык — файл словаря и строка в plugin.json.
-   * Своим блоком без отступа после строк плагинов (размеры видов, «Схема») — иначе выглядит настройкой «Браузера»; видна, пока включён плагин с языками. Выбор пишет поле lang — все окна сразу на нём (renderer\i18n.js).
+   * Своим блоком без отступа после строк плагинов (размеры видов) — иначе выглядит настройкой «Браузера»; видна, пока включён плагин с языками. Выбор пишет поле lang — все окна сразу на нём (renderer\i18n.js).
    * Отвечает функцией, которая перерисовывает строку по настройкам: её зовёт paint.
    * @param {any} t window.terminalus @param {HTMLElement} plg раздел «Плагины» @param {Tx} tx надпись на текущем языке
    * @param {{ id: string, langs?: Record<string, string> }[]} list плагины с языками @param {(s: any, id: string) => boolean} on включён ли плагин
@@ -530,6 +557,69 @@
   }
 
   /**
+   * Список «Тема» (t723) — одно место выбора вида окна и терминала: темы макета, схемы плагина «Темы» (main\settings.js schemes()), темы Нагорняка.
+   * Пункт пишет поля настроек вместе (themePatch), выбранный пункт считается из них обратно. «Скло» (только macOS) в списке нет:
+   * сохранённое показывается временным пунктом, пока не выбрали другое, — иначе список показал бы не ту тему.
+   * Отвечает функцией, которая перерисовывает список по настройкам: её зовёт paint.
+   * @param {any} t window.terminalus @param {HTMLSelectElement} sel @param {Tx} tx надпись на текущем языке
+   * @param {(id: string) => boolean} plgOn включён ли плагин, пока в настройках нет записи
+   */
+  function themeList(t, sel, tx, plgOn) {
+    /** @type {{ id: string, name: string }[]} */
+    let schemes = [];
+    try { const r = t.settings.schemes(); if (Array.isArray(r)) schemes = r; } catch {}
+    const opt = (/** @type {string} */ value, /** @type {string} */ key, /** @type {string} */ ru) => {
+      const o = document.createElement('option');
+      o.value = value;
+      if (key) tx(o, key, ru); else o.textContent = ru;
+      return o;
+    };
+    const group = (/** @type {string} */ key, /** @type {string} */ ru, /** @type {HTMLOptionElement[]} */ opts) => {
+      const g = document.createElement('optgroup');
+      if (key) tx(g, key, ru, 'label'); else g.label = ru;
+      g.append(...opts);
+      return g;
+    };
+    const groups = [
+      group('', 'Kermach', [opt('kermach:system', 'dialogs.apSystem', 'Как в системе'), opt('kermach:light', 'dialogs.uiLight', 'Светлая'),
+        opt('kermach:dark', 'dialogs.uiDark', 'Тёмная'), opt('termius', 'dialogs.uiTermius', 'Termius Dark')]),
+      ...(schemes.length ? [group('dialogs.temaSchemes', 'Схемы', schemes.map((x) => opt('scheme:' + x.id, '', x.name)))] : []),
+      group('dialogs.temaNahorniak', 'Темы Нагорняка', [opt('studio:light', 'dialogs.uiStudioLight', 'Студия светлая'), opt('studio:dark', 'dialogs.uiStudioDark', 'Студия тёмная'),
+        opt('deck:light', 'dialogs.uiDeckLight', 'Пульт светлый'), opt('deck:dark', 'dialogs.uiDeckDark', 'Пульт тёмный')]),
+    ];
+    const glass = [opt('glass:light', 'dialogs.uiGlassLight', 'Стекло светлое'), opt('glass:dark', 'dialogs.uiGlassDark', 'Стекло тёмное')];
+    sel.append(...groups);
+    sel.addEventListener('change', () => change(t, themePatch(sel.value)));
+    return (/** @type {any} */ s) => {
+      const v = themeValue(s, schemes.map((x) => x.id), plgOn('themes'), matchMedia('(prefers-color-scheme: dark)').matches);
+      for (const o of glass) if (o.value !== v) o.remove(); else if (!o.isConnected) groups[groups.length - 1].append(o);
+      sel.value = v;
+    };
+  }
+
+  /** Пункт списка «Тема» → поля настроек (t723). @param {string} v */
+  function themePatch(v) {
+    if (v.startsWith('kermach:')) return { ui: 'kermach', appearance: v.slice(8) };
+    if (v.startsWith('scheme:')) return { ui: 'termius', theme: v.slice(7), plugins: { themes: true } };
+    if (v === 'termius') return { ui: 'termius', theme: '' };
+    const [ui, mode] = v.split(':');
+    return { ui, appearance: mode };
+  }
+
+  /**
+   * Поля настроек → пункт списка «Тема» (t723). Studio, deck и glass «как в системе» из прежних настроек — пункт по виду системы.
+   * Схема — только включённая (plugins.themes) и есть в themes.json; иначе окно в Termius Dark (main\settings.js scheme()), и пункт тот же.
+   * @param {any} s настройки @param {string[]} ids схемы из themes.json @param {boolean} defOn плагин «Темы» включён без записи в настройках @param {boolean} sysDark
+   */
+  function themeValue(s, ids, defOn, sysDark) {
+    const ui = s.ui || 'termius';
+    if (ui === 'kermach') return 'kermach:' + (s.appearance === 'light' || s.appearance === 'dark' ? s.appearance : 'system');
+    if (ui === 'studio' || ui === 'deck' || ui === 'glass') return `${ui}:${s.appearance === 'light' || s.appearance === 'dark' ? s.appearance : sysDark ? 'dark' : 'light'}`;
+    const on = s.plugins && typeof s.plugins.themes === 'boolean' ? s.plugins.themes : defOn;
+    return on && s.theme && ids.includes(s.theme) ? 'scheme:' + s.theme : 'termius';
+  }
+
+  /**
    * Окошко «Настройки»: изменения действуют сразу, кнопки «Применить» нет. «Сбросить» — 100 %, 17, сдвиг просмотра Markdown 0 (t245), звук включён.
    * @param {any} t window.terminalus
    * @returns {Promise<null>}
@@ -537,12 +627,9 @@
   async function settings(t) {
     await watch(t);
     // Надписи ставит tx — по таблице STATIC и в коде строк ниже: язык выбирают в этом же окне, и оно перерисовывается без переоткрытия (t184).
-    // Темы программы (t651): три вида макета. Светлая и Тёмная — тема kermach с appearance, Termius Dark — termius (по умолчанию).
-    // «Скло», «Студія», «Пульт» в коде остаются (main\ui-themes.js), в списке их нет. data-look — какой вид; data-ap занят кнопками «Оформления».
-    const CARDS = [{ look: 'light', ui: 'kermach' }, { look: 'dark', ui: 'kermach' }, { look: 'termius', ui: 'termius' }];
+    // Тема (t723): один список — themeList; пункты и какие поля настроек они пишут — там же.
     const body = `
-      <div class="sec uis"><div class="cap uit"></div><div class="uicards">${CARDS.map((c) => `<button class="uicard" data-ui="${c.ui}" data-look="${c.look}"><span class="pv ${c.look}"><i></i><i></i></span><span class="nm"></span><span class="by"></span></button>`).join('')}</div></div>
-      <div class="sec apr"><div class="cap apt"></div><div class="seg">${['system', 'light', 'dark'].map((a) => `<button data-ap="${a}"></button>`).join('')}</div><div class="uinote"></div></div>
+      <div class="sec thm"><div class="stepper"><span class="cap tmt" style="flex:none;margin:0"></span><select class="tms"></select></div></div>
       <div class="sec"><div class="cap zoom"></div>
         <div class="seg">${ZOOMS.map((z) => `<button data-z="${z}">${z} %</button>`).join('')}</div></div>
       <div class="sec"><div class="cap font"></div>
@@ -555,13 +642,7 @@
     /** Селектор, ключ, русский текст, свойство. @type {[string, string, string, string][]} */
     const STATIC = [
       ['.dlg-title .t', 'dialogs.nastroyki', 'Настройки', 'textContent'], ['.dlg-title .x', 'common.close', 'Закрыть', 'title'],
-      ['.uit', 'dialogs.uiTheme', 'Тема программы', 'textContent'],
-      ['.uicard[data-look="light"] .nm', 'dialogs.uiLight', 'Светлая', 'textContent'], ['.uicard[data-look="light"] .by', 'dialogs.uiLightBy', 'системная, для дня', 'textContent'],
-      ['.uicard[data-look="dark"] .nm', 'dialogs.uiDark', 'Тёмная', 'textContent'], ['.uicard[data-look="dark"] .by', 'dialogs.uiDarkBy', 'системная, для вечера', 'textContent'],
-      ['.uicard[data-look="termius"] .nm', 'dialogs.uiTermius', 'Termius Dark', 'textContent'], ['.uicard[data-look="termius"] .by', 'dialogs.uiTermiusBy', 'зелёная, прежний вид', 'textContent'],
-      ['.apt', 'dialogs.appearance', 'Оформление', 'textContent'],
-      ['[data-ap="system"]', 'dialogs.apSystem', 'Как в системе', 'textContent'], ['[data-ap="light"]', 'dialogs.apLight', 'Светлое', 'textContent'], ['[data-ap="dark"]', 'dialogs.apDark', 'Тёмное', 'textContent'],
-      ['.uinote', 'dialogs.apNoteTermius', 'Termius Dark всегда тёмная. Её цвета может заменить схема плагина «Темы».', 'textContent'],
+      ['.tmt', 'dialogs.tema', 'Тема', 'textContent'],
       ['.cap.zoom', 'dialogs.razmerShriftaOkon', 'Размер шрифта окон', 'textContent'], ['.cap.font', 'dialogs.razmerShriftaTerminala', 'Размер шрифта терминала', 'textContent'],
       ['.m', 'dialogs.menshe', 'Меньше', 'title'], ['.p', 'dialogs.bolshe', 'Больше', 'title'],
       ['.sndt', 'dialogs.zvukKogdaAgentZakonchil', 'Звук, когда агент закончил или ждёт ответа', 'textContent'],
@@ -588,30 +669,26 @@
       const ntf = /** @type {HTMLInputElement} */ (q('.ntf'));
       const paint = (/** @type {any} */ s) => {
         dlg.querySelectorAll('.seg button[data-z]').forEach((b) => b.classList.toggle('on', Number(/** @type {HTMLElement} */ (b).dataset.z) === s.uiZoom));
-        const ui = s.ui || 'termius';
-        // Светлая или Тёмная горит по действующему виду: при «Как в системе» — по виду системы.
-        const ap = s.appearance === 'light' || s.appearance === 'dark' ? s.appearance : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-        dlg.querySelectorAll('.uicard').forEach((b) => { const d = /** @type {HTMLElement} */ (b).dataset; b.classList.toggle('on', d.ui === ui && (ui !== 'kermach' || d.look === ap)); });
-        dlg.querySelectorAll('[data-ap]').forEach((b) => { b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.ap === (s.appearance || 'system')); /** @type {HTMLButtonElement} */ (b).disabled = ui === 'rostyslav' || ui === 'termius'; });
-        q('.uinote').hidden = ui !== 'termius';
+        theme(s);
         if (document.activeElement !== num) num.value = String(s.termFont);
         snd.checked = !!s.sound;
         ntf.checked = s.notify !== false;
         dlg.querySelectorAll('.plg input').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); const on = s.plugins && s.plugins[i.dataset.id || '']; i.checked = typeof on === 'boolean' ? on : plgDefault.get(i.dataset.id || '') !== false; });
         // Размеры видов браузера (t207) — только пока «Браузер» включён.
         dlg.querySelectorAll('.bvws').forEach((r) => { /** @type {HTMLElement} */ (r).style.display = s.plugins && s.plugins.browser === false ? 'none' : ''; });
-        if (themes) themes();
         if (frame) frame(s);
         if (langs) langs(s);
       };
-      /** Перерисовка строки «Схема» (t185); null — плагина «Темы» в списке нет. @type {(() => void) | null} */
-      let themes = null;
       /** Перерисовка строки «Толщина» плагина «Рамка проекта» (t484); null — плагина в списке нет. @type {((s: any) => void) | null} */
       let frame = null;
       /** Перерисовка строки «Язык программы» (t184); null — плагинов с языками нет. @type {((s: any) => void) | null} */
       let langs = null;
       /** Включён ли плагин, пока в настройках нет записи (plugin.json, "enabled": false — нет, t220). @type {Map<string, boolean>} */
       const plgDefault = new Map();
+      const tms = /** @type {HTMLSelectElement} */ (q('.tms'));
+      tms.style.cssText = 'flex:1;min-width:0;height:26px;padding:0 6px;border-radius:6px;border:1px solid var(--line, rgba(141,145,165,.14));'
+        + 'background:var(--hover);color:var(--text);font:inherit;outline:0';
+      const theme = themeList(t, tms, tx, (id) => plgDefault.get(id) !== false);
       const offPaint = onSettings(paint);
       off = () => { offPaint(); offLang(); };
       // Плагины (t182): у каждого выключатель; окна проектов включают и выключают плагин сразу, без перезагрузки.
@@ -622,6 +699,8 @@
         const withLangs = (Array.isArray(list) ? list : []).filter((pl) => pl.langs && Object.keys(pl.langs).length);
         list = [...(Array.isArray(list) ? list : []), { id: 'browser', name: 'Браузер' }];
         for (const pl of list) {
+          // У плагина «Темы» выключателя нет (t723): его схемы — пункты списка «Тема», выбор схемы включает её сам.
+          if (pl.id === 'themes') continue;
           const lab = document.createElement('label');
           lab.className = 'chk';
           const cb = document.createElement('input');
@@ -643,10 +722,9 @@
           lab.append(cb, sp);
           plg.appendChild(lab);
           if (pl.id === 'browser') browserViews(t, plg, tx);
-          if (pl.id === 'themes') themes = themeRow(t, plg, tx);
           if (pl.id === 'frame') frame = frameRow(t, lab, tx, (s) => (s.plugins && typeof s.plugins.frame === 'boolean' ? s.plugins.frame : plgDefault.get('frame') !== false));
         }
-        // Строка языка — сразу под «Плагинами», выше размеров видов и «Схемы»: plg.after ставит новый блок первым.
+        // Строка языка — сразу под «Плагинами», выше размеров видов: plg.after ставит новый блок первым.
         if (withLangs.length) langs = langRow(t, plg, tx, withLangs, (s, id) => (s.plugins && typeof s.plugins[id] === 'boolean' ? s.plugins[id] : plgDefault.get(id) !== false));
         plg.hidden = false;
         if (cur) paint(cur);
@@ -655,9 +733,6 @@
       // поэтому «Настройки» закрываются; после «Агентов» они заново не открываются.
       q('.agt .open').onclick = () => { done(null); agents(t); };
       dlg.querySelectorAll('.seg button[data-z]').forEach((b) => b.addEventListener('click', () => change(t, { uiZoom: Number(/** @type {HTMLElement} */ (b).dataset.z) })));
-      // Светлая и Тёмная задают и вид: { ui: 'kermach', appearance }; Termius Dark — только ui, «Оформление» у неё недоступно.
-      dlg.querySelectorAll('.uicard').forEach((b) => b.addEventListener('click', () => { const d = /** @type {HTMLElement} */ (b).dataset; change(t, d.ui === 'kermach' ? { ui: d.ui, appearance: d.look } : { ui: d.ui }); }));
-      dlg.querySelectorAll('[data-ap]').forEach((b) => b.addEventListener('click', () => change(t, { appearance: /** @type {HTMLElement} */ (b).dataset.ap })));
       const font = (/** @type {number} */ v) => {
         const n = Math.round(v);
         if (!Number.isFinite(n)) { paint(cur); return; }

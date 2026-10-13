@@ -14,6 +14,8 @@
   body { display: flex; flex-direction: column; }
   ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: rgba(var(--muted-rgb),.25); border-radius: 4px; }
   svg { display: block; flex-shrink: 0; }
+  /* Атрибут hidden сильнее display у кнопок (.bbtn — flex): иначе «Автоматизации» видны и при выключенном плагине (t663). */
+  [hidden] { display: none !important; }
 
   /* Заголовок окна: за него окно перетаскивается, кнопки — нет. */
   #title { height: 36px; display: flex; align-items: center; padding-left: 14px; flex-shrink: 0; -webkit-app-region: drag; }
@@ -38,6 +40,9 @@
   .bbtn.danger { border-color: rgba(var(--danger-rgb),.55); color: var(--danger); }
   .bbtn.danger:hover { background: rgba(var(--danger-rgb),.10); color: var(--danger); border-color: var(--danger); }
   .bbtn:disabled, .bbtn:disabled:hover, .bbtn.danger:disabled:hover { opacity: .45; background: none; }
+  /* Обёртка кнопок справа, значок «Настройки» и подсказка «Ctrl K» — для нового вида (ui-kermach-projects.css, t663); здесь строка как раньше. */
+  #barTools { display: contents; }
+  #setIcon, #search .kbd { display: none; }
   #error { display: none; padding: 0 16px 8px; color: var(--danger); font-size: 12px; }
   /* Кнопка «Автоматизации N» (t252): число серым, зелёным — есть прогон, который ещё не открывали. */
   #autosN { font-size: 11px; color: var(--muted); border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 3px; padding: 0 6px; line-height: 16px; }
@@ -59,7 +64,13 @@
   #list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
   /* Заголовок группы: стрелка свернуть / развернуть, имя, серым — сколько проектов; у свёрнутой справа сводка. */
   .group { display: flex; align-items: center; gap: 6px; height: 30px; margin-top: 6px; padding: 0 14px 0 6px; border-radius: 4px; font-size: 11px; color: var(--muted); letter-spacing: .04em; }
-  .group:first-child { margin-top: 0; }
+  /* Блок — обёртка заголовка и строк (t664): в новом виде карточка, здесь её нет — заголовок и строки как раньше прямо в #list.
+     Заголовок всегда первый в своей обёртке, поэтому отступ сверху убирается только у первого блока списка. */
+  .gcard { display: contents; }
+  .gcard:first-child > .group { margin-top: 0; }
+  /* Стрелка — один путь «вправо», у раскрытой группы повёрнута вниз. */
+  .group .chev { transition: transform .2s; }
+  .group:not(.shut) .chev { transform: rotate(90deg); }
   .group[data-key] { cursor: default; }
   .group[data-key]:hover { background: var(--hover); }
   .group .gn { text-transform: uppercase; }
@@ -73,6 +84,8 @@
   .row:hover { background: var(--hover); }
   .row.fresh { background: var(--hover); outline: 1px solid rgba(var(--accent-rgb),.5); }
   .strip { width: 3px; height: 24px; border-radius: 2px; flex-shrink: 0; }
+  /* Плитка значка проекта — для нового вида (t664); здесь полоса и значок — прямые дети строки, как раньше. */
+  .row .pic { display: contents; }
   .text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .text .n { font-size: 13px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .text .p { font-size: 11px; line-height: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -123,11 +136,14 @@
   </div>
 </div>
 <div id="bar">
-  <label id="search"><span id="searchIcon"></span><input id="q" placeholder="Поиск проекта" spellcheck="false" autofocus data-i18n-placeholder="projects.poiskProekta"></label>
+  <label id="search"><span id="searchIcon"></span><input id="q" placeholder="Поиск по имени или пути" spellcheck="false" autofocus data-i18n-placeholder="projects.poiskPoImeniIli"><span id="qKbd" class="kbd">Ctrl K</span></label>
   <button id="add" class="bbtn"><span id="plusIcon"></span><span data-i18n="projects.dobavitPapku">Добавить папку</span></button>
-  <button id="autos" class="bbtn" hidden><span id="autosIcon"></span><span id="autosName">Автоматизации</span><span id="autosN" class="tag"></span></button>
-  <button id="settings" class="bbtn" title="Размер шрифта окон и терминала, звук" data-i18n-title="projects.razmerShriftaOkonI"><span data-i18n="projects.nastroyki">Настройки</span></button>
-  <button id="stopAll" class="bbtn danger" title="Закрыть программу, все вкладки и агентов. Вкладки вернутся при следующем запуске, разговоры Claude — тоже" data-i18n-title="projects.zakrytProgrammuVseVkladki"><span id="stopIcon"></span><span data-i18n="projects.ostanovitVse">Остановить всё</span></button>
+  <!-- Новый вид (t663): три кнопки — значками в заголовке окна, подписи .lbl скрыты. В старых темах обёртки нет (display: contents). -->
+  <span id="barTools">
+  <button id="autos" class="bbtn" hidden><span id="autosIcon"></span><span id="autosName" class="lbl">Автоматизации</span><span id="autosN" class="tag"></span></button>
+  <button id="settings" class="bbtn" title="Размер шрифта окон и терминала, звук" data-i18n-title="projects.razmerShriftaOkonI"><span id="setIcon"></span><span class="lbl" data-i18n="projects.nastroyki">Настройки</span></button>
+  <button id="stopAll" class="bbtn danger" title="Закрыть программу, все вкладки и агентов. Вкладки вернутся при следующем запуске, разговоры Claude — тоже" data-i18n-title="projects.zakrytProgrammuVseVkladki"><span id="stopIcon"></span><span class="lbl" data-i18n="projects.ostanovitVse">Остановить всё</span></button>
+  </span>
 </div>
 <div id="error"></div>
 <div id="count"><span id="total"></span><span id="allAgents"></span><span id="allNeed"></span><button id="fold" class="tool"></button><span id="views"><button id="vList" title="Список" data-i18n-title="projects.spisok"></button><button id="vTiles" title="Плитка" data-i18n-title="projects.plitka"></button></span></div>

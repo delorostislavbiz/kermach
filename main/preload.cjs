@@ -125,8 +125,10 @@ contextBridge.exposeInMainWorld('terminalus', {
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     set: (patch) => ipcRenderer.invoke('settings:set', patch),
-    // Тема окна (t257): { id, kind, window, terminal, list } или null — плагина «Темы» нет или он выключен. Синхронно: renderer\theme.js ставит цвета до отрисовки.
+    // Тема окна (t257): { id, kind, window, terminal } или null — схема не выбрана, плагина «Темы» нет. Синхронно: renderer\theme.js ставит цвета до отрисовки.
     look: () => ipcRenderer.sendSync('settings:look'),
+    // Схемы плагина «Темы» для списка «Тема» в «Настройках» (t723): [{ id, name, kind }], синхронно.
+    schemes: () => ipcRenderer.sendSync('settings:schemes'),
     // Словарь языка для окна (t258): { lang, dict } или null — синхронно, до отрисовки. Читает renderer\i18n.js.
     dict: () => ipcRenderer.sendSync('settings:dict'),
     // Отвечает функцией снятия подписки (t218): «Браузер» подписывается при каждом включении и снимает подписку при выключении.

@@ -23,9 +23,12 @@ const limitsUsed = (w) => Math.max(0, Math.min(100, Math.round(w.used_percentage
 /** Цвет числа: как у Орки по израсходованному — до 60 % обычный, до 80 % жёлтый, дальше красный. @param {number} used */
 const limitsColor = (used) => {
   const k = used < 60 ? 'normal' : used < 80 ? 'warn' : 'bad';
-  // Со схемой плагина «Темы» (t185) — её текст, жёлтый и красный; без неё (и в проверках под node) — LIMITS_COLOR.
-  const T = typeof window === 'object' ? /** @type {any} */ (window).Theme : null;
-  return (T && T.color({ normal: 'text', warn: 'warn', bad: 'danger' }[k])) || LIMITS_COLOR[k];
+  // Со схемой плагина «Темы» (t185) — её текст, жёлтый и красный; без неё — переменная окна (--text у Termius Dark — зелёный терминала, t753);
+  // в проверках под node — LIMITS_COLOR.
+  if (typeof window !== 'object') return LIMITS_COLOR[k];
+  const T = /** @type {any} */ (window).Theme;
+  const v = k === 'normal' ? getComputedStyle(document.documentElement).getPropertyValue('--text').trim() : '';
+  return (T && T.color({ normal: 'text', warn: 'warn', bad: 'danger' }[k])) || v || LIMITS_COLOR[k];
 };
 
 /** Время до сброса: «2 ч 14 мин», «45 мин», «3 д 4 ч», «меньше минуты». @param {number} ms */
@@ -143,7 +146,15 @@ function limitsSetup(host) {
         const v = document.createElement('span');
         v.style.color = limitsColor(p.used);
         v.textContent = `${p.used} %`;
-        s.append(I18n.t('limits.ispolzovano2', '{label}: использовано ', { label: p.label }), v, p.tail);
+        // Полоса 44×5 нового вида (Д-11): заполнение — израсходованный процент. Видна только в Kermach и Termius Dark (renderer\ui-kermach-project.css); текста не добавляет.
+        const bar = document.createElement('i');
+        bar.className = 'lbar';
+        const fill = document.createElement('b');
+        fill.style.width = `${Math.max(0, Math.min(100, p.used))}%`;
+        // Как в макете: обычная полоса — --ok, жёлтая и красная — те же, что у числа.
+        fill.style.background = p.used < 60 ? 'var(--ok, #41D68A)' : limitsColor(p.used);
+        bar.appendChild(fill);
+        s.append(bar,I18n.t('limits.ispolzovano2', '{label}: использовано ', { label: p.label }), v, p.tail);
       }
       bar.appendChild(s);
     }

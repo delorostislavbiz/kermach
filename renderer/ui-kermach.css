@@ -9,6 +9,9 @@ html[data-ui="termius"]:not([data-theme]) {
   --side: #1A1D2F; --tab-active: #23273C; --menu: #20243A; --line: rgba(141,145,165,.16); --hover: rgba(141,145,165,.13);
   --selected: rgba(141,145,165,.13); --card: #1A1D2F; --term: #11142A; --line-strong: rgba(141,145,165,.26); --off: rgba(141,145,165,.3);
   --knob: #C9D0DC; --tint-a: .18; --ok: #41D68A;
+  /* Текст окна — цвет текста терминала (t753, Ростислав: «шрифт везде должен быть зелёным, таким, какой он в терминале»).
+     Приглушённые подписи (--muted, --tab-fg, --status-fg) остаются серыми, как серые подсказки в терминале. */
+  --text: var(--term-fg); --tab-active-fg: var(--term-fg);
   --font-ui: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-label: var(--font-ui); --r-sm: 6px; --r-md: 8px; --r-lg: 10px;
 }

@@ -226,7 +226,8 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .seg { display: inline-flex; flex-wrap: wrap; align-self: flex-start; max-width: 100%; border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 5px; overflow: hidden; }
     #plugin-roadmap-panel .seg button { height: 26px; padding: 0 10px; border: 0; background: transparent; color: var(--muted); font: inherit; white-space: nowrap; }
     #plugin-roadmap-panel .seg button.on { background: var(--accent); color: var(--on-accent, #fff); font-weight: 600; }
-    #plugin-roadmap-panel .dec { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; line-height: 17px; }
+    #plugin-roadmap-panel .dec { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; line-height: 17px; cursor: pointer; }
+    #plugin-roadmap-panel .dec:hover .dx { text-decoration: underline; }
     #plugin-roadmap-panel .dec .dt { font-size: 11px; font-weight: 700; color: var(--rm-info); }
     #plugin-roadmap-panel .dec .dt.dead { color: var(--rm-warn); }
     #plugin-roadmap-panel .dec .dx { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; }
@@ -289,6 +290,8 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .rinbox .moved { padding: 0 4px; color: var(--muted); font-size: 11.5px; line-height: 16px; overflow-wrap: anywhere; }
     #plugin-roadmap-panel .rinbox .moved b { color: var(--rm-ok); font-weight: 400; }
     #plugin-roadmap-panel .rinbox .none { padding: 4px; color: var(--muted); }
+    #plugin-roadmap-panel .rinbox .idone .card { cursor: pointer; }
+    #plugin-roadmap-panel .rinbox .idone .card .tt { color: var(--muted); }
     /* «Решения и тупики» во всю панель (t517, экран 16): фильтр по карте и файлу, «все / решения / тупики»; запись — вид, тема, дата · агент, суть, карта и файлы. */
     #plugin-roadmap-panel .rdecs { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 12px; display: flex; flex-direction: column; gap: 8px; }
     #plugin-roadmap-panel .rdecs .ttl { font-weight: 600; color: var(--text); }
@@ -449,6 +452,8 @@ function roadmapSetup(host) {
     const wi = wItems.get(c.id);
     if (wi && wi.st === 'closed' && c.status !== 'готово') { meta += ` · ${T('wave.closed', 'вкладка закрыта, карта не готова')}`; tone = ' warn'; }
     if (wi && wi.st === 'fail') { meta += ` · ${T('wave.fail', 'не запущена: {why}', { why: wi.why })}`; tone = ' warn'; }
+    // Запущена кнопкой, пока ждала в волне (t728): «стоп» волны её вкладку не закроет.
+    if (wi && wi.manual && wi.st === 'run' && ['в работе', 'ждёт ответа'].includes(c.status)) meta += ` · ${T('wave.manual', 'запущена вручную')}`;
     if (c.status === 'в очереди') {
       const wait = c.depends.filter((/** @type {string} */ d) => { const x = byId.get(d); return !x || x.status !== 'готово'; });
       if (wait.length) meta += ` · ${T('waits', 'ждёт {ids}', { ids: wait.join(', ') })}`;
@@ -456,8 +461,8 @@ function roadmapSetup(host) {
     } else {
       if (c.agent) meta += ` · ${c.agent}`;
       // «Готово» — closed из файла (t537): время файла после git clone у всех одно, нет closed — без времени.
-      // Запущена кнопкой (t515) — время запуска; иначе время правки файла.
-      const t = c.status === 'готово' ? when(stampAt(c.closed)) : when(c.run && c.run.started ? c.run.started : c.at);
+      // Запущена кнопкой (t515) — время запуска из мешка; иначе без времени (t605): время правки файла после git clone ложное.
+      const t = c.status === 'готово' ? when(stampAt(c.closed)) : when(c.run && c.run.started ? c.run.started : 0);
       if (t) meta += ` · ${t}`;
     }
     if (c.status === 'ждёт ответа') tone = ' warn';
@@ -522,7 +527,7 @@ function roadmapSetup(host) {
         : T('wave.done', 'завершена · {done} из {all}', { done: wv.done, all: wv.all });
     const sure = !!stopAsk && stopAsk.id === wv.id && stopAsk.until > Date.now();
     const btn = wv.state === 'run'
-      ? `<button type="button" data-wave="stop" data-wid="${esc(wv.id)}" class="${sure ? 'sure' : ''}" title="${esc(T('wave.stopTitle', 'Остановить волну: вкладки её карт закроются сразу, правки в папке останутся, новых запусков не будет'))}">${esc(sure ? T('wave.stopSure', 'точно остановить?') : `■ ${T('wave.stop', 'стоп')}`)}</button>`
+      ? `<button type="button" data-wave="stop" data-wid="${esc(wv.id)}" class="${sure ? 'sure' : ''}" title="${esc(T('wave.stopTitle', 'Остановить волну: новых запусков не будет, вкладки карт, которые открыла волна, закроются. Запущенные вручную останутся.'))}">${esc(sure ? T('wave.stopSure', 'точно остановить?') : `■ ${T('wave.stop', 'стоп')}`)}</button>`
       : `<button type="button" data-wave="drop" data-wid="${esc(wv.id)}" title="${esc(T('wave.dropTitle', 'Убрать строку волны'))}">${esc(T('wave.drop', 'убрать'))}</button>`;
     let html = `<div class="wave ${esc(wv.state)}" data-wid="${esc(wv.id)}"><div class="wl"><b>${esc(T('wave.name', 'Волна {letter}', { letter: wv.letter }))}</b>`
       + `<span class="ws">${esc(`${mode} · ${st}`)}</span><span class="grow"></span>${btn}</div>`;
@@ -798,8 +803,9 @@ function roadmapSetup(host) {
   const cardLabels = () => {
     if (!cur) return;
     const q = (/** @type {string} */ s) => /** @type {HTMLElement} */ (cardEl.querySelector(s));
-    q('[data-act="back"]').textContent = `‹ ${T('back', 'роадмап')}`;
-    q('[data-act="back"]').title = T('backTitle', 'К списку фаз и карт');
+    // Подпись — куда ведёт «назад» (t748): фаза, «Входящие», «Решения и тупики» или доска.
+    q('[data-act="back"]').textContent = `‹ ${fzBack || (ibBack ? T('inbox', 'Входящие') : dcBack ? T('decs', 'Решения и тупики') : T('back', 'роадмап'))}`;
+    q('[data-act="back"]').title = fzBack || ibBack || dcBack ? '' : T('backTitle', 'К списку фаз и карт');
     q('[data-act="prompt"]').textContent = T('prompt', 'Показать промпт');
     q('[data-act="prompt"]').title = T('promptTitle', 'Текст, который получит агент: общие правила, паспорт проекта, шаблон вида работы, карта и свежие заметки. Собирается из файлов, только чтение');
     q('[data-act="run"]').textContent = T('run', 'Запустить');
@@ -1466,6 +1472,12 @@ function roadmapSetup(host) {
           : T('ib.noPhase', 'Фаз пока нет: перенести некуда'))}">${esc(T('ib.move', 'перенести в фазу'))}</button>`
         + `<button type="button" class="btn cl" data-iclose="${id}"${busy} title="${esc(T('ib.closeTitle', 'Поставить карте статус «готово». Файл и номер остаются'))}">${esc(T('ib.close', 'закрыть'))}</button></div></div>`;
     }
+    // Закрытые из «Входящих» (t685): серые строки под списком, как готовые карты фазы; «скрыть сделанное» их прячет. Счётчики — только открытые (t516).
+    if (!hideDone && last && Array.isArray(last.cards) && Array.isArray(last.inbox)) {
+      const ids = new Set(last.inbox);
+      const shut = last.cards.filter((/** @type {any} */ c) => ids.has(c.id) && c.status === 'готово').reverse();
+      if (shut.length) html += `<div class="box idone"><div class="cards">${shut.map((/** @type {any} */ c) => cardRow(c, byId)).join('')}</div></div>`;
+    }
     for (const d of st.done) html += `<div class="moved"><b>→</b> ${esc(d)}</div>`;
     inboxEl.innerHTML = html;
   };
@@ -1524,11 +1536,12 @@ function roadmapSetup(host) {
     if (mv) { ibMove(mv.dataset.imove || ''); return; }
     const cl = /** @type {HTMLElement | null} */ (t.closest('[data-iclose]'));
     if (cl) { ibClose(cl.dataset.iclose || ''); return; }
-    const op = /** @type {HTMLElement | null} */ (t.closest('[data-iopen]'));
+    // Карта — по заголовку открытой или по серой строке закрытой (t685).
+    const op = /** @type {HTMLElement | null} */ (t.closest('[data-iopen], .idone .card[data-id]'));
     if (!op) return;
     ibBack = ib;
     hideInbox();
-    openCard(op.dataset.iopen || '');
+    openCard(op.dataset.iopen || op.dataset.id || '');
     if (!cur) { const st = ibBack; ibBack = null; openInbox(st); }
   });
   inboxEl.addEventListener('change', (ev) => {
@@ -1549,7 +1562,11 @@ function roadmapSetup(host) {
   const ibFlush = () => { if (ib && ib.later && !ibDown) { ib.later = false; paintInbox(); } };
   inboxEl.addEventListener('focusout', () => setTimeout(ibFlush, 0));
   inboxEl.addEventListener('pointerdown', () => { ibDown = true; });
-  const ibUp = () => { if (ibDown) setTimeout(() => { ibDown = false; ibFlush(); }, 0); };
+  // Тот же отпуск кнопки снимает и задержку доски (t722, drawSoft ниже).
+  const ibUp = () => {
+    if (ibDown) setTimeout(() => { ibDown = false; ibFlush(); }, 0);
+    if (bodyDown) setTimeout(() => { bodyDown = false; drawFlush(); }, 0);
+  };
   document.addEventListener('pointerup', ibUp);
   document.addEventListener('pointercancel', ibUp);
 
@@ -1557,7 +1574,8 @@ function roadmapSetup(host) {
   /**
    * Открытый экран: вид («all», «решение», «тупик»), строки фильтра карты и файла — часть заголовка карты или пути, без учёта регистра.
    * Поля ввода рисуются один раз при открытии: на каждое событие доски перерисовывается только список, иначе ввод теряет фокус.
-   * @type {null | { type: string, card: string, file: string }}
+   * from — экран открыт щелчком по решению на карте (t690): её номер и прежние «назад» карты.
+   * @type {null | { type: string, card: string, file: string, from?: { id: string, fz: string, ib: any, dc: any } }}
    */
   let dc = null;
   /** Карта открыта из списка решений: «назад» с карты ведёт туда, с тем же фильтром. @type {typeof dc} */
@@ -1568,9 +1586,12 @@ function roadmapSetup(host) {
     if (!st) return [];
     const q = (/** @type {string} */ s) => s.trim().toLowerCase();
     const card = q(st.card), file = q(st.file);
+    // Номер целиком («t12» или «12», кончается цифрой) — только эта карта, иначе «t12» находит и t120 (t747); часть («t», «t1-») — по вхождению.
+    const whole = /\d$/.test(card), digits = /^\d+$/.test(card);
+    const hit = (/** @type {string} */ c) => (!whole ? c.includes(card) : digits ? c.replace(/^\D+/, '') === card : c === card);
     return (last && last.decisions ? last.decisions : [])
       .filter((/** @type {any} */ d) => (st.type === 'all' || d.type === st.type)
-        && (!card || (d.card || '').toLowerCase().includes(card))
+        && (!card || hit((d.card || '').toLowerCase()))
         && (!file || d.files.some((/** @type {string} */ f) => f.toLowerCase().includes(file))))
       // Новые сверху: по дате, при равной — по номеру.
       .sort((/** @type {any} */ a, /** @type {any} */ z) => (z.date || '').localeCompare(a.date || '') || z.num - a.num);
@@ -1603,7 +1624,7 @@ function roadmapSetup(host) {
   const decsFrame = () => {
     const st = dc;
     if (!st) return;
-    decsEl.innerHTML = `<div class="ctop"><div class="cbar"><span class="back" data-dact="back">‹ ${esc(T('back', 'роадмап'))}</span><span class="ttl">${esc(T('decs', 'Решения и тупики'))}</span>`
+    decsEl.innerHTML = `<div class="ctop"><div class="cbar"><span class="back" data-dact="back">‹ ${esc(st.from ? st.from.id : T('back', 'роадмап'))}</span><span class="ttl">${esc(T('decs', 'Решения и тупики'))}</span>`
       + '<span class="crumb"></span></div></div>'
       + `<div class="dflt"><input type="text" data-dq="card" spellcheck="false" placeholder="${esc(T('dc.cardPh', 'карта, напр. t12'))}" value="${esc(st.card)}">`
       + `<input type="text" data-dq="file" spellcheck="false" placeholder="${esc(T('dc.filePh', 'файл, напр. delivery.ts'))}" value="${esc(st.file)}"></div>`
@@ -1621,10 +1642,28 @@ function roadmapSetup(host) {
   };
   const hideDecs = () => { dc = null; decsEl.hidden = true; decsEl.textContent = ''; };
   const closeDecs = () => { hideDecs(); body.hidden = false; draw(); };
+  /** Щелчок по решению на карте (t690): экран с фильтром по этой карте; «назад» — на карту, и её «назад» ведёт туда же, куда вёл. */
+  const decsOfCard = () => {
+    if (!cur) return;
+    const from = { id: cur.id, fz: fzBack, ib: ibBack, dc: dcBack };
+    if (pv) closePrompt();
+    cur = null;
+    cardEl.hidden = true;
+    cardEl.textContent = '';
+    fzBack = ''; ibBack = null; dcBack = null;
+    openDecs({ type: 'all', card: from.id, file: '', from });
+  };
+  /** «Назад» с экрана, открытого с карты: карта и её цепочка «назад»; карты больше нет — по цепочке дальше. @param {NonNullable<NonNullable<typeof dc>['from']>} from */
+  const backToCard = (from) => {
+    hideDecs();
+    fzBack = from.fz; ibBack = from.ib; dcBack = from.dc;
+    openCard(from.id);
+    if (!cur) closeCard();
+  };
   decsEl.addEventListener('click', (ev) => {
     const t = /** @type {HTMLElement} */ (ev.target);
     if (!dc) return;
-    if (t.closest('[data-dact="back"]')) { closeDecs(); return; }
+    if (t.closest('[data-dact="back"]')) { if (dc.from) backToCard(dc.from); else closeDecs(); return; }
     const ty = /** @type {HTMLElement | null} */ (t.closest('[data-dtype]'));
     if (ty) { dc.type = ty.dataset.dtype || 'all'; paintDecs(); return; }
     const op = /** @type {HTMLElement | null} */ (t.closest('[data-dopen]'));
@@ -1781,6 +1820,7 @@ function roadmapSetup(host) {
     if (seg) { setV('human', seg.dataset.v || ''); cur.saved = ''; paintNotes(); return; }
     const open = /** @type {HTMLElement | null} */ (t.closest('[data-open]'));
     if (open) { const id = open.dataset.open || ''; if (last && last.cards && last.cards.some((/** @type {any} */ x) => x.id === id)) leave(() => openCard(id)); return; }
+    if (t.closest('[data-dec]')) { leave(decsOfCard); return; }
     const act = /** @type {HTMLElement | null} */ (t.closest('[data-act]'));
     if (act && act.dataset.act === 'back') { leave(closeCard); return; }
     if (act && act.dataset.act === 'save') { save(); return; }
@@ -1832,6 +1872,10 @@ function roadmapSetup(host) {
   };
   /** Панель переехала: колонка, строка слева, кнопка шапки; поля карты — по новой ширине. */
   const moved = () => { paintRight(); paintRow(); paintFull(); if (cur) growAll(); };
+  /** Прокрутка частей панели (t601): перенос узла в другое место обнуляет scrollTop — запомнить до переноса, вернуть, когда панель уже видна. */
+  const parts = [body, cardEl, promptEl, passEl, phaseEl, inboxEl, decsEl];
+  const scrolls = () => parts.map((el) => el.scrollTop);
+  const unscroll = (/** @type {number[]} */ s) => parts.forEach((el, i) => { if (s[i]) el.scrollTop = s[i]; });
   /** «Во всё окно» (t526): панель — во вкладку «Роадмап · проект»; вкладка уже есть — показать её, второй не будет. */
   const openFull = () => {
     if (!host.pages) return;
@@ -1841,13 +1885,15 @@ function roadmapSetup(host) {
       sid, kind: 'roadmap', title: tabTitle(), icon: 'grid', color: TAB_COLOR,
       focus: () => panel.focus({ preventScroll: true }),
       // Крестик вкладки, «свернуть» и остановка плагина: панель — обратно в колонку, ввод карты с ней. Вопроса нет: ничего не теряется.
-      close: () => { if (tab && tab.sid === sid) { tab = null; toRight(); moved(); } return true; },
+      close: () => { if (tab && tab.sid === sid) { const sc = scrolls(); tab = null; toRight(); moved(); unscroll(sc); } return true; },
     });
     tab = { sid };
+    const sc = scrolls();
     t.pane.appendChild(panel);
     panel.hidden = false;
     moved();
     host.pages.show(sid);
+    unscroll(sc);
   };
   const closeFull = () => { if (tab) host.pages.removeTab(tab.sid); };
   panel.querySelector('.rh')?.addEventListener('click', (ev) => {
@@ -1856,7 +1902,8 @@ function roadmapSetup(host) {
   });
   // Доска во вкладке — строка слева показывает вкладку, а не прячет панель.
   row.onclick = () => { if (tab && host.pages) host.pages.show(tab.sid); else setOpen(!open); };
-  hideBox.addEventListener('change', () => { hideDone = hideBox.checked; api('setState', { hideDone }); draw(); });
+  // Экран «Входящих» — тоже (t685): закрытые карты под списком прячутся и возвращаются сразу.
+  hideBox.addEventListener('change', () => { hideDone = hideBox.checked; api('setState', { hideDone }); draw(); paintInbox(); });
   /** «Составить роадмап» (t519): вкладку открывает главная часть. Доска появится — слежение пришлёт её, пустой экран уйдёт сам. */
   const composeRun = async () => {
     if (comp.busy) return;
@@ -1985,8 +2032,31 @@ function roadmapSetup(host) {
   document.addEventListener('keydown', onKey);
   body.addEventListener('change', (ev) => {
     const s = /** @type {HTMLSelectElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('select[data-do="lim"]'));
-    if (s) api('setState', { maxRuns: Number(s.value) });
+    if (s) { api('setState', { maxRuns: Number(s.value) }); limDone(); }
   });
+  // Список предела открыт (t722): событие доски её не перерисовывает — иначе список закрылся бы и сбросил фокус. Приём t711 «Входящих»:
+  // отложенное рисуем, когда фокус ушёл со списка, но не посреди щелчка.
+  let drawLater = false;
+  let bodyDown = false;
+  // Список предела закрыли выбором или Escape (t755), а фокус остался на нём: ждать ухода фокуса незачем — рисуем, фокус — на новый список.
+  // Щелчок по списку или клавиша на нём — его, может быть, открыли снова: опять ждём, как t722.
+  /** @type {Element | null} */
+  let limShut = null;
+  const isLim = (/** @type {EventTarget | null} */ t) => !!t && !!/** @type {HTMLElement} */ (t).closest?.('select[data-do="lim"]') && body.contains(/** @type {Node} */ (t));
+  const drawSoft = () => {
+    const a = document.activeElement;
+    const lim = isLim(a);
+    if (a && a.tagName === 'SELECT' && body.contains(a) && !(lim && limShut === a)) { drawLater = true; return; }
+    drawLater = false;
+    draw();
+    if (lim) { limShut = body.querySelector('select[data-do="lim"]'); /** @type {HTMLElement | null} */ (limShut)?.focus({ preventScroll: true }); }
+  };
+  const drawFlush = () => { if (drawLater && !bodyDown && open) drawSoft(); };
+  const limDone = () => { const a = document.activeElement; limShut = isLim(a) ? a : null; setTimeout(drawFlush, 0); };
+  body.addEventListener('focusout', (ev) => { if (isLim(ev.target)) limShut = null; setTimeout(drawFlush, 0); });
+  body.addEventListener('pointerdown', (ev) => { bodyDown = true; if (isLim(ev.target)) limShut = null; });
+  body.addEventListener('keydown', (ev) => { if (isLim(ev.target) && ev.key !== 'Escape') limShut = null; });
+  body.addEventListener('keyup', (ev) => { if (ev.key === 'Escape' && isLim(ev.target)) limDone(); });
   body.addEventListener('click', (ev) => {
     if (Date.now() - bandEnd < 300) return;
     const wb = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-wave]'));
@@ -2027,7 +2097,7 @@ function roadmapSetup(host) {
     if (!syncTimer) syncTimer = setTimeout(() => { syncTimer = null; if (!stopped) api('sync'); }, 300);
   });
   // Правка файлов доски снаружи: главная часть прислала новую доску.
-  host.on('board', (/** @type {any} */ b) => { if (stopped || !b) return; last = b; if (open) draw(); refreshPassport(); refreshPhase(); inboxSoft(); paintDecs(); if (cur) refreshCard(); if (pv) loadPrompt(); });
+  host.on('board', (/** @type {any} */ b) => { if (stopped || !b) return; last = b; if (open) drawSoft(); refreshPassport(); refreshPhase(); inboxSoft(); paintDecs(); if (cur) refreshCard(); if (pv) loadPrompt(); });
   // «Стоп» волны (t687): главная часть назвала вкладки, окно их закрывает — без вопроса, как term.close; статус «пауза» поставит sync.
   host.on('waveClose', (/** @type {any} */ x) => {
     const term = host.bridge && host.bridge.term;

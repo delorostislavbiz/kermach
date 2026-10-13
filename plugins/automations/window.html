@@ -51,7 +51,7 @@
   .row.foreign { background: rgba(236,168,85,.08); box-shadow: inset 2px 0 0 var(--warn); } .row.foreign .p { color: var(--warn); }
   .row.disabled .n { color: var(--muted); } .row.broken .p { color: var(--danger); }
   .sw { width: 30px; height: 16px; border-radius: 8px; background: rgba(var(--muted-rgb),.3); position: relative; flex-shrink: 0; border: 0; padding: 0; }
-  .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 6px; background: var(--text); }
+  .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 6px; background: var(--knob, var(--text)); }
   .sw.on { background: var(--accent); } .sw.on::after { left: 16px; background: var(--on-accent); }
   .head { display: flex; align-items: center; gap: 12px; padding: 6px 20px 12px; flex-shrink: 0; }
   .head h1 { font-size: 16px; font-weight: 600; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .head .sp { flex: 1; }

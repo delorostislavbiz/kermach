@@ -1,1 +1,98 @@
-/* Kermach, окно «Проекты» — пачка 3 этапа d1 (t663–t665). Пока пусто: файл подключён в ui.css пачкой 1 (t651), чтобы пачки не правили один файл. */
+/* Kermach, окно «Проекты» — пачка 3 этапа d1 (t663–t665, t679). Файл подключён в ui.css пачкой 1 (t651), чтобы пачки не правили один файл.
+   Селекторы новой темы — под html:is([data-ui="kermach"], [data-ui="termius"]); образец — экран «Проекты» прототипа (spikes\t643-design\src-proto\template.html:404).
+   Новая разметка projects.html (#barTools, .lbl, .kbd, #setIcon, .gcard, .pic) в старых темах скрыта или display: contents — там окно как раньше.
+   Не трогаю правила «требует ответа» (.row.need, .group.shut.need, .tile.need): их цвет сверяют t149-css и t31-states. */
+
+/* --- Заголовок 40 px (t663): значок и «Kermach» 13/600, подпись «— Проекты» скрыта; кнопки окна 44×34 сверху, «закрыть» под мышью — #E81123. --- */
+html:is([data-ui="kermach"], [data-ui="termius"]) #title { height: 40px; padding-left: 16px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #title .name { font-size: 13px; font-weight: 600; letter-spacing: .02em; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #title .name .muted { display: none; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #title .btns { align-self: flex-start; height: 34px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #title .btns div { width: 44px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #title .btns div:hover { background: var(--selected); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #title .btns #close:hover { background: #E81123; color: #fff; }
+
+/* «Автоматизации», «Настройки», «Остановить всё» — значками 30×30 в заголовке, левее кнопок окна (3 × 44 + 4). Подпись — в title, .lbl скрыт.
+   Обёртка — в #bar, не в #title: так старые темы и проверки видят кнопки там же. Над областью перетаскивания — no-drag. */
+html:is([data-ui="kermach"], [data-ui="termius"]) #barTools { display: flex; align-items: center; gap: 2px; position: absolute; top: 5px; right: 140px; -webkit-app-region: no-drag; }
+html.mac:is([data-ui="kermach"], [data-ui="termius"]) #barTools { right: 10px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #barTools .bbtn { width: auto; min-width: 30px; height: 30px; gap: 4px; padding: 0 7px; justify-content: center; border: 0; border-radius: 6px; background: none; color: var(--muted); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #barTools .bbtn:hover { background: var(--selected); color: var(--text); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #barTools .bbtn:disabled { opacity: .45; background: none; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #barTools .lbl { display: none; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #barTools svg { width: 16px; height: 16px; }
+/* Значки — цвета кнопки (--muted, под мышью --text), как в макете; «Остановить всё» остаётся красным. */
+html:is([data-ui="kermach"], [data-ui="termius"]) #barTools .bbtn:not(.danger) svg { stroke: currentColor; color: currentColor; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #barTools .bbtn.danger:hover { background: rgba(var(--danger-rgb), .12); color: var(--danger); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #setIcon { display: flex; }
+/* Число автоматизаций остаётся рядом со значком: зелёное — есть прогон, который не открывали (t252). */
+html:is([data-ui="kermach"], [data-ui="termius"]) #autosN { font-size: 10.5px; line-height: 15px; padding: 0 5px; border-color: var(--line); }
+
+/* --- Строка поиска (t663): поле 34 px, фон --card, рамка --line, радиус 8; справа подсказка «Ctrl K»; «Добавить папку» — сплошная accent. --- */
+/* #bar есть и в окне правки снимка (plugins\browser\editor.html) — правило только для строки с поиском (t759). */
+html:is([data-ui="kermach"], [data-ui="termius"]) #bar:has(#search) { gap: 8px; padding: 4px 16px 14px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #search { height: 34px; padding: 0 10px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #q { font-size: var(--fs-base); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #search .kbd { display: block; font-size: 11px; line-height: 16px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); white-space: nowrap; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #add { height: 34px; gap: 6px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-weight: 500; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #add:hover { background: var(--accent-hover); color: var(--on-accent); }
+/* Значок «+» рисуется цветом accent (projects-page.js) — на сплошной кнопке он цвета текста: свойство CSS сильнее атрибута stroke. */
+html:is([data-ui="kermach"], [data-ui="termius"]) #add svg { stroke: var(--on-accent); color: var(--on-accent); }
+
+/* --- Сводка (t665): 11.5 px --muted, отступ как в макете. «Требуют ответа» — --need (в новых видах = --warn, ставит theme.js). --- */
+html:is([data-ui="kermach"], [data-ui="termius"]) #count { padding: 0 22px 8px; font-size: var(--fs-desc); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tool { height: 24px; border-color: var(--line); border-radius: 6px; font-size: var(--fs-cap); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tool:hover { background: var(--selected); border-color: var(--line-strong); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #views { border-color: var(--line); border-radius: 6px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #views button.on { background: var(--selected); }
+
+/* --- Группы карточками (t664): .gcard — фон --card, рамка --line, радиус 10, отступ 4; между карточками 6. --- */
+html:is([data-ui="kermach"], [data-ui="termius"]) #list { padding: 0 16px 16px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .gcard { display: flex; flex-direction: column; gap: 1px; padding: 0 4px 4px; margin-top: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .gcard:first-child { margin-top: 0; }
+/* Свёрнутая группа — одна строка заголовка, нижний отступ карточки не нужен. */
+html:is([data-ui="kermach"], [data-ui="termius"]) .gcard:has(> .group.shut) { padding-bottom: 0; }
+/* Заголовок 40 px, 11.5/600 --muted; справа число проектов или сводка свёрнутой группы. Фон свёрнутой — у карточки, не у заголовка. */
+html:is([data-ui="kermach"], [data-ui="termius"]) .group { height: 40px; margin: 0 -4px; padding: 0 12px; gap: 8px; border-radius: 10px; font-size: var(--fs-desc); font-weight: 600; letter-spacing: .04em; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .group .gn { flex: 1; min-width: 0; text-transform: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .group .gc { color: var(--muted); font-weight: 400; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .group .sum { font-weight: 400; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .group .need { font-weight: 400; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .group:not(.shut) { background: none; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .group.shut:not(.need) { background: none; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .group[data-key]:not(.need):hover { background: none; color: var(--text); }
+/* Стрелка: поворот за .25 s только у заголовка, по которому щёлкнули (.turn, projects-page.js): список рисуется заново, transition не сыграет. */
+@keyframes kTurnOpen { from { transform: none; } to { transform: rotate(90deg); } }
+@keyframes kTurnShut { from { transform: rotate(90deg); } to { transform: none; } }
+html:is([data-ui="kermach"], [data-ui="termius"]) .group.turn:not(.shut) .chev { animation: kTurnOpen .25s var(--ease-in) both; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .group.turn.shut .chev { animation: kTurnShut .25s var(--ease-in) both; }
+
+/* Строка 48 px, радиус 7; под мышью — фон --selected и отступ слева 10 → 14 за .2 s. Строки «требует ответа» фон под мышью оставляют свой. */
+html:is([data-ui="kermach"], [data-ui="termius"]) .row { height: 48px; gap: 12px; padding: 0 10px; border-radius: 7px; transition: background .15s, padding .2s; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .row:not(.need):hover { background: var(--selected); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .row:hover { padding-left: 14px; }
+/* Плитка 30×30 радиус 8 с тинтом цвета проекта: .strip — на всю плитку с прозрачностью --tint-a, её фон — цвет проекта (по нему step3-6 узнаёт цвет). */
+html:is([data-ui="kermach"], [data-ui="termius"]) .row .pic { position: relative; width: 30px; height: 30px; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .row .pic .strip { position: absolute; inset: 0; width: auto; height: auto; border-radius: 0; opacity: var(--tint-a, .18); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .row .pic svg { position: relative; width: 16px; height: 16px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .text { gap: 2px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .text .n { font-size: var(--fs-name); line-height: 17px; font-weight: 500; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .text .p { font-size: var(--fs-cap); }
+/* Справа — состояния с числом и «кто запущен», как раньше (решение по вопросу 1). «Требует ответа» — капсула 22 px с рамкой его цвета.
+   Цвет состояний не меняю: его ставит projects-page.js из states.js, в Termius Dark это уже --warn и --ok (сверяет t31-states). */
+html:is([data-ui="kermach"], [data-ui="termius"]) .row .st.waiting { height: 22px; padding: 0 9px; border: 1px solid currentColor; border-radius: 11px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .row .states { align-items: center; }
+
+/* Плитка проекта внутри карточки: фон --bg поверх --card, радиус 8. Цвет «требует ответа» — прежний (.tile.need). */
+html:is([data-ui="kermach"], [data-ui="termius"]) .tiles { padding: 0 0 2px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tile { border-radius: 8px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tile:not(.need) { background: var(--selected); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tile:not(.need):hover { background: var(--line-strong); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tile .n { font-size: var(--fs-name); font-weight: 500; }
+
+/* «Уменьшить движение» в системе — стрелка без поворота, строки без сдвига (каскад k-in выключает ui-kermach.css). */
+@media (prefers-reduced-motion: reduce) {
+  html:is([data-ui="kermach"], [data-ui="termius"]) .group.turn .chev { animation: none; }
+  html:is([data-ui="kermach"], [data-ui="termius"]) .row { transition: none; }
+}

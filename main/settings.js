@@ -29,10 +29,12 @@ const partKind = (k) => (PART_KINDS.includes(k) || (typeof k === 'string' && /^a
  * plugins — выключатели плагинов по имени папки (t182): false — выключен; нет записи — включён.
  * agents — выключатели агентов из системы по id (t183, main\agents.js): true — включён; нет записи — выключен.
  * pluginSettings — свои настройки плагинов по имени папки (t256): объект, который плагин хранит как хочет; программа его не разбирает.
- * theme — id схемы плагина «Темы» (t257): строка без проверки по списку; нет такой схемы — схема default из themes.json.
+ * theme — id схемы плагина «Темы» (t257): строка без проверки по списку. Пусто, termius-dark или такой схемы нет — схемы нет, Termius Dark в цветах макета (t723).
  * ui — тема интерфейса (main\ui-themes.js, t506, t651): kermach — Светлая и Тёмная макета; termius — Termius Dark, по умолчанию, со схемами плагина «Темы»;
- *   rostyslav (прежнее имя) читается как termius; studio, deck и glass (только macOS) — темы Нагорняка: код есть, в «Настройках» их нет.
+ *   rostyslav (прежнее имя) читается как termius; studio и deck — темы Нагорняка; glass (только macOS) — в «Настройках» его нет, сохранённый работает.
  * appearance — светлый или тёмный вид: system (как в системе), light, dark. У Termius Dark вид задаёт схема, без схемы — тёмный.
+ * Все поля выбирает один список «Тема» в «Настройках» (t723, renderer\dialogs.js): пункт пишет ui, appearance, theme и plugins.themes вместе;
+ *   plugins.themes — признак «схема включена», своего выключателя у плагина «Темы» нет.
  * lang — язык надписей (t258): '' — русский; иначе ключ из поля "lang" plugin.json включённого плагина (main\i18n.js).
  * layoutPresets — пресеты раскладок окна проекта (t397), общие для всех проектов: { name, kind, fr, parts, files: { open, width } };
  *   parts — вид вкладки в каждой части ('' — часть пустая), files — панель «Файлы» (открыта ли, ширина в px).
@@ -168,28 +170,46 @@ function look() {
 }
 
 /**
- * Действующая схема плагина «Темы» (t257): { id, kind, window, terminal, list } или null — плагина нет, он выключен или themes.json не прочитан.
- * Файл схем читается с диска при каждом вызове: новая схема видна, как только окно переоткрыли, без перезапуска программы.
+ * Схемы плагина «Темы» из themes.json (t257): { dir, conf, all } или null — плагина нет или файл не прочитан.
+ * Файл читается с диска при каждом вызове: новая схема видна, как только окно переоткрыли, без перезапуска программы.
  */
-function scheme() {
+function schemeFile() {
   // require здесь, а не в начале файла: main\plugins.js сам требует settings.js — кольцо.
   const { dirsOf } = require('./plugins');
   const dir = dirsOf(dataDir()).map((d) => path.join(d, 'themes')).reverse().find((d) => fs.existsSync(path.join(d, 'plugin.json')));
   if (!dir) return null;
   try {
     const conf = JSON.parse(fs.readFileSync(path.join(dir, 'plugin.json'), 'utf8'));
-    if (!pluginOn('themes', conf.enabled !== false)) return null;
     const data = JSON.parse(fs.readFileSync(path.join(dir, 'themes.json'), 'utf8'));
-    const all = Array.isArray(data.themes) ? data.themes : [];
-    const t = all.find((x) => x && x.id === cur.theme) || all.find((x) => x && x.id === data.default);
-    if (!t || !t.window || !t.terminal) return null;
-    // list — для строки «Схема» в «Настройках» (t185, renderer\dialogs.js): какие схемы есть в файле.
-    const list = all.filter((x) => x && typeof x.id === 'string').map((x) => ({ id: x.id, name: String(x.name || x.id), kind: x.kind === 'light' ? 'light' : 'dark' }));
-    return { id: t.id, kind: t.kind === 'light' ? 'light' : 'dark', window: t.window, terminal: t.terminal, list };
+    return { dir, conf, all: Array.isArray(data.themes) ? data.themes : [] };
   } catch (e) {
     log(`темы: ${path.join(dir, 'themes.json')} не прочитан (${e instanceof Error ? e.message : e}), окна в своих цветах`);
     return null;
   }
+}
+
+/** Схема termius-dark — прежние цвета Termius Dark (#141729); вместо неё Termius Dark без схемы, в цветах макета (t723). */
+const OLD_TERMIUS = 'termius-dark';
+
+/**
+ * Действующая схема плагина «Темы» (t257): { id, kind, window, terminal } или null — плагина нет, схема не включена или не выбрана.
+ * Отката на схему default из themes.json нет (t723): пусто, termius-dark и неизвестный id — null, то есть Termius Dark в цветах макета.
+ */
+function scheme() {
+  if (!cur.theme || cur.theme === OLD_TERMIUS) return null;
+  const f = schemeFile();
+  if (!f || !pluginOn('themes', f.conf.enabled !== false)) return null;
+  const t = f.all.find((x) => x && x.id === cur.theme);
+  if (!t || !t.window || !t.terminal) return null;
+  return { id: t.id, kind: t.kind === 'light' ? 'light' : 'dark', window: t.window, terminal: t.terminal };
+}
+
+/** Схемы для списка «Тема» в «Настройках» (t723): [{ id, name, kind }] — все из themes.json, кроме termius-dark; выключатель плагина не важен. */
+function schemes() {
+  const f = schemeFile();
+  if (!f) return [];
+  return f.all.filter((x) => x && typeof x.id === 'string' && x.id !== OLD_TERMIUS && x.window && x.terminal)
+    .map((x) => ({ id: x.id, name: String(x.name || x.id), kind: x.kind === 'light' ? 'light' : 'dark' }));
 }
 
 /** Фон окна до загрузки страницы (BrowserWindow backgroundColor): без него светлая схема мигала бы тёмным при открытии. */
@@ -287,8 +307,10 @@ function register(c) {
   if (process.platform === 'darwin') { try { systemPreferences.on('accent-color-changed', sysChanged); } catch {} }
   // Тема до первой отрисовки (t257): preload спрашивает синхронно, renderer\theme.js ставит цвета в <head> — без тёмной вспышки.
   ipcMain.on('settings:look', (e) => { e.returnValue = sender.allowed(e, 'settings:look') ? look() : null; });
+  // Схемы для списка «Тема» (t723): синхронно, «Настройки» строят список при открытии.
+  ipcMain.on('settings:schemes', (e) => { e.returnValue = sender.allowed(e, 'settings:schemes') ? schemes() : []; });
   // Словарь языка для окна (t258): синхронно, окно спрашивает в <head> до отрисовки. Нет языка — null, диск не трогается.
   ipcMain.on('settings:dict', (e) => { e.returnValue = sender.allowed(e, 'settings:dict') ? require('./i18n').dict() : null; });
 }
 
-module.exports = { register, load, get, set, look, background, dress, onChange, pluginOn, agentOn, ZOOMS, TERM_MIN, TERM_MAX, DEFAULTS };
+module.exports = { register, load, get, set, look, schemes, background, dress, onChange, pluginOn, agentOn, ZOOMS, TERM_MIN, TERM_MAX, DEFAULTS };

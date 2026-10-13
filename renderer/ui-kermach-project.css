@@ -61,3 +61,87 @@ html.side-off:is([data-ui="kermach"], [data-ui="termius"]) #side { display: none
 html.side-off:is([data-ui="kermach"], [data-ui="termius"]) #sideShow { display: flex; align-items: center; justify-content: center; align-self: center; width: 28px; height: 28px; margin: 0 2px 0 8px;
   border-radius: 6px; flex-shrink: 0; color: var(--muted); }
 html.side-off:is([data-ui="kermach"], [data-ui="termius"]) #sideShow:hover { background: var(--selected); color: var(--text); }
+
+/* ===== Пачка 2б (Д-7, Д-8, Д-9, Д-11, Д-23) ===== */
+/* Новые элементы в старых темах не видны: «Браузер» в полосе, шапка карточки, полоса лимита.
+   Плитка вкладки .tt там — display: contents: значок остаётся прямым ребёнком вкладки. */
+#tbBrowser, .pane > .phead, #plugin-limits .lbar { display: none; }
+.tab .tt { display: contents; }
+.tab .tt b { display: none; }
+
+/* --- Тулбар 48 px (Д-7): заголовок и вкладки — одна строка. ---
+   #title — только кнопки окна 44×34 в правом верхнем углу поверх строки. #main и #center остаются коробками: их ширину читают right-resize.js и t347-right.
+   Окно тянут за пустое место полосы (drag). Двойной щелчок и прилипание к краю делает система — своего dblclick нет. */
+/* body:has(#tabrow) — только окно проекта и сильнее правила #title окна «Проекты» (ui-kermach-projects.css: высота 40, отступ 16), которое подключено и здесь. */
+html:is([data-ui="kermach"], [data-ui="termius"]) body:has(#tabrow) #title { position: absolute; top: 0; right: 0; height: 48px; padding: 0; align-items: flex-start; z-index: 20; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #title .name { display: none; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #title .btns { height: 34px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #title .btns div { width: 44px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #title .btns div:hover { background: var(--selected); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #title .btns #close:hover { background: #E81123; color: #fff; }
+/* macOS: родные кнопки слева, своих нет — отступ полосы под них. */
+html.mac:is([data-ui="kermach"], [data-ui="termius"]) #title { display: none; }
+html.mac:is([data-ui="kermach"], [data-ui="termius"]) #tabrow { padding-left: 84px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #tabrow { height: 48px; align-items: center; gap: 6px; padding-left: 10px; border-bottom: 0; -webkit-app-region: drag; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #tabrow > * { -webkit-app-region: no-drag; }
+/* Правая панель скрыта — кнопки окна над полосой вкладок: место под них справа (3 × 44 и зазор). */
+html:not(.mac):is([data-ui="kermach"], [data-ui="termius"]) body:has(#right[hidden]) #tabrow { padding-right: 138px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #tabs { align-items: center; gap: 4px; height: 100%; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #plus { width: 28px; height: 28px; margin: 0; border-radius: 6px; }
+/* В разметке «Браузер» стоит после «Раскладки»: сразу за «+» должна идти «Раскладка» (t397-split). На экране — «Браузер», потом «Разделить», как в макете: order. */
+html:is([data-ui="kermach"], [data-ui="termius"]) #tbBrowser:not([hidden]) { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; margin-left: auto; border-radius: 6px; flex-shrink: 0; color: var(--muted); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #layoutBtn { order: 1; width: 30px; height: 30px; margin-right: 4px; border-radius: 6px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) body:has(#tbBrowser:not([hidden])) #layoutBtn { margin-left: 0; }
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(#plus, #tbBrowser, #layoutBtn):hover,
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(#plus, #layoutBtn).open { background: var(--selected); color: var(--text); }
+
+/* --- Вкладка (Д-8): 30 px, радиус 7, отступ 0 10 0 6, 12.5 px; плитка 20×20 радиус 5 с тинтом цвета терминала, значок 13. ---
+   Активная — фон --tab-active и рамка --line; неактивная — прозрачная, --muted. Подсветка «требует ответа» (.need) — прежняя: по ней проверки узнают состояние. */
+html:is([data-ui="kermach"], [data-ui="termius"]) .tab { height: 30px; gap: 7px; padding: 0 10px 0 6px; border: 1px solid transparent; border-radius: 7px; overflow: hidden;
+  font-size: var(--fs-btn); color: var(--muted); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tab:not(.need):hover { background: var(--selected); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tab.on { border-color: var(--line); color: var(--text); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tab.on:not(.need) { background: var(--tab-active); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tab .tt { position: relative; display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; overflow: hidden; flex-shrink: 0; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tab .tt b { display: block; position: absolute; inset: 0; opacity: var(--tint-a, .18); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tab .tt svg { position: relative; width: 13px; height: 13px; }
+/* Полоса снизу — только у работающего: 2 px цвета терминала, 40 % ширины, бежит 1.8 s (kSweep; стоит при скрытом окне). */
+html:is([data-ui="kermach"], [data-ui="termius"]) .tab i { display: none; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .tab[data-state="working"] i { display: block; right: auto; width: 40%; animation: kSweep 1.8s linear infinite; }
+html.k-hidden .tab i { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { html:is([data-ui="kermach"], [data-ui="termius"]) .tab[data-state="working"] i { animation: none; } }
+
+/* --- Карточка терминала (Д-9): фон --term, рамка --line, радиус 10, 8 px от краёв и между частями. ---
+   #panes — 4 px от краёв (сверху −4: карточка сразу под полосой, как в макете), часть — ещё 4 (--pane-pad: inset у .pane и отступ части в раскладке, panePad() в project-page.js).
+   Рамка — ::before поверх xterm: своя рамка у .pane изменила бы размер, который мерит подгонка xterm. */
+html:is([data-ui="kermach"], [data-ui="termius"]) { --pane-pad: 4px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #panes { margin: -4px 4px 0; }
+html:is([data-ui="kermach"], [data-ui="termius"]) body:has(#bottom[hidden]) #panes { margin-bottom: 4px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(.pane, .pane.page) { inset: var(--pane-pad); border-radius: 10px; overflow: hidden; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .pane:not(.page) { background: var(--term); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .pane::before { content: ''; position: absolute; inset: 0; border: 1px solid var(--line); border-radius: 10px; pointer-events: none; z-index: 9; }
+/* Шапка 34 px: точка 8 px цвета терминала, имя (500), «· состояние». Место под неё — padding-top у .xterm: подгонка xterm вычитает padding самого .xterm. */
+html:is([data-ui="kermach"], [data-ui="termius"]) .pane > .phead { display: flex; align-items: center; gap: 8px; position: absolute; left: 0; right: 0; top: 0; height: 34px; padding: 0 14px; z-index: 8;
+  background: var(--term); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .pane > .phead i { width: 8px; height: 8px; border-radius: 4px; flex-shrink: 0; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .pane > .phead b { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .pane > .xterm { padding: 48px 18px 8px; }
+/* Слой прокрутки xterm 6 лежит на всём .xterm, вместе с полем вокруг текста, и красится #000 из xterm.css (фон темы получает внутренний элемент).
+   Прозрачный — поле берёт фон карточки --term, а он в новых видах равен фону терминала (main\ui-themes.js). */
+html:is([data-ui="kermach"], [data-ui="termius"]) .pane > .xterm .xterm-viewport { background-color: transparent; }
+/* Часть с фокусом — полоса сверху внутри карточки, а не над ней (в старых темах — над отступом 16). */
+html:is([data-ui="kermach"], [data-ui="termius"]) #panes.split .pane:not(.page).focus::after { left: 0; right: 0; top: 0; }
+
+/* --- Нижняя строка 34 px (Д-11): под карточкой, справа от боковой панели; панель — во всю высоту окна, как в макете. --- */
+html:is([data-ui="kermach"], [data-ui="termius"]) #bottom { height: 34px; gap: 22px; padding: 0 16px; border-top: 0; margin-left: 252px; color: var(--muted); }
+html.side-off:is([data-ui="kermach"], [data-ui="termius"]) #bottom { margin-left: 0; }
+html:not(.side-off):is([data-ui="kermach"], [data-ui="termius"]) body:has(#bottom:not([hidden])) #side { margin-bottom: -26px; }
+/* Полоса лимита 44×5: заполнение — израсходованный процент цветом limitsColor (plugins\limits\window.js), при загрузке — kFill 1.2 s. */
+html:is([data-ui="kermach"], [data-ui="termius"]) #plugin-limits .lbar { display: inline-flex; width: 44px; height: 5px; margin-right: 7px; border-radius: 3px; overflow: hidden; vertical-align: middle; background: var(--selected); }
+html:is([data-ui="kermach"], [data-ui="termius"]) #plugin-limits .lbar b { display: block; height: 100%; transform-origin: left; animation: kFill 1.2s var(--ease-in) both; }
+@media (prefers-reduced-motion: reduce) { html:is([data-ui="kermach"], [data-ui="termius"]) #plugin-limits .lbar b { animation: none; } }
+
+/* --- Правая панель (Д-23): плашка как карточка терминала. Отступ — внутри ширины #right (border-box): ширину считает right-resize.js, вкладке остаётся то же место.
+   Сверху 48 — под кнопки окна; это место тянется, как полоса вкладок. Панели плагинов — карточками, файлы плагинов не тронуты. --- */
+html:is([data-ui="kermach"], [data-ui="termius"]) #right { padding: 48px 8px 8px 0; border-left: 0; -webkit-app-region: drag; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #right > * { -webkit-app-region: no-drag; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }

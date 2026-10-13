@@ -87,16 +87,12 @@
     terminal: () => (look ? look.terminal : null),
     /** Цвет окна темы по имени поля (muted, accent…) или '' — темы нет. @param {string} name */
     color: (name) => (look && look.window[name]) || '',
-    /** Схемы плагина для выбора в «Настройках»: [{ id, name, kind }]; пусто — плагин выключен. */
-    list: () => (look && Array.isArray(look.list) ? look.list : []),
     /** Тема интерфейса: kermach, termius, rostyslav, studio, deck, glass (macOS). */
     ui: () => (meta && meta.ui) || 'termius',
     /** Светлый или тёмный вид действующей темы: light или dark. */
     mode: () => (meta && meta.kind === 'light' ? 'light' : 'dark'),
     /** id действующей схемы или '' — темы нет. */
     id: () => (look ? look.id : ''),
-    /** Переспросить тему у главного процесса: «Настройки» зовут при открытии — схему могли добавить файлом, пока окно открыто. */
-    refresh: () => { if (t && t.settings && typeof t.settings.look === 'function') apply(ask()); },
     /** Тема сменилась. Ответ — функция снятия подписки. @param {() => void} cb */
     onChange: (cb) => { subs.add(cb); return () => subs.delete(cb); },
   };
