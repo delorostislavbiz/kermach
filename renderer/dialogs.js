@@ -84,7 +84,7 @@
   .dlg .btns .danger { background: var(--danger); border-color: var(--danger); color: #fff; }
   .dlg .btns .danger:hover { background: var(--danger-hover); border-color: var(--danger-hover); }
   .dlg .seg { display: flex; gap: 8px; }
-  /* Тема программы (t506): карточки с образцом окна (main/ui-themes.js); «Скло» — только на macOS, поэтому колонки — по числу карточек. */
+  /* Тема программы (t506, t651): три карточки макета с образцом окна — Светлая, Тёмная, Termius Dark (цвета README: фон, панель, терминал, акцент). */
   .dlg .uicards { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px; }
   .dlg .uicard { display: flex; flex-direction: column; gap: 6px; padding: 6px; border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 8px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
   .dlg .uicard:hover { background: var(--hover); }
@@ -93,15 +93,11 @@
   .dlg .uicard .pv i { display: block; }
   .dlg .uicard .nm { font-size: 12px; font-weight: 600; line-height: 1.25; }
   .dlg .uicard .by { font-size: 10.5px; line-height: 1.25; color: var(--muted); }
-  .dlg .uicard .pv.rostyslav { background: #141729; } .dlg .uicard .pv.rostyslav i:first-child { border-right: 1px solid #23273D; }
-  .dlg .uicard .pv.rostyslav i:last-child { background: linear-gradient(#141729 0 28%, #1A1D2F 28% 40%, #141729 40%); box-shadow: inset 6px -10px 0 -4px #21B568; }
-  .dlg .uicard .pv.glass { background: linear-gradient(135deg, #8FB8F2, #8C74C9 70%, #C890B5); }
-  .dlg .uicard .pv.glass i:first-child { background: rgba(246,246,248,.45); }
-  .dlg .uicard .pv.glass i:last-child { background: #fff; margin: 5px 5px 5px 0; border-radius: 4px; box-shadow: inset -10px -8px 0 -6px #0A84FF; }
-  .dlg .uicard .pv.studio { background: #F4F5F7; }
-  .dlg .uicard .pv.studio i:last-child { background: #fff; margin: 5px 5px 0 0; border: 1px solid #E4E7EB; border-bottom: 0; border-radius: 4px 4px 0 0; box-shadow: inset 0 -9px 0 -6px #13795B; }
-  .dlg .uicard .pv.deck { background: #0B0D10; } .dlg .uicard .pv.deck i:first-child { background: #101317; border-right: 1px solid #232A33; }
-  .dlg .uicard .pv.deck i:last-child { background: repeating-linear-gradient(#0B0D10 0 6px, #151A20 6px 13px); box-shadow: inset 3px 0 0 #4DA3FF; margin: 4px; border-radius: 3px; }
+  .dlg .uicard .pv i:first-child { margin: 4px 0 4px 4px; border-radius: 4px; }
+  .dlg .uicard .pv i:last-child { margin: 4px; border-radius: 4px; box-shadow: inset 6px -8px 0 -4px var(--pv-a); }
+  .dlg .uicard .pv.light { --pv-a: #0A7AFF; background: #F2F2F4; } .dlg .uicard .pv.light i:first-child { background: #E8E8EB; } .dlg .uicard .pv.light i:last-child { background: #FFFFFF; border: 1px solid rgba(0,0,0,.08); }
+  .dlg .uicard .pv.dark { --pv-a: #0A84FF; background: #1E1E20; } .dlg .uicard .pv.dark i:first-child { background: #29292C; } .dlg .uicard .pv.dark i:last-child { background: #161618; border: 1px solid rgba(255,255,255,.08); }
+  .dlg .uicard .pv.termius { --pv-a: #21B568; background: #141729; } .dlg .uicard .pv.termius i:first-child { background: #1A1D2F; } .dlg .uicard .pv.termius i:last-child { background: #11142A; border: 1px solid rgba(141,145,165,.16); }
   .dlg .uinote { font-size: 11px; color: var(--muted); }
   .dlg .seg button:disabled { opacity: .45; cursor: default; }
   .dlg .seg button, .dlg .stepper button, .dlg .stepper input { height: 30px; border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 4px; background: none; color: var(--text); font: 13px 'Segoe UI', system-ui, sans-serif; outline-offset: 2px; }
@@ -115,6 +111,7 @@
   .dlg .stepper .hint { color: var(--muted); font-size: 12px; }
   .dlg .chk { display: flex; align-items: center; gap: 10px; }
   .dlg .chk input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+  .dlg .chk.ntfr { margin-top: 8px; }
   /* «Агенты» (t407): в «Настройках» — кнопка, список — своим окошком; прокручивается тело окошка, у списка своей прокрутки нет. */
   .dlg .agt .row { display: flex; align-items: center; gap: 10px; }
   .dlg .agt .open, .dlg .agt .how button { height: 30px; padding: 0 14px; border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 4px; background: none; color: var(--text);
@@ -321,7 +318,7 @@
   const TERM_MIN = 10;
   const TERM_MAX = 28;
   const TERM_DEF = 17;
-  /** @type {{ uiZoom: number, termFont: number, sound: boolean } | null} */
+  /** @type {{ uiZoom: number, termFont: number, sound: boolean, notify: boolean } | null} */
   let cur = null;
   /** @type {Set<(s: any) => void>} */
   const subs = new Set();
@@ -540,16 +537,18 @@
   async function settings(t) {
     await watch(t);
     // Надписи ставит tx — по таблице STATIC и в коде строк ниже: язык выбирают в этом же окне, и оно перерисовывается без переоткрытия (t184).
-    // Темы программы (t506): «Скло» держится на полупрозрачности macOS — на Windows его карточки нет (main\ui-themes.js uisFor).
-    const uis = ['rostyslav', 'glass', 'studio', 'deck'].filter((u) => u !== 'glass' || /Mac/.test(navigator.platform));
+    // Темы программы (t651): три вида макета. Светлая и Тёмная — тема kermach с appearance, Termius Dark — termius (по умолчанию).
+    // «Скло», «Студія», «Пульт» в коде остаются (main\ui-themes.js), в списке их нет. data-look — какой вид; data-ap занят кнопками «Оформления».
+    const CARDS = [{ look: 'light', ui: 'kermach' }, { look: 'dark', ui: 'kermach' }, { look: 'termius', ui: 'termius' }];
     const body = `
-      <div class="sec uis"><div class="cap uit"></div><div class="uicards">${uis.map((u) => `<button class="uicard" data-ui="${u}"><span class="pv ${u}"><i></i><i></i></span><span class="nm"></span><span class="by"></span></button>`).join('')}</div></div>
+      <div class="sec uis"><div class="cap uit"></div><div class="uicards">${CARDS.map((c) => `<button class="uicard" data-ui="${c.ui}" data-look="${c.look}"><span class="pv ${c.look}"><i></i><i></i></span><span class="nm"></span><span class="by"></span></button>`).join('')}</div></div>
       <div class="sec apr"><div class="cap apt"></div><div class="seg">${['system', 'light', 'dark'].map((a) => `<button data-ap="${a}"></button>`).join('')}</div><div class="uinote"></div></div>
       <div class="sec"><div class="cap zoom"></div>
         <div class="seg">${ZOOMS.map((z) => `<button data-z="${z}">${z} %</button>`).join('')}</div></div>
       <div class="sec"><div class="cap font"></div>
         <div class="stepper"><button class="m">−</button><input class="num" type="number" min="${TERM_MIN}" max="${TERM_MAX}" step="1"><button class="p">+</button><span class="hint"></span></div></div>
-      <div class="sec"><label class="chk"><input type="checkbox" class="snd"><span class="sndt"></span></label></div>
+      <div class="sec"><label class="chk"><input type="checkbox" class="snd"><span class="sndt"></span></label>
+        <label class="chk ntfr"><input type="checkbox" class="ntf"><span class="ntft"></span></label></div>
       <div class="sec plg" hidden><div class="cap"></div></div>
       <div class="sec agt"><div class="cap"></div><div class="row"><button class="open"></button><span class="sub hint"></span></div></div>
       <div class="btns"><button class="reset"></button><button class="cancel ok"></button></div>`;
@@ -557,24 +556,23 @@
     const STATIC = [
       ['.dlg-title .t', 'dialogs.nastroyki', 'Настройки', 'textContent'], ['.dlg-title .x', 'common.close', 'Закрыть', 'title'],
       ['.uit', 'dialogs.uiTheme', 'Тема программы', 'textContent'],
-      ['.uicard[data-ui="rostyslav"] .nm', 'dialogs.uiRostyslav', 'Тема Ростислава', 'textContent'], ['.uicard[data-ui="rostyslav"] .by', 'dialogs.uiRostyslavBy', 'прежний вид', 'textContent'],
-      ...uis.includes('glass') ? /** @type {[string, string, string, string][]} */ ([['.uicard[data-ui="glass"] .nm', 'dialogs.uiGlass', 'Стекло', 'textContent'], ['.uicard[data-ui="glass"] .by', 'dialogs.uiNahorniak', 'Тема Нагорняка', 'textContent']]) : [],
-      ['.uicard[data-ui="studio"] .nm', 'dialogs.uiStudio', 'Студия', 'textContent'], ['.uicard[data-ui="studio"] .by', 'dialogs.uiNahorniak', 'Тема Нагорняка', 'textContent'],
-      ['.uicard[data-ui="deck"] .nm', 'dialogs.uiDeck', 'Пульт', 'textContent'], ['.uicard[data-ui="deck"] .by', 'dialogs.uiNahorniak', 'Тема Нагорняка', 'textContent'],
+      ['.uicard[data-look="light"] .nm', 'dialogs.uiLight', 'Светлая', 'textContent'], ['.uicard[data-look="light"] .by', 'dialogs.uiLightBy', 'системная, для дня', 'textContent'],
+      ['.uicard[data-look="dark"] .nm', 'dialogs.uiDark', 'Тёмная', 'textContent'], ['.uicard[data-look="dark"] .by', 'dialogs.uiDarkBy', 'системная, для вечера', 'textContent'],
+      ['.uicard[data-look="termius"] .nm', 'dialogs.uiTermius', 'Termius Dark', 'textContent'], ['.uicard[data-look="termius"] .by', 'dialogs.uiTermiusBy', 'зелёная, прежний вид', 'textContent'],
       ['.apt', 'dialogs.appearance', 'Оформление', 'textContent'],
       ['[data-ap="system"]', 'dialogs.apSystem', 'Как в системе', 'textContent'], ['[data-ap="light"]', 'dialogs.apLight', 'Светлое', 'textContent'], ['[data-ap="dark"]', 'dialogs.apDark', 'Тёмное', 'textContent'],
-      ['.uinote', 'dialogs.apNote', 'У «Темы Ростислава» светлый или тёмный вид задаёт схема плагина «Темы».', 'textContent'],
+      ['.uinote', 'dialogs.apNoteTermius', 'Termius Dark всегда тёмная. Её цвета может заменить схема плагина «Темы».', 'textContent'],
       ['.cap.zoom', 'dialogs.razmerShriftaOkon', 'Размер шрифта окон', 'textContent'], ['.cap.font', 'dialogs.razmerShriftaTerminala', 'Размер шрифта терминала', 'textContent'],
       ['.m', 'dialogs.menshe', 'Меньше', 'title'], ['.p', 'dialogs.bolshe', 'Больше', 'title'],
       ['.sndt', 'dialogs.zvukKogdaAgentZakonchil', 'Звук, когда агент закончил или ждёт ответа', 'textContent'],
+      ['.ntft', 'dialogs.notifyAgent', 'Всплывающее уведомление, когда агент закончил или ждёт ответа', 'textContent'],
       ['.plg .cap', 'dialogs.plaginy', 'Плагины', 'textContent'], ['.agt .cap', 'dialogs.agenty', 'Агенты', 'textContent'],
       ['.agt .open', 'dialogs.agentyOtkryt', 'Агенты…', 'textContent'], ['.agt .hint', 'dialogs.agentyPodskazka', 'включить установленных и узнать, как поставить остальных', 'textContent'],
       ['.reset', 'dialogs.sbrosit', 'Сбросить', 'textContent'], ['.cancel', 'common.close', 'Закрыть', 'textContent'],
     ];
     /** @type {() => void} */
     let off = () => {};
-    // Четыре карточки тем (macOS) в 420 px не помещаются — окно шире; на Windows их три, ширина прежняя.
-    const r = await modal(I18n.t('dialogs.nastroyki', 'Настройки'), uis.length > 3 ? 480 : 420, body, (dlg, done) => {
+    const r = await modal(I18n.t('dialogs.nastroyki', 'Настройки'), 420, body, (dlg, done) => {
       const q = (/** @type {string} */ s) => /** @type {HTMLElement} */ (dlg.querySelector(s));
       q('.dlg-body').classList.add('scroll');
       // Надписи окна: ключ и русский текст запоминаются, смена языка ставит их заново (РЕШЕНИЯ «Разметка, которую строит код, — не через data-i18n»).
@@ -587,14 +585,18 @@
       const offLang = I18n.onChange(() => { for (const x of texts) x.el[x.prop] = I18n.t(x.key, x.ru, x.vars); });
       const num = /** @type {HTMLInputElement} */ (q('.num'));
       const snd = /** @type {HTMLInputElement} */ (q('.snd'));
+      const ntf = /** @type {HTMLInputElement} */ (q('.ntf'));
       const paint = (/** @type {any} */ s) => {
         dlg.querySelectorAll('.seg button[data-z]').forEach((b) => b.classList.toggle('on', Number(/** @type {HTMLElement} */ (b).dataset.z) === s.uiZoom));
-        const ui = s.ui || 'rostyslav';
-        dlg.querySelectorAll('.uicard').forEach((b) => b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.ui === ui));
-        dlg.querySelectorAll('[data-ap]').forEach((b) => { b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.ap === (s.appearance || 'system')); /** @type {HTMLButtonElement} */ (b).disabled = ui === 'rostyslav'; });
-        q('.uinote').hidden = ui !== 'rostyslav';
+        const ui = s.ui || 'termius';
+        // Светлая или Тёмная горит по действующему виду: при «Как в системе» — по виду системы.
+        const ap = s.appearance === 'light' || s.appearance === 'dark' ? s.appearance : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        dlg.querySelectorAll('.uicard').forEach((b) => { const d = /** @type {HTMLElement} */ (b).dataset; b.classList.toggle('on', d.ui === ui && (ui !== 'kermach' || d.look === ap)); });
+        dlg.querySelectorAll('[data-ap]').forEach((b) => { b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.ap === (s.appearance || 'system')); /** @type {HTMLButtonElement} */ (b).disabled = ui === 'rostyslav' || ui === 'termius'; });
+        q('.uinote').hidden = ui !== 'termius';
         if (document.activeElement !== num) num.value = String(s.termFont);
         snd.checked = !!s.sound;
+        ntf.checked = s.notify !== false;
         dlg.querySelectorAll('.plg input').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); const on = s.plugins && s.plugins[i.dataset.id || '']; i.checked = typeof on === 'boolean' ? on : plgDefault.get(i.dataset.id || '') !== false; });
         // Размеры видов браузера (t207) — только пока «Браузер» включён.
         dlg.querySelectorAll('.bvws').forEach((r) => { /** @type {HTMLElement} */ (r).style.display = s.plugins && s.plugins.browser === false ? 'none' : ''; });
@@ -653,7 +655,8 @@
       // поэтому «Настройки» закрываются; после «Агентов» они заново не открываются.
       q('.agt .open').onclick = () => { done(null); agents(t); };
       dlg.querySelectorAll('.seg button[data-z]').forEach((b) => b.addEventListener('click', () => change(t, { uiZoom: Number(/** @type {HTMLElement} */ (b).dataset.z) })));
-      dlg.querySelectorAll('.uicard').forEach((b) => b.addEventListener('click', () => change(t, { ui: /** @type {HTMLElement} */ (b).dataset.ui })));
+      // Светлая и Тёмная задают и вид: { ui: 'kermach', appearance }; Termius Dark — только ui, «Оформление» у неё недоступно.
+      dlg.querySelectorAll('.uicard').forEach((b) => b.addEventListener('click', () => { const d = /** @type {HTMLElement} */ (b).dataset; change(t, d.ui === 'kermach' ? { ui: d.ui, appearance: d.look } : { ui: d.ui }); }));
       dlg.querySelectorAll('[data-ap]').forEach((b) => b.addEventListener('click', () => change(t, { appearance: /** @type {HTMLElement} */ (b).dataset.ap })));
       const font = (/** @type {number} */ v) => {
         const n = Math.round(v);
@@ -665,7 +668,8 @@
       q('.p').onclick = () => font(Number(cur && cur.termFont) + 1);
       num.addEventListener('change', () => font(Number(num.value)));
       snd.addEventListener('change', () => change(t, { sound: snd.checked }));
-      q('.reset').onclick = () => change(t, { uiZoom: 100, termFont: TERM_DEF, mdShift: 0, sound: true });
+      ntf.addEventListener('change', () => change(t, { notify: ntf.checked }));
+      q('.reset').onclick = () => change(t, { uiZoom: 100, termFont: TERM_DEF, mdShift: 0, sound: true, notify: true });
       return () => font(Number(num.value));
     });
     off();

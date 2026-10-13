@@ -256,9 +256,11 @@ module.exports = (ctx) => {
    * @param {string} ref
    */
   const run = async (ref) => {
-    const c = board.read(project).cards.find((x) => x.id === ref);
+    const b = board.read(project);
+    const c = b.cards.find((x) => x.id === ref);
     if (!c) return { error: `карты ${ref} нет на доске или файл с ошибкой` };
-    if (!c.phase) return { error: 'карта во «Входящих»: запускаются только карты фазы' };
+    // Фаза в файле есть, а такой фазы на доске нет (f9) — карта тоже во «Входящих» (t516).
+    if (!c.phase || b.inbox.includes(ref)) return { error: 'карта во «Входящих»: запускаются только карты фазы' };
     if (c.status === 'готово') return { error: 'карта уже готова' };
     // Любой агент каталога ядра (t576): не установлен, выключен, неизвестен, не берёт задание при запуске — причину называет ядро в ответе openTab.
     const agent = c.agent || 'claude';

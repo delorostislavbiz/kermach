@@ -57,7 +57,8 @@ function readSmall(file, max) {
   const st = fs.lstatSync(file);
   if (st.isSymbolicLink() || !st.isFile()) throw new Error(`${path.basename(file)} — не обычный файл`);
   if (st.size > max) throw new Error(`${path.basename(file)} слишком большой: ${st.size} байт, предел ${max}`);
-  return fs.readFileSync(file, 'utf8').replace(/^﻿/, '').replace(/\r\n/g, '\n');
+  // Одиночный \r — перенос строки, как в редакторе: иначе `## Шаблон: сделать\r…` не узнаётся — «.» в разборе его не берёт (t641).
+  return fs.readFileSync(file, 'utf8').replace(/^﻿/, '').replace(/\r\n?/g, '\n');
 }
 
 /**

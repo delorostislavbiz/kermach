@@ -11,12 +11,16 @@
 // Звук — системный (shell.beep: «Стандартный звук» Windows), без файлов, окон и процессов.
 // TERMINALUS_SOUND=0 — выключатель для проверок: событие пишется в журнал, но не звучит.
 // Настройка «звук» (settings.js, t181) читается на каждое событие: выключили — не звучит, мигание остаётся.
+// Тот же повод показывает уведомление Windows (notify.js, t151) — после мигания и до проверок звука: у него своя настройка.
 
+const path = require('path');
 const electron = require('electron');
 const projects = require('./projects');
 const projectWindow = require('./project-window');
 const attention = require('./attention');
 const settings = require('./settings');
+const notify = require('./notify');
+const { shownTitle } = require('./tab-look');
 
 /**
  * Состояния, на которые звучит сигнал, и их слово в main.log. working — нет: агент начал работу, ответа от человека не ждёт.
@@ -39,6 +43,18 @@ function projectFocused(project) {
 }
 
 /**
+ * Имена для уведомления: проект — как в окне проекта (имя из «Проектов»), окна нет — имя папки; вкладка — как на её ярлыке.
+ * @param {any} s терминал из списка демона; нет — проект не узнан
+ */
+function names(s) {
+  if (!s) return { project: '', name: 'Kermach', tab: '' };
+  const w = s.project ? projectWindow.windowFor(projects.projectId(s.project)) : null;
+  const p = w ? projectWindow.projectOf(w.webContents) : null;
+  // Имя вкладки — то же, что на её ярлыке (tab-look.js, t645).
+  return { project: s.project || '', name: (p && p.name) || path.basename(s.project || '') || 'Kermach', tab: shownTitle(s) };
+}
+
+/**
  * Подключить звук к событиям демона. Можно звать на каждого нового клиента — например, после переподключения (t125).
  * @param {import('../daemon/client').DaemonClient} client
  * @param {{ log: (msg: string) => void }} c
@@ -48,6 +64,7 @@ function attach(client, c) {
   attached.add(client);
   const off = process.env.TERMINALUS_SOUND === '0';
   if (off) c.log('звук: выключен переменной TERMINALUS_SOUND=0');
+  client.on('exit', (/** @type {any} */ m) => { if (m && m.sid) notify.forget(m.sid); });
   client.on('state', (/** @type {any} */ m) => {
     if (!LOUD_STATES.has(m.state)) return;
     const what = `${m.sid} ${LOUD_STATES.get(m.state)} (${m.by})`;
@@ -58,6 +75,9 @@ function attach(client, c) {
       if (s && projectFocused(s.project)) { c.log(`звук: ${what} — молчу, окно проекта в фокусе`); return; }
       // Мигание на панели задач или точка у часов (t108) — и когда звук выключен: это другой канал.
       attention.raise(s ? s.project : '', what, c.log);
+      // Бросок уведомления (имена, словарь, Electron) не глушит звук (t681).
+      try { notify.show({ sid: m.sid, state: m.state, ...names(s), on: settings.get().notify !== false }, what, c.log); }
+      catch (e) { c.log(`уведомление: ${what} — не показано: ${e instanceof Error ? e.message : e}`); }
       if (off) { c.log(`звук: ${what} — выключен для проверки`); return; }
       if (!settings.get().sound) { c.log(`звук: ${what} — выключен настройкой`); return; }
       electron.shell.beep();

@@ -74,20 +74,28 @@ const CODEX_ASK = /^(Approval requested|Codex wants to edit |Plan mode prompt: |
 // Codex: строка хода над полем ввода «Working (12s • esc to interrupt)» — видна весь ход и пропадает с его концом (t609).
 // Со второго хода это единственный признак начала хода: кадр спиннера в заголовке codex ставит только до темы разговора.
 // В живой строке «esc» жирный, скобка перед ним тусклая — копия строки в тексте ответа не такая. Запуск MCP рисует ту же строку — это не ход.
-// Живая строка начинается с первой клетки, а всё, что codex рисует в разговоре, — со значка или отступа («  └», вывод команды — 4 пробела):
-// так копия строки с оформлением (вывод команды cat записанного экрана) не ставит «работает» (t626, spikes\t626-codex-busy\col0.txt).
+// Живая строка начинается словом «Working» с первой клетки, а всё, что codex рисует в разговоре, — со значка или отступа («  └», «• », вывод команды — 4 пробела):
+// так копия строки с оформлением (вывод команды cat записанного экрана) не ставит «работает» (t626, t637, spikes\t626-codex-busy\col0.txt).
+// Слово без границы: после разрешения xterm показывает испорченную перерисовку «Workingr(4s…» — это тоже живая строка.
 // Счётчик секунд не опора: codex перерисовывает строку по событиям, без них по 3–4 с (spikes\t609-codex-turn\replay-all.txt).
-const CODEX_BUSY = /\((\d[\dhms ]*s) • esc to interrupt\)/;
-const CODEX_BUSY_SKIP = /^\s*Starting MCP servers/;
+// Строку шире панели codex обрезает сам и ставит «…» в последнюю клетку: в 28 колонках «Working (6s • esc to interr…»
+// (spikes\t637-daemon\narrow28-mid-ansi-draft.txt). Такая строка тоже живая, если доходит до края и «esc» в ней начат (t635).
+// Без «…» — тоже: так выглядит перенос или обрезка самим xterm (spikes\t637-daemon\hour-*.txt).
+const CODEX_BUSY = /\((\d[\dhms ]*s) • (esc to interrupt\)|(e[a-z ]*)…?$)/;
+const CODEX_BUSY_TAIL = 'esc to interrupt)';
+const CODEX_BUSY_START = /^Working/;
 // «Готов» → «работает»: строка видна не меньше BUSY_ON_MS (после Esc на вопросе она мелькает на миг).
 // «Работает» → «готов» без OSC 9 (Esc посреди хода): строки нет BUSY_OFF_MS и вывода нет BUSY_QUIET_MS.
-// Пока codex выводит ответ, строки нет весь вывод (40 строк — 3,8 с), но куски идут без пауз длиннее 0,7 с; после Esc — одна строка и тишина
-// (spikes\t609-codex-turn\gaps.txt). Предела «строки нет N с — готов и при выводе» нет: длинный ответ без строки — всё ещё ход (t626).
-// «Работает» навсегда не остаётся: конец хода — OSC 9, прерванный ход — тишина, выход codex — onExit; без хода codex вывода не шлёт.
+// Пока codex выводит ответ, строки нет весь вывод (40 строк — 3,8 с; абзац на 1500 знаков — до 25 с). Паузы между кусками: в столбике до 0,7 с
+// (spikes\t609-codex-turn\gaps.txt), в длинном абзаце без переносов — 2,64 с (spikes\t637-daemon\long-gaps.txt): тишина 2 с дала
+// ложное «готов» посреди ответа (t634). Тишина 6 с — запас больше двух раз; цена — после Esc «готов» на 6 с, а не на 3 с.
+// После Esc — одна строка и тишина. Предела «строки нет N с — готов и при выводе» нет: длинный ответ без строки — всё ещё ход (t626).
+// «Работает» снимают: конец хода — OSC 9, прерванный ход — тишина, выход codex — onExit; без хода codex вывода не шлёт.
+// Остаётся «работает» только у codex, который завис со строкой хода на экране, — это видит и человек.
 // Экран смотрится не чаще раза в BUSY_LOOK_MS.
 const BUSY_ON_MS = 1000;
 const BUSY_OFF_MS = 3000;
-const BUSY_QUIET_MS = 2000;
+const BUSY_QUIET_MS = 6000;
 const BUSY_LOOK_MS = 300;
 // Другие агенты каталога (t334): состояние по заголовку, правила свои у каждого — grok по пробе t331 (spikes\t331-states\live-grok*.txt),
 // остальные по корпусу и коду Орки (ref\orca-out\shared\agent-title-status.js). Проверка по порядку: ждёт → работает → готов.
@@ -268,6 +276,8 @@ class Session {
     this.dataAt = 0;
     /** @type {NodeJS.Timeout | null} */
     this.busyTimer = null;
+    // Когда сработает busyTimer (мс).
+    this.busyDue = 0;
     // Когда сменился номер разговора Claude (мс). Строка состояния, запущенная раньше, — о прежнем разговоре (t82).
     this.claudeIdAt = 0;
     // Терминал закрыли командой kill — выход с любым кодом не ошибка.
@@ -380,8 +390,23 @@ class Session {
    * @param {number} ms
    */
   lookBusy(ms) {
-    if (this.busyTimer) return;
-    this.busyTimer = setTimeout(() => this.term.write('', () => { this.busyTimer = null; if (sessions.has(this.sid) && this.agent === 'codex') this.busyState(); }), ms);
+    // Стоящий таймер позже нужного — заменить: таймер «досмотреть тишину» (до BUSY_QUIET_MS) иначе откладывает взгляд на новый ход
+    // после OSC 9, и короткий ход остаётся без «работает» (t634, spikes\t637-daemon\replay-stdout-src.txt).
+    const due = Date.now() + ms;
+    if (this.busyTimer) {
+      if (this.busyDue <= due) return;
+      clearTimeout(this.busyTimer);
+    }
+    // Ссылка на таймер живёт до колбэка записи. busyReset между таймером и колбэком её стирает — тогда взгляд устарел (он о прежнем агенте):
+    // колбэк не трогает ни ссылку на новый таймер, ни состояние (t637).
+    const t = setTimeout(() => this.term.write('', () => {
+      if (this.busyTimer !== t) return;
+      this.busyTimer = null;
+      // Бросок в колбэке записи навсегда останавливает копию экрана вкладки (@xterm/headless, spikes\review-rm1m\probe\throw.txt) — t633.
+      try { if (sessions.has(this.sid) && this.agent === 'codex') this.busyState(); } catch (e) { log(`терминал ${this.sid}: строка хода не разобрана: ${/** @type {any} */ (e).stack || e}`); }
+    }), ms);
+    this.busyTimer = t;
+    this.busyDue = due;
   }
 
   /** Забыть строку хода (t626): вид вкладки сменили с codex — признаки и таймер прежнего агента не ставят состояние новому. */
@@ -414,7 +439,9 @@ class Session {
    * Состояние Codex по строке хода (CODEX_BUSY). «Готов» → «работает»: строка видна BUSY_ON_MS — ход, начатый текстом после конца прошлого.
    * «Работает» → «готов»: строки нет BUSY_OFF_MS и вывода нет BUSY_QUIET_MS, а в этом «работает» её видели —
    * ход прервали (Esc, Ctrl+C), OSC 9 тогда нет.
-   * «Ждёт» и «состояния нет» строка не меняет: при вопросе её нет, а до первого хода «работает» ставит спиннер в заголовке.
+   * «Состояния нет» → «работает» — так же, как из «готов»: вид вкладки сменили на codex посреди хода (t628 сбросил состояние в ''),
+   * а спиннера в заголовке со второго хода нет (t637). Запуск MCP рисует строку со словом «Starting» — она не считается (CODEX_BUSY_START).
+   * «Ждёт» строка не меняет: при вопросе её нет.
    */
   busyState() {
     const now = Date.now();
@@ -429,7 +456,7 @@ class Session {
         if (off >= BUSY_OFF_MS && quiet >= BUSY_QUIET_MS) this.setState('done', 'screen');
         else wait = Math.max(BUSY_OFF_MS - off, BUSY_QUIET_MS - quiet);
       }
-    } else if (this.state === 'done' && on) {
+    } else if ((this.state === 'done' || !this.state) && on) {
       if (now - this.busyOn >= BUSY_ON_MS && now >= this.settleUntil) { this.setState('working', 'screen'); this.busySeen = true; }
       else wait = Math.max(BUSY_ON_MS - (now - this.busyOn), this.settleUntil - now);
     }
@@ -437,7 +464,7 @@ class Session {
     if (wait >= 0) this.lookBusy(Math.max(wait, 50));
   }
 
-  /** Есть ли на экране живая строка хода Codex: снизу вверх первая подходящая, с первой клетки, «esc» жирный, скобка тусклая. @returns {boolean} */
+  /** Есть ли на экране живая строка хода Codex: снизу вверх первая подходящая, «Working» с первой клетки, «esc» жирный, скобка тусклая; шире панели — обрезана у края. @returns {boolean} */
   busyLine() {
     const b = this.term.buffer.active;
     const cell = b.getNullCell();
@@ -445,7 +472,9 @@ class Session {
       const line = b.getLine(y);
       const s = line?.translateToString(true) || '';
       const m = CODEX_BUSY.exec(s);
-      if (!line || !m || !/^\S/.test(s) || CODEX_BUSY_SKIP.test(s)) continue;
+      if (!line || !m || !CODEX_BUSY_START.test(s)) continue;
+      // Обрезанный хвост — только у края панели и только начало «esc to interrupt)»: «Working (5s • ещё текст» не строка хода.
+      if (m[2] !== CODEX_BUSY_TAIL && (s.length < this.term.cols || !CODEX_BUSY_TAIL.startsWith(m[3]))) continue;
       // Позиция в строке — номер клетки, если левее нет широких знаков; иначе оформление не сверить, и строка не считается.
       const x = m.index;
       const esc = x + m[1].length + 4;
@@ -536,22 +565,37 @@ class Session {
     this.term.write('', () => {
       const sub = this.subs.get(client);
       if (!sub || sub.attachId !== attachId) return client.fail(reqId, 'подписка отменена');
-      client.reply(reqId, { sid: this.sid, snapshot: this.serializer.serialize(), cols: this.cols, rows: this.rows });
-      for (const d of sub.held || []) client.send({ ev: 'data', sid: this.sid, data: d });
+      let replied = false;
+      // Бросок здесь остановил бы копию экрана вкладки навсегда (t633): ошибку в журнал, клиенту — отказ, придержанный вывод не копится.
+      try {
+        const snapshot = this.serializer.serialize();
+        client.reply(reqId, { sid: this.sid, snapshot, cols: this.cols, rows: this.rows });
+        replied = true;
+        for (const d of sub.held || []) client.send({ ev: 'data', sid: this.sid, data: d });
+      } catch (e) {
+        log(`терминал ${this.sid}: снимок для подписки не отправлен: ${/** @type {any} */ (e).stack || e}`);
+        if (!replied) { this.subs.delete(client); try { client.fail(reqId, 'снимок не снят'); } catch {} }
+      }
       sub.held = null;
     });
   }
 
   /** Вывод терминала целиком: 'text' — простой текст, 'ansi' — с цветами (как снимок). @param {string} format */
   read(format) {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       this.term.write('', () => {
-        if (format === 'ansi') return resolve(this.serializer.serialize());
-        const b = this.term.buffer.active;
-        const lines = [];
-        for (let i = 0; i < b.length; i++) lines.push(b.getLine(i)?.translateToString(true) ?? '');
-        while (lines.length && !lines[lines.length - 1]) lines.pop();
-        resolve(lines.join('\n'));
+        // Бросок здесь остановил бы копию экрана вкладки навсегда (t633) — ошибку в журнал, клиенту отказ.
+        try {
+          if (format === 'ansi') return resolve(this.serializer.serialize());
+          const b = this.term.buffer.active;
+          const lines = [];
+          for (let i = 0; i < b.length; i++) lines.push(b.getLine(i)?.translateToString(true) ?? '');
+          while (lines.length && !lines[lines.length - 1]) lines.pop();
+          resolve(lines.join('\n'));
+        } catch (e) {
+          log(`терминал ${this.sid}: вывод не прочитан: ${/** @type {any} */ (e).stack || e}`);
+          reject(e);
+        }
       });
     });
   }
@@ -764,7 +808,7 @@ function handle(c, msg) {
       s.subs.delete(c);
       return c.reply(id);
     case 'read':
-      return void s.read(msg.format).then((text) => c.reply(id, { text }));
+      return void s.read(msg.format).then((text) => c.reply(id, { text }), () => c.fail(id, 'вывод не прочитан'));
     case 'write':
       s.onInput(String(msg.data));
       s.pty.write(String(msg.data));

@@ -1,0 +1,108 @@
+/* Kermach — макет Claude Design (этап d1, пачка 1: t651–t654, t662). Три вида: Светлая и Тёмная (data-ui="kermach", data-mode), Termius Dark (data-ui="termius").
+   Цвета — переменные theme.css и переменные макета (--card, --term, --line-strong, --off, --knob, --tint-a, --ok); ставит renderer\theme.js из look() главного процесса (main\ui-themes.js).
+   Здесь — общее для всех окон: размеры текста, переключатель, сегменты, кнопки, карточки-группы, поля, анимации, точки состояний.
+   Окно проекта — ui-kermach-project.css (пачка 2), «Проекты» — ui-kermach-projects.css (пачка 3). Классы и id, которые читают проверки, не переименовываются. */
+
+/* Termius Dark без схемы плагина «Темы» (look() = null): цвета макета сверх theme.css (README, «Токены тем») и форма — как shape('termius') в main\ui-themes.js.
+   Со схемой на <html> есть data-theme, и переменные ставит renderer\theme.js из схемы. */
+html[data-ui="termius"]:not([data-theme]) {
+  --side: #1A1D2F; --tab-active: #23273C; --menu: #20243A; --line: rgba(141,145,165,.16); --hover: rgba(141,145,165,.13);
+  --selected: rgba(141,145,165,.13); --card: #1A1D2F; --term: #11142A; --line-strong: rgba(141,145,165,.26); --off: rgba(141,145,165,.3);
+  --knob: #C9D0DC; --tint-a: .18; --ok: #41D68A;
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-label: var(--font-ui); --r-sm: 6px; --r-md: 8px; --r-lg: 10px;
+}
+
+/* Размеры текста макета (t652, README «Типографика»): 11 подписи и пути, 11.5 описания, 12.5 вкладки и кнопки, 13 основной, 13.5 имена проектов, 15 заголовок окошка, 17 заголовок раздела. */
+html:is([data-ui="kermach"], [data-ui="termius"]) {
+  --fs-cap: 11px; --fs-desc: 11.5px; --fs-btn: 12.5px; --fs-base: 13px; --fs-name: 13.5px; --fs-title: 15px; --fs-head: 17px;
+  --ease-in: cubic-bezier(.2,.8,.2,1); --ease-spring: cubic-bezier(.3,1.5,.5,1);
+}
+/* Шрифт интерфейса — Segoe UI Variable (--font-ui из ui-themes.js shape). Вес выше строк окошек с 'Segoe UI' в dialogs.js (.dlg .btns button и т. п.). */
+html:is([data-ui="kermach"], [data-ui="termius"])[data-ui] body,
+html:is([data-ui="kermach"], [data-ui="termius"])[data-ui] .dlg,
+html:is([data-ui="kermach"], [data-ui="termius"])[data-ui] .dlg :is(button, input, select, textarea, .field) { font-family: var(--font-ui); }
+
+/* --- Общие элементы (t653) --- */
+
+/* Переключатель 34×20, ручка 16 px — поверх того же input type=checkbox (правило 2 КАРТЫ.md): щелчок, checked и change — как у флажка.
+   Новые места — класс k-switch; флажки окошек (.dlg .chk) — сразу переключатели. */
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(input[type="checkbox"].k-switch, .dlg .chk input[type="checkbox"]) {
+  appearance: none; -webkit-appearance: none; position: relative; flex: none; width: 34px; height: 20px; margin: 0; border: 0; border-radius: 10px;
+  background: var(--off); cursor: pointer; outline-offset: 2px; transition: background .2s;
+}
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(input[type="checkbox"].k-switch, .dlg .chk input[type="checkbox"])::before {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 8px; background: var(--knob);
+  transition: transform .25s var(--ease-spring);
+}
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(input[type="checkbox"].k-switch, .dlg .chk input[type="checkbox"]):checked { background: var(--accent); }
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(input[type="checkbox"].k-switch, .dlg .chk input[type="checkbox"]):checked::before { transform: translateX(14px); }
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(input[type="checkbox"].k-switch, .dlg .chk input[type="checkbox"]):focus-visible { outline: 2px solid var(--accent); }
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(input[type="checkbox"].k-switch, .dlg .chk input[type="checkbox"]):disabled { opacity: .45; cursor: default; }
+/* Окно «Агенты»: место под выключатель в строках без него — ширины переключателя, иначе имена Gemini и Kimi правее остальных (t407). */
+html:is([data-ui="kermach"], [data-ui="termius"]) .dlg .agt .fixed { width: 34px; flex: 0 0 34px; }
+
+/* Сегменты: фон --sel (у нас --hover), отступ 2, радиус 8; выбранный — акцент. Окошки: .dlg .seg, выбранная кнопка — .on. */
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(.k-seg, .dlg .seg) { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--hover); }
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(.k-seg, .dlg .seg) > button {
+  height: 26px; min-width: 52px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--text); font-size: 12px; cursor: pointer;
+  transition: background .2s, color .2s;
+}
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(.k-seg, .dlg .seg) > button:hover:not(.on):not(:disabled) { background: var(--hover); }
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(.k-seg, .dlg .seg) > button.on { background: var(--accent); color: var(--on-accent); }
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(.k-seg, .dlg .seg) > button:disabled { opacity: .45; cursor: default; }
+
+/* Кнопки: главная — акцент, 32 px, радиус 8; обычная — рамка --line-strong. Окошки: .dlg .btns button и .ok. Теней нет. */
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(.k-btn, .dlg .btns button) {
+  height: 32px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 8px; background: none; color: var(--text); font-size: var(--fs-btn); cursor: pointer;
+}
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(.k-btn, .dlg .btns button):hover { background: var(--hover); }
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(.k-btn.primary, .dlg .btns .ok) { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 500; }
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(.k-btn.primary, .dlg .btns .ok):hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(.k-btn.danger, .dlg .btns .danger) { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+/* Карточка-группа: фон --card, рамка --line, радиус 10; строки от 44 px, между строками — линия. */
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-card > .k-row { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 8px 14px; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-card > .k-row + .k-row { border-top: 1px solid var(--line); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-row .k-sub { font-size: var(--fs-desc); color: var(--muted); }
+
+/* Поле: 34 px, радиус 8, фокус — рамка 2 px акцентом (box-shadow, чтобы текст не прыгал). */
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(.k-field, .dlg .field) {
+  height: 34px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--input); color: var(--text); font-size: var(--fs-base); outline: 0;
+}
+html:is([data-ui="kermach"], [data-ui="termius"]) :is(.k-field, .dlg .field):focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+/* --- Анимации (t654, ключевые кадры прототипа) ---
+   Только transform и opacity. Бесконечные — k-ring, k-breathe, k-sweep, k-blink, k-frame: стоят при скрытом окне (класс k-hidden ставит theme.js)
+   и выключены при prefers-reduced-motion. Разовые — k-in, k-win, k-side, k-pop, k-fill. */
+@keyframes kIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes kWin { from { opacity: 0; transform: translateY(16px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes kFill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes kSide { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: none; } }
+@keyframes kPop { from { opacity: 0; transform: scale(.95) translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes kRing { 0% { transform: scale(1); opacity: .55; } 100% { transform: scale(3.2); opacity: 0; } }
+@keyframes kBreathe { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes kFrame { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+@keyframes kSweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+@keyframes kBlink { 0%, 49% { opacity: .85; } 50%, 100% { opacity: 0; } }
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-in { animation: kIn .4s var(--ease-in) both; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-win { animation: kWin .5s var(--ease-in) both; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-side { animation: kSide .45s var(--ease-in) both; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-pop { animation: kPop .18s var(--ease-in) both; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-fill { transform-origin: left; animation: kFill .6s var(--ease-in) both; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-ring { transform-box: fill-box; transform-origin: center; animation: kRing 1.8s ease-out infinite; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-breathe { animation: kBreathe 1.6s ease-in-out infinite; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-sweep { animation: kSweep 1.8s linear infinite; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-blink { animation: kBlink 1.1s steps(1) infinite; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .k-frame { animation: kFrame 1.6s ease-in-out infinite; }
+/* Кольцо «работает» шире значка 12×12: svg точки состояния не обрезает его (renderer\states.js, glyph в project-page.js и projects-page.js). */
+html:is([data-ui="kermach"], [data-ui="termius"]) svg:has(> .k-ring) { overflow: visible; }
+/* Окно скрыто — бесконечные стоят (document.hidden, theme.js). */
+html.k-hidden :is(.k-ring, .k-breathe, .k-sweep, .k-blink, .k-frame) { animation-play-state: paused; }
+/* «Уменьшить движение» в системе — анимаций нет, смена цвета остаётся (README «Анимации»). */
+@media (prefers-reduced-motion: reduce) {
+  html:is([data-ui="kermach"], [data-ui="termius"]) :is(.k-in, .k-win, .k-side, .k-pop, .k-fill, .k-ring, .k-breathe, .k-sweep, .k-blink, .k-frame) { animation: none; }
+  html:is([data-ui="kermach"], [data-ui="termius"]) .k-ring { opacity: 0; }
+  html:is([data-ui="kermach"], [data-ui="termius"]) :is(input[type="checkbox"].k-switch, .dlg .chk input[type="checkbox"])::before { transition: none; }
+}

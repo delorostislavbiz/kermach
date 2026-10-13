@@ -21,6 +21,8 @@ const projectWindow = require('./project-window');
 const tabs = require('./tabs');
 const { findProgram, notFound } = require('./find-program');
 const agents = require('./agents');
+// Вид вкладки, её имя, цвет и значок — общие с уведомлением (sound.js, t645).
+const { KINDS, agentOf, lookOf, kindOf, shownTitle } = require('./tab-look');
 const i18n = require('./i18n');
 const { withExtra, unwrap } = require('./cmd-shim');
 // Окружение команды kermach browser (старое имя terminalus, t381): канал, подпись проекта, папка команды в PATH — в каждый новый терминал проекта.
@@ -33,25 +35,6 @@ const browserCli = require('../plugins/browser/cli');
  *   link?: { onClient: (fn: (d: import('../daemon/client').DaemonClient) => void) => void, ensure: () => Promise<import('../daemon/client').DaemonClient> } }} Ctx
  */
 
-/** Что ставится новой вкладке. Цвета — из палитры макета. */
-const KINDS = /** @type {const} */ ({
-  claude: { title: 'Claude', color: '#2091F6', icon: 'bot' },
-  codex: { title: 'Codex', color: '#ECA855', icon: 'cpu' },
-  shell: { title: 'Терминал', color: '#8D91A5', icon: 'terminal' },
-});
-
-/**
- * Агент из системы (t183): вид 'agent:<id>', id — из каталога main\agents.js, кроме Claude и Codex. Нет такого — пусто.
- * @param {unknown} kind
- */
-const agentOf = (kind) => (typeof kind === 'string' && kind.startsWith('agent:') ? agents.extra(kind.slice(6)) : null);
-
-/** Имя, цвет и значок новой вкладки по виду: свои виды — из KINDS, агенты из системы — из каталога. @param {string} kind */
-function lookOf(kind) {
-  const a = agentOf(kind);
-  if (a) return { title: a.title, ...agents.LOOK };
-  return KINDS[/** @type {keyof typeof KINDS} */ (kind)] || KINDS.shell;
-}
 
 /**
  * Состояние агента во вкладке (t13): код от демона → слово на экране. Одно на вкладки, боковую панель и окно «Проекты».
@@ -393,26 +376,6 @@ function hasConversation(id) {
   let dirs;
   try { dirs = fs.readdirSync(root, { withFileTypes: true }); } catch { return false; }
   return dirs.some((d) => d.isDirectory() && fs.existsSync(path.join(root, d.name, `${id}.jsonl`)));
-}
-
-/** Вид вкладки по терминалу демона. Старые терминалы без цвета и значка получают их по виду. Агента нет в каталоге — «Терминал». @param {any} s */
-function kindOf(s) {
-  const k = s.meta && s.meta.kind;
-  return k === 'claude' || k === 'codex' || agentOf(k) ? k : 'shell';
-}
-
-/** Заголовок, который Claude пишет до первого вопроса, — не тема: вкладки остаются «Claude», «Claude 2». */
-const NO_TOPIC = new Set(['Claude Code']);
-
-/**
- * Имя вкладки на экране. У Claude — тема разговора из заголовка терминала (autoTitle от демона), пока имя не дали вручную.
- * У Codex и «Терминала» — своё имя: их заголовки не проверялись, а PowerShell пишет туда своё.
- * Старый демон (этап 1) autoTitle не знает — тогда своё имя и у Claude.
- * @param {any} s
- */
-function shownTitle(s) {
-  const own = s.title || lookOf(kindOf(s)).title;
-  return kindOf(s) === 'claude' && !s.titleManual && s.autoTitle && !NO_TOPIC.has(s.autoTitle) ? s.autoTitle : own;
 }
 
 /** Что окно получает о терминале. state — код из STATE_WORDS или ''; старый демон его не знает — ''.

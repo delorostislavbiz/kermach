@@ -12,7 +12,8 @@ const DIR = path.join('.kermach', 'roadmap');
 const MAX_SIZE = 256 * 1024;
 const NAME_RE = /^([tfd])(\d{1,6})\.md$/;
 const REF_RE = /^(passport|[tfd]\d{1,6})$/;
-const KEY_RE = /^([A-Za-z_][\w-]*):(.*)$/;
+// Значение — до конца строки вместе с \r: «.» его не берёт, и \r в конце строки (файл с \r\r\n) ломал бы шапку (t641).
+const KEY_RE = /^([A-Za-z_][\w-]*):([\s\S]*)$/;
 
 const CARD_STATUS = ['в очереди', 'в работе', 'ждёт ответа', 'на проверке', 'на ревью', 'пауза', 'готово'];
 const PHASE_STATUS = ['запланирована', 'идёт', 'готова'];
@@ -41,7 +42,8 @@ const HEAD_KEYS = {
 /**
  * @typedef {{ file: string, reason: string }} Problem
  * @typedef {{ key: string, value: string, line: number }} HeadLine
- * @typedef {{ bom: string, eol: string, lines: string[], head: HeadLine[] | null, headEnd: number, error: string }} Parsed
+ * @typedef {{ bom: string, eol: string, lines: string[], ends: string[], head: HeadLine[] | null, headEnd: number, error: string }} Parsed
+ * ends[i] — конец строки i, как в файле (\r\n или \n): у файла со смешанными концами нетронутая строка пишется со своим концом (t638). eol — конец новых строк.
  * headEnd — номер строки сразу после шапки (0, если шапки нет).
  * @typedef {{ key: string, start: number, end: number, value: string }} Span
  * start — строка подписи или заголовка раздела, end — первая строка после поля.
@@ -56,8 +58,9 @@ const HEAD_KEYS = {
  * @typedef {{ file: string, sections: Record<string, { title: string, text: string, empty: boolean }>, missing: string[], hidden: string[] }} Passport
  * hidden — разделы, которые спрятала в блок кода ``` без пары (hiddenKeys, t614): окно их не видит, запись отказывает.
  * @typedef {{ root: string, exists: boolean, passport: Passport | null, phases: Phase[], cards: Card[], inbox: string[], decisions: Decision[],
- *   counter: { t: number, d: number }, errors: Problem[], warnings: Problem[] }} Board
+ *   counter: { t: number, d: number }, alike: Record<string, string>, errors: Problem[], warnings: Problem[] }} Board
  * counter — последние выданные номера с учётом файлов: следующий номер карты — counter.t + 1.
+ * alike — карта «Входящих» → номер карты с таким же или очень похожим заголовком (t516): пометка «похоже на tNN».
  */
 
 /** Сравнение значений: без регистра, «ё» как «е». @param {string} s */
@@ -105,14 +108,18 @@ function ensureRoot(project) {
   return dir;
 }
 
-/** Разбор текста файла: строки, шапка. @param {string} text @returns {Parsed} */
+/** Разбор текста файла: строки, конец каждой строки, шапка. @param {string} text @returns {Parsed} */
 function parse(text) {
   const bom = text.startsWith('﻿') ? '﻿' : '';
   const body = bom ? text.slice(1) : text;
-  const eol = body.includes('\r\n') ? '\r\n' : '\n';
-  const lines = body.split(/\r?\n/);
+  const parts = body.split(/(\r?\n)/);
+  const lines = parts.filter((_, i) => i % 2 === 0);
+  const ends = parts.filter((_, i) => i % 2 === 1);
+  // Конец новых строк — какой у большинства строк файла, поровну — \r\n (t638): один случайный \r\n в LF-файле не делает правку CRLF.
+  const crlf = ends.filter((e) => e === '\r\n').length;
+  const eol = crlf && crlf >= ends.length - crlf ? '\r\n' : '\n';
   /** @type {Parsed} */
-  const p = { bom, eol, lines, head: null, headEnd: 0, error: '' };
+  const p = { bom, eol, lines, ends, head: null, headEnd: 0, error: '' };
   if (lines[0].trim() !== '---') return p;
   const close = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
   if (close < 0) { p.error = 'сломанная шапка: нет закрывающей строки ---'; return p; }
@@ -122,7 +129,13 @@ function parse(text) {
     const l = lines[i];
     if (!l.trim() || l.trimStart().startsWith('#')) continue;
     const m = KEY_RE.exec(l);
-    if (!m) { p.error = `сломанная шапка, строка ${i + 1}: «${l.slice(0, 60)}» — нужно «ключ: значение», ключ латиницей`; return p; }
+    // Одиночный \r внутри строки редактор показывает переносом: человек видит две строки, вторая без «ключ:». Карту не читаем, \r в тексте ошибки виден (t641).
+    const cr = /\r/.test(l.trim());
+    if (!m || cr) {
+      const why = cr ? 'внутри строки одиночный \\r (возврат каретки): редактор показывает его как перенос строки, уберите его' : 'нужно «ключ: значение», ключ латиницей';
+      p.error = `сломанная шапка, строка ${i + 1}: «${l.slice(0, 60).replace(/\r/g, '\\r')}» — ${why}`;
+      return p;
+    }
     if (head.some((h) => h.key === m[1])) { p.error = `сломанная шапка: ключ ${m[1]} дважды`; return p; }
     head.push({ key: m[1], value: m[2].trim(), line: i });
   }
@@ -198,7 +211,8 @@ const codeMask = (lines, from = 0) => fences(lines, from).code;
 
 /** Заголовок раздела паспорта «## …»: ключ ('' — раздел не наш) и название. Двоеточие в конце (`## Журнал:`) — тот же раздел (t599). @param {string} line */
 function secHead(line) {
-  const m = /^##\s+(?:\d+[.)]?\s*)?(.+?)\s*:?\s*$/.exec(line);
+  // Название — до одиночного \r: «.» его не берёт, и `## Журнал\r…` не узнавался (t642). Строка заголовка в файле не меняется: запись раздела её не трогает.
+  const m = /^##[^\S\r]+(?:\d+[.)]?[^\S\r]*)?([^\r]+?)[^\S\r]*:?[^\S\r]*(?:\r[\s\S]*)?$/.exec(line);
   if (!m) return null;
   return { key: Object.keys(PASSPORT).find((k) => norm(PASSPORT[/** @type {keyof PASSPORT} */ (k)]) === norm(m[1])) || '', title: m[1] };
 }
@@ -252,7 +266,8 @@ function hiddenKeys(kind, p) {
   return out;
 }
 
-const CRIT_RE = /^[-*]\s*\[([ xXхХ]?)\]\s*(.*)$/;
+// Текст признака — [\s\S], а не «.»: «.» не берёт одиночный \r, и признак «а\rб» пропал бы с доски (t640). \n в строке не бывает — файл поделён по нему.
+const CRIT_RE = /^[-*]\s*\[([ xXхХ]?)\]\s*([\s\S]*)$/;
 /**
  * Строки признаков поля в файле — одно правило для чтения и щелчка (t607): строки внутри блоков кода ``` не признаки.
  * В строке подписи признак может стоять после двоеточия: «Признаки готовности: - [ ] …».
@@ -412,7 +427,7 @@ function maxNum(byId, kind) {
 function read(project) {
   const dir = root(project);
   /** @type {Board} */
-  const b = { root: dir, exists: false, passport: null, phases: [], cards: [], inbox: [], decisions: [], counter: { t: 0, d: 0 }, errors: [], warnings: [] };
+  const b = { root: dir, exists: false, passport: null, phases: [], cards: [], inbox: [], decisions: [], counter: { t: 0, d: 0 }, alike: {}, errors: [], warnings: [] };
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return b;
   try { ownRoot(project, dir); } catch (e) { b.errors.push({ file: DIR, reason: e instanceof Error ? e.message : String(e) }); return b; }
   b.exists = true;
@@ -452,7 +467,43 @@ function read(project) {
     if (f) f.cards.push(t.id); else b.inbox.push(t.id);
     for (const d of t.depends) if (!cards.has(d)) b.warnings.push({ file: t.file, reason: `зависит от ${d}, а карты ${d} нет` });
   }
+  b.alike = alike(b.cards, b.inbox);
   return b;
+}
+
+/**
+ * Слова заголовка для «похоже на» (t516): без регистра, «ё» как «е», без знаков. Короче трёх букв — прочь («в», «не», «к»),
+ * длиннее пяти — первые пять: «доставке» и «доставка» — одно слово. Индексатора нет, сравнение простое. @param {string} s
+ */
+const words = (s) => new Set((norm(s).match(/[\p{L}\p{N}]+/gu) || []).filter((w) => w.length > 2).map((w) => w.slice(0, 5)));
+/**
+ * Заголовки «очень похожи», когда общих слов не меньше этой доли от всех разных слов двух заголовков.
+ * «Тест корзины падает при пустом городе» и «Тест корзины падает при пустом адресе» — 5 из 7, похожи; одно общее слово из трёх-четырёх — нет.
+ */
+const ALIKE = 0.6;
+/**
+ * Для карт ids — самая похожая другая карта доски: в фазе, во «Входящих», готовая — все (дубль готовой карты тоже дубль).
+ * Одинаковая доля — меньший номер: карты отсортированы по номеру. @param {Card[]} cards @param {string[]} ids @returns {Record<string, string>}
+ */
+function alike(cards, ids) {
+  /** @type {Record<string, string>} */
+  const out = {};
+  const ws = new Map(cards.map((c) => [c.id, words(c.title)]));
+  const nt = new Map(cards.map((c) => [c.id, norm(c.title)]));
+  for (const id of ids) {
+    const a = ws.get(id) || new Set();
+    let best = 0;
+    for (const c of cards) {
+      if (c.id === id) continue;
+      const z = ws.get(c.id) || new Set();
+      let n = 0;
+      for (const w of a) if (z.has(w)) n++;
+      // Заголовок из одних коротких слов («Не то») слов не даёт — совпадение текста целиком всё равно «похоже».
+      const r = nt.get(id) && nt.get(id) === nt.get(c.id) ? 1 : n ? n / (a.size + z.size - n) : 0;
+      if (r >= ALIKE && r > best) { best = r; out[id] = c.id; }
+    }
+  }
+  return out;
 }
 
 /** Файл по ссылке t12, f1, d3, passport: имя на диске (t09.md для t9) или новое. @param {string} project @param {string} ref */
@@ -491,8 +542,11 @@ function bodyLs(v) {
   const rc = codeMask(raw);
   return raw.map((l, i) => (rc[i] ? l : l.trim())).filter((l, i) => l || rc[i]);
 }
-/** Значение поля для сравнения — то, что прочтётся после записи (t621): отступ и пустая строка в блоке ``` — правка, пробелы в конце вне блока — нет. @param {unknown} v */
-const sameField = (v) => fieldValue(bodyLs(v).join('\n'));
+/**
+ * Значение поля для сравнения — то, что прочтётся после записи (t621): отступ и пустая строка в блоке ``` — правка, пробелы в конце вне блока — нет.
+ * Одиночный \r — как \n: поле ввода само делает из него \n, и нетронутое поле иначе считалось бы правкой (t636, как раздел паспорта в t600). В запись \r так и уходит. @param {unknown} v
+ */
+const sameField = (v) => fieldValue(bodyLs(String(v === undefined || v === null ? '' : v).replace(/\r\n?/g, '\n')).join('\n'));
 
 /**
  * Строки значения поля тела, как они лягут в файл: без пустых и пробелов по краям, пустое — прочерк.
@@ -550,6 +604,14 @@ function refuse(bad, line = '') {
   return Object.assign(new Error(`${msg}${line ? ` (строка «${line.trim().slice(0, 40)}»)` : ''}`), { code: problems[0].code, field: problems[0].fields[0], problems });
 }
 
+/** Заменить del строк с номера at на ins; у новых строк конец eol, у остальных — свой (t638). @param {Parsed} p @param {number} at @param {number} del @param {string[]} ins */
+function put(p, at, del, ins) {
+  p.lines.splice(at, del, ...ins);
+  p.ends.splice(at, del, ...ins.map(() => p.eol));
+}
+/** Текст файла: каждая строка со своим концом, у последней конца нет. @param {Parsed} p */
+const joined = (p) => p.bom + p.lines.map((l, i) => (i < p.lines.length - 1 ? l + (p.ends[i] || p.eol) : l)).join('');
+
 /**
  * Правка полей одного файла. Меняются только строки этих полей.
  * changes: ключи шапки (status, phase, health…), поля тела (what, goal, criteria…), разделы паспорта (transport…), title.
@@ -584,16 +646,16 @@ function update(project, ref, changes) {
       const t = String(value).trim();
       if (!t || /[\r\n]/.test(t)) throw new Error('заголовок — одна непустая строка');
       const tl = titleLine(p);
-      if (tl >= 0) lines[tl] = `# ${t}`; else lines.splice(p.headEnd, 0, `# ${t}`);
+      if (tl >= 0) lines[tl] = `# ${t}`; else put(p, p.headEnd, 0, [`# ${t}`]);
     } else if (HEAD_KEYS[kind].includes(key)) {
       const v = headValue(value);
       const h = (p.head || []).find((x) => x.key === key);
       const line = v ? `${key}: ${v}` : `${key}:`;
       if (h) lines[h.line] = line;
-      else { lines.splice(p.headEnd - 1, 0, line); }
+      else put(p, p.headEnd - 1, 0, [line]);
     } else if (key in fields) {
       const ls = key === 'criteria'
-        ? (Array.isArray(value) ? value : []).map((c) => { const t = String(c && c.text || '').trim(); if (!t || /[\r\n]/.test(t)) throw new Error('признак — одна непустая строка'); return `- [${c.done ? 'x' : ' '}] ${t}`; })
+        ? (Array.isArray(value) ? value : []).map((c) => { const t = String(c && c.text || '').trim(); if (!t || /\n/.test(t)) throw new Error('признак — одна непустая строка'); return `- [${c.done ? 'x' : ' '}] ${t}`; })
         : bodyLines(value, fields, key);
       if (key !== 'criteria') want[key] = fieldValue(ls.join('\n'));
       const sp = spans(p, fields)[key];
@@ -603,12 +665,12 @@ function update(project, ref, changes) {
       else if (sp) {
         // Подпись оставляем как написал человек (регистр), меняем только текст после двоеточия.
         first[0] = first[0].replace(/^[^:]*:/, lines[sp.start].slice(0, lines[sp.start].indexOf(':') + 1));
-        lines.splice(sp.start, sp.end - sp.start, ...first);
+        put(p, sp.start, sp.end - sp.start, first);
       } else {
         const all = Object.values(spans(p, fields));
         const tl = titleLine(p);
         const at = all.length ? Math.max(...all.map((s) => s.end)) : tl >= 0 ? tl + 1 : lines.length;
-        lines.splice(at, 0, ...first);
+        put(p, at, 0, first);
       }
     } else if (kind === 'passport' && key in PASSPORT) {
       // Заголовки внутри блока кода — текст раздела (t607); незакрытый ``` и заголовки вне блока отклонены выше.
@@ -622,15 +684,15 @@ function update(project, ref, changes) {
         while (end > s.start + 1 && !lines[end - 1].trim()) end--;
         let from = s.start + 1;
         while (ls.length && from < end && !lines[from].trim()) from++;
-        lines.splice(from, end - from, ...ls);
+        put(p, from, end - from, ls);
       } else {
         while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-        lines.push('', `## ${PASSPORT[/** @type {keyof PASSPORT} */ (key)]}`, ...ls, '');
+        put(p, lines.length, 0, ['', `## ${PASSPORT[/** @type {keyof PASSPORT} */ (key)]}`, ...ls, '']);
       }
     } else throw new Error(`поле «${key}» у ${ref} не правится программой`);
-    Object.assign(p, parse(p.bom + lines.join(p.eol)), { lines });
+    Object.assign(p, parse(joined(p)), { lines });
   }
-  const text = p.bom + lines.join(p.eol);
+  const text = joined(p);
   const after = item(kind, num, path.basename(file), text);
   if ('error' in after) throw new Error(`правка не принята: ${after.error}`);
   // Записанное читается тем же текстом. Иначе ``` без пары выше в файле взяла бы в пару ограждение нового блока — не пишем.
