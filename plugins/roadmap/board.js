@@ -849,14 +849,17 @@ function section(d) {
 /**
  * Объединить повтор с более старой записью (t835, кнопка «объединить» в окне — программа сама не сливает).
  * В старую: repeats — карта повтора (поле card или номера t<N> из заголовка) и его repeats; files — объединение;
- * в конец тела — заголовок повтора с его номером и весь его текст. Файл повтора удаляется: всё, что в нём было по делу, уже в старой.
+ * в конец тела — заголовок повтора с его номером и весь его текст. Файл повтора убирает remove: всё, что в нём было по делу, уже в старой.
  * retitle(старый заголовок, заголовок повтора) — новый заголовок старой: в него дописывается обстоятельство повтора (t922: +1 попадание подбора).
  * Общий раздел (section) не объединяется ни как повтор, ни как старая: t922 — склейка с ним снимает попадания.
+ * remove(файл повтора) — по умолчанию удалить; окно передаёт свою и кладёт файл в Корзину (t1032): шапка повтора (how, date, agent, until)
+ * в старую не переходит, ошибочное объединение откатывается возвратом файла из Корзины.
  * @param {string} project @param {string} from повтор d<N> @param {string} into старая запись d<N>
  * @param {(old: string, rep: string) => string} [retitle]
+ * @param {(file: string) => void} [remove]
  * @returns {Decision & { repointed: string[] }} repointed — паттерны, в from которых повтор заменён старой (t1014)
  */
-function merge(project, from, into, retitle) {
+function merge(project, from, into, retitle, remove = fs.unlinkSync) {
   if (![from, into].every((r) => /^d\d+$/.test(String(r))) || from === into) throw new Error('объединяются две разные записи d<N>');
   const [src, dst] = [from, into].map((ref) => {
     const at = locate(project, ref);
@@ -937,7 +940,7 @@ function merge(project, from, into, retitle) {
     save(at.file, t);
     repointed.push(d.id);
   }
-  try { fs.unlinkSync(src.file); } catch (e) {
+  try { remove(src.file); } catch (e) {
     throw new Error(`${into} дописана, файл ${path.basename(src.file)} не удалён: ${e instanceof Error ? e.message : e}. Удалите его сами или нажмите «объединить» ещё раз`);
   }
   return Object.assign(/** @type {Decision} */ (after.item), { repointed });

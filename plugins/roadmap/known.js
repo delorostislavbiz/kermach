@@ -445,15 +445,18 @@ let fresh = null;
 /**
  * Пометки записей проекта для окна, без записи на диск (окно подключит t990 или следующая карта).
  * Плюс записи базы с метками конфликта git — kind conflict, id ''. @param {string} dataDir @param {string} project @param {import('./board').Board} [b]
+ * @param {{ cut?: number }} [info] — сюда cut: сколько старых файлов базы не прочитано (t1012, окно пишет об этом строкой)
  * @returns {Mark[]}
  */
-function marks(dataDir, project, b) {
+function marks(dataDir, project, b, info) {
   const dir = dirOf(dataDir, false);
   if (!fs.existsSync(dir)) return [];
   const st = readState(dir);
   const pb = b || board.read(project);
   const out = syncOne(dir, st, project, pb, false, approvedOf(dataDir, project, pb), ownerOf(st, project, false));
-  for (const x of list(dir).conflicts) out.push(mark('', x, 'conflict', 'conflict', { s: x }));
+  const r = list(dir);
+  for (const x of r.conflicts) out.push(mark('', x, 'conflict', 'conflict', { s: x }));
+  if (info) info.cut = r.cut;
   return out;
 }
 

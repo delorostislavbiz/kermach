@@ -843,23 +843,31 @@ module.exports = (ctx) => {
       }
       // Пометки общей базы для экрана записей (t991): по запросу окна, не в snapshot — marks читает все s<N>.md базы.
       // Битый state.json или ссылка наружу — warn: экран открывается и пишет предупреждение.
-      if (cmd === 'known') { try { return { marks: known.marks(ctx.dataDir, project) }; } catch (e) { return { marks: [], warn: why(e) }; } }
+      // cut (t1012) — сколько старых файлов базы не прочитано: окно пишет строку, иначе обрезка видна только в known.md.
+      if (cmd === 'known') { try { const info = { cut: 0 }; return { marks: known.marks(ctx.dataDir, project, undefined, info), cut: info.cut, max: known.MAX_FILES }; } catch (e) { return { marks: [], warn: why(e) }; } }
       if (cmd === 'knownDrop' || cmd === 'knownBack') return knownAct(cmd, String(args[0] || ''));
-      // «Объединить» в списке записей (t835): повтор from дописывается в старую into, в её название — обстоятельство повтора, файл повтора удаляется.
-      if (cmd === 'merge') {
+      // «Объединить» в списке записей (t835): повтор from дописывается в старую into, в её название — обстоятельство повтора,
+      // файл повтора — в Корзину (t1032): ошибочное объединение откатывается возвратом файла и правкой старой записи.
+      if (cmd === 'merge') return (async () => {
         const [from, into] = args.map(String);
         try {
           // t1014: какие паттерны были утверждены до объединения — merge меняет их from, утверждение снимается, человеку это видно в журнале.
           /** @type {Set<string>} */
           let was = new Set();
           try { was = new Set(patterns.served(ctx.dataDir, project, board.read(project)).all.map((d) => d.id)); } catch { /* доска не читается — merge сам скажет */ }
-          const item = board.merge(project, from, into, prompt.mergeTitle);
+          let rep = '';
+          const item = board.merge(project, from, into, prompt.mergeTitle, (f) => { rep = f; });
           const lost = [...item.repointed, ...(item.type === patterns.PATTERN ? [into] : [])].filter((id) => was.has(id));
           ctx.log(`${from} объединена с ${into}: повторы ${item.repeats.join(', ') || 'нет'}; название «${item.title}»`
             + `${lost.length ? `; утверждение снято: ${lost.join(', ')} — from поменялся, утвердите заново` : ''}`);
+          // Повторное «объединить» доделает: тело в старую второй раз не дописывается (строка «<заголовок> (dN):» уже есть).
+          try { await require('electron').shell.trashItem(rep); } catch (e) {
+            throw new Error(`${into} дописана, файл ${path.basename(rep)} не ушёл в Корзину: ${why(e)}. Нажмите «объединить» ещё раз`);
+          }
+          ctx.log(`${path.basename(rep)} (повтор ${from}) — в Корзину`);
           return { item };
         } catch (e) { return { error: String((e && /** @type {any} */ (e).message) || e) }; }
-      }
+      })();
       // «Не похоже» (t969): в шапку from — differs: other, пометку этой пары alikeNotes больше не ставит.
       if (cmd === 'differ') {
         const [from, other] = args.map(String);

@@ -65,16 +65,17 @@ function roadmapSetup(host) {
     : d.type === 'паттерн' ? ['patt', T('dPatt', 'ПАТТЕРН')] : ['', T('dDec', 'РЕШЕНИЕ')]);
   /**
    * Пометки записи (t833): догадка, отменена, срок вышел — агенту карты отменённая и просроченная не подаются; повторы — карты, где причина встретилась снова (t835).
-   * fmt — вид даты: форма карты даёт короткий «15.10» (t859), иначе ГГГГ-ММ-ДД. @param {any} d @param {(s: string) => string} [fmt]
+   * fmt — вид даты: форма карты даёт короткий «15.10» (t859), иначе ГГГГ-ММ-ДД. full — отзывы словами, для подсказки (t1009).
+   * @param {any} d @param {(s: string) => string} [fmt] @param {boolean} [full]
    */
-  const dMarks = (d, fmt = (s) => s) => {
+  const dMarks = (d, fmt = (s) => s, full = false) => {
     const pad = (/** @type {number} */ n) => String(n).padStart(2, '0');
     const now = new Date();
     const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
     return [d.how === 'догадка' ? T('dGuess', 'догадка') : '', d.cancelled ? T('dCancelled', 'отменена {d}', { d: fmt(d.cancelled) }) : '',
       !d.cancelled && d.until && d.until < today ? T('dExpired', 'срок вышел {d}', { d: fmt(d.until) }) : '',
       d.repeats && d.repeats.length ? T('dRepeats', 'повторы: {list}', { list: d.repeats.join(', ') }) : '',
-      d.wrong && d.wrong.length ? T('dWrong', 'неверна: {list}', { list: d.wrong.join(', ') }) : '', useMark(d)].filter(Boolean);
+      d.wrong && d.wrong.length ? T('dWrong', 'неверна: {list}', { list: d.wrong.join(', ') }) : '', useMark(d, full)].filter(Boolean);
   };
   /** @type {WeakMap<object, any>} */
   const useMemo = new WeakMap();
@@ -114,10 +115,15 @@ function roadmapSetup(host) {
     useMemo.set(b, u);
     return u;
   };
-  /** Пометка отзывов у записи (t837): нет ни одного — пусто. @param {any} d */
-  const useMark = (d) => {
+  /**
+   * Пометка отзывов у записи (t837): нет ни одного — пусто. В строке — короткая «отзывы 1/0/1», иначе многоточие срезает её на узком окне (t1009);
+   * full — расшифровка для подсказки. @param {any} d @param {boolean} [full]
+   */
+  const useMark = (d, full = false) => {
     const n = last && got(useOf(last).per, d.id);
-    return n ? T('dUse', 'отзывы: помогла {ok}, не пригодилась {no}, неверна {bad}', { ok: n[0], no: n[1], bad: n[2] }) : '';
+    if (!n) return '';
+    const v = { ok: n[0], no: n[1], bad: n[2] };
+    return full ? T('dUse', 'отзывы: помогла {ok}, не пригодилась {no}, неверна {bad}', v) : T('dUseS', 'отзывы {ok}/{no}/{bad}', v);
   };
   /** Ждёт человека (t987): агент отметил «неверна» с причиной (t836), запись не отменена — агентам она не подаётся. @param {any} d */
   const isWrong = (d) => !!(d.wrong && d.wrong.length && !d.cancelled);
@@ -292,7 +298,8 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .f.clash textarea, #plugin-roadmap-panel .f.clash select { border-color: var(--rm-warn); }
     #plugin-roadmap-panel .sels { display: flex; flex-wrap: wrap; gap: 6px; }
     #plugin-roadmap-panel .sels select { flex: 0 0 auto; max-width: 100%; height: 28px; padding: 0 4px; background: var(--input, transparent); border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 5px; }
-    #plugin-roadmap-panel .seg { display: inline-flex; flex-wrap: wrap; align-self: flex-start; max-width: 100%; border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 5px; overflow: hidden; }
+    /* t991, t1023: overflow: hidden снимает нижний предел высоты — в колонке flex на длинном списке .seg сжимался до 2 px; не сжимается нигде. */
+    #plugin-roadmap-panel .seg { display: inline-flex; flex-wrap: wrap; flex-shrink: 0; align-self: flex-start; max-width: 100%; border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 5px; overflow: hidden; }
     #plugin-roadmap-panel .seg button { height: 26px; padding: 0 10px; border: 0; background: transparent; color: var(--muted); font: inherit; white-space: nowrap; }
     #plugin-roadmap-panel .seg button.on { background: var(--accent); color: var(--on-accent, #fff); font-weight: 600; }
     /* Запись в форме карты — одной строкой (t859): длинные тема и пометки обрезаются многоточием, целиком — в подсказке. */
@@ -372,8 +379,6 @@ function roadmapSetup(host) {
       background: var(--input, transparent); border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 5px; }
     #plugin-roadmap-panel .rdecs .dflt input:focus { outline: 0; border-color: var(--focus, var(--rm-info)); }
     #plugin-roadmap-panel .rdecs .dlist { display: flex; flex-direction: column; gap: 8px; }
-    /* t991: длинный список сжимал переключатель вида до 2 px (overflow: hidden снимает нижний предел высоты) — кнопок не было видно. */
-    #plugin-roadmap-panel .rdecs > .seg { flex-shrink: 0; }
     #plugin-roadmap-panel .rdecs .drec { padding: 9px 12px; display: flex; flex-direction: column; gap: 6px; }
     #plugin-roadmap-panel .rdecs .dh { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
     #plugin-roadmap-panel .rdecs .dt { flex-shrink: 0; padding: 0 6px; border-radius: 4px; line-height: 18px; font-size: 11px; font-weight: 700;
@@ -508,9 +513,10 @@ function roadmapSetup(host) {
   /**
    * Пометки общей базы (t991) — команда known главной части, по открытию экрана записей и по каждой доске, пока он открыт (не в доске: marks читает все s<N>.md).
    * warn — база не читается (битый state.json). seq — ответ на старый запрос не затирает новый.
-   * @type {{ marks: { id: string, s: string, kind: string, why: string }[], warn: string, seq: number }}
+   * cut, max (t1012) — сколько старых файлов базы не прочитано и сколько читается: база больше предела.
+   * @type {{ marks: { id: string, s: string, kind: string, why: string }[], warn: string, cut: number, max: number, seq: number }}
    */
-  const knownSt = { marks: [], warn: '', seq: 0 };
+  const knownSt = { marks: [], warn: '', cut: 0, max: 0, seq: 0 };
   /** «Убрать» / «снова в общую базу» (t991): запись, у которой команда ушла и ответа ещё нет. */
   let knownBusy = '';
   /** «Собрать в паттерн» / «не паттерн» / «утвердить» (t1005): запись, у которой команда ушла и ответа ещё нет. */
@@ -1031,7 +1037,8 @@ function roadmapSetup(host) {
     q('.decs').innerHTML = decs.length
       ? decs.map((/** @type {any} */ d) => {
         const dm = [d.id, ...dMarks(d, day), day(d.date), d.agent].filter(Boolean).join(' · ');
-        return `<div class="dec" data-dec="${esc(d.id)}" title="${esc([d.title || d.id, dm, d.text || '', d.stack && d.stack.length ? `stack: ${d.stack.join(', ')}` : '', d.portable ? `${T('dc.portable', 'Переносимый вывод')}:\n${d.portable}` : ''].filter(Boolean).join('\n'))}"><span class="dt ${dLabel(d)[0]}">${esc(dLabel(d)[1])}</span>`
+        const dmFull = [d.id, ...dMarks(d, day, true), day(d.date), d.agent].filter(Boolean).join(' · ');
+        return `<div class="dec" data-dec="${esc(d.id)}" title="${esc([d.title || d.id, dmFull, d.text || '', d.stack && d.stack.length ? `stack: ${d.stack.join(', ')}` : '', d.portable ? `${T('dc.portable', 'Переносимый вывод')}:\n${d.portable}` : ''].filter(Boolean).join('\n'))}"><span class="dt ${dLabel(d)[0]}">${esc(dLabel(d)[1])}</span>`
           + `<span class="dx">${esc(d.title || d.id)}</span><span class="dm">${esc(dm)}</span></div>`;
       }).join('')
       : `<div class="none">${esc(T('noDecs', 'пока нет'))}</div>`;
@@ -1954,9 +1961,10 @@ function roadmapSetup(host) {
     if (!mergeErr) await load();
     else if (dc) paintDecs();
   };
-  /** Предупреждения базы над списком (t991): state.json не читается, s<N>.md с метками конфликта git. */
+  /** Предупреждения базы над списком (t991): state.json не читается, s<N>.md с метками конфликта git; на виде «общая база» — обрезка (t1012). */
   const knownWarn = () => (knownSt.warn ? `<div class="note warn" data-n="known">${esc(T('dc.kWarn', 'Общая база не читается: {error}. Записи проекта в неё не уходят, другие проекты их не получают', { error: knownSt.warn }))}</div>` : '')
-    + knownSt.marks.filter((m) => m.kind === 'conflict').map((m) => `<div class="note warn" data-n="kconflict">${esc(T('dc.kConflict', 'В общей базе {file} с метками конфликта git — агентам не подаётся, поправьте файл', { file: `${m.s}.md` }))}</div>`).join('');
+    + knownSt.marks.filter((m) => m.kind === 'conflict').map((m) => `<div class="note warn" data-n="kconflict">${esc(T('dc.kConflict', 'В общей базе {file} с метками конфликта git — агентам не подаётся, поправьте файл', { file: `${m.s}.md` }))}</div>`).join('')
+    + (knownSt.cut && dc && dc.type === 'known' ? `<div class="note warn" data-n="kcut">${esc(T('dc.kCut', 'В общей базе больше {max} файлов: {n} старых не прочитано, агентам они не подаются', { n: knownSt.cut, max: knownSt.max }))}</div>` : '');
   /** Пометки базы заново; доску не ждёт — экран перерисуется по ответу. */
   const loadKnown = async () => {
     const n = ++knownSt.seq;
@@ -1964,6 +1972,8 @@ function roadmapSetup(host) {
     if (n !== knownSt.seq) return;
     knownSt.marks = r && Array.isArray(r.marks) ? r.marks : [];
     knownSt.warn = r && (r.warn || r.error) ? String(r.warn || r.error) : '';
+    knownSt.cut = r && r.cut > 0 ? Number(r.cut) : 0;
+    knownSt.max = r && r.max > 0 ? Number(r.max) : 0;
     if (!stopped && dc) paintDecs();
   };
   /** «Убрать» или «снова в общую базу» (t991): команда главной части, потом пометки заново. @param {string} id @param {'knownDrop' | 'knownBack'} cmd */
@@ -1989,7 +1999,7 @@ function roadmapSetup(host) {
     for (const b of decsEl.querySelectorAll('[data-dtype]')) b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.dtype === st.type);
     // «Общая база» (t991) — только когда у записей проекта есть пометки базы или она не читается.
     const kb = /** @type {HTMLElement | null} */ (decsEl.querySelector('[data-dtype="known"]'));
-    if (kb) kb.hidden = !knownSt.marks.length && !knownSt.warn && st.type !== 'known';
+    if (kb) kb.hidden = !knownSt.marks.length && !knownSt.warn && !knownSt.cut && st.type !== 'known';
     // «Паттерны» (t1005) — только когда на доске есть паттерн или кандидат.
     const pb = /** @type {HTMLElement | null} */ (decsEl.querySelector('[data-dtype="patt"]'));
     if (pb) pb.hidden = !all.some((/** @type {any} */ d) => d.type === 'паттерн') && !(last && Array.isArray(last.patternC) && last.patternC.length) && st.type !== 'patt';
@@ -2004,7 +2014,8 @@ function roadmapSetup(host) {
         + d.files.map((/** @type {string} */ f) => `<span>${esc(f)}</span>`).join('');
       // Пометки первыми (t859): строка обрезается с конца, пометки не должны пропасть.
       const dm = [...dMarks(d, day), day(d.date), d.agent].filter(Boolean).join(' · ');
-      html += `<div class="box drec" data-id="${esc(d.id)}"><div class="dh" title="${esc(`${d.title || d.id}\n${dm}`)}"><span class="dt ${cls}">${esc(label)}</span>`
+      const dmFull = [...dMarks(d, day, true), day(d.date), d.agent].filter(Boolean).join(' · ');
+      html += `<div class="box drec" data-id="${esc(d.id)}"><div class="dh" title="${esc(`${d.title || d.id}\n${dmFull}`)}"><span class="dt ${cls}">${esc(label)}</span>`
         + `<span class="tt">${esc(d.title || d.id)}</span><span class="dm">${esc(dm)}</span></div>`
         + (d.text ? `<div class="dtx">${esc(d.text)}</div>` : '') + portRow(d) + knownRow(d)
         + (ref ? `<div class="dref">${ref}</div>` : '') + wrongRow(d) + pactRow(d) + pattRow(d) + likeRow(d) + '</div>';
