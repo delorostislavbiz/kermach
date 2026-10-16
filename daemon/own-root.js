@@ -1,7 +1,8 @@
 // @ts-check
 // Свой ли процесс сидит под номером корня терминала (t141). Между «корень жив» и taskkill /T номер может достаться чужому:
 // node-pty закрывает дескриптор процесса сразу после его выхода (conpty.cc, SetupExitCallback), а exitCode в JS появляется позже.
-// Сверка — время запуска процесса под номером против времени pty.spawn: он синхронный, корень создаётся внутри него.
+// Сверка — время запуска процесса под номером против окна от начала pty.spawn до времени, когда номер корня стал виден (whenPid):
+// в node-pty 1.1 корень создаётся внутри pty.spawn, в 1.2 — чуть позже, когда подключился поток вывода (t909).
 // Как в Орке (daemon-cgroup-scope, verifyTreeKillTarget === 'own', MIT), только по времени запуска, а не по цепочке родителей.
 // Время запуска читает PowerShell (Get-Process): wmic в Windows 11 нет. Один запуск — 0,4–0,85 с, поэтому номера,
 // спрошенные в одни 20 мс («Остановить всё»), идут одним запуском.
@@ -14,6 +15,9 @@ const GATHER_MS = 20;
 const QUERY_MS = 3000;
 /** Допуск между временем pty.spawn и временем запуска процесса: часы одни, разница — миллисекунды. */
 const SKEW_MS = 1000;
+/** Сколько ждать номер корня: node-pty 1.2 ждёт поток вывода до 5 с (CONNECTION_TIMEOUT, windowsPtyAgent.js), сверху запас. */
+const PID_WAIT_MS = 6000;
+const PID_POLL_MS = 5;
 
 /**
  * Время запуска процессов. Номер → мс (Unix) или NaN — процесс есть, время не читается (чужой пользователь, система).
@@ -53,7 +57,7 @@ function batched(pid) {
 
 /**
  * Свой ли процесс под номером.
- * own — время запуска внутри [from − SKEW_MS, to + SKEW_MS], где from..to — вызов pty.spawn;
+ * own — время запуска внутри [from − SKEW_MS, to + SKEW_MS], где from..to — от начала pty.spawn до whenPid;
  * foreign — процесс есть, время другое или не читается (свои дети того же пользователя читаются всегда);
  * absent — процесса с таким номером нет; unknown — PowerShell не ответил.
  * @param {number} pid @param {number} from @param {number} to @param {{ timeoutMs?: number }} [o] timeoutMs — отдельный запуск (для проб)
@@ -68,4 +72,31 @@ async function check(pid, from, to, o = {}) {
   return { verdict: started >= from - SKEW_MS && started <= to + SKEW_MS ? 'own' : 'foreign', started };
 }
 
-module.exports = { check, query, SKEW_MS, QUERY_MS };
+/**
+ * Номер корня терминала и время, когда он стал виден (t909). node-pty 1.1 даёт pty.pid сразу после spawn,
+ * 1.2 — только после подключения потока вывода: обычно через 25–55 мс, под нагрузкой дольше.
+ * Корень создаётся раньше, чем номер виден, поэтому at — верхняя граница окна сверки. Терминал вышел без номера или
+ * номер не появился за maxMs — pid 0.
+ * @param {{ pid: number, onExit: (cb: () => void) => { dispose: () => void } }} p терминал node-pty
+ * @param {number} [maxMs]
+ * @returns {Promise<{ pid: number, at: number }>}
+ */
+function whenPid(p, maxMs = PID_WAIT_MS) {
+  if (p.pid) return Promise.resolve({ pid: p.pid, at: Date.now() });
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    let exited = false;
+    const sub = p.onExit(() => { exited = true; });
+    const tick = () => {
+      if (p.pid || exited || Date.now() - t0 >= maxMs) {
+        try { sub.dispose(); } catch {}
+        resolve({ pid: p.pid || 0, at: Date.now() });
+        return;
+      }
+      setTimeout(tick, PID_POLL_MS);
+    };
+    tick();
+  });
+}
+
+module.exports = { check, query, whenPid, SKEW_MS, QUERY_MS, PID_WAIT_MS };

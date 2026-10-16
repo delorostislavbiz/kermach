@@ -50,7 +50,7 @@
    * @typedef {{ focus: () => void, close: () => void, look?: (f: { color: string, icon: string }) => void }} PageTab
    * runs — агент, запущенный руками во вкладке-терминале (t406): claude, codex, agent:<id> или ''. Вид kind остаётся shell — так вкладку запустили.
    * pics — получатель снимка со страницы (t416), от главного процесса.
-   * @typedef {{ sid: string, kind: string, runs?: string, pics?: boolean, title: string, color: string, icon: string, alive: boolean, lost?: boolean, failed?: string, state: string, pane: HTMLElement, x: any, page?: PageTab, pos?: number, url?: string }} Tab
+   * @typedef {{ sid: string, kind: string, runs?: string, pics?: boolean, title: string, color: string, icon: string, alive: boolean, lost?: boolean, failed?: string, state: string, pane: HTMLElement, x: any, page?: PageTab, pos?: number, url?: string, claudeSessionId?: string, codexSessionId?: string, bypass?: boolean }} Tab
    */
   /** @type {Map<string, Tab>} */
   const tabs = new Map();
@@ -152,7 +152,7 @@
       tabKey: (/** @type {string} */ kind, /** @type {boolean} */ shift) => (kind === 'recent' ? walkRecent(shift ? -1 : 1) : stepTab(kind === 'next' ? 1 : -1)),
     }, fontPx());
     /** @type {Tab} */
-    const tab = { sid, kind: s.kind, runs: String(s.runs || ''), pics: !!s.pics, title: s.title, color: colorOf(s.color), icon: s.icon, alive: true, state: String(s.state || ''), pane, x };
+    const tab = { sid, kind: s.kind, runs: String(s.runs || ''), pics: !!s.pics, title: s.title, color: colorOf(s.color), icon: s.icon, alive: true, state: String(s.state || ''), pane, x, claudeSessionId: s.claudeSessionId, codexSessionId: s.codexSessionId, bypass: !!s.bypass };
     tabs.set(sid, tab);
     const early = pending.get(sid);
     if (early) { for (const d of early) x.write(d); pending.delete(sid); }
@@ -536,12 +536,14 @@
     // В раскладке (t397) вкладка в фокусе — on, остальные видимые в частях — vis (отмечены слабее).
     const cls = (/** @type {Tab} */ x, /** @type {string} */ k) => `${x.sid === active ? ' on' : lay && lay.parts.includes(x.sid) ? ' vis' : ''}${k === 'waiting' ? ' need' : ''}`;
     // Вкладка сайта (t172): вторая строка — адрес страницы без https://, а не метка состояния.
+    // Claude без вопросов о разрешениях (t851): молния после имени — в списке слева и на вкладке полосы, слово — в подсказке.
+    const by = (/** @type {Tab} */ x) => (x.bypass ? `<span class="by" title="${esc(I18n.t('page.claudeBypass', 'Claude без вопросов о разрешениях'))}" style="display:inline-flex;vertical-align:-2px;margin-left:4px">${svg('bolt', '#ECA855', 12)}</span>` : '');
     const addr = (/** @type {Tab} */ x) => `<div class="st url" title="${esc(x.url || '')}">${esc((x.url || '').replace(/^https?:\/\//i, ''))}</div>`;
     $('list').innerHTML = list.map((x) => { const k = stateOf(x); return `<div class="term${x.page ? ' site' : ''}${cls(x, k)}" data-sid="${esc(x.sid)}">
       <div class="tile"><div class="strip" style="background:${x.color}"></div>${svg(x.icon, x.color, 18)}</div>
-      <div class="text"><div class="n">${esc(x.title)}</div>${x.page ? addr(x) : x.connecting ? `<div class="st">${I18n.t('page.podklyuchaetsya', 'подключается…')}</div>` : st(x, k)}</div></div>`; }).join('');
+      <div class="text"><div class="n">${esc(x.title)}${by(x)}</div>${x.page ? addr(x) : x.connecting ? `<div class="st">${I18n.t('page.podklyuchaetsya', 'подключается…')}</div>` : st(x, k)}</div></div>`; }).join('');
     $('tabs').innerHTML = list.map((x) => { const k = stateOf(x); return `<div class="tab${cls(x, k)}" data-sid="${esc(x.sid)}" style="--c:${x.color}"${k ? ` data-state="${k}" title="${hint(x, k)}"` : ''}>
-      <div class="tt"><b style="background:${x.color}"></b>${svg(x.icon, x.color, 14)}</div><span>${esc(x.title)}</span>${k ? glyph(k) : ''}<span class="x" data-close title="${I18n.t('common.close', 'Закрыть')}">${svg('close', (window.Theme && Theme.color('muted')) || '#8D91A5', 12, 2)}</span><i style="background:${x.color}"></i></div>`; }).join('');
+      <div class="tt"><b style="background:${x.color}"></b>${svg(x.icon, x.color, 14)}</div><span>${esc(x.title)}</span>${by(x)}${k ? glyph(k) : ''}<span class="x" data-close title="${I18n.t('common.close', 'Закрыть')}">${svg('close', (window.Theme && Theme.color('muted')) || '#8D91A5', 12, 2)}</span><i style="background:${x.color}"></i></div>`; }).join('');
     // Шапка карточки терминала (Д-9): точка цвета, имя, «· состояние». Видна только в новом виде (ui-kermach-project.css).
     for (const x of list) {
       if (x.page || !x.pane) continue;
@@ -917,13 +919,14 @@
    * Новый терминал вида kind — вкладкой, и сразу на него. Ответ — { session } или { error }.
    * opts — параметры вкладки: { agent } у пункта агента Claude (t251), { kind, args, … } от плагина (host.openTab, t253).
    * fromPlugin — ошибка уходит плагину, а не во вкладку окна. focus false — вкладка встаёт в полосу, выбранная остаётся (t706).
-   * @param {string} kind @param {any} [opts] @param {boolean} [fromPlugin] @param {boolean} [focus]
+   * Не от плагина — вкладку открыл человек: human: true, по нему ядро берёт настройку проекта «без вопросов о разрешениях»; bypass — пункт меню (t851).
+   * @param {string} kind @param {any} [opts] @param {boolean} [fromPlugin] @param {boolean} [focus] @param {boolean} [bypass]
    */
-  async function create(kind, opts, fromPlugin, focus) {
+  async function create(kind, opts, fromPlugin, focus, bypass) {
     creating++;
     try {
       const { cols, rows } = size();
-      const r = await t.term.create(kind, cols, rows, opts);
+      const r = await t.term.create(kind, cols, rows, fromPlugin ? opts : { ...opts, human: true, ...(bypass ? { bypass: true } : {}) });
       if (r.error) {
         t.log(`не открыл ${kind}: ${r.error}`);
         if (fromPlugin) return r;
@@ -976,6 +979,18 @@
     el.onclick = () => { closeMenu(); fn(); };
   };
   wireItem($('addClaude'), () => create('claude'));
+  // «Claude без вопросов о разрешениях» (t851) — сразу под «Claude»: вкладка с --dangerously-skip-permissions, в полосе со значком-молнией.
+  {
+    const el = document.createElement('div');
+    el.className = 'item';
+    el.id = 'addClaudeBypass';
+    el.dataset.icon = 'bolt';
+    el.dataset.color = '#2091F6';
+    el.dataset.i18n = 'page.claudeBypass';
+    el.textContent = I18n.t('page.claudeBypass', 'Claude без вопросов о разрешениях');
+    $('addClaude').after(el);
+    wireItem(el, () => create('claude', undefined, false, true, true));
+  }
   wireItem($('addCodex'), () => create('codex'));
   wireItem($('addShell'), () => create('shell'));
   // «Браузер» в полосе вкладок (Д-7) — тот же пункт меню «+», что ставит плагин браузера (addButton('addBrowser')); нет пункта — нет и кнопки.
@@ -1163,11 +1178,12 @@
         if (closing.has(s.sid)) continue;
         const had = tabs.get(s.sid);
         if (had) {
-          had.title = s.title; had.color = colorOf(s.color); had.icon = s.icon; had.state = String(s.state || ''); had.connecting = !!s.connecting; had.runs = String(s.runs || ''); had.pics = !!s.pics;
+          had.title = s.title; had.color = colorOf(s.color); had.icon = s.icon; had.state = String(s.state || ''); had.connecting = !!s.connecting; had.runs = String(s.runs || ''); had.pics = !!s.pics; had.claudeSessionId = s.claudeSessionId; had.codexSessionId = s.codexSessionId; had.bypass = !!s.bypass;
           // Агента узнали в терминале уже после выбора вкладки (t406, ревью): выбрана позже нынешнего получателя — получатель теперь она.
           if (isAgent(had) && lastAgent !== had.sid && recent.lastIndexOf(had.sid) > recent.lastIndexOf(lastAgent)) lastAgent = had.sid;
           // Вышел, пока окно было занято: term:exit уже отметил вкладку, здесь — на случай, если событие разминулось со списком.
-          if (s.alive === false) had.alive = false;
+          // Вкладка из revive сначала пришла «подключается», потом не запустилась (t778): причина с пометкой, как у новой вкладки ниже.
+          if (s.alive === false) { had.alive = false; if (s.failed && had.failed !== s.notice) { had.failed = s.notice; had.x.notice(s.notice); } }
           // Снимок экрана ляжет поверх старого — экран сначала очищается, иначе история задвоится.
           else if (relink.has(s.sid)) {
             had.x.term.reset();
@@ -1340,7 +1356,8 @@
   // не дольше PLUGINS_WAIT_MS (t277): «Лимиты» сразу показывают нижнюю строку, и замер места для демона должен её учесть.
   // Код плагина вызывает terminalusPlugin((host) => …) и получает свои места в окне и список терминалов:
   //   host.bottom — нижняя строка, host.right — правая панель, host.side — низ левой панели (t252); все скрыты, плагин сам снимает hidden;
-  //   host.terminals() — терминалы окна: { sid, kind, title, color, icon, alive, state }, state — код из STATES или '';
+  //   host.terminals() — терминалы окна: { sid, kind, title, color, icon, alive, state, claudeSessionId, codexSessionId }, state — код из STATES или '';
+  //   номер разговора Codex — только у продолженной вкладки (t768);
   //   host.onTerminals(cb) — список изменился;
   //   host.project — { id, name, path, color, icon }; host.log(текст) — строка в main.log;
   //   host.bridge — window.terminalus, term.close в нём убирает и вкладку из полосы (t705); host.pages — addTab, removeTab, setTab, show, isActive, addButton, removeButton (вкладка-страница в общей полосе и пункт меню «+», t220).
@@ -1360,6 +1377,22 @@
   const pluginFailed = new Set();
   /** Подписки host.on включённого плагина: id → функции снятия (t256). @type {Map<string, (() => void)[]>} */
   const pluginOffs = new Map();
+  /** Свои плагины (папка пользователя, main\plugins.js own), пока выключены: код не грузится вовсе, тег — когда человек включил (t855). @type {Map<string, { id: string, url: string }>} */
+  const ownLater = new Map();
+  /** Тег <script> кода плагина; ответ — когда код отработал или не загрузился. @param {{ id: string, url: string }} pl @returns {Promise<null>} */
+  const loadPlugin = (pl) => {
+    const s = document.createElement('script');
+    s.src = pl.url;
+    // Скрипты выполняются в порядке списка, а не загрузки: строки внизу левой панели всегда в одном порядке (t520).
+    s.async = false;
+    s.dataset.plugin = pl.id;
+    const r = new Promise((done) => {
+      s.onload = () => { if (!pluginFailed.has(pl.id)) t.log(`плагин ${pl.id}: загружен`); done(null); };
+      s.onerror = () => { t.log(`плагин ${pl.id}: не загрузился (${pl.url})`); done(null); };
+    });
+    document.body.appendChild(s);
+    return /** @type {Promise<null>} */ (r);
+  };
   w.terminalusPlugin = (/** @type {(host: any) => void} */ setup) => {
     const s = /** @type {HTMLScriptElement | null} */ (document.currentScript);
     const id = s && s.dataset.plugin;
@@ -1378,7 +1411,7 @@
       right: $('right'),
       side: $('sideFoot'),
       terminals: () => [...tabs.values()].filter((x) => !x.sid.startsWith('-') && !x.page)
-        .map((x) => ({ sid: x.sid, kind: x.kind, title: x.title, color: x.color, icon: x.icon, alive: x.alive, state: stateOf(x) })),
+        .map((x) => ({ sid: x.sid, kind: x.kind, title: x.title, color: x.color, icon: x.icon, alive: x.alive, state: stateOf(x), claudeSessionId: x.claudeSessionId, codexSessionId: x.codexSessionId })),
       onTerminals: (/** @type {() => void} */ cb) => { if (typeof cb === 'function') watchers.push({ id, cb }); },
       log: (/** @type {string} */ m) => t.log(`плагин ${id}: ${m}`),
       /** Мост окна (window.terminalus) и места для вкладок-страниц (t220): вкладка в полосе, пункт меню «+». term.close убирает и вкладку (t705). */
@@ -1386,12 +1419,16 @@
       pages: pageApi,
       call: (/** @type {string} */ cmd, /** @type {any[]} */ ...args) => t.plugin.call(id, cmd, ...args),
       /**
-       * Открыть вкладку и сразу на неё (t253): { kind, args, cwd, env, title, prompt, focus }. kind — claude, codex, shell или agent:<id>;
-       * prompt — первое сообщение аргументом командной строки; focus: false — без перехода на неё (t706). Проверяет главный процесс (terminals.js, checkExtra). Ответ { session } или { error }.
+       * Открыть вкладку и сразу на неё (t253): { kind, args, cwd, env, title, prompt, focus, agent, resume }. kind — claude, codex, shell или agent:<id>;
+       * prompt — первое сообщение аргументом командной строки; focus: false — без перехода на неё (t706).
+       * resume — номер разговора Claude или Codex: claude --resume или codex resume, разговора на диске нет — { error } (t768).
+       * Проверяет главный процесс (terminals.js, checkExtra). Ответ { session } или { error }.
        */
       openTab: async (/** @type {any} */ o) => {
         if (!o || typeof o !== 'object') return { error: I18n.t('page.opentabZhdalObektKind', 'openTab: ждал объект { kind, ... }') };
         const { kind, focus, ...rest } = o;
+        // Без вопросов о разрешениях (t851) — только выбор человека: поля human и bypass плагину не даны.
+        if ('human' in rest || 'bypass' in rest) return { error: I18n.t('page.bypassHuman', 'Режим «без вопросов о разрешениях» включает только человек: пункт меню «+» или настройка проекта') };
         return create(String(kind), rest, true, focus !== false);
       },
       on: (/** @type {string} */ event, /** @type {(payload: any) => void} */ cb) => {
@@ -1430,6 +1467,13 @@
     t.log(`плагин ${id}: выключен`);
   };
   SD.onSettings((/** @type {any} */ s) => {
+    // Свой плагин включили (t855) — только теперь его код: тег <script>, setup запустится сам (want уже да).
+    for (const [id, pl] of ownLater) {
+      if (!(s.plugins && s.plugins[id] === true)) continue;
+      ownLater.delete(id);
+      want.set(id, true);
+      loadPlugin(pl);
+    }
     for (const id of plugins.keys()) {
       const on = s.plugins && typeof s.plugins[id] === 'boolean' ? s.plugins[id] : defaultOn.get(id) !== false;
       want.set(id, on);
@@ -1441,22 +1485,14 @@
     if (id) { pluginFailed.add(id); t.log(`плагин ${id}: ошибка в коде: ${ev.message} (строка ${ev.lineno})`); }
   });
   /** Код плагинов загружен или не загрузился — все теги <script> отработали (t277). @type {Promise<unknown>} */
-  const pluginsLoaded = t.plugins.list().then((/** @type {{ id: string, name: string, url: string, enabled?: boolean, defaultOn?: boolean }[]} */ list) => {
+  const pluginsLoaded = t.plugins.list().then((/** @type {{ id: string, name: string, url: string, enabled?: boolean, defaultOn?: boolean, own?: boolean }[]} */ list) => {
     const loads = [];
     for (const pl of list) {
       want.set(pl.id, pl.enabled !== false);
       defaultOn.set(pl.id, pl.defaultOn !== false);
       pluginUrls.set(pl.url, pl.id);
-      const s = document.createElement('script');
-      s.src = pl.url;
-      // Скрипты выполняются в порядке списка, а не загрузки: строки внизу левой панели всегда в одном порядке (t520).
-      s.async = false;
-      s.dataset.plugin = pl.id;
-      loads.push(new Promise((done) => {
-        s.onload = () => { if (!pluginFailed.has(pl.id)) t.log(`плагин ${pl.id}: загружен`); done(null); };
-        s.onerror = () => { t.log(`плагин ${pl.id}: не загрузился (${pl.url})`); done(null); };
-      }));
-      document.body.appendChild(s);
+      if (pl.own && pl.enabled === false) { ownLater.set(pl.id, pl); t.log(`плагин ${pl.id}: свой, выключен — код не загружен`); continue; }
+      loads.push(loadPlugin(pl));
     }
     return Promise.all(loads);
   }).catch((/** @type {any} */ e) => t.log(`список плагинов не получен: ${e}`));

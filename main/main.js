@@ -279,15 +279,18 @@ function start(asked) {
   // Больше ничего: текст в терминале печатает любая программа, поэтому чужая схема (javascript:, file:) и программа (.exe, .cmd…)
   // не открываются — openPath запустил бы программу. Путь — полный или от папки проекта окна (за её пределы — нет), только если файл или папка есть.
   // Хвост :строка[:столбец] (src\a.js:120:5) отбрасывается: редактора нет, строку передать некому.
-  ipcMain.handle('link:open', async (e, target) => {
+  // Кто открыл (t895) — для журнала: слово окна, главный процесс его не проверяет; не из списка или пусто — терминал (Ctrl+щелчок как раньше).
+  const LINK_FROM = { terminal: 'из терминала', browser: 'из браузера', agents: 'из окна «Агенты»', markdown: 'из просмотра markdown' };
+  ipcMain.handle('link:open', async (e, target, from) => {
     if (!sender.allowed(e, 'link:open')) return sender.refused();
     let t = String(target);
+    const by = typeof from === 'string' && Object.hasOwn(LINK_FROM, from) ? LINK_FROM[/** @type {'terminal'} */ (from)] : LINK_FROM.terminal;
     try {
       if (/^https?:\/\//i.test(t)) {
         const u = new URL(t);
         if (!u.hostname) return { error: i18n.t('link.notUrl', 'не адрес: {t}', { t }) };
         await shell.openExternal(u.href);
-        log(`ссылка из терминала: ${u.href}`);
+        log(`ссылка ${by}: ${u.href}`);
         return {};
       }
       t = t.replace(/(?::\d+){1,2}$/, '');
@@ -308,7 +311,7 @@ function start(asked) {
       if (MAC && st.isFile() && osRules.executable(st.mode)) return { error: i18n.t('link.program', 'программу не запускаю: {t}', { t }) };
       const err = await shell.openPath(t);
       if (err) return { error: i18n.t('link.failed', 'не открылся: {t} — {err}', { t, err }) };
-      log(`файл из терминала: ${t}`);
+      log(`файл ${by}: ${t}`);
       return {};
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };

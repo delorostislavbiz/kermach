@@ -73,9 +73,9 @@ function changed(root, since, max = 200) {
   return out;
 }
 
-/** Остановить claude с детьми: claude.cmd идёт через cmd.exe, p.kill() снял бы только cmd. @param {import('child_process').ChildProcess} p */
+/** Остановить claude с детьми: claude.cmd идёт через cmd.exe, p.kill() снял бы только cmd. taskkill — по полному пути (t802): PATH бывает урезан. @param {import('child_process').ChildProcess} p */
 function killTree(p) {
-  if (process.platform === 'win32' && p.pid) spawnSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { windowsHide: true });
+  if (process.platform === 'win32' && p.pid) spawnSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(p.pid), '/T', '/F'], { windowsHide: true });
   else p.kill();
 }
 

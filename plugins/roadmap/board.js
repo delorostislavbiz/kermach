@@ -20,7 +20,15 @@ const PHASE_STATUS = ['запланирована', 'идёт', 'готова'];
 const HEALTH = ['зелёный', 'жёлтый', 'красный'];
 const HUMAN = ['без человека', 'нужен человек'];
 const KINDS = ['сделать', 'ревью', 'разведка'];
-const DTYPES = ['решение', 'тупик'];
+const DTYPES = ['решение', 'тупик', 'договорённость', 'паттерн'];
+/** Поле how записи d<N> (t833): проверено прогоном или догадка. */
+const HOW = ['проверено', 'догадка'];
+/** Отзыв агента о поданной записи (t836): поле used карты, «d12 помогла, d40 не пригодилась». */
+const VERDICTS = ['помогла', 'не пригодилась', 'неверна'];
+/** Значение stack записи d<N> (t988): тема, плагин или библиотека в нижнем регистре, `@scope/` и версия через @ — по желанию. */
+const STACK = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._/-]*(@[0-9a-z][0-9a-z.*x_-]*)?$/;
+/** Заголовок раздела записи для других проектов (t988). */
+const PORTABLE = 'Переносимый вывод';
 
 /** Подписи тела карты и фазы: ключ → подпись в файле. */
 const CARD_FIELDS = { what: 'Что сделать', why: 'Зачем', files: 'Файлы', check: 'Как проверить', notes: 'Особые указания', done: 'Что сделано', proof: 'Доказательство' };
@@ -33,11 +41,13 @@ const PASSPORT = {
 };
 /** Ключи шапки, которые правит программа; остальные ключи файла — чужие, их сохраняем и не трогаем. */
 const HEAD_KEYS = {
-  t: ['phase', 'status', 'kind', 'agent', 'model', 'effort', 'depends', 'human', 'created', 'closed', 'source'],
+  t: ['phase', 'status', 'kind', 'agent', 'model', 'effort', 'depends', 'human', 'created', 'closed', 'source', 'used', 'served'],
   f: ['status', 'health', 'health_why', 'health_by', 'health_at'],
-  d: ['type', 'card', 'files', 'date', 'agent'],
+  d: ['type', 'card', 'files', 'date', 'agent', 'how', 'until', 'repeats', 'cancelled', 'differs', 'wrong', 'stack', 'from', 'approved', 'pattern'],
   passport: [],
 };
+/** Свои ключи шапки карты из FORMAT.md (t830): update их пишет, а читаются они, как и прочие чужие ключи, в extra. */
+const OWN_HEAD = { t: ['pick', 'advisor', 'agent_why'], f: [], d: [], passport: [] };
 
 /**
  * @typedef {{ file: string, reason: string }} Problem
@@ -49,14 +59,26 @@ const HEAD_KEYS = {
  * start — строка подписи или заголовка раздела, end — первая строка после поля.
  * @typedef {{ text: string, done: boolean }} Criterion
  * @typedef {{ id: string, num: number, file: string, title: string, phase: string, status: string, kind: string, agent: string, model: string,
- *   effort: string, depends: string[], human: string, created: string, closed: string, source: string, fields: Record<string, string>, extra: Record<string, string> }} Card
+ *   effort: string, depends: string[], human: string, created: string, closed: string, source: string, used: Record<string, string>, served: string[], fields: Record<string, string>,
+ *   extra: Record<string, string> }} Card
+ * used — отзыв агента о поданных записях (t836): d<N> → «помогла», «не пригодилась» или «неверна».
+ * served — какие d<N> программа подала агенту в задании (t1008), пишет addServed.
  * @typedef {{ id: string, num: number, file: string, title: string, status: string, health: string, healthWhy: string, healthBy: string, healthAt: string,
  *   goal: string, criteria: Criterion[], ready: boolean, cards: string[], extra: Record<string, string> }} Phase
  * ready — отмечены все признаки готовности (и они есть).
  * @typedef {{ id: string, num: number, file: string, title: string, type: string, card: string, files: string[], date: string, agent: string, text: string,
- *   extra: Record<string, string> }} Decision
- * @typedef {{ file: string, sections: Record<string, { title: string, text: string, empty: boolean }>, missing: string[], hidden: string[] }} Passport
- * hidden — разделы, которые спрятала в блок кода ``` без пары (hiddenKeys, t614): окно их не видит, запись отказывает.
+ *   how: string, until: string, repeats: string[], cancelled: string, differs: string[], wrong: string[], wrongBare: string[],
+ *   stack: string[], portable: string, from: string[], approved: string, pattern: string, extra: Record<string, string> }} Decision
+ * how — «проверено», «догадка» или пусто; until — срок годности ГГГГ-ММ-ДД, в этот день запись ещё действует; repeats — карты, где ту же причину нашли заново;
+ * cancelled — дата отмены: запись больше не действует, но остаётся в истории (t833). differs — записи, на которые эта не похожа: человек нажал «не похоже» (t969), пометку «похожа» с ними не ставим.
+ * stack — чей код виноват: тема, плагин, библиотека (t988); portable — раздел «## Переносимый вывод» для других проектов, в text его нет.
+ * wrong — карты, чей агент отметил запись «неверна» (t836), только те, у кого в тексте есть строка «Неверно (tN): почему»: запись не подаётся агентам, ждёт человека. Пустое значение — то же, что нет ключа.
+ * wrongBare — tN из шапки wrong без строки «Неверно (tN): …» (t998): отметка не действует, доска даёт замечание; окно снимает их по «верна».
+ * from — записи, из которых собран паттерн (type: паттерн, t1002); approved — день, когда человек утвердил паттерн (действует, только если sha1 текста
+ * совпал с approved.json в папке данных, t845); pattern — «нет»: человек сказал «не паттерн», запись больше не предлагается центром паттерна.
+ * @typedef {{ file: string, sections: Record<string, { title: string, text: string, empty: boolean }>, missing: string[], hidden: string[], hiddenBy: '' | 'loose' | 'pair' }} Passport
+ * hidden — разделы, которые есть только внутри блока кода ``` (hiddenKeys, t614, t622): окно их не видит, запись отказывает.
+ * hiddenBy — отчего: loose — выше ``` без пары, pair — ``` в паре вокруг раздела.
  * @typedef {{ root: string, exists: boolean, passport: Passport | null, phases: Phase[], cards: Card[], inbox: string[], decisions: Decision[],
  *   counter: { t: number, d: number }, alike: Record<string, string>, lost: Record<string, string>, errors: Problem[], warnings: Problem[] }} Board
  * counter — последние выданные номера с учётом файлов: следующий номер карты — counter.t + 1.
@@ -69,6 +91,8 @@ const norm = (s) => s.trim().toLowerCase().replace(/ё/g, 'е');
 const canon = (list, v) => list.find((x) => norm(x) === norm(v)) || '';
 /** Прочерк и пустое — пустое значение. @param {string} v */
 const blank = (v) => (/^[—–-]?$/.test(v.trim()) ? '' : v.trim());
+/** Настоящая дата ГГГГ-ММ-ДД: 2026-13-45 — нет. @param {string} v */
+const isDay = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v); const d = m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null; return !!d && d.toISOString().slice(0, 10) === v; };
 /** @param {string} v */
 const list = (v) => { const m = /^\[(.*)\]$/.exec(v.trim()); return (m ? m[1] : v).split(',').map((s) => s.trim()).filter(Boolean); };
 
@@ -244,16 +268,34 @@ function titleLine(p) {
 }
 
 /**
- * Разделы паспорта или поля карты и фазы, которые спрятала в блок кода ``` без пары (t614).
- * По правилу Markdown одиночная ``` берёт в пару ближайшую ``` ниже, и всё между ними — текст блока: окно раздела не видит,
- * а «Сохранить» дописало бы в конец второй раздел с тем же именем. Признак: в файле есть ``` без пары, а заголовок или подпись — только внутри блока.
- * Все ``` в паре — заголовок в блоке считаем образцом (пример паспорта в разделе), и такой раздел дописывается как обычно.
+ * Разделы «## Переносимый вывод» записи d<N> (t988): от заголовка до следующего `#`/`##` или конца файла.
+ * Заголовок внутри блока кода — текст записи, как у паспорта (t607). @param {string[]} lines @param {number} from
+ */
+function portSpans(lines, from) {
+  const code = codeMask(lines, from);
+  /** @type {{ start: number, end: number }[]} */
+  const out = [];
+  for (let i = from; i < lines.length; i++) {
+    const m = code[i] ? null : secHead(lines[i]);
+    if (!m || norm(m.title) !== norm(PORTABLE)) continue;
+    let end = i + 1;
+    while (end < lines.length && (code[end] || !/^#{1,2}\s/.test(lines[end]))) end++;
+    out.push({ start: i, end });
+    i = end - 1;
+  }
+  return out;
+}
+
+/**
+ * Разделы паспорта или поля карты и фазы, которые есть только внутри блока кода ``` (t614, t622): окно их не видит,
+ * а «Сохранить» дописало бы в конец второй раздел с тем же именем.
+ * Два случая. ``` без пары (t614): по правилу Markdown она берёт в пару ближайшую ``` ниже. Все ``` в паре (t622): две случайные ``` вокруг раздела
+ * по файлу не отличить от образца паспорта в блоке — поэтому тоже замечание и отказ записи, а не молча. Раздел есть и вне блока — образец, всё как обычно.
  * @param {string} kind @param {Parsed} p @returns {string[]}
  */
 function hiddenKeys(kind, p) {
   if (kind !== 'passport' && kind !== 't' && kind !== 'f') return [];
-  const { code, loose } = fences(p.lines, p.headEnd);
-  if (loose < 0) return [];
+  const { code } = fences(p.lines, p.headEnd);
   const fields = kind === 't' ? CARD_FIELDS : PHASE_FIELDS;
   const has = kind === 'passport' ? sections(p) : spans(p, fields);
   /** @type {string[]} */
@@ -265,6 +307,9 @@ function hiddenKeys(kind, p) {
   }
   return out;
 }
+
+/** Есть ли в файле ``` без пары: тогда спрятанное — от неё (t614), иначе — от ``` в паре (t622). @param {Parsed} p */
+const looseFence = (p) => fences(p.lines, p.headEnd).loose >= 0;
 
 // Текст признака — [\s\S], а не «.»: «.» не берёт одиночный \r, и признак «а\rб» пропал бы с доски (t640). \n в строке не бывает — файл поделён по нему.
 const CRIT_RE = /^[-*]\s*\[([ xXхХ]?)\]\s*([\s\S]*)$/;
@@ -317,7 +362,7 @@ const headObj = (p) => Object.fromEntries((p.head || []).map((h) => [h.key, h.va
 /**
  * Проверка и разбор одного файла доски. Возвращает предмет или текст ошибки.
  * @param {string} kind t, f, d или passport @param {number} num @param {string} file @param {string} text
- * @returns {{ item: Card | Phase | Decision | Passport } | { error: string }}
+ * @returns {{ item: Card | Phase | Decision | Passport, warn?: string[] } | { error: string }}
  */
 function item(kind, num, file, text) {
   const p = parse(text);
@@ -329,7 +374,8 @@ function item(kind, num, file, text) {
     /** @type {Passport['sections']} */
     const out = {};
     for (const [k, s] of Object.entries(secs)) out[k] = { title: s.title, text: s.value, empty: !s.value };
-    return { item: { file, sections: out, missing: Object.keys(PASSPORT).filter((k) => !secs[k]), hidden: hiddenKeys(kind, p) } };
+    const hidden = hiddenKeys(kind, p);
+    return { item: { file, sections: out, missing: Object.keys(PASSPORT).filter((k) => !secs[k]), hidden, hiddenBy: hidden.length ? (looseFence(p) ? 'loose' : 'pair') : '' } };
   }
   if (!p.head) return { error: 'нет шапки: файл начинается со строки ---' };
   const id = `${kind}${num}`;
@@ -351,12 +397,23 @@ function item(kind, num, file, text) {
     const depends = list(blank(h.depends || ''));
     const bad = depends.find((d) => !/^t\d{1,6}$/.test(d));
     if (bad) return { error: `depends: «${bad}» — нужно t<номер>` };
+    // t836: отзыв о записях — опечатка агента не прячет закрытую карту, а даёт замечание.
+    /** @type {Record<string, string>} */
+    const used = {};
+    const warn = [];
+    for (const s of list(blank(h.used || ''))) {
+      const m = /^(d\d{1,6})\s+(.+)$/.exec(s);
+      const v = m ? canon(VERDICTS, m[2].trim()) : '';
+      if (m && v) used[m[1]] = v; else warn.push(`used: «${s}» — нужно d<номер> и ${VERDICTS.join(', ')}`);
+    }
+    const served = [];
+    for (const s of list(blank(h.served || ''))) { if (/^d\d{1,6}$/.test(s)) served.push(s); else warn.push(`served: «${s}» — нужно d<номер>`); }
     const sp = spans(p, CARD_FIELDS);
     /** @type {Record<string, string>} */
     const fields = {};
     for (const k of Object.keys(CARD_FIELDS)) fields[k] = sp[k] ? fieldValue(sp[k].value) : '';
     return { item: { id, num, file, title, phase, status, kind: kindOf, agent: blank(h.agent || ''), model: blank(h.model || ''), effort: blank(h.effort || ''),
-      depends, human, created: h.created || '', closed: blank(h.closed || ''), source: blank(h.source || ''), fields, extra } };
+      depends, human, created: h.created || '', closed: blank(h.closed || ''), source: blank(h.source || ''), used, served, fields, extra }, warn };
   }
   if (kind === 'f') {
     const status = canon(PHASE_STATUS, h.status || '');
@@ -371,8 +428,46 @@ function item(kind, num, file, text) {
   }
   const type = canon(DTYPES, h.type || '');
   if (!type) return { error: `type «${h.type || ''}»: допустимы ${DTYPES.join(', ')}` };
-  const text0 = tl < 0 ? '' : p.lines.slice(tl + 1).join('\n').trim();
-  return { item: { id, num, file, title, type, card: blank(h.card || ''), files: list(blank(h.files || '')), date: h.date || '', agent: blank(h.agent || ''), text: text0, extra } };
+  const howV = blank(h.how || '');
+  const how = howV ? canon(HOW, howV) : '';
+  if (howV && !how) return { error: `how «${howV}»: допустимы ${HOW.join(', ')} или пусто` };
+  const until = blank(h.until || ''), cancelled = blank(h.cancelled || '');
+  if (until && !isDay(until)) return { error: `until «${until}» — нужна дата ГГГГ-ММ-ДД или пусто` };
+  if (cancelled && !isDay(cancelled)) return { error: `cancelled «${cancelled}» — нужна дата отмены ГГГГ-ММ-ДД или пусто` };
+  const repeats = list(blank(h.repeats || ''));
+  const badRep = repeats.find((r) => !/^t\d{1,6}$/.test(r));
+  if (badRep) return { error: `repeats: «${badRep}» — нужно t<номер>` };
+  const differs = list(blank(h.differs || ''));
+  const badDif = differs.find((r) => !/^d\d{1,6}$/.test(r));
+  if (badDif) return { error: `differs: «${badDif}» — нужно d<номер>` };
+  const marks = list(blank(h.wrong || ''));
+  const badWrong = marks.find((r) => !/^t\d{1,6}$/.test(r));
+  if (badWrong) return { error: `wrong: «${badWrong}» — нужно t<номер>` };
+  const stack = list(blank(h.stack || ''));
+  const badStack = stack.find((s) => !STACK.test(s));
+  if (badStack) return { error: `stack: «${badStack}» — имя темы, плагина или библиотеки: a-z, цифры, . - _ /, версия через @` };
+  // t1002: паттерн — обобщение записей из from; approved — день утверждения человеком; pattern: нет — человек сказал «не паттерн» про центр кандидата (t845).
+  const from = list(blank(h.from || ''));
+  const badFrom = from.find((r) => !/^d\d{1,6}$/.test(r));
+  if (badFrom) return { error: `from: «${badFrom}» — нужно d<номер>` };
+  const approved = blank(h.approved || '');
+  if (approved && !isDay(approved)) return { error: `approved «${approved}» — нужна дата утверждения ГГГГ-ММ-ДД или пусто` };
+  const patV = blank(h.pattern || '');
+  const pattern = patV.toLowerCase() === 'нет' ? 'нет' : '';
+  if (patV && !pattern) return { error: `pattern «${patV}»: допустимо нет или пусто` };
+  // t988: «## Переносимый вывод» — не в text: обрезка подбора (t959), похожесть (t835) и section() видят только свою часть записи.
+  const port = tl < 0 ? [] : portSpans(p.lines, tl + 1);
+  const text0 = tl < 0 ? '' : p.lines.slice(tl + 1).filter((_, i) => !port.some((s) => i + tl + 1 >= s.start && i + tl + 1 < s.end)).join('\n').trim();
+  const portable = port.map((s) => p.lines.slice(s.start + 1, s.end).join('\n').trim()).filter(Boolean).join('\n\n');
+  // t836: «неверна» без причины не действует — запись подаётся, как раньше, а в замечаниях доски видно, чего не хватает.
+  const why = (/** @type {string} */ t) => new RegExp(`^Неверно \\(${t}\\):\\s*\\S`, 'm').test(text0);
+  const wrong = marks.filter(why);
+  const wrongBare = marks.filter((t) => !why(t));
+  const warn = wrongBare.map((t) => `wrong: ${t} без строки «Неверно (${t}): почему» — отметка не действует`);
+  if (type === 'паттерн' && !from.length) warn.push('паттерн без from — не видно, из каких записей он собран');
+  if (type !== 'паттерн' && (from.length || approved)) warn.push(`${from.length ? 'from' : 'approved'} у записи «${type}» не действует — только у паттерна`);
+  return { item: { id, num, file, title, type, card: blank(h.card || ''), files: list(blank(h.files || '')), date: h.date || '', agent: blank(h.agent || ''), text: text0,
+    stack, portable, how, until, repeats, cancelled, differs, wrong, wrongBare, from, approved, pattern, extra }, warn };
 }
 
 /** Безопасное чтение файла доски: не ссылка, не больше предела. @param {string} file */
@@ -444,10 +539,15 @@ function read(project) {
     let r, text = '';
     try { text = readSmall(inside(dir, name)); r = item(kind, num, name, text); } catch (e) { r = { error: e instanceof Error ? e.message : String(e) }; }
     if ('error' in r) { b.errors.push({ file: name, reason: r.error }); continue; }
-    // Раздел или поле ушли в блок кода из-за ``` без пары (t614) — замечание к файлу: иначе они пропадают из окна молча.
-    for (const k of text.includes('```') ? hiddenKeys(kind, parse(text)) : []) {
+    for (const w of ('warn' in r && r.warn) || []) b.warnings.push({ file: name, reason: w });
+    // Раздел или поле только внутри блока кода (t614, t622) — замечание к файлу: иначе они пропадают из окна молча.
+    const pp = text.includes('```') ? parse(text) : null;
+    for (const k of pp ? hiddenKeys(kind, pp) : []) {
       const t = kind === 'passport' ? PASSPORT[/** @type {keyof PASSPORT} */ (k)] : (kind === 't' ? CARD_FIELDS : PHASE_FIELDS)[k];
-      b.warnings.push({ file: name, reason: `«${t}» внутри блока кода: выше в файле \`\`\` без пары. Окно ${kind === 'passport' ? 'этот раздел' : 'это поле'} не показывает, «Сохранить» его не запишет — закройте блок в файле` });
+      const what = kind === 'passport' ? 'этот раздел' : 'это поле';
+      b.warnings.push({ file: name, reason: looseFence(/** @type {Parsed} */ (pp))
+        ? `«${t}» внутри блока кода: выше в файле \`\`\` без пары. Окно ${what} не показывает, «Сохранить» его не запишет — закройте блок в файле`
+        : `«${t}» есть только внутри блока кода \`\`\`. Окно ${what} не показывает, «Сохранить» его не запишет — если это не образец, уберите \`\`\` вокруг в файле` });
     }
     if (kind === 't') b.cards.push(/** @type {Card} */ (r.item));
     else if (kind === 'f') b.phases.push(/** @type {Phase} */ (r.item));
@@ -472,6 +572,9 @@ function read(project) {
     if (f) f.cards.push(t.id); else b.inbox.push(t.id);
     for (const d of t.depends) if (!cards.has(d)) b.warnings.push({ file: t.file, reason: `зависит от ${d}, а карты ${d} нет` });
   }
+  // t1002: from со ссылкой на запись, которой нет, — замечание: паттерн собран из неё, а прочитать её нельзя (файла нет или в нём ошибка).
+  const decs = new Set(b.decisions.map((d) => d.id));
+  for (const d of b.decisions) for (const r of d.from) if (!decs.has(r)) b.warnings.push({ file: d.file, reason: `from: ${r} — записи ${r} нет или её файл с ошибкой` });
   b.alike = alike(b.cards, b.inbox);
   return b;
 }
@@ -598,6 +701,7 @@ const REFUSE = {
   heading: 'вне блока кода ``` строка читалась бы как заголовок или новое поле',
   fence: 'блок кода ``` не закрыт',
   hidden: 'в файле есть ``` без пары, и это место оказалось бы внутри блока кода',
+  boxed: 'это место в файле только внутри блока кода ``` — если это не образец, уберите ``` вокруг',
 };
 /**
  * Отказ записи, который окно объясняет своими словами (t607): problems — все плохие поля по code (t615), code и field — первые.
@@ -618,6 +722,22 @@ function put(p, at, del, ins) {
 const joined = (p) => p.bom + p.lines.map((l, i) => (i < p.lines.length - 1 ? l + (p.ends[i] || p.eol) : l)).join('');
 
 /**
+ * Поданные агенту записи (t1008): served: карты пополняется — прежние номера остаются, новые дописываются в конец, в порядке подачи.
+ * Ничего нового — файл не пишется. Файл читается заново здесь и в update: used:, которое агент вписал после открытия вкладки, не теряется.
+ * @param {string} project @param {string} ref @param {string[]} ids
+ */
+function addServed(project, ref, ids) {
+  const { kind, num, file } = locate(project, ref);
+  if (kind !== 't') throw new Error('served есть только у карты');
+  if (!fs.existsSync(file)) throw new Error(`нет файла ${path.basename(file)}`);
+  const r = item(kind, num, path.basename(file), readSmall(file));
+  if ('error' in r) throw new Error(`файл с ошибкой не правим: ${r.error}`);
+  const old = /** @type {Card} */ (r.item).served;
+  const all = [...new Set([...old, ...ids.filter((id) => /^d\d{1,6}$/.test(id))])];
+  return all.length === old.length ? r.item : update(project, ref, { served: all });
+}
+
+/**
  * Правка полей одного файла. Меняются только строки этих полей.
  * changes: ключи шапки (status, phase, health…), поля тела (what, goal, criteria…), разделы паспорта (transport…), title.
  * criteria — список { text, done }. Возвращает новый предмет после разбора.
@@ -636,10 +756,12 @@ function update(project, ref, changes) {
   /** @type {Record<string, string[]>} */
   const bad = {};
   const hid = hiddenKeys(kind, p);
+  // ``` без пары (t614) или в паре вокруг раздела (t622): окно объясняет по-разному.
+  const boxed = looseFence(p) ? 'hidden' : 'boxed';
   const has = kind === 'passport' ? sections(p) : spans(p, fields);
   for (const [key, value] of Object.entries(changes)) {
     const own = kind === 'passport' ? key in PASSPORT : key in fields;
-    const c = !own ? '' : hid.includes(key) && !has[key] ? 'hidden' : key === 'criteria' ? '' : kind === 'passport' ? secText(value).code : bodyText(value, fields).code;
+    const c = !own ? '' : hid.includes(key) && !has[key] ? boxed : key === 'criteria' ? '' : kind === 'passport' ? secText(value).code : bodyText(value, fields).code;
     if (c) (bad[c] = bad[c] || []).push(key);
   }
   if (Object.keys(bad).length) throw refuse(bad);
@@ -652,7 +774,7 @@ function update(project, ref, changes) {
       if (!t || /[\r\n]/.test(t)) throw new Error('заголовок — одна непустая строка');
       const tl = titleLine(p);
       if (tl >= 0) lines[tl] = `# ${t}`; else put(p, p.headEnd, 0, [`# ${t}`]);
-    } else if (HEAD_KEYS[kind].includes(key)) {
+    } else if (HEAD_KEYS[kind].includes(key) || OWN_HEAD[kind].includes(key)) {
       const v = headValue(value);
       const h = (p.head || []).find((x) => x.key === key);
       const line = v ? `${key}: ${v}` : `${key}:`;
@@ -708,11 +830,175 @@ function update(project, ref, changes) {
   return after.item;
 }
 
+/** Строка «<заголовок> (dN):» — начало текста, дописанного объединением (merge). */
+const MERGED = /^.+ \(d\d+\):$/;
+/**
+ * Общий раздел, а не одна причина (t835): запись не про одну карту (пусто в card, в заголовке нет ни t<N>, ни даты ДД.ММ),
+ * а в своём тексте, до дописанного объединением, три строки и больше и ни одной «Причина:» — несколько фактов под одним названием
+ * («Мелочи», «Снимки окон (этап 3)»). На доске t920 таких три: d4, d5, d14. Похожим его не помечают и не объединяют.
+ * @param {Decision} d
+ */
+function section(d) {
+  if (d.card || /\bt\d+|\d\d\.\d\d/.test(d.title)) return false;
+  const lines = String(d.text || '').split(/\r?\n/);
+  const end = lines.findIndex((l) => MERGED.test(l.trim()));
+  const own = (end >= 0 ? lines.slice(0, end) : lines).filter((l) => l.trim() && !l.startsWith(ERROR_LINE));
+  return own.length >= 3 && !own.some((l) => /^\s*Причина:/.test(l));
+}
+
+/**
+ * Объединить повтор с более старой записью (t835, кнопка «объединить» в окне — программа сама не сливает).
+ * В старую: repeats — карта повтора (поле card или номера t<N> из заголовка) и его repeats; files — объединение;
+ * в конец тела — заголовок повтора с его номером и весь его текст. Файл повтора удаляется: всё, что в нём было по делу, уже в старой.
+ * retitle(старый заголовок, заголовок повтора) — новый заголовок старой: в него дописывается обстоятельство повтора (t922: +1 попадание подбора).
+ * Общий раздел (section) не объединяется ни как повтор, ни как старая: t922 — склейка с ним снимает попадания.
+ * @param {string} project @param {string} from повтор d<N> @param {string} into старая запись d<N>
+ * @param {(old: string, rep: string) => string} [retitle]
+ * @returns {Decision & { repointed: string[] }} repointed — паттерны, в from которых повтор заменён старой (t1014)
+ */
+function merge(project, from, into, retitle) {
+  if (![from, into].every((r) => /^d\d+$/.test(String(r))) || from === into) throw new Error('объединяются две разные записи d<N>');
+  const [src, dst] = [from, into].map((ref) => {
+    const at = locate(project, ref);
+    if (!fs.existsSync(at.file)) throw new Error(`нет файла ${path.basename(at.file)}`);
+    const text = readSmall(at.file);
+    const r = item('d', at.num, path.basename(at.file), text);
+    if ('error' in r) throw new Error(`файл с ошибкой не правим: ${r.error}`);
+    return { file: at.file, text, d: /** @type {Decision} */ (r.item) };
+  });
+  if (src.d.num < dst.d.num) throw new Error(`${from} старше ${into}: повтор дописывается в более старую запись`);
+  for (const x of [src, dst]) if (section(x.d)) throw new Error(`${x.d.id} — общий раздел, а не одна причина: его не объединяют`);
+  const cards = (/** @type {Decision} */ d) => (d.card ? [d.card] : d.title.match(/\bt\d{1,6}\b/g) || []);
+  const own = new Set(cards(dst.d));
+  const repeats = [...new Set([...dst.d.repeats, ...cards(src.d), ...src.d.repeats])].filter((c) => !own.has(c));
+  const files = [...new Set([...dst.d.files, ...src.d.files])];
+  // stack повтора — только имена, которых у старой нет: woodmart рядом с woodmart@8.1 не дописываем.
+  const named = (/** @type {string} */ s) => s.replace(/^(@?[^@]*)@.*$/, '$1');
+  const stack = [...dst.d.stack, ...src.d.stack.filter((s, i, a) => a.indexOf(s) === i && !dst.d.stack.some((x) => named(x) === named(s)))];
+  // «Не похоже» повтора (t969) переходит к старой: та же причина не похожа на те же записи.
+  const differs = [...new Set([...dst.d.differs, ...src.d.differs])].filter((r) => r !== dst.d.id);
+  // t989: отзыв «неверна» повтора переходит к старой вместе со строкой «Неверно (tN): …» в теле — иначе неверная причина снова в подборе.
+  // Берём список из шапки как есть: отметка без строки причины тоже сохраняется, как в файле.
+  const rawWrong = (/** @type {string} */ text) => list(blank(((parse(text).head || []).find((x) => x.key === 'wrong') || { value: '' }).value));
+  const wrongOld = rawWrong(dst.text);
+  const wrong = [...new Set([...wrongOld, ...rawWrong(src.text)])];
+  // t1014: паттерн объединяется только с паттерном; from старого — объединение обоих, повтор в нём заменён старой, сама старая не входит.
+  const isP = (/** @type {Decision} */ d) => d.type === 'паттерн';
+  if (isP(src.d) !== isP(dst.d)) throw new Error(`${isP(src.d) ? from : into} — паттерн, ${isP(src.d) ? into : from} — нет: паттерн объединяют только с паттерном`);
+  const relink = (/** @type {string[]} */ l, /** @type {string} */ self) => [...new Set(l.map((r) => (r === src.d.id ? dst.d.id : r)))].filter((r) => r !== self);
+  const fromList = isP(dst.d) ? relink([...dst.d.from, ...src.d.from], dst.d.id) : dst.d.from;
+  const p = parse(dst.text);
+  for (const [key, v] of /** @type {Array<[string, string[]]>} */ ([['files', files], ['repeats', repeats], ...(differs.length > dst.d.differs.length ? [['differs', differs]] : []),
+    ...(fromList.join() !== dst.d.from.join() ? [['from', fromList]] : []),
+    ...(stack.length > dst.d.stack.length ? [['stack', stack]] : []), ...(wrong.length > wrongOld.length ? [['wrong', wrong]] : [])])) {
+    const h = (p.head || []).find((x) => x.key === key);
+    if (h) p.lines[h.line] = `${key}: ${headValue(v)}`; else put(p, p.headEnd - 1, 0, [`${key}: ${headValue(v)}`]);
+    Object.assign(p, parse(joined(p)));
+  }
+  // Строка «<заголовок> (dN):» уже есть — прошлый заход дописал тело, но не удалил файл: второй раз тело не дописываем.
+  const mark = `${src.d.title} (${src.d.id}):`;
+  if (!p.lines.some((l) => l.trim() === mark)) {
+    // t988: тело повтора — перед «## Переносимый вывод», иначе оно становится частью раздела; раздел повтора — в конец раздела старой.
+    // Раздел ищем ниже строки «# …», как item: выше заголовка он — не раздел записи.
+    const from = titleLine(p) + 1 || p.headEnd;
+    const first = portSpans(p.lines, from)[0];
+    const stop = first ? first.start : p.lines.length;
+    let end = stop;
+    while (end > 0 && !p.lines[end - 1].trim()) end--;
+    put(p, end, stop - end, ['', mark, ...(src.d.text ? src.d.text.split(/\r?\n/) : []), '']);
+    if (src.d.portable) {
+      const last = portSpans(p.lines, from).pop();
+      let at = last ? last.end : p.lines.length;
+      while (at > 0 && !p.lines[at - 1].trim()) at--;
+      put(p, at, 0, ['', ...(last ? [] : [`## ${PORTABLE}`]), mark, ...src.d.portable.split(/\r?\n/)]);
+    }
+    const at = p.lines.findIndex((l, i) => i >= p.headEnd && /^#\s/.test(l));
+    const title = retitle ? retitle(dst.d.title, src.d.title).replace(/\s+/g, ' ').trim() : '';
+    if (at >= 0 && title && title !== dst.d.title) p.lines[at] = `# ${title}`;
+  }
+  const text = joined(p);
+  const after = item('d', dst.d.num, path.basename(dst.file), text);
+  if ('error' in after) throw new Error(`объединение не принято: ${after.error}`);
+  save(dst.file, text);
+  // t1014: повтор стоял в from других паттернов — его причина теперь в старой, ссылку переводим на неё. Утверждение этих паттернов снимается само:
+  // отпечаток sha1 учитывает from. Делаем до удаления повтора: сбой здесь оставляет его файл, и повторное «объединить» доделает.
+  /** @type {string[]} */
+  const repointed = [];
+  for (const d of read(project).decisions) {
+    if (!isP(d) || d.id === src.d.id || d.id === dst.d.id || !d.from.includes(src.d.id)) continue;
+    const at = locate(project, d.id);
+    const q = parse(readSmall(at.file));
+    const h = (q.head || []).find((x) => x.key === 'from');
+    if (!h) continue;
+    q.lines[h.line] = `from: ${headValue(relink(d.from, d.id))}`;
+    const t = joined(q);
+    const r = item('d', d.num, path.basename(at.file), t);
+    if ('error' in r) throw new Error(`${into} дописана, from паттерна ${d.id} не поправлен: ${r.error}`);
+    save(at.file, t);
+    repointed.push(d.id);
+  }
+  try { fs.unlinkSync(src.file); } catch (e) {
+    throw new Error(`${into} дописана, файл ${path.basename(src.file)} не удалён: ${e instanceof Error ? e.message : e}. Удалите его сами или нажмите «объединить» ещё раз`);
+  }
+  return Object.assign(/** @type {Decision} */ (after.item), { repointed });
+}
+
+/**
+ * «Не похоже» (t969, кнопка в окне): в шапку from дописать other в differs — пометка «похожа» этой пары больше не ставится, и после перезапуска тоже.
+ * Откат — убрать номер из differs в файле. @param {string} project @param {string} from d<N> @param {string} other d<N>
+ */
+function differ(project, from, other) {
+  if (![from, other].every((r) => /^d\d+$/.test(String(r))) || from === other) throw new Error('нужны две разные записи d<N>');
+  const at = locate(project, from);
+  if (!fs.existsSync(at.file)) throw new Error(`нет файла ${path.basename(at.file)}`);
+  const r = item('d', at.num, path.basename(at.file), readSmall(at.file));
+  if ('error' in r) throw new Error(`файл с ошибкой не правим: ${r.error}`);
+  const d = /** @type {Decision} */ (r.item);
+  if (d.differs.includes(other)) return d;
+  return /** @type {Decision} */ (update(project, from, { differs: [...d.differs, other] }));
+}
+
 /** Время для полей created: ГГГГ-ММ-ДД ЧЧ:ММ по местному. */
 function stamp() {
   const d = new Date();
   const z = (/** @type {number} */ n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`;
+}
+
+/**
+ * Человек посмотрел запись с отзывом «неверна» и решил, что она верна (t989, кнопка «верна» в окне «Посмотреть»).
+ * Строки «Неверно (tN): …» → «Проверено человеком (ГГГГ-ММ-ДД): верна, отзыв tN снят», tN уходит из wrong; остальные байты и концы строк
+ * как были, поэтому запись возвращается в подбор. Возвращает прежние строки — для журнала и отката.
+ * @param {string} project @param {string} ref d<N> @param {string} card t<N> @returns {string[]}
+ */
+function reviewed(project, ref, card) {
+  if (!/^d\d+$/.test(String(ref))) throw new Error('проверяется запись d<N>');
+  if (!/^t\d{1,6}$/.test(String(card))) throw new Error('отзыв снимается с карты t<N>');
+  const { num, file } = locate(project, ref);
+  if (!fs.existsSync(file)) throw new Error(`нет файла ${path.basename(file)}`);
+  const old = readSmall(file);
+  const before = item('d', num, path.basename(file), old);
+  if ('error' in before) throw new Error(`файл с ошибкой не правим: ${before.error}`);
+  const p = parse(old);
+  const code = codeMask(p.lines, p.headEnd);
+  const from = titleLine(p) + 1 || p.headEnd;
+  const re = new RegExp(`^Неверно \\(${card}\\):`);
+  /** @type {string[]} */
+  const was = [];
+  for (let i = from; i < p.lines.length; i++) {
+    if (code[i] || !re.test(p.lines[i])) continue;
+    was.push(p.lines[i]);
+    p.lines[i] = `Проверено человеком (${stamp().slice(0, 10)}): верна, отзыв ${card} снят`;
+  }
+  if (!was.length) throw new Error(`у ${ref} нет строки «Неверно (${card}): …»`);
+  // tN без строки «Неверно» в wrong оставлять нельзя: доска покажет «отметка не действует».
+  const h = (p.head || []).find((x) => x.key === 'wrong');
+  if (h) { const rest = list(blank(h.value)).filter((t) => t !== card); p.lines[h.line] = rest.length ? `wrong: ${headValue(rest)}` : 'wrong:'; }
+  const text = joined(p);
+  const after = item('d', num, path.basename(file), text);
+  if ('error' in after) throw new Error(`правка не принята: ${after.error}`);
+  save(file, text);
+  return was;
 }
 
 /** Выдать следующий номер карты (t) или записи (d) и записать его в счётчик. @param {string} project @param {'t' | 'd'} kind */
@@ -725,6 +1011,9 @@ function nextId(project, kind) {
   save(inside(dir, 'counter.json'), `{ ${Object.entries(obj).map(([k, v]) => `${JSON.stringify(k)}: ${JSON.stringify(v)}`).join(', ')} }\n`);
   return `${kind}${n}`;
 }
+
+/** Подпись строки с дословным симптомом в теле записи d<N> (t867). */
+const ERROR_LINE = 'Текст ошибки:';
 
 /**
  * Новая карта (во «Входящих», если нет phase), фаза или запись. Возвращает номер.
@@ -744,14 +1033,22 @@ function create(project, what, data) {
   const body = ['---', '---', `# ${title}`];
   if (kind === 't') for (const [k, l] of Object.entries(CARD_FIELDS)) body.push(...fieldHead(l, bodyLines(data[k], CARD_FIELDS, k)));
   if (kind === 'f') body.push(...fieldHead('Цель', bodyLines(data.goal, PHASE_FIELDS, 'goal')), 'Признаки готовности:');
-  if (kind === 'd') body.push(String(data.text || '').trim());
+  // t867: запись без текста получает строку «Текст ошибки:» — по дословному симптому её находит kermach roadmap notes, по одной причине не находит (t526 → d161).
+  if (kind === 'd') body.push(String(data.text || '').trim() || `${ERROR_LINE} —`);
   const headLines = Object.entries(head).map(([k, v]) => { const s = headValue(v); return s ? `${k}: ${s}` : `${k}:`; });
   const textOf = (/** @type {string} */ id) => [body[0], `id: ${id}`, ...headLines, ...body.slice(1)].join('\n') + '\n';
   // Проверяем до выдачи номера: неверные поля не должны сжечь номер в счётчике.
   const check = item(kind, 1, `${kind}1.md`, textOf(`${kind}1`));
   if ('error' in check) throw new Error(`не принято: ${check.error}`);
-  const id = kind === 'f' ? `f${maxNum(scan(dir).byId, 'f') + 1}` : nextId(project, /** @type {'t' | 'd'} */ (kind));
-  fs.writeFileSync(inside(dir, `${id}.md`), textOf(id), { encoding: 'utf8', flag: 'wx' });
+  // Номер занят файлом, который появился после подсчёта (агент или другой процесс завёл карту в тот же миг, t804) — следующий номер:
+  // wx не даёт затереть чужой файл, а без повтора человек получал EEXIST и сгоревший номер.
+  let id = '';
+  for (let tries = 0; ; tries++) {
+    id = kind === 'f' ? `f${maxNum(scan(dir).byId, 'f') + 1}` : nextId(project, /** @type {'t' | 'd'} */ (kind));
+    try { fs.writeFileSync(inside(dir, `${id}.md`), textOf(id), { encoding: 'utf8', flag: 'wx' }); break; } catch (e) {
+      if (!e || /** @type {any} */ (e).code !== 'EEXIST' || tries >= 19) throw e;
+    }
+  }
   if (kind === 'f' && Array.isArray(data.criteria)) update(project, id, { criteria: data.criteria });
   return id;
 }
@@ -872,4 +1169,4 @@ async function ownRootAsync(project, dir) {
   if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`папка доски ведёт за пределы проекта: ${real}`);
 }
 
-module.exports = { DIR, MAX_SIZE, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, update, nextId, create, watch, codeMask, edges, sameField };
+module.exports = { DIR, MAX_SIZE, ERROR_LINE, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, HOW, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, update, addServed, merge, reviewed, differ, section, nextId, create, watch, codeMask, edges, sameField, alike };

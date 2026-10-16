@@ -22,6 +22,7 @@ const grab = require('./grab');
 const { tabKeyOf } = require('./keys');
 // Команда terminalus browser (t381): канал для агента в терминале и консоль страниц с их загрузки.
 const cli = require('./cli');
+const marks = require('./marks');
 
 /**
  * @typedef {{ dataDir: string, log: (m: string) => void }} Ctx
@@ -390,6 +391,27 @@ function register(c, of) {
   projectOf = of;
   registerSwitch(c);
   cli.start(c, of);
+  marks.init(c);
+  // Закладки проекта (t881, marks.js): читает окно проекта; весь список пишет только оно — после записи список уходит всем окнам этого проекта.
+  ipcMain.handle('browser:marks', (e) => {
+    if (!sender.allowed(e, 'browser:marks')) return sender.refused();
+    const p = projectOf(e.sender);
+    return p ? marks.list(p.id) : { error: 'окно без проекта' };
+  });
+  ipcMain.handle('browser:marks-set', (e, list) => {
+    if (!sender.allowed(e, 'browser:marks-set')) return sender.refused();
+    const p = projectOf(e.sender);
+    if (!p) return { error: 'окно без проекта' };
+    const out = marks.set(p.id, list);
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      const wc = win.webContents;
+      if (wc.isDestroyed() || wc === e.sender) continue;
+      const q = projectOf(wc);
+      if (q && q.id === p.id) wc.send('browser:marks', out);
+    }
+    return out;
+  });
   ipcMain.handle('browser:list', (e) => {
     if (!sender.allowed(e, 'browser:list')) return sender.refused();
     const p = projectOf(e.sender);

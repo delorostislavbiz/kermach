@@ -31,7 +31,30 @@
     tablet: '<rect x="4.5" y="3" width="15" height="18" rx="2"/><path d="M11 18h2"/>',
     dev: '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/>',
     agent: '<rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/>',
+    mark: '<path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z"/>',
+    out: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
   };
+  /**
+   * Закладки проекта (t881): полоса под адресом, звёздочка, список в пустой вкладке. Стили — здесь, а не в index.html: они только у «Браузера».
+   * Цвета — переменные темы окна, как у панели вкладки.
+   */
+  const MARK_CSS = `.bmarks { height: 28px; flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 8px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+      border-bottom: 1px solid var(--line, rgba(141,145,165,.14)); }
+    .bmarks[hidden] { display: none; }
+    .bmark { height: 22px; max-width: 180px; flex-shrink: 0; display: flex; align-items: center; gap: 5px; padding: 0 8px; border-radius: 4px; color: var(--text); font-size: 12px; cursor: default; }
+    .bmark span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bmark svg { flex-shrink: 0; color: var(--muted); }
+    .bmark:hover, .bmrow:hover { background: var(--hover); }
+    .bmark.drag, .bmrow.drag { opacity: .45; }
+    .bmark.dropb { box-shadow: inset 2px 0 0 var(--accent); } .bmark.dropa { box-shadow: inset -2px 0 0 var(--accent); }
+    .bmrow.dropb { box-shadow: inset 0 2px 0 var(--accent); } .bmrow.dropa { box-shadow: inset 0 -2px 0 var(--accent); }
+    .bbar .bb[data-b="mark"].on svg { fill: currentColor; }
+    .bview .bmsg .bmlist { display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: min(420px, 90%); max-height: 100%; overflow-y: auto; }
+    .bview .bmsg .bmhead { margin-bottom: 10px; text-align: center; }
+    .bmrow { display: flex; gap: 12px; padding: 6px 10px; border-radius: 4px; color: var(--text); text-align: left; cursor: default; }
+    .bmrow span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bmrow span:last-child { margin-left: auto; max-width: 50%; color: var(--muted); }`;
   /** Виды вкладки сайта (t207): кнопка — подпись. Считается при каждом показе — язык меняется на лету (t287). @param {'desktop' | 'mobile' | 'tablet'} k */
   const viewTitle = (k) => (k === 'mobile' ? I18n.t('browser.mobilnyy', 'Мобильный') : k === 'tablet' ? I18n.t('browser.planshet', 'Планшет') : I18n.t('browser.kompyuter', 'Компьютер'));
   /** Сколько держится строка о неудаче рядом с адресом. */
@@ -61,7 +84,7 @@
     if (!n.length) return I18n.t('browser.agentaPonimayuschegoKartinki', 'агента, понимающего картинки');
     return n.length === 1 ? n[0] : `${n.slice(0, -1).join(', ')} ${I18n.t('browser.ili', 'или')} ${n[n.length - 1]}`;
   };
-  const glyph = (/** @type {keyof GLYPH} */ k) => `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${GLYPH[k]}</svg>`;
+  const glyph = (/** @type {keyof GLYPH} */ k, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${GLYPH[k]}</svg>`;
 
   /**
    * Что набрали в адресной строке → адрес. Без схемы — https://, для localhost и IP — http://. Другие схемы не пускаем.
@@ -82,8 +105,10 @@
 
   /**
    * @typedef {{ sid: string, url: string, title: string, pane: HTMLElement, input: HTMLInputElement, view: any, msg: HTMLElement,
-   *   note: HTMLElement, btn: Record<'back' | 'fwd' | 'reload' | 'shot' | 'pick' | 'desktop' | 'mobile' | 'tablet' | 'dev' | 'agent' | 'any', HTMLElement>, picking: boolean,
-   *   tab: { pos: number }, savedPos: number, kind: 'desktop' | 'mobile' | 'tablet', box: HTMLElement, untitled: boolean, badUrl: boolean, agent: boolean, site: string, any: boolean }} BTab
+   *   note: HTMLElement, btn: Record<'back' | 'fwd' | 'reload' | 'mark' | 'out' | 'shot' | 'pick' | 'desktop' | 'mobile' | 'tablet' | 'dev' | 'agent' | 'any', HTMLElement>, picking: boolean,
+   *   tab: { pos: number }, savedPos: number, kind: 'desktop' | 'mobile' | 'tablet', box: HTMLElement, untitled: boolean, badUrl: boolean, agent: boolean, site: string, any: boolean,
+   *   bar: HTMLElement }} BTab
+   * @typedef {{ url: string, title: string }} Mark
    */
 
   /** @param {any} host место в окне от project-page.js */
@@ -105,6 +130,16 @@
     let shown = '';
     /** Снимки команды terminalus browser, которые сейчас показывают вкладку (t387): номер гостя → сколько. @type {Map<number, number>} */
     const reveals = new Map();
+    /** Закладки проекта (t881) по порядку — от главного процесса (marks.js); пишет весь список setMarks. @type {Mark[]} */
+    let marks = [];
+    /** Адрес закладки, которую сейчас тянут мышью (порядок закладок). */
+    let dragUrl = '';
+    if (!document.getElementById('bmarksCss')) {
+      const st = document.createElement('style');
+      st.id = 'bmarksCss';
+      st.textContent = MARK_CSS;
+      document.head.appendChild(st);
+    }
 
     /**
      * Стили показа на панели вкладки по счёту снимков (t387). Скрытую вкладку (visibility: hidden) Chromium не рисует, и снимок ждёт кадра вечно:
@@ -155,6 +190,14 @@
       s.btn.back.classList.toggle('off', !back);
       s.btn.fwd.classList.toggle('off', !fwd);
       s.btn.reload.classList.toggle('off', !v);
+      // Звёздочка (t881): залита — адрес вкладки в закладках проекта; у пустой вкладки добавлять нечего.
+      const on = marked(s.url);
+      s.btn.mark.classList.toggle('on', on);
+      s.btn.mark.classList.toggle('off', !s.url);
+      s.btn.mark.title = on ? I18n.t('browser.markOff', 'Убрать из закладок проекта') : I18n.t('browser.markOn', 'Добавить в закладки проекта');
+      // «Открыть в браузере Windows» (t884): там работают расширения (Bitwarden), а пароль не проходит через Kermach. Только http(s).
+      s.btn.out.classList.toggle('off', !/^https?:\/\//i.test(s.url));
+      s.btn.out.title = I18n.t('browser.openOut', 'Открыть в обычном браузере (Chrome) — там работают ваши расширения, например Bitwarden');
       // «Скриншот» — только когда есть страница и агент, куда вставить путь.
       const to = host.agentTarget();
       s.btn.shot.classList.toggle('off', !v || !to);
@@ -316,6 +359,126 @@
       host.show(to);
     }
 
+    /** Адрес в закладках проекта. @param {string} url */
+    const marked = (url) => !!url && marks.some((m) => m.url === url);
+    /** Адрес коротко для списка в пустой вкладке: без схемы и www. @param {string} url */
+    const shortUrl = (url) => url.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '');
+
+    /** Закладки поменялись — полоса, список в пустой вкладке и звёздочка у всех вкладок окна. */
+    function redrawMarks() {
+      for (const x of list) { drawMarks(x); msgText(x); buttons(x); }
+    }
+
+    /**
+     * Весь список закладок → главный процесс; он отвечает записанным (после своей проверки) и рассылает другим окнам проекта.
+     * Полоса перерисовывается сразу, не дожидаясь ответа. @param {Mark[]} next
+     */
+    function saveMarks(next) {
+      marks = next;
+      redrawMarks();
+      Promise.resolve().then(() => b.setMarks(next)).then((/** @type {any} */ r) => {
+        if (dead) return;
+        if (!Array.isArray(r)) { host.log(`закладки не сохранены: ${r && r.error || 'нет ответа'}`); return; }
+        marks = r;
+        redrawMarks();
+      }).catch((/** @type {any} */ e) => host.log(`закладки не сохранены: ${e}`));
+    }
+
+    /** Звёздочка: адреса нет в закладках — добавить в конец с заголовком страницы, есть — убрать. @param {BTab} s */
+    function toggleMark(s) {
+      if (!s.url) return;
+      if (marked(s.url)) saveMarks(marks.filter((m) => m.url !== s.url));
+      else saveMarks([...marks, { url: s.url, title: s.untitled ? shortUrl(s.url) : s.title }]);
+    }
+
+    /**
+     * Открыть закладку. Пустая вкладка — сайт в ней. Вкладка с сайтом — новая вкладка рядом, а не в этой:
+     * эта может быть отдана агенту («Агенту»), и админка в ней стала бы доступна агенту.
+     * @param {BTab} s @param {string} url
+     */
+    function openMark(s, url) {
+      if (!s.url) { s.input.value = url; go(s); } else open({ url, select: true });
+    }
+
+    /** Правый щелчок по закладке: «Переименовать» — окошко имени, как у терминала; «Удалить». @param {string} url @param {number} x @param {number} y */
+    async function markMenu(url, x, y) {
+      const D = w.Dialogs;
+      const pick = await D.menu(x, y, [{ id: 'rename', label: I18n.t('common.rename', 'Переименовать'), icon: 'pen' }, '-',
+        { id: 'delete', label: I18n.t('common.delete', 'Удалить'), icon: 'trash', danger: true }]);
+      const m = marks.find((k) => k.url === url);
+      if (dead || !m) return;
+      if (pick === 'delete') saveMarks(marks.filter((k) => k !== m));
+      else if (pick === 'rename') {
+        const title = await D.rename({ value: m.title, title: I18n.t('browser.markRename', 'Имя закладки'), max: 300 });
+        const now = marks.find((k) => k.url === url);
+        if (!dead && title && now) saveMarks(marks.map((k) => (k === now ? { url, title } : k)));
+      }
+    }
+
+    /** Перенести закладку from перед to или после неё (порядок мышью). @param {string} from @param {string} to @param {boolean} after */
+    function moveMark(from, to, after) {
+      const m = marks.find((k) => k.url === from);
+      if (!m || from === to) return;
+      const next = marks.filter((k) => k !== m);
+      const i = next.findIndex((k) => k.url === to);
+      if (i < 0) return;
+      next.splice(after ? i + 1 : i, 0, m);
+      saveMarks(next);
+    }
+
+    /**
+     * Элемент закладки: в полосе (row = false) или строкой в пустой вкладке. Щелчок — открыть, правый щелчок — меню, перетащить — порядок.
+     * @param {BTab} s @param {Mark} m @param {boolean} row
+     */
+    function markEl(s, m, row) {
+      const el = document.createElement('div');
+      el.className = row ? 'bmrow' : 'bmark';
+      el.title = `${m.title}\n${m.url}`;
+      el.draggable = true;
+      if (!row) el.innerHTML = glyph('globe', 12);
+      for (const text of row ? [m.title, shortUrl(m.url)] : [m.title]) {
+        const span = document.createElement('span');
+        span.textContent = text;
+        el.appendChild(span);
+      }
+      el.onclick = () => openMark(s, m.url);
+      el.oncontextmenu = (ev) => { ev.preventDefault(); markMenu(m.url, ev.clientX, ev.clientY).catch((e) => host.log(`меню закладки: ${e}`)); };
+      const side = (/** @type {DragEvent} */ ev) => {
+        const r = el.getBoundingClientRect();
+        return row ? ev.clientY > r.top + r.height / 2 : ev.clientX > r.left + r.width / 2;
+      };
+      const unmark = () => el.classList.remove('dropa', 'dropb');
+      el.addEventListener('dragstart', (ev) => {
+        dragUrl = m.url;
+        el.classList.add('drag');
+        if (ev.dataTransfer) { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/x-kermach-mark', m.url); }
+      });
+      el.addEventListener('dragend', () => { dragUrl = ''; el.classList.remove('drag'); });
+      el.addEventListener('dragover', (ev) => {
+        if (!dragUrl || dragUrl === m.url) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const after = side(ev);
+        el.classList.toggle('dropa', after);
+        el.classList.toggle('dropb', !after);
+      });
+      el.addEventListener('dragleave', unmark);
+      el.addEventListener('drop', (ev) => {
+        if (!dragUrl) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        unmark();
+        moveMark(dragUrl, m.url, side(ev));
+      });
+      return el;
+    }
+
+    /** Полоса закладок под адресом: нет закладок — полосы нет, место не занимает. @param {BTab} s */
+    function drawMarks(s) {
+      s.bar.replaceChildren(...marks.map((m) => markEl(s, m, false)));
+      s.bar.hidden = !marks.length;
+    }
+
     /** Тег webview — только когда есть адрес: пустая вкладка ждёт ввода. @param {BTab} s @param {string} url */
     function attach(s, url) {
       const v = document.createElement('webview');
@@ -365,10 +528,19 @@
       buttons(s);
     }
 
-    /** Строка посреди пустой вкладки: приглашение ввести адрес или «это не адрес». @param {BTab} s */
+    /** Строка посреди пустой вкладки: приглашение ввести адрес или «это не адрес»; под ней — закладки проекта (t881). @param {BTab} s */
     function msgText(s) {
-      s.msg.textContent = s.badUrl ? I18n.t('browser.etoNeAdresSayta', 'Это не адрес сайта. Откроются только адреса http и https.')
-        : I18n.t('browser.vvediteAdresSaytaI', 'Введите адрес сайта и нажмите Enter.');
+      const text = s.badUrl ? I18n.t('browser.etoNeAdresSayta', 'Это не адрес сайта. Откроются только адреса http и https.')
+        : marks.length ? I18n.t('browser.markEmpty', 'Введите адрес сайта или откройте закладку проекта.')
+          : I18n.t('browser.vvediteAdresSaytaI', 'Введите адрес сайта и нажмите Enter.');
+      if (!marks.length) { s.msg.textContent = text; return; }
+      const box = document.createElement('div');
+      box.className = 'bmlist';
+      const head = document.createElement('div');
+      head.className = 'bmhead';
+      head.textContent = text;
+      box.append(head, ...marks.map((m) => markEl(s, m, true)));
+      s.msg.replaceChildren(box);
     }
 
     /**
@@ -440,7 +612,8 @@
       // Надписи панели ставит label(s): при открытии и после смены языка (t287).
       s.pane.innerHTML = `<div class="bbar"><div class="bb" data-b="back">${glyph('back')}</div>`
         + `<div class="bb" data-b="fwd">${glyph('fwd')}</div><div class="bb" data-b="reload">${glyph('reload')}</div>`
-        + `<input spellcheck="false"><span class="bnote" hidden></span>`
+        + `<input spellcheck="false"><span class="bnote" hidden></span><div class="bb" data-b="mark" style="margin-left:2px">${glyph('mark')}</div>`
+        + `<div class="bb" data-b="out">${glyph('out')}</div>`
         + `<div class="bb" data-b="desktop" style="margin-left:6px">${glyph('desktop')}</div>`
         + `<div class="bb" data-b="mobile">${glyph('mobile')}</div>`
         + `<div class="bb" data-b="tablet">${glyph('tablet')}</div>`
@@ -448,15 +621,29 @@
         + `<div class="bb" data-b="any" style="width:auto;padding:0 7px;margin-left:2px;display:none"><span></span></div>`
         + `<div class="bb" data-b="dev" style="margin-left:6px">${glyph('dev')}</div>`
         + `<div class="bb" data-b="pick">${glyph('pick')}</div><div class="bb" data-b="shot">${glyph('shot')}</div></div>`
-        + `<div class="bview"><div class="bmsg"></div></div>`;
+        + `<div class="bmarks" hidden></div><div class="bview"><div class="bmsg"></div></div>`;
       s.input = /** @type {HTMLInputElement} */ (s.pane.querySelector('input'));
+      s.bar = /** @type {HTMLElement} */ (s.pane.querySelector('.bmarks'));
       s.msg = /** @type {HTMLElement} */ (s.pane.querySelector('.bmsg'));
       s.box = /** @type {HTMLElement} */ (s.pane.querySelector('.bview'));
       s.note = /** @type {HTMLElement} */ (s.pane.querySelector('.bnote'));
       s.btn = /** @type {any} */ ({});
       for (const el of s.pane.querySelectorAll('.bb')) s.btn[/** @type {'back'} */ (/** @type {HTMLElement} */ (el).dataset.b)] = /** @type {HTMLElement} */ (el);
       label(s);
-      s.btn.back.onclick = () => { try { if (s.view && s.view.canGoBack()) s.view.goBack(); } catch {} };
+      drawMarks(s);
+      // Полоса прокрутки у закладок скрыта, а обычное колесо (deltaY) сам Chromium вбок не крутит (t890). Тачпад и колесо вбок (deltaX) — как есть.
+      s.bar.addEventListener('wheel', (e) => {
+        if (e.deltaX || !e.deltaY || s.bar.scrollWidth <= s.bar.clientWidth) return;
+        s.bar.scrollLeft += e.deltaY;
+        e.preventDefault();
+      }, { passive: false });
+      s.btn.mark.onclick = () => toggleMark(s);
+      // Адрес открывает главный процесс (link:open, main.js): только http(s), в браузере Windows по умолчанию.
+      s.btn.out.onclick = () => {
+        if (!/^https?:\/\//i.test(s.url)) return;
+        host.bridge.openLink(s.url, 'browser').then((/** @type {any} */ r) => { if (r && r.error) host.log(`открыть в браузере: ${r.error}`); }, (/** @type {any} */ e) => host.log(`открыть в браузере: ${e}`));
+      };
+      s.btn.back.onclick =() => { try { if (s.view && s.view.canGoBack()) s.view.goBack(); } catch {} };
       s.btn.fwd.onclick = () => { try { if (s.view && s.view.canGoForward()) s.view.goForward(); } catch {} };
       s.btn.reload.onclick = () => { if (s.view) s.view.reload(); };
       s.btn.shot.onclick = () => { shot(s).catch((e) => host.log(`снимок: ${e}`)); };
@@ -493,8 +680,10 @@
     offs.push(I18n.onChange(() => { for (const x of list) label(x); plus(); }));
 
     // Размеры видов и масштаб окна (t207) — до вкладок из файла: тег узкого вида сразу получает свою ширину.
-    Promise.all([b.list(), b.views().catch(() => null), host.bridge.settings.get().catch(() => null)]).then(([/** @type {any} */ r, /** @type {any} */ v, /** @type {any} */ st]) => {
+    // Закладки (t881) — тоже до вкладок: полоса и список в пустой вкладке рисуются при открытии.
+    Promise.all([b.list(), b.views().catch(() => null), host.bridge.settings.get().catch(() => null), b.marks().catch(() => null)]).then(([/** @type {any} */ r, /** @type {any} */ v, /** @type {any} */ st, /** @type {any} */ mk]) => {
       if (v && v.mobile && v.tablet) views = v;
+      if (Array.isArray(mk)) marks = mk;
       if (st && Number(st.uiZoom) > 0) zoom = Number(st.uiZoom) / 100;
       if (dead) return;
       if (!r || r.error) { host.log(`вкладки сайта не получены: ${r ? r.error : 'нет ответа'}`); return; }
@@ -510,6 +699,8 @@
         views = v;
         for (const x of list) if (x.kind !== 'desktop') applyView(x).catch((e) => host.log(`вид вкладки сайта: ${e}`));
       }));
+      // Закладки записало другое окно этого проекта (t881) — полоса здесь та же.
+      offs.push(b.onMarks((/** @type {any} */ v) => { if (!dead && Array.isArray(v)) { marks = v; redrawMarks(); } }));
       // Шрифт окон (масштаб окна) поменяли — тег узкого вида пересчитывается, чтобы страница осталась своей ширины.
       offs.push(host.bridge.settings.onChanged((/** @type {any} */ st) => {
         const z = Number(st && st.uiZoom) / 100;

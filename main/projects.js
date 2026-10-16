@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const i18n = require('./i18n');
 
 const ORCA_FILE = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
   'orca-termius', 'profiles', 'local-default', 'orca-data.json');
@@ -21,7 +22,7 @@ const DEFAULT_COLOR = '#737373';
 
 /**
  * openedAt — когда проект открывали последний раз (ISO); нет — ни разу не открывали в TERMINALUS. По нему окно «Проекты» ставит недавние выше.
- * @typedef {{ id: string, name: string, path: string, color: string, icon: string, group: string | null, pinned?: boolean, openedAt?: string }} Project
+ * @typedef {{ id: string, name: string, path: string, color: string, icon: string, group: string | null, pinned?: boolean, bypass?: boolean, openedAt?: string }} Project
  * @typedef {{ at: string, count: number, note?: string }} OrcaImport
  * @typedef {{ v: 2, last: string, importedFromOrca?: OrcaImport, groups: { id: string, name: string }[], projects: Project[] }} ProjectsData
  */
@@ -201,12 +202,13 @@ function add(dataDir, data, dir) {
  * Проверка того, что пришло из окна: имя (1–60 знаков после обрезки пробелов), цвет #rrggbb, значок из набора icons.js.
  * Регистр цвета не меняется: у проектов из Орки цвета строчными буквами, в палитре — заглавными.
  * pinned — только true или false (t164): закрепление проекта в окне «Проекты».
- * @param {any} f @param {('title' | 'color' | 'icon' | 'pinned')[]} keys какие поля можно менять
- * @returns {{ fields: { title?: string, color?: string, icon?: string, pinned?: boolean }, error?: undefined } | { error: string, fields?: undefined }}
+ * bypass — только true или false (t851): все новые вкладки Claude проекта — без вопросов о разрешениях.
+ * @param {any} f @param {('title' | 'color' | 'icon' | 'pinned' | 'bypass')[]} keys какие поля можно менять
+ * @returns {{ fields: { title?: string, color?: string, icon?: string, pinned?: boolean, bypass?: boolean }, error?: undefined } | { error: string, fields?: undefined }}
  */
 function checkLook(f, keys) {
   if (!f || typeof f !== 'object') return { error: 'нечего менять' };
-  /** @type {{ title?: string, color?: string, icon?: string, pinned?: boolean }} */
+  /** @type {{ title?: string, color?: string, icon?: string, pinned?: boolean, bypass?: boolean }} */
   const out = {};
   for (const k of keys) {
     if (!(k in f)) continue;
@@ -221,6 +223,9 @@ function checkLook(f, keys) {
     } else if (k === 'pinned') {
       if (typeof v !== 'boolean') return { error: `закрепление — только true или false: ${JSON.stringify(v)}` };
       out.pinned = v;
+    } else if (k === 'bypass') {
+      if (typeof v !== 'boolean') return { error: `без вопросов о разрешениях — только true или false: ${JSON.stringify(v)}` };
+      out.bypass = v;
     } else {
       if (typeof v !== 'string' || !require('../renderer/icons').GRID.includes(v)) return { error: `нет такого значка: ${v}` };
       out.icon = v;
@@ -232,8 +237,8 @@ function checkLook(f, keys) {
 /**
  * Цвет, значок и закрепление проекта. Меняются поля того же объекта, а не подменяется сам объект: окно проекта держит ссылку на него
  * (project-window.js), и после смены оно видит новые цвет и значок.
- * Открепленный проект поля pinned не держит: оно пропадает из записи, как у проекта, никогда не бывшего закреплённым.
- * @param {string} dataDir @param {ProjectsData} data @param {string} id @param {{ color?: string, icon?: string, pinned?: boolean }} look
+ * Открепленный проект поля pinned не держит: оно пропадает из записи, как у проекта, никогда не бывшего закреплённым. Так же bypass (t851).
+ * @param {string} dataDir @param {ProjectsData} data @param {string} id @param {{ color?: string, icon?: string, pinned?: boolean, bypass?: boolean }} look
  * @returns {Project | null} нет такого проекта — null
  */
 function setLook(dataDir, data, id, look) {
@@ -243,6 +248,8 @@ function setLook(dataDir, data, id, look) {
   if (look.icon) p.icon = look.icon;
   if (look.pinned === true) p.pinned = true;
   else if (look.pinned === false) delete p.pinned;
+  if (look.bypass === true) p.bypass = true;
+  else if (look.bypass === false) delete p.bypass;
   save(dataDir, data);
   return p;
 }
@@ -262,4 +269,82 @@ function remove(dataDir, data, id) {
   return p;
 }
 
-module.exports = { ORCA_FILE, DEFAULT_COLOR, normPath, projectId, load, save, findByPath, remember, add, checkLook, setLook, remove };
+// Группы (t774): создать, переименовать, сдвинуть, удалить; перенести проект. Номер новой группы — uuid: не пересечётся с номерами из Орки.
+
+/**
+ * Имя группы: без пробелов по краям, не пустое, не длиннее 60 знаков и без повтора без учёта регистра (кроме самой группы except).
+ * @param {ProjectsData} data @param {unknown} name @param {string} [except]
+ * @returns {{ name: string } | { error: string }}
+ */
+function checkGroupName(data, name, except = '') {
+  const n = typeof name === 'string' ? name.trim() : '';
+  if (!n) return { error: i18n.t('projects.groupEmpty', 'Имя группы пустое') };
+  if (n.length > 60) return { error: i18n.t('projects.groupLong', 'Имя группы длиннее 60 знаков') };
+  const low = n.toLocaleLowerCase();
+  const same = data.groups.find((g) => g.id !== except && g.name.toLocaleLowerCase() === low);
+  if (same) return { error: i18n.t('projects.groupExists', 'Группа «{name}» уже есть', { name: same.name }) };
+  return { name: n };
+}
+
+/**
+ * Новая группа — последней. pid — сразу перенести в неё этот проект (пункт «Новая группа…» в меню проекта).
+ * @param {string} dataDir @param {ProjectsData} data @param {unknown} name @param {string} [pid]
+ * @returns {{ group: { id: string, name: string } } | { error: string }}
+ */
+function addGroup(dataDir, data, name, pid) {
+  const c = checkGroupName(data, name);
+  if (!('name' in c)) return c;
+  const p = pid ? data.projects.find((x) => x.id === pid) : null;
+  if (pid && !p) return { error: `нет проекта ${pid}` };
+  const group = { id: crypto.randomUUID(), name: c.name };
+  data.groups.push(group);
+  if (p) p.group = group.id;
+  save(dataDir, data);
+  return { group };
+}
+
+/** @param {string} dataDir @param {ProjectsData} data @param {string} id @param {unknown} name @returns {{ group: { id: string, name: string } } | { error: string }} */
+function renameGroup(dataDir, data, id, name) {
+  const g = data.groups.find((x) => x.id === id);
+  if (!g) return { error: `нет группы ${id}` };
+  const c = checkGroupName(data, name, id);
+  if (!('name' in c)) return c;
+  g.name = c.name;
+  save(dataDir, data);
+  return { group: g };
+}
+
+/** «Выше» (-1) и «Ниже» (1): меняется местами с соседней. Порядок групп — порядок в файле. @param {string} dataDir @param {ProjectsData} data @param {string} id @param {number} step */
+function moveGroup(dataDir, data, id, step) {
+  const i = data.groups.findIndex((x) => x.id === id);
+  if (i < 0) return { error: `нет группы ${id}` };
+  const j = i + step;
+  if ((step !== 1 && step !== -1) || j < 0 || j >= data.groups.length) return { error: `группу ${id} некуда сдвинуть` };
+  [data.groups[i], data.groups[j]] = [data.groups[j], data.groups[i]];
+  save(dataDir, data);
+  return { ok: true };
+}
+
+/** Удалить группу: её проекты остаются в списке, «Без группы». @param {string} dataDir @param {ProjectsData} data @param {string} id @returns {{ moved: number } | { error: string }} */
+function removeGroup(dataDir, data, id) {
+  const i = data.groups.findIndex((x) => x.id === id);
+  if (i < 0) return { error: `нет группы ${id}` };
+  data.groups.splice(i, 1);
+  let moved = 0;
+  for (const p of data.projects) if (p.group === id) { p.group = null; moved++; }
+  save(dataDir, data);
+  return { moved };
+}
+
+/** Перенести проект в группу; null — «Без группы». @param {string} dataDir @param {ProjectsData} data @param {string} id @param {string | null} groupId */
+function setGroup(dataDir, data, id, groupId) {
+  const p = data.projects.find((x) => x.id === id);
+  if (!p) return { error: `нет проекта ${id}` };
+  if (groupId !== null && !data.groups.some((g) => g.id === groupId)) return { error: `нет группы ${groupId}` };
+  p.group = groupId;
+  save(dataDir, data);
+  return { project: p };
+}
+
+module.exports = { ORCA_FILE, DEFAULT_COLOR, normPath, projectId, load, save, findByPath, remember, add, checkLook, setLook, remove,
+  checkGroupName, addGroup, renameGroup, moveGroup, removeGroup, setGroup };

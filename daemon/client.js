@@ -26,6 +26,8 @@ class DaemonClient extends EventEmitter {
     this.daemonPid = 0;
     /** Файл настроек для claude --settings (хуки на приёмник демона). Пусто — демон старый, claude без хуков. */
     this.hooksSettings = '';
+    /** Флаги -c хука SessionStart для codex (t777). Пусто — демон старый, codex без хука. @type {string[]} */
+    this.codexHookArgs = [];
     /** Как запущен демон, если его запустил этот клиент: 'rundll32' или 'напрямую'. @type {string} */
     this.spawnedVia = '';
     this.nextId = 1;
@@ -128,6 +130,7 @@ function connect({ role = 'client', name = '', version = PROTOCOL_VERSION } = {}
         const r = await c.request('hello', { v: version, role, name, key: readKey() });
         c.daemonPid = r.pid;
         c.hooksSettings = String(r.hooksSettings || '');
+        c.codexHookArgs = Array.isArray(r.codexHookArgs) ? r.codexHookArgs.map(String) : [];
         resolve(c);
       } catch (e) {
         c.close();

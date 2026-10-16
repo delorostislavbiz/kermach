@@ -129,8 +129,9 @@ function runUser(command, input) {
     // Чужих /T не задевает (t98): зовётся, только пока cmd.exe жив, — Node держит его хэндл, номер не переиспользован;
     // сирот старше родителя taskkill /T не трогает (spikes\t71-find\taskkill-probe.txt). cmd.exe уже вышел, а внук держит
     // вывод — done ещё false, но номер свободен (exit-vs-close.txt там же): тогда не гасим, просто выходим.
+    // taskkill — по полному пути (t802): PATH у скрипта строки состояния бывает урезан.
     if (process.platform !== 'win32') child.kill();
-    else if (child.pid && child.exitCode === null && child.signalCode === null) spawnSync('taskkill', ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true, stdio: 'ignore' });
+    else if (child.pid && child.exitCode === null && child.signalCode === null) spawnSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true, stdio: 'ignore' });
     finish();
   }, USER_MS).unref();
 }

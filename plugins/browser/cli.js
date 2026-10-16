@@ -25,6 +25,7 @@ const { SOCK_MAX } = require('../../daemon/platform');
 const pasteFiles = require('../../main/paste-files');
 const settings = require('../../main/settings');
 const { CONTROL } = require('./grab');
+const marks = require('./marks');
 
 /** Папка команды: terminalus.cmd (Windows) и terminalus (sh: Git Bash у Claude, Mac); сам скрипт — в lib\ под ней, вне PATH (t388). */
 const BIN = path.join(__dirname, '..', '..', 'bin');
@@ -550,9 +551,12 @@ async function handle(q) {
 async function work(q, id) {
   const c = /** @type {Ctx} */ (ctx);
   const host = hostOf(id);
-  if (!host) return fail(3, 'окно проекта закрыто — откройте проект в Kermach, и вкладки браузера снова будут видны');
-  const p = projectOf(host);
+  const p = host ? projectOf(host) : null;
   const project = p ? clean(p.name).slice(0, 200) : '';
+  // Закладки проекта (t881) — только чтение и без отметки «Агенту»: агенту нужен адрес админки, а менять закладки может только человек (marks.js).
+  // Окно проекта не нужно: список лежит в главном процессе.
+  if (q.cmd === 'marks') return { ok: true, project, marks: marks.list(id).map((m) => ({ title: clean(m.title).slice(0, 300), url: clean(m.url).slice(0, 4096) })) };
+  if (!host) return fail(3, 'окно проекта закрыто — откройте проект в Kermach, и вкладки браузера снова будут видны');
   const tabs = await tabsOf(host);
   if (!tabs) return fail(3, 'окно проекта ещё не готово или не отвечает — повторите через несколько секунд');
   // Вкладок нет — код не 0 и у списка тоже: агент по коду видит, что смотреть нечего (бриф t381).

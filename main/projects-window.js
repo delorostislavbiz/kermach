@@ -165,14 +165,21 @@ function register(c) {
     return r;
   });
   // «Цвет и значок» и «Закрепить» / «Открепить» (pinned, t164). Открытое окно проекта перекрашивает заголовок и значок на панели задач.
+  // «Claude без вопросов о разрешениях» (bypass, t851) — только из окна «Проекты»: в окне проекта работают плагины, им эту настройку менять нельзя.
   ipcMain.handle('projects:update', (e, id, look) => {
     if (!sender.allowed(e, 'projects:update')) return sender.refused();
-    const f = projects.checkLook(look, ['color', 'icon', 'pinned']);
+    const fromList = !!win && !win.isDestroyed() && e.sender === win.webContents;
+    if (look && typeof look === 'object' && 'bypass' in look && !fromList) {
+      c.log(`проект ${id}: настройку «без вопросов о разрешениях» прислало не окно «Проекты» — отказ`);
+      return { error: 'настройку «без вопросов о разрешениях» меняет только окно «Проекты»' };
+    }
+    const f = projects.checkLook(look, ['color', 'icon', 'pinned', 'bypass']);
     if (!f.fields) return f;
     const p = projects.setLook(c.dataDir, /** @type {any} */ (data), String(id), f.fields);
     if (!p) return { error: `нет проекта ${id}` };
     if (f.fields.color || f.fields.icon) c.log(`проект ${p.path}: цвет ${p.color}, значок ${p.icon}`);
     if (f.fields.pinned !== undefined) c.log(`проект ${p.path}: ${f.fields.pinned ? 'закреплён' : 'откреплён'}`);
+    if (f.fields.bypass !== undefined) c.log(`проект ${p.path}: новые вкладки Claude ${f.fields.bypass ? 'без вопросов о разрешениях' : 'с вопросами о разрешениях, как обычно'}`);
     changed();
     require('./project-window').windowFor(p.id)?.webContents.send('project:changed');
     return { ok: true };
@@ -183,6 +190,49 @@ function register(c) {
     const p = projects.remove(c.dataDir, /** @type {any} */ (data), String(id));
     if (!p) return { error: `нет проекта ${id}` };
     c.log(`убран из списка проект ${p.path}`);
+    changed();
+    return { ok: true };
+  });
+  // Группы (t774): создать (projectId — сразу перенести в неё проект), переименовать, «Выше» / «Ниже», удалить; перенести проект в группу.
+  // Ошибка (пустое имя, повтор) — { error }, страница показывает её строкой ошибки.
+  ipcMain.handle('projects:groupAdd', (e, name, projectId) => {
+    if (!sender.allowed(e, 'projects:groupAdd')) return sender.refused();
+    const r = projects.addGroup(c.dataDir, /** @type {any} */ (data), name, typeof projectId === 'string' ? projectId : undefined);
+    if ('error' in r) return r;
+    c.log(`новая группа «${r.group.name}»${projectId ? `, в неё перенесён проект ${projectId}` : ''}`);
+    changed();
+    return r;
+  });
+  ipcMain.handle('projects:groupRename', (e, id, name) => {
+    if (!sender.allowed(e, 'projects:groupRename')) return sender.refused();
+    const r = projects.renameGroup(c.dataDir, /** @type {any} */ (data), String(id), name);
+    if ('error' in r) return r;
+    c.log(`группа ${id} переименована в «${r.group.name}»`);
+    changed();
+    return r;
+  });
+  ipcMain.handle('projects:groupMove', (e, id, step) => {
+    if (!sender.allowed(e, 'projects:groupMove')) return sender.refused();
+    const r = projects.moveGroup(c.dataDir, /** @type {any} */ (data), String(id), Number(step));
+    if ('error' in r) return r;
+    changed();
+    return r;
+  });
+  // Удалить группу: проекты остаются и уходят в «Без группы». Ключ группы убирается из свёрнутых.
+  ipcMain.handle('projects:groupRemove', (e, id) => {
+    if (!sender.allowed(e, 'projects:groupRemove')) return sender.refused();
+    const r = projects.removeGroup(c.dataDir, /** @type {any} */ (data), String(id));
+    if ('error' in r) return r;
+    if (view.collapsed.includes(String(id))) { view.collapsed = view.collapsed.filter((k) => k !== String(id)); saveView(); }
+    c.log(`удалена группа ${id}, проектов перенесено в «Без группы»: ${r.moved}`);
+    changed();
+    return r;
+  });
+  ipcMain.handle('projects:setGroup', (e, id, groupId) => {
+    if (!sender.allowed(e, 'projects:setGroup')) return sender.refused();
+    const r = projects.setGroup(c.dataDir, /** @type {any} */ (data), String(id), typeof groupId === 'string' ? groupId : null);
+    if ('error' in r) return r;
+    c.log(`проект ${r.project.path}: группа ${r.project.group || 'нет'}`);
     changed();
     return { ok: true };
   });

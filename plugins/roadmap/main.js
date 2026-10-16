@@ -10,7 +10,9 @@
 // «Показать промпт» (t514) — команда prompt: текст собирает prompt.js из файлов доски и шаблонов при каждом вызове (своя копия prompt.md в ctx.dataDir, нет — встроенный); lists — списки моделей из agents.js.
 // «Запустить» (t515) — команда run: вкладка агента карты через ctx.openTab, первое сообщение — тот же prompt.build, агент, модель и усилие — agents.launchArgs.
 // Агент — любой из каталога ядра (t576): claude и codex — свой вид вкладки, остальные — agent:<id> (agents.kindOf); список для окна — ctx.agents().
-// Запуски — в мешке ctx.settings: runs[ключ проекта][карта] = { sid, started, title, kind, gone, st, at }; в файл карты — только статус (файл под git, номер вкладки ему не нужен).
+// Запуски — в мешке ctx.settings: runs[ключ проекта][карта] = { sid, started, title, kind, gone, st, at, tries, waited }; в файл карты — только статус (файл под git, номер вкладки ему не нужен).
+// tries и waited (t830) — номер попытки и «попытка дошла до „ждёт ответа“»: повторный запуск такой карты — ступенью выше (agents.raise), только в аргументах вкладки.
+// Запись запуска забыта, а карта не «готово» и не «в очереди» (на проверке, на ревью, статус от человека) — tries и waited живут в past[ключ][карта] до следующего запуска.
 // title и kind (t577) — заголовок открытия (ownTitle ядра) и агент: после revive демона номер вкладки новый, вкладку узнаём по ним, запись получает новый номер.
 // st и at — статус, который записала сама программа, и время правки файла сразу после записи (t551): окно по ним отличает свою запись от правки снаружи.
 // Статус идёт за вкладкой — sync: его зовут ctx.onState и окно на каждое изменение списка вкладок; живые вкладки — ctx.terminals() у демона.
@@ -19,6 +21,7 @@
 // Записи запусков меняются правками по ключам карт (patchRuns): sync и run ждут демона, и запись целиком затёрла бы то, что сделал другой за это время (t555).
 // «Составить роадмап» (t519) — команда compose: доски нет — вкладка Claude с заданием из compose.md (prompt.compose), доску заводит агент.
 // Её номер — в мешке, compose[ключ проекта] = { sid, started, title } (t568): экземпляр гаснет с окном, а вкладка живёт у демона. После revive номер новый — вкладку узнаём по title (ownTitle ядра); её нет — sync забывает запись.
+// «Новая карта» (t818) — команда newcard: доска есть — вкладка Claude с заданием из newcard.md (prompt.newcard), карту заводит агент. Запись — newcard[ключ проекта], как compose.
 // Файл карты есть, но не читается (агент пишет его не разом, опечатка в шапке) — запись держим: забываем, только когда карты нет на доске (t553).
 // Волна (t687) — команда wave: карты одной фазы («независимые», «все», «выделенные») запускаются тем же run по очереди. Очередь — только в памяти экземпляра:
 // окно закрыли или программу перезапустили — волн нет, само ничего не стартует. Шаг волны (pump) — в том же цикле sync после сверки статусов.
@@ -30,10 +33,19 @@ const fs = require('fs');
 const path = require('path');
 const board = require('./board');
 const prompt = require('./prompt');
+const patterns = require('./patterns');
 const agents = require('./agents');
+const codemap = require('./codemap/host');
+const askLog = require('./codemap/asked');
+const known = require('./known');
+/** Как часто смотреть, не появилась ли .kermach у проекта без карты кода (t876): дёшево — один stat. */
+const MAP_WAIT_MS = Number(process.env.T876_MAP_WAIT_MS) || 5000;
+/** Как часто смотреть журнал запросов «по смыслу», пока панель открыта (t947): один stat, файл тот же — без чтения. */
+const ASK_POLL_MS = 1000;
 
 /** Значение поля карты из board.js. @param {any} c @param {string} k */
-const field = (c, k) => String((k in board.CARD_FIELDS ? c.fields[k] : c[k]) || '');
+// Своих ключей шапки (pick, advisor…) в карте нет отдельным полем — они в extra (t832: сверка base у «снять pick»).
+const field = (c, k) => String((k in board.CARD_FIELDS ? c.fields[k] : k in c ? c[k] : c.extra && c.extra[k]) || '');
 /** Для сравнения: то, что прочтётся после записи board.update — строки блока ``` с отступом и пустыми, остальные без пробелов по краям, прочерк — пусто (t621). @param {unknown} v */
 const same = (v) => board.sameField(v);
 /** Предмет доски по ссылке (t513): passport — паспорт, f<N> — фаза, остальное — карта. @param {any} b @param {string} ref */
@@ -61,6 +73,8 @@ const valueOf = (ref, o, k, raw = false) => {
 const why = (e) => String((e && /** @type {any} */ (e).message) || e);
 /** Статусы, которые ставит запуск: только их программа меняет дальше сама. */
 const OWN = ['в работе', 'ждёт ответа'];
+/** Статусы, после которых счёт попыток начинается с 1 (t830). */
+const RESET = ['готово', 'в очереди'];
 /** Карту проверяют, вкладка запуска ещё жива (t707): запись держим — место занято, но статус по вкладке не пишем; вкладку закрыли — запись забываем без «паузы». */
 const HOLD = ['на проверке', 'на ревью'];
 /**
@@ -135,6 +149,30 @@ module.exports = (ctx) => {
   const starting = new Set();
   /** Карты, о которых уже сказали в журнал «файл не читается»: строка одна на сбой, а не на каждую сверку. */
   const unread = new Set();
+  // Карта кода (t840): строится и обновляется в фоне, в отдельном процессе (codemap\host.js — один исполнитель на программу).
+  // Карта — в .kermach\codemap\ проекта, только если .kermach уже есть: в чужие папки не пишем. Отписка — в stop().
+  // .kermach нет (папку ещё не завели или сама папка пропала) — смотреть раз в MAP_WAIT_MS: появилась — карта строится без переоткрытия окна (t876).
+  // Начинается в конце фабрики (t871): упала фабрика ниже — plugin-bridge.js не зовёт stop(), и исполнитель остался бы без хозяина.
+  codemap.setLog(ctx.log);
+  let offMap = () => {};
+  /** @type {NodeJS.Timeout | null} */
+  let mapWait = null;
+  let saidGone = false;
+  const startMap = () => {
+    mapWait = null;
+    if (stopped) return;
+    const mapFile = codemap.mapFile(project, { where: 'project' });
+    if (!mapFile) {
+      const gone = !fs.existsSync(project);
+      if (gone && !saidGone) ctx.log(`карта кода: нет папки ${project} — начну, когда папка вернётся`);
+      saidGone = gone;
+      mapWait = setTimeout(startMap, MAP_WAIT_MS);
+      return;
+    }
+    offMap = codemap.watch(project, mapFile, (m) => {
+      if (m.type === 'map' && m.how !== 'update' && m.how !== 'read') ctx.log(`карта кода: ${m.how === 'build' ? 'построена' : 'построена заново'}, файлов ${m.files}, объявлений ${m.symbols}, ${m.ms} мс`);
+    });
+  };
 
   /** Файлы карт с живым запуском: слежение смотрит их каждый круг (board.watch, pin) — первая правка агента видна сразу и на большой доске. @type {string[]} */
   let pins = [];
@@ -147,11 +185,28 @@ module.exports = (ctx) => {
     if (ids.size) try { names = fs.readdirSync(board.root(project)); } catch { /* папки доски нет — смотреть нечего */ }
     pins = names.filter((n) => ids.has(cardOf(n)));
   };
-  /** Запуски этого проекта из мешка: карта → { sid, started, gone, st, at }. @returns {Record<string, { sid: string, started: number, gone?: boolean, st?: string, at?: number }>} */
+  /** Запуски этого проекта из мешка: карта → { sid, started, gone, st, at }. @returns {Record<string, { sid: string, started: number, gone?: boolean, st?: string, at?: number, tries?: number, waited?: boolean }>} */
   const runsOf = () => {
     const s = ctx.settings.get();
     const all = s.runs && typeof s.runs === 'object' ? s.runs : {};
     return all[key] && typeof all[key] === 'object' ? { ...all[key] } : {};
+  };
+  /** Счёт попыток карт без записи запуска (t830): карта → { tries, waited }. */
+  const pastOf = () => {
+    const s = ctx.settings.get();
+    const all = s.past && typeof s.past === 'object' ? s.past : {};
+    return all[key] && typeof all[key] === 'object' ? { ...all[key] } : {};
+  };
+  /** Правка счёта попыток, как patchRuns: null — забыть. @param {Record<string, any>} ch */
+  const patchPast = (ch) => {
+    const s = ctx.settings.get();
+    const all = { ...(s.past && typeof s.past === 'object' ? s.past : {}) };
+    const mine = all[key] && typeof all[key] === 'object' ? { ...all[key] } : {};
+    for (const [id, v] of Object.entries(ch)) {
+      if (v) mine[id] = v; else delete mine[id];
+    }
+    if (Object.keys(mine).length) all[key] = mine; else delete all[key];
+    ctx.settings.set({ ...s, past: all });
   };
   /** Правка записей запусков по ключам на свежем мешке (t555): значение — новая запись, null — забыть. @param {Record<string, any>} ch */
   const patchRuns = (ch) => {
@@ -165,12 +220,16 @@ module.exports = (ctx) => {
     ctx.settings.set({ ...s, runs: all });
     repin(mine);
   };
-  /** Вкладка составления этого проекта из мешка (t568); title — заголовок, данный при открытии (ownTitle ядра). @returns {{ sid: string, started: number, title: string } | null} */
-  const composeOf = () => {
+  /**
+   * Вкладка задания этого проекта из мешка: bag — compose (составление, t568) или newcard (новая карта, t818); title — заголовок, данный при открытии (ownTitle ядра).
+   * @param {'compose' | 'newcard'} bag @returns {{ sid: string, started: number, title: string } | null}
+   */
+  const taskOf = (bag) => {
     const s = ctx.settings.get();
-    const c = s.compose && typeof s.compose === 'object' ? s.compose[key] : null;
+    const c = s[bag] && typeof s[bag] === 'object' ? s[bag][key] : null;
     return c && typeof c === 'object' && typeof c.sid === 'string' && c.sid ? { sid: c.sid, started: Number(c.started) || 0, title: typeof c.title === 'string' ? c.title : '' } : null;
   };
+  const composeOf = () => taskOf('compose');
   /**
    * Вкладка составления среди живых: по номеру, а после revive демона (номер новый) — claude с тем же заголовком открытия.
    * Ядро без ownTitle — только по номеру. @param {any[]} tabs @param {{ sid: string, title: string }} rec
@@ -187,12 +246,23 @@ module.exports = (ctx) => {
    */
   const waitingOf = (r) => new Set(r && Array.isArray(r.waiting) ? r.waiting.map(String) : []);
   const runTabOf = (tabs, rec) => tabs.find((t) => t.sid === rec.sid) || (rec.title ? tabs.find((t) => t.kind === rec.kind && t.ownTitle === rec.title) : undefined);
-  /** Записать или забыть (null) вкладку составления — на свежем мешке, только свой ключ (как patchRuns). @param {{ sid: string, started: number, title: string } | null} v */
-  const setCompose = (v) => {
+  /**
+   * Записать или забыть (null) вкладку задания — на свежем мешке, только свой ключ (как patchRuns).
+   * @param {'compose' | 'newcard'} bag @param {{ sid: string, started: number, title: string } | null} v
+   */
+  const setTask = (bag, v) => {
     const s = ctx.settings.get();
-    const all = { ...(s.compose && typeof s.compose === 'object' ? s.compose : {}) };
+    const all = { ...(s[bag] && typeof s[bag] === 'object' ? s[bag] : {}) };
     if (v) all[key] = v; else delete all[key];
-    ctx.settings.set({ ...s, compose: all });
+    ctx.settings.set({ ...s, [bag]: all });
+  };
+  /**
+   * Кнопки заданий (t519, t818): who — начало строк журнала, of — «вкладка … уже открыта», board — нужна ли доска, make — сборка задания, subj — подпись файла длинного задания.
+   * @type {Record<'compose' | 'newcard', { who: string, of: string, board: boolean, make: typeof prompt.compose, subj: string }>}
+   */
+  const TASKS = {
+    compose: { who: 'составить роадмап', of: 'составления', board: false, make: prompt.compose, subj: 'Задание для составления роадмапа' },
+    newcard: { who: 'новая карта', of: 'новой карты', board: true, make: prompt.newcard, subj: 'Задание для новой карты' },
   };
   /** Записать статус карты и запомнить, что его записала программа: значение и время правки файла (t551). @param {string} id @param {string} status */
   const writeStatus = (id, status) => {
@@ -208,21 +278,24 @@ module.exports = (ctx) => {
    * Связи с демоном нет — ничего не меняем: пропажу вкладки от обрыва не отличить.
    */
   const syncOnce = async () => {
-    if (!Object.keys(runsOf()).length && !composeOf()) return;
+    if (!Object.keys(runsOf()).length && !Object.keys(pastOf()).length && !composeOf() && !taskOf('newcard')) return;
     const asked = Date.now();
     const r = await ctx.terminals();
     if (stopped || !r || 'error' in r) return;
-    // Вкладки составления нет у демона — забываем (t568); после revive — новый номер. Запись новее вопроса не трогаем, как запуски ниже.
+    // Вкладки задания нет у демона — забываем (t568, t818); после revive — новый номер. Запись новее вопроса не трогаем, как запуски ниже.
     const wait = waitingOf(r);
-    const cp = composeOf();
-    const ct = cp && cp.started < asked ? composeTabOf(r.tabs, cp) : null;
-    // Вкладки нет, а revive её ещё поднимет (t582) — не забываем: следующая сверка найдёт её по заголовку.
-    if (cp && cp.started < asked && (!ct || ct.sid !== cp.sid) && (ct || !wait.has(cp.sid))) {
-      setCompose(ct ? { ...cp, sid: ct.sid } : null);
-      ctx.log(ct ? `составить роадмап: вкладка ${cp.sid} запущена заново — теперь ${ct.sid}` : `составить роадмап: вкладки ${cp.sid} нет у демона — запись забыта`);
-      if (!stopped) ctx.send('board', snapshot());
+    for (const bag of /** @type {const} */ (['compose', 'newcard'])) {
+      const cp = taskOf(bag);
+      const ct = cp && cp.started < asked ? composeTabOf(r.tabs, cp) : null;
+      // Вкладки нет, а revive её ещё поднимет (t582) — не забываем: следующая сверка найдёт её по заголовку.
+      if (cp && cp.started < asked && (!ct || ct.sid !== cp.sid) && (ct || !wait.has(cp.sid))) {
+        setTask(bag, ct ? { ...cp, sid: ct.sid } : null);
+        ctx.log(ct ? `${TASKS[bag].who}: вкладка ${cp.sid} запущена заново — теперь ${ct.sid}` : `${TASKS[bag].who}: вкладки ${cp.sid} нет у демона — запись забыта`);
+        // Строку «составляется…» окно рисует по записи compose; запись новой карты окну не нужна.
+        if (!stopped && bag === 'compose') ctx.send('board', snapshot());
+      }
     }
-    if (!Object.keys(runsOf()).length) return;
+    if (!Object.keys(runsOf()).length && !Object.keys(pastOf()).length) return;
     // Записи — после ответа демона (t555): пока он отвечал, карту могли запустить или перезапустить. Дальше до patchRuns ожиданий нет.
     // Запуск новее вопроса к демону пропускаем: его вкладки может не быть в ответе, это не «пауза».
     const mine = runsOf();
@@ -232,6 +305,18 @@ module.exports = (ctx) => {
     const hurt = new Set(b.errors.map((e) => cardOf(e.file)));
     /** @type {Record<string, any>} */
     const ch = {};
+    /** @type {Record<string, any>} */
+    const pc = {};
+    // Счёт попыток без записи запуска: карта ушла в «готово» или «в очередь», её нет — забываем.
+    for (const id of Object.keys(pastOf())) {
+      const c = b.cards.find((x) => x.id === id);
+      if (!c ? !hurt.has(id) : RESET.includes(c.status)) pc[id] = null;
+    }
+    /** Забыть запись запуска; карта не «готово» и не «в очереди» — счёт попыток переходит в past. @param {string} id @param {any} run @param {any} c */
+    const drop = (id, run, c) => {
+      ch[id] = null;
+      if (c && !RESET.includes(c.status)) pc[id] = { tries: Number.isInteger(run.tries) && run.tries >= 1 ? run.tries : 1, waited: !!run.waited || c.status === 'ждёт ответа' };
+    };
     for (const [id, run] of Object.entries(mine)) {
       const c = b.cards.find((x) => x.id === id);
       if (!c && hurt.has(id)) {
@@ -242,7 +327,7 @@ module.exports = (ctx) => {
       if (run.started >= asked) continue;
       const own = c && (run.gone ? c.status === 'пауза' : OWN.includes(c.status));
       const hold = c && !run.gone && HOLD.includes(c.status);
-      if (!c || (!own && !hold)) { ch[id] = null; continue; }
+      if (!c || (!own && !hold)) { drop(id, run, c); continue; }
       if (run.gone) continue;
       // После revive демона у вкладки новый номер (t577): узнаём её по заголовку открытия, запись получает новый номер — это не «пауза».
       const t = runTabOf(r.tabs, run);
@@ -251,19 +336,24 @@ module.exports = (ctx) => {
       const moved = t && t.sid !== run.sid ? { ...run, sid: t.sid } : null;
       if (moved && t) ctx.log(`${id}: вкладка ${run.sid} запущена заново — теперь ${t.sid}`);
       if (hold) {
-        if (!t) { ch[id] = null; ctx.log(`${id}: вкладка ${run.sid} закрыта, статус «${c.status}» не меняю — место свободно`); } else if (moved) ch[id] = moved;
+        if (!t) { drop(id, run, c); ctx.log(`${id}: вкладка ${run.sid} закрыта, статус «${c.status}» не меняю — место свободно`); } else if (moved) ch[id] = moved;
         continue;
       }
-      const rec = moved || run;
+      // waited (t830): попытка дошла до «ждёт ответа» — следующий запуск этой карты пойдёт ступенью выше (triesOf). «Пауза» после закрытия вкладки его не стирает.
+      const rec0 = moved || run;
       const want = t ? BY_STATE[t.state] || '' : 'пауза';
-      if (!want) { if (moved) ch[id] = moved; continue; }
-      if (want === c.status) { if (!t) ch[id] = { ...rec, gone: true }; else if (moved) ch[id] = moved; continue; }
+      // Человек ответил в той же вкладке, агент снова работает — попытка продолжается: отметку снимаем.
+      const rec = want === 'в работе' ? (rec0.waited ? { ...rec0, waited: false } : rec0) : c.status === 'ждёт ответа' && !rec0.waited ? { ...rec0, waited: true } : rec0;
+      if (!want) { if (rec !== run) ch[id] = rec; continue; }
+      if (want === c.status) { if (!t) ch[id] = { ...rec, gone: true }; else if (rec !== run) ch[id] = rec; continue; }
       try {
-        ch[id] = { ...rec, ...(t ? {} : { gone: true }), ...writeStatus(id, want).own };
+        ch[id] = { ...rec, ...(t ? {} : { gone: true }), ...(want === 'ждёт ответа' ? { waited: true } : {}), ...writeStatus(id, want).own };
         ctx.log(`${id}: статус ${c.status} → ${want} (вкладка ${rec.sid}${t ? `, состояние ${t.state}` : ' закрыта'})`);
-      } catch (e) { ctx.log(`${id}: статус ${want} не записан: ${why(e)}`); if (moved) ch[id] = moved; }
+      } catch (e) { ctx.log(`${id}: статус ${want} не записан: ${why(e)}`); if (rec !== run) ch[id] = rec; }
     }
     if (Object.keys(ch).length) patchRuns(ch);
+    if (Object.keys(pc).length) patchPast(pc);
+    if (Object.keys(ch).length || Object.keys(pc).length) sendIfChanged();
   };
   // ——— Волна (t687) и предел (t689) ———
   /**
@@ -350,7 +440,9 @@ module.exports = (ctx) => {
   const sendIfChanged = () => {
     // Панель не открывали или закрыли — окну не шлём: откроют — возьмёт доску командой board.
     if (!panelOn) return;
-    const sig = JSON.stringify([waves.map(waveView), usedOf(), maxOf()]);
+    // Счёт попыток (t830) и gone — в подписи: сверка меняет их без правки файла, а окно показывает ступень следующего запуска (t832).
+    const tries = Object.entries({ ...pastOf(), ...runsOf() }).map(([id, r]) => [id, r.tries, !!r.waited, !!r.gone]);
+    const sig = JSON.stringify([waves.map(waveView), usedOf(), maxOf(), tries]);
     if (sig === waveSig || stopped) return;
     waveSig = sig;
     ctx.send('board', snapshot());
@@ -471,6 +563,26 @@ module.exports = (ctx) => {
     if (typeof ctx.agents !== 'function') return null;
     try { return ctx.agents(); } catch (e) { ctx.log(`список агентов не получен: ${why(e)}`); return null; }
   };
+  /**
+   * Номер попытки (t830). prev — запись прошлого запуска или её счёт в past. Карта ушла в «готово» или «в очередь» — sync забывает и то и другое: счёт с 1.
+   * Растёт, если прошлая попытка остановилась на «ждёт ответа» (красная проверка, вопрос, ход кончился без «готово», статус от человека): waited — «пауза» после закрытия вкладки его не стирает,
+   * снова «в работе» в той же вкладке (человек ответил) — снимает. Прошлую закрыли посреди работы («пауза» без waited), «на проверке», «на ревью» — номер прежний.
+   * @param {any} prev запись прошлого запуска, счёт из past или undefined @param {string} status статус карты в файле сейчас
+   */
+  const triesOf = (prev, status) => {
+    if (!prev || status === 'в очереди') return 1;
+    const n = Number.isInteger(prev.tries) && prev.tries >= 1 ? prev.tries : 1;
+    return prev.waited || prev.st === 'ждёт ответа' || status === 'ждёт ответа' ? n + 1 : n;
+  };
+  /**
+   * Попытка и ступень следующего запуска карты (t832): одна функция для start и для окна — окно лестницу не повторяет.
+   * @param {any} c карта доски @param {Record<string, any>} [runs] @param {Record<string, any>} [past]
+   * @returns {{ tries: number, model: string, effort: string, note: string }}
+   */
+  const nextOf = (c, runs = runsOf(), past = pastOf()) => {
+    const tries = triesOf(runs[c.id] || past[c.id], c.status);
+    return { tries, ...agents.raise(c.agent || 'claude', c.model, c.effort, tries, c.extra && c.extra.pick) };
+  };
   /** Запуск после проверок карты; run держит флаг «запуск идёт». @param {string} ref @param {any} c @param {string} agent @param {boolean} quiet */
   const start = async (ref, c, agent, quiet) => {
     const prev = runsOf()[ref];
@@ -482,11 +594,16 @@ module.exports = (ctx) => {
     }
     const pr = prompt.build(project, ref, { dataDir: ctx.dataDir });
     if ('error' in pr) return { error: `промпт не собран: ${pr.error}` };
-    const la = agents.launchArgs(agent, c.model, c.effort);
+    const up = nextOf(c);
+    const tries = up.tries;
+    if (up.note) ctx.log(`${ref}: ${up.note}`);
+    const la = agents.launchArgs(agent, up.model, up.effort);
     if (la.skipped) ctx.log(`${ref}: ${la.skipped}`);
     const title = `${ref} · ${c.title || ''}`.trim().slice(0, 64);
     const kind = agents.kindOf(agent);
-    const r = await openWith({ kind, args: la.args, title, ...(quiet ? { focus: false } : {}) }, ref, ref, pr.text, 'промпт');
+    // Claude следует настройке проекта «без вопросов о разрешениях» (t852): режим включает человек в окне «Проекты», ядро решает само. Другие агенты — как были.
+    const follow = kind === 'claude' ? { followBypass: true } : {};
+    const r = await openWith({ kind, args: la.args, title, ...follow, ...(quiet ? { focus: false } : {}) }, ref, ref, pr.text, 'промпт');
     if (!r || 'error' in r) {
       const e = r ? r.error : 'нет ответа';
       ctx.log(`${ref}: вкладка не открылась: ${e}`);
@@ -494,11 +611,16 @@ module.exports = (ctx) => {
     }
     const sid = r.session.sid;
     // title и kind — чтобы узнать вкладку после revive демона, когда номер у неё новый (t577); title — ownTitle ядра, freeTitle делает его единственным в проекте.
-    patchRuns({ [ref]: { sid, started: Date.now(), title: String(r.session.ownTitle || ''), kind } });
+    patchRuns({ [ref]: { sid, started: Date.now(), title: String(r.session.ownTitle || ''), kind, tries } });
+    // Сверка могла перенести запись в past, пока открывалась вкладка: чистим по мешку сейчас, а не по прочитанному до await.
+    if (pastOf()[ref]) patchPast({ [ref]: null });
     // Grok (t587): модель и усилие ядро передаёт не флагами, а через GROK_CONFIG (terminals.js grokConfig) — журнал пишет так же. Флаги парами: -m X, --reasoning-effort Y.
     const grok = agent === 'grok' ? la.args.map((a, i) => (i % 2 ? '' : `${a === '-m' ? 'модель' : 'усилие'} ${la.args[i + 1]}`)).filter(Boolean).join(', ') : '';
     const how = grok ? `, ${grok} через GROK_CONFIG` : la.args.length ? ` ${la.args.join(' ')}` : '';
-    ctx.log(`${ref}: запущена во вкладке ${sid}, ${agent}${how}, промпт ${pr.text.length} знаков`);
+    ctx.log(`${ref}: запущена во вкладке ${sid}, ${agent}${how}${r.session.bypass ? ', без вопросов о разрешениях' : ''}, промпт ${pr.text.length} знаков`
+      + `, подано записей ${pr.served.length}${pr.served.length ? ` (${pr.served.join(', ')})` : ''}`);
+    // t1008: какие d<N> поданы — в served: карты, повторный запуск дописывает новые. addServed и update читают файл заново: used: агента не теряется.
+    if (pr.served.length) { try { board.addServed(project, ref, pr.served); } catch (e) { ctx.log(`${ref}: served не записан: ${why(e)}`); } }
     try {
       if (c.status === 'в работе') return { session: r.session, item: c, skipped: la.skipped };
       const w = writeStatus(ref, 'в работе');
@@ -511,48 +633,70 @@ module.exports = (ctx) => {
     }
   };
 
-  /** «Составить роадмап» (t519): вкладка открывается. Номер открытой — в мешке (composeOf): пока она жива у демона, вторую не открываем. */
-  let composing = false;
+  /** Вкладка задания открывается (t519, t818) — флаг на каждую кнопку. Номер открытой — в мешке (taskOf): пока она жива у демона, вторую не открываем. */
+  const opening = { compose: false, newcard: false };
   /**
-   * «Составить роадмап» на пустом проекте (t519): вкладка Claude в папке проекта, первое сообщение — задание из compose.md.
-   * Модель и усилие — по умолчанию claude: человек их ещё не выбирал, а имя модели в коде устарело бы. Доску заводит агент, панель видит её слежением.
-   * @param {string} title заголовок вкладки — от окна, на языке программы
+   * Вкладка Claude в папке проекта, первое сообщение — задание из шаблона: «Составить роадмап» на пустом проекте (t519, compose.md)
+   * или «Новая карта», когда доска есть (t818, newcard.md). Файлы доски заводит агент, панель видит их слежением.
+   * Модель и усилие — по умолчанию claude: человек их ещё не выбирал, а имя модели в коде устарело бы.
+   * @param {'compose' | 'newcard'} bag @param {string} title заголовок вкладки — от окна, на языке программы
    */
-  const compose = async (title) => {
-    if (board.read(project).exists) return { error: 'доска уже есть: папка .kermach\\roadmap заведена' };
+  const openTask = async (bag, title) => {
+    const k = TASKS[bag];
+    if (board.read(project).exists !== k.board) return { error: k.board ? 'доски нет: сначала «Составить роадмап»' : 'доска уже есть: папка .kermach\\roadmap заведена' };
     // До первого await: второй щелчок, пока первый ждёт демона или вкладку, видит флаг (как t554).
-    if (composing) return { error: 'вкладка уже открывается' };
-    composing = true;
+    if (opening[bag]) return { error: 'вкладка уже открывается' };
+    opening[bag] = true;
     try {
-      const was = composeOf();
+      const was = taskOf(bag);
       if (was) {
         const r = await ctx.terminals();
         // Демон не ответил — живую вкладку от ушедшей не отличить: отказ только этому щелчку, следующий спросит снова (t568).
-        if (!r || 'error' in r) return { error: `демон не ответил, открыта ли вкладка составления: ${r ? r.error : 'нет ответа'}` };
+        if (!r || 'error' in r) return { error: `демон не ответил, открыта ли вкладка ${k.of}: ${r ? r.error : 'нет ответа'}` };
         const t = composeTabOf(r.tabs, was);
         if (t) {
-          if (t.sid !== was.sid) { setCompose({ ...was, sid: t.sid }); ctx.log(`составить роадмап: вкладка ${was.sid} запущена заново — теперь ${t.sid}`); }
-          return { error: `вкладка составления уже открыта: ${t.sid}`, sid: t.sid };
+          if (t.sid !== was.sid) { setTask(bag, { ...was, sid: t.sid }); ctx.log(`${k.who}: вкладка ${was.sid} запущена заново — теперь ${t.sid}`); }
+          return { error: `вкладка ${k.of} уже открыта: ${t.sid}`, sid: t.sid };
         }
-        if (waitingOf(r).has(was.sid)) return { error: 'вкладка составления уже открыта: она ещё подключается после перезапуска' };
-        ctx.log(`составить роадмап: вкладки ${was.sid} нет у демона — открываю новую`);
+        if (waitingOf(r).has(was.sid)) return { error: `вкладка ${k.of} уже открыта: она ещё подключается после перезапуска` };
+        ctx.log(`${k.who}: вкладки ${was.sid} нет у демона — открываю новую`);
       }
-      const pr = prompt.compose(project, { dataDir: ctx.dataDir });
+      const pr = k.make(project, { dataDir: ctx.dataDir });
       if ('error' in pr) return { error: pr.error };
-      for (const w of pr.warnings) ctx.log(`составить роадмап: ${w}`);
-      const r = await openWith({ kind: 'claude', args: [], title: String(title || 'Роадмап').slice(0, 64) }, 'compose', 'составить роадмап', pr.text, 'задание', { title: 'Задание для составления роадмапа', it: 'Оно' });
+      for (const w of pr.warnings) ctx.log(`${k.who}: ${w}`);
+      const r = await openWith({ kind: 'claude', args: [], title: String(title || 'Роадмап').slice(0, 64), followBypass: true }, bag, k.who, pr.text, 'задание', { title: k.subj, it: 'Оно' });
       if (!r || 'error' in r) {
         const e = r ? r.error : 'нет ответа';
-        ctx.log(`составить роадмап: вкладка не открылась: ${e}`);
+        ctx.log(`${k.who}: вкладка не открылась: ${e}`);
         return { error: e };
       }
-      setCompose({ sid: r.session.sid, started: Date.now(), title: String(r.session.ownTitle || '') });
-      ctx.log(`составить роадмап: вкладка ${r.session.sid}, claude, задание ${pr.text.length} знаков${pr.templates.own ? ' (своя копия шаблона)' : ''}`);
+      setTask(bag, { sid: r.session.sid, started: Date.now(), title: String(r.session.ownTitle || '') });
+      ctx.log(`${k.who}: вкладка ${r.session.sid}, claude${r.session.bypass ? ' без вопросов о разрешениях' : ''}, задание ${pr.text.length} знаков${pr.templates.own ? ' (своя копия шаблона)' : ''}`);
       return { session: r.session };
-    } finally { composing = false; }
+    } finally { opening[bag] = false; }
   };
 
   /** Доска с временем последней правки файла карты (at, мс): его панель показывает в строке карты. */
+  /**
+   * Пометки «похожа на dN» (t835) без паттернов (t1015): паттерн словами повторяет свои записи — у него вышло бы «похожа на d77»,
+   * а «объединить» удалило бы файл паттерна. Запись «похожа на паттерн» тоже без пометки: слияние дописало бы текст в паттерн и сняло утверждение.
+   * @param {import('./board').Board} b @returns {Record<string, string>}
+   */
+  const alikeOf = (b) => {
+    const pat = new Set(b.decisions.filter((d) => d.type === patterns.PATTERN).map((d) => d.id));
+    /** @type {Record<string, string>} */
+    const out = {};
+    for (const [y, x] of Object.entries(prompt.alikeNotes(b.decisions))) if (!pat.has(y) && !pat.has(x)) out[y] = x;
+    return out;
+  };
+  /** Заголовок карты «Собрать паттерн» (t1005): по нему кнопка находит уже заведённую карту. @param {string[]} ids */
+  const makeTitle = (ids) => `Собрать паттерн из ${ids.join(', ')}`;
+  /** Карта «Собрать паттерн из X, …» не в «готово» — её номер, иначе пусто. @param {import('./board').Board} b @param {string} x */
+  const makeCardOf = (b, x) => {
+    const head = makeTitle([x]);
+    const c = b.cards.find((t) => t.status !== 'готово' && (t.title === head || t.title.startsWith(`${head},`)));
+    return c ? c.id : '';
+  };
   const snapshot = () => {
     const b = board.read(project);
     for (const c of b.cards) {
@@ -563,9 +707,13 @@ module.exports = (ctx) => {
     // Запуск карты (t515): время запуска для строки и gone — вкладку закрыли. Номер вкладки окну не нужен.
     // st и at — своя запись статуса (t551): совпали со статусом и временем файла — окно не пишет «изменился снаружи».
     const mine = runsOf();
+    const past = pastOf();
     for (const c of b.cards) {
       const m = mine[c.id];
       if (m) /** @type {any} */ (c).run = { started: m.started, gone: !!m.gone, st: m.st || '', at: m.at || 0 };
+      // Следующий запуск пойдёт не на модели и усилии карты (t832) — окно пишет строку «следующий запуск — попытка N, …».
+      const n = m && !m.gone || c.status === 'готово' ? null : nextOf(c, mine, past);
+      if (n && n.tries > 1 && (n.model !== String(c.model || '') || n.effort !== String(c.effort || ''))) /** @type {any} */ (c).next = { tries: n.tries, model: n.model, effort: n.effort };
     }
     // Вкладка составления (t568): окно рисует над доской строку «составляется…», пока вкладка с этим номером жива в окне.
     const cp = composeOf();
@@ -573,16 +721,74 @@ module.exports = (ctx) => {
     // Волны окна (t687) и занятые места (t689): окно рисует строки волн и пометки «ждёт места» у карт.
     /** @type {any} */ (b).waves = waves.map(waveView);
     /** @type {any} */ (b).slots = { used: usedOf(), max: maxOf(), top: MAX_RUNS_TOP };
+    // Повторы среди записей (t835): окно пишет «похожа на dN» и даёт кнопку «объединить».
+    const alikeD = alikeOf(b);
+    /** @type {any} */ (b).alikeD = alikeD;
+    // Паттерны (t1005): кандидаты — пометка «похоже на паттерн» с кнопками «собрать в паттерн» и «не паттерн», card — карта «Собрать паттерн» в работе.
+    // Утверждённые — по отпечатку в approved.json (patterns.served): файл читаем, только когда на доске есть паттерн.
+    /** @type {any} */ (b).patternC = patterns.candidates(b, alikeD).map((c) => ({ ...c, card: makeCardOf(b, c.id) }));
+    const sv = b.decisions.some((d) => d.type === patterns.PATTERN) ? patterns.served(ctx.dataDir, project, b) : null;
+    /** @type {any} */ (b).patternOk = sv ? sv.all.map((d) => d.id) : [];
+    /** @type {any} */ (b).patternErr = sv ? sv.error : '';
+    // t1030: у пометки «похожа на dN» — «dN в паттерне dM», когда dN — источник утверждённого паттерна: повтор дописывают в паттерн.
+    /** @type {any} */ (b).alikeP = sv ? prompt.alikePattern(ctx.dataDir, project, b, alikeD) : {};
+    // Запросы «по смыслу» (t842): окно пишет «Поиск по смыслу: просили N, не нашли M», когда N больше 0.
+    const asked = askLog.counts(codemap.mapFile(project, { where: 'project' }));
+    /** @type {any} */ (b).asked = asked;
+    askSig = `${asked.asked}:${asked.missed}`;
     return b;
+  };
+  // Счётчик «по смыслу» (t947): агент пишет asked.jsonl, а не файлы доски — board.watch этого не видит, и строка ждала бы правки доски.
+  // Пока панель открыта — раз в ASK_POLL_MS счёт из журнала; поменялся — окну доска.
+  /** @type {NodeJS.Timeout | null} */
+  let askTimer = null;
+  let askSig = '';
+  const askPoll = () => {
+    if (!panelOn || stopped) return;
+    const c = askLog.counts(codemap.mapFile(project, { where: 'project' }));
+    if (`${c.asked}:${c.missed}` !== askSig) ctx.send('board', snapshot());
   };
   const startWatch = () => {
     if (watcher || stopped) return;
     // Смена файла — и окну доска, и sync: «готово» в файле карты волны запускает её зависимые (t687), даже когда панель закрыта.
     watcher = board.watch(project, () => { if (!stopped) { ctx.send('board', snapshot()); sync(); } }, { log: ctx.log, pin: () => pins });
+    askTimer = setInterval(askPoll, ASK_POLL_MS);
     ctx.log(`слежение за ${board.DIR} включено`);
   };
-  const unwatch = () => { if (watcher) { watcher.close(); watcher = null; ctx.log(`слежение за ${board.DIR} закрыто`); } };
+  const unwatch = () => {
+    if (askTimer) { clearInterval(askTimer); askTimer = null; }
+    if (watcher) { watcher.close(); watcher = null; ctx.log(`слежение за ${board.DIR} закрыто`); }
+  };
 
+  /**
+   * Кнопки общей базы (t991): «убрать» — s<N>.md записи в Корзину, «снова в общую базу» — known.restore, следующая сборка промпта заведёт копию заново.
+   * Пометку берём заново, а не со слов окна: оно могло показать кнопку по старой доске. У edited сначала файл в Корзину,
+   * иначе restore заведёт s<N+1> с тем же текстом, а старый файл без строки state.json тоже будет подаваться (карта 5 t844).
+   * @param {'knownDrop' | 'knownBack'} cmd @param {string} ref
+   */
+  const knownAct = async (cmd, ref) => {
+    try {
+      const m = known.marks(ctx.dataDir, project).find((x) => x.id === ref);
+      const want = cmd === 'knownDrop' ? ['shared'] : ['removed', 'edited'];
+      if (!m || !want.includes(m.kind)) throw new Error(`у ${ref} ${m ? `пометка «${m.kind}»` : 'нет пометки общей базы'} — ${cmd === 'knownDrop' ? 'убирать нечего' : 'возвращать нечего'}`);
+      const dir = path.join(ctx.dataDir, known.KNOWN);
+      const file = path.join(dir, `${m.s}.md`);
+      if (m.kind !== 'removed') {
+        if (!/^s\d+$/.test(m.s) || !fs.lstatSync(file).isFile()) throw new Error(`${m.s}.md — не файл (ссылка или папка): не трогаю`);
+        if (path.relative(fs.realpathSync(ctx.dataDir), fs.realpathSync(dir)) !== known.KNOWN) throw new Error(`${dir} — ссылка наружу: не трогаю`);
+        const { shell } = require('electron');
+        await shell.trashItem(file);
+        ctx.log(`общая база: ${m.s}.md (копия ${ref}) — в Корзину`);
+      }
+      if (cmd === 'knownBack') {
+        known.restore(ctx.dataDir, project, ref);
+        ctx.log(`общая база: ${ref} снова пойдёт в базу при следующей сборке промпта, строка ${m.s} снята из state.json`);
+      }
+      return {};
+    } catch (e) { return { error: why(e) }; }
+  };
+
+  startMap();
   return {
     handle(cmd, ...args) {
       if (cmd === 'board') { panelOn = true; startWatch(); sync(); return snapshot(); }
@@ -591,7 +797,8 @@ module.exports = (ctx) => {
       // READY — агенты, найденные и включённые в системе (t576, ctx.agents); ядро без ctx.agents — null, окно берёт встроенные AGENTS.
       if (cmd === 'lists') return { AGENTS: agents.AGENTS, MODELS: agents.MODELS, EFFORT: agents.EFFORT, EFFORTS: agents.EFFORTS, TUNE: agents.TUNE, READY: ready() };
       if (cmd === 'run') return run(String(args[0] || ''));
-      if (cmd === 'compose') return compose(String(args[0] || ''));
+      if (cmd === 'compose') return openTask('compose', String(args[0] || ''));
+      if (cmd === 'newcard') return openTask('newcard', String(args[0] || ''));
       if (cmd === 'sync') { sync(); return {}; }
       if (cmd === 'wave') return waveStart(String(args[0] || ''), String(args[1] || ''), args[2]);
       if (cmd === 'waveStop') return waveStop(String(args[0] || ''));
@@ -621,7 +828,10 @@ module.exports = (ctx) => {
           if (base && typeof base === 'object') {
             if (it && Object.keys(changes).some((k) => k in base && valueOf(String(ref), it, k) !== valueOf(String(ref), { [k]: base[k] }, k, true))) return { clash: true, item: it };
           }
-          const all = changes.status === 'готово' && c && c.status !== 'готово' && !('closed' in changes) ? { ...changes, closed: board.stamp() } : changes;
+          const all = changes.status === 'готово' && c && c.status !== 'готово' && !('closed' in changes) ? { ...changes, closed: board.stamp() } : { ...changes };
+          // Модель или усилие сменили в окне — их назвал человек: повторная попытка их не повышает (t830, FORMAT.md «pick»).
+          // Пустые model и effort (окно сбросило их при смене агента) — это не выбор человека: pick не ставим.
+          if (c && ['model', 'effort'].some((k) => String(changes[k] || '').trim()) && !('pick' in changes)) all.pick = 'человек';
           const item = board.update(project, ref, all);
           ctx.log(`${ref}: сохранено ${Object.keys(all).join(', ')}`);
           return { item };
@@ -630,6 +840,122 @@ module.exports = (ctx) => {
           // code и field — у отказов, которые окно объясняет своими словами (t607); problems — все плохие поля по code (t615).
           return { error: String((x && x.message) || e), ...(x && x.code ? { code: x.code, field: x.field, problems: x.problems } : {}) };
         }
+      }
+      // Пометки общей базы для экрана записей (t991): по запросу окна, не в snapshot — marks читает все s<N>.md базы.
+      // Битый state.json или ссылка наружу — warn: экран открывается и пишет предупреждение.
+      if (cmd === 'known') { try { return { marks: known.marks(ctx.dataDir, project) }; } catch (e) { return { marks: [], warn: why(e) }; } }
+      if (cmd === 'knownDrop' || cmd === 'knownBack') return knownAct(cmd, String(args[0] || ''));
+      // «Объединить» в списке записей (t835): повтор from дописывается в старую into, в её название — обстоятельство повтора, файл повтора удаляется.
+      if (cmd === 'merge') {
+        const [from, into] = args.map(String);
+        try {
+          // t1014: какие паттерны были утверждены до объединения — merge меняет их from, утверждение снимается, человеку это видно в журнале.
+          /** @type {Set<string>} */
+          let was = new Set();
+          try { was = new Set(patterns.served(ctx.dataDir, project, board.read(project)).all.map((d) => d.id)); } catch { /* доска не читается — merge сам скажет */ }
+          const item = board.merge(project, from, into, prompt.mergeTitle);
+          const lost = [...item.repointed, ...(item.type === patterns.PATTERN ? [into] : [])].filter((id) => was.has(id));
+          ctx.log(`${from} объединена с ${into}: повторы ${item.repeats.join(', ') || 'нет'}; название «${item.title}»`
+            + `${lost.length ? `; утверждение снято: ${lost.join(', ')} — from поменялся, утвердите заново` : ''}`);
+          return { item };
+        } catch (e) { return { error: String((e && /** @type {any} */ (e).message) || e) }; }
+      }
+      // «Не похоже» (t969): в шапку from — differs: other, пометку этой пары alikeNotes больше не ставит.
+      if (cmd === 'differ') {
+        const [from, other] = args.map(String);
+        try {
+          const item = board.differ(project, from, other);
+          ctx.log(`${from} не похожа на ${other}: differs ${item.differs.join(', ')}`);
+          return { item };
+        } catch (e) { return { error: String((e && /** @type {any} */ (e).message) || e) }; }
+      }
+      // Отзыв агента «неверна» (t836), список «Посмотреть» (t987): «верна» — board.reviewed по каждой карте из wrong (t990): tN уходит из wrong,
+      // строка «Неверно (tN): …» становится «Проверено человеком…», запись снова подаётся агентам. «Отменить» — cancelled сегодня, wrong остаётся историей.
+      // Прежние строки и прежнее wrong — в журнал, по ним откат.
+      if (cmd === 'wrongOk' || cmd === 'wrongCancel') {
+        const ref = String(args[0]);
+        try {
+          const b = board.read(project);
+          const d = b.decisions.find((/** @type {any} */ x) => x.id === ref);
+          if (!d) throw new Error(`нет записи ${ref}`);
+          if (!d.wrong.length || d.cancelled) throw new Error(`у ${ref} нет действующей отметки «неверна»`);
+          if (cmd === 'wrongOk') {
+            // d.wrong — только tN со строкой «Неверно (tN): …», по ним reviewed. tN без строки — в d.wrongBare (t998), отметка не действует;
+            // после reviewed они одни остаются в шапке — t993: снимаем их напрямую, иначе замечание доски висит на верной записи.
+            for (const card of d.wrong) ctx.log(`${ref} верна, отзыв ${card} снят; было: ${board.reviewed(project, ref, card).join(' | ')}`);
+            const bare = d.wrongBare || [];
+            if (bare.length) {
+              board.update(project, ref, { wrong: '' });
+              ctx.log(`${ref} верна: из wrong сняты ${bare.join(', ')} без строки «Неверно»`);
+            }
+            return {};
+          }
+          const item = board.update(project, ref, { cancelled: board.stamp().slice(0, 10) });
+          ctx.log(`${ref} отменена: cancelled ${item.cancelled}, wrong ${d.wrong.join(', ')}`);
+          return { item };
+        } catch (e) { return { error: String((e && /** @type {any} */ (e).message) || e) }; }
+      }
+      // «Сделать договорённостью» (t960): «Правило работы: …» агент заводит решением, тип меняет человек (t925, FORMAT.md).
+      // Только решение с таким названием: окно могло показать кнопку по старой доске. Прежний agent — в журнал, по нему откат.
+      if (cmd === 'pact') {
+        const ref = String(args[0]);
+        try {
+          const d = board.read(project).decisions.find((/** @type {any} */ x) => x.id === ref);
+          if (!d) throw new Error(`нет записи ${ref}`);
+          if (d.type !== 'решение' || !/^Правило работы:/.test(d.title)) throw new Error(`${ref} — не решение «Правило работы: …»`);
+          const item = board.update(project, ref, { type: 'договорённость', agent: 'человек' });
+          ctx.log(`${ref} стала договорённостью; agent был «${d.agent || '—'}»`);
+          return { item };
+        } catch (e) { return { error: String((e && /** @type {any} */ (e).message) || e) }; }
+      }
+      // Паттерны (t1005, план t845 раздел 4). Кандидата и паттерн берём с диска заново: окно могло показать кнопку по старой доске.
+      // «Собрать в паттерн» — карта во «Входящих», текст паттерна пишет агент; «не паттерн» — pattern: нет в шапке центра, откат — убрать строку.
+      if (cmd === 'patternMake' || cmd === 'patternNo') {
+        const ref = String(args[0]);
+        try {
+          const b = board.read(project);
+          const c = patterns.candidates(b, alikeOf(b)).find((x) => x.id === ref);
+          if (!c) throw new Error(`${ref} — не кандидат в паттерн`);
+          if (cmd === 'patternNo') {
+            const item = board.update(project, ref, { pattern: 'нет' });
+            ctx.log(`${ref}: не паттерн, в шапке pattern: нет; вокруг были ${c.members.join(', ') || '—'}`);
+            return { item };
+          }
+          // Второй щелчок или вторая вкладка — та же карта, а не вторая.
+          const had = makeCardOf(b, ref);
+          if (had) return { card: had };
+          const ids = [ref, ...c.members];
+          const id = board.create(project, 'card', {
+            title: makeTitle(ids),
+            kind: 'сделать',
+            what: [`Прочитай записи ${ids.join(', ')}: программа считает, что у них одна причина.`,
+              c.repeats.length ? `Причину ${ref} находили и в картах ${c.repeats.join(', ')} (repeats).` : '',
+              c.error ? `У записей один «${board.ERROR_LINE} ${c.error}».` : '',
+              `Одна причина — заведи одну запись-паттерн: type: паттерн, from: [${ids.join(', ')}], название — правило одной строкой, текст — «Правило:», «Почему:», «Когда не так:», до 400 знаков (образец — FORMAT.md).`,
+              'approved: не ставь: паттерн утверждает человек кнопкой «утвердить». Причины разные — паттерн не заводи, напиши в «Что сделано», какие записи о чём.'].filter(Boolean).join('\n'),
+            why: 'Утверждённый паттерн агенты получают в каждом задании проекта одной строкой вместо нескольких записей.',
+            check: 'В окне «Решения и тупики» у новой записи метка ПАТТЕРН и «ждёт утверждения», замечаний доски к ней нет.',
+          });
+          ctx.log(`${ref}: карта ${id} «${makeTitle(ids)}» во «Входящих»`);
+          return { card: id };
+        } catch (e) { return { error: why(e) }; }
+      }
+      // «Утвердить» (t1005): сначала отпечаток в approved.json, потом approved: в шапке. Отпечаток без шапки (patterns.sha), поэтому порядок не важен для sha;
+      // упала запись шапки — паттерн без approved: не подаётся, повторный щелчок доделает.
+      if (cmd === 'patternOk') {
+        const ref = String(args[0]);
+        try {
+          const b = board.read(project);
+          const d = b.decisions.find((x) => x.id === ref);
+          if (!d || d.type !== patterns.PATTERN) throw new Error(`${ref} — не паттерн`);
+          if (d.cancelled || d.wrong.length) throw new Error(`${ref} отменён или отмечен «неверна» — утверждать нечего`);
+          if (!d.from.length) throw new Error(`у ${ref} нет from — не видно, из каких записей он собран`);
+          if (patterns.served(ctx.dataDir, project, b).all.some((x) => x.id === ref)) throw new Error(`${ref} уже утверждён`);
+          const e = patterns.approve(ctx.dataDir, project, d);
+          ctx.log(`${ref}: утверждён человеком, отпечаток ${e.sha1.slice(0, 12)} в ${patterns.APPROVED}; approved было «${d.approved || '—'}»`);
+          const item = board.update(project, ref, { approved: e.at });
+          return { item };
+        } catch (e) { return { error: why(e) }; }
       }
       // set заменяет весь мешок (t502): прежние поля сливаются с новыми.
       if (cmd === 'setState') {
@@ -649,6 +975,6 @@ module.exports = (ctx) => {
       }
       return { error: `нет команды ${cmd}` };
     },
-    stop() { stopped = true; live.delete(sync); unwatch(); },
+    stop() { stopped = true; live.delete(sync); unwatch(); if (mapWait) clearTimeout(mapWait); offMap(); },
   };
 };

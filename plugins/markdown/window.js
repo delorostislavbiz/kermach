@@ -646,7 +646,7 @@
       }
       if (/^https?:/i.test(href)) {
         const r = typeof w.TerminalusBrowserOpen === 'function' ? w.TerminalusBrowserOpen(href) : null;
-        if (!r || !r.ok) host.bridge.openLink(href);
+        if (!r || !r.ok) host.bridge.openLink(href, 'markdown');
         return;
       }
       if (SCHEME.test(plain(href))) return;
@@ -654,7 +654,7 @@
       try { rel = decodeURIComponent(rel); } catch {}
       const abs = isAbsPath(rel) ? rel : joinRel(dirOf(d.path), POSIX ? rel : rel.replace(/\\/g, '/'));
       if (DOC.test(abs) || TXT.test(abs)) openPath(abs, true).then((r) => { if (!r.ok) showNote(d, r.error || I18n.t('md.neOtkrylos', 'не открылось'), false); });
-      else host.bridge.openLink(abs).then((/** @type {any} */ r) => { if (r && r.error) showNote(d, r.error, false); });
+      else host.bridge.openLink(abs, 'markdown').then((/** @type {any} */ r) => { if (r && r.error) showNote(d, r.error, false); });
     }
 
     /** Путь или адрес из терминала, меню, окна выбора → вкладка. @param {string} target @param {boolean} select @returns {Promise<{ ok: boolean, error?: string, sid?: string }>} */

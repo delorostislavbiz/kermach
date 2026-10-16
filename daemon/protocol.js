@@ -4,7 +4,8 @@
 // Запрос клиента: { id, cmd, ...поля }. Ответ демона: { id, ok: true, ...поля } или { id, ok: false, error }.
 // Событие демона (без id): { ev, ...поля }.
 // Первым запросом клиент обязан прислать hello с версией договора; при другой версии демон отказывает и закрывает канал.
-// Добавочные поля версии 1 (старые клиенты их не читают): ответ hello — hooksSettings (путь для claude --settings);
+// Добавочные поля версии 1 (старые клиенты их не читают): ответ hello — hooksSettings (путь для claude --settings),
+// codexHookArgs (флаги -c хука SessionStart Codex, t777; meta.codexSessionId демон меняет сам и шлёт { ev: 'updated' });
 // у терминала — hook { event, at, sessionId, source } — последнее событие хука; событие { ev: 'hook', sid, hook }.
 // meta.claudeSessionId вкладки Claude меняет и сам демон: Claude после /clear прислал новый session_id — приходит { ev: 'updated' }.
 // У каждого терминала в окружении TERMINALUS_TAB_KEY = его sid: хук шлёт его заголовком X-Terminalus-Tab.

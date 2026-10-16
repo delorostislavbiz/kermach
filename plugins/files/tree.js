@@ -1,16 +1,14 @@
 // @ts-check
 // Плагин «Файлы» (t327), чтение папки проекта без Electron: проверка «путь внутри проекта», содержимое одной папки, поиск по имени и по тексту.
 // Функции без Electron на асинхронном fs — их же гоняет проверка голым node (spikes\t327-files\unit.js). Ничего не пишет.
-// Поиск в git-папке — по списку git ls-files (без игнорируемых .gitignore), в остальных — обход папки. Обход пропускает
-// node_modules и .git (SKIP) и ссылки на папки (symlink, junction): ссылка может вести за пределы проекта или по кругу.
+// Поиск — по списку файлов общего модуля main\project-files.js (его же берёт карта кода «Роадмапа»): в git-папке git ls-files без игнорируемых .gitignore,
+// иначе обход; node_modules, .git (SKIP) и ссылки на папки пропущены. Здесь — пределы чтения текста и сообщение о брошенном чтении папки (readdirBack).
 const fs = require('fs');
 const path = require('path');
-const { execTree } = require('../../main/exec-worker');
+const files = require('../../main/project-files');
 
-/** Сколько ждать список файлов от git; дольше — обход папки. */
-const GIT_MS = 10000;
-/** Папки, в которые поиск не заходит: тысячи чужих файлов, искать в них нечего. В дереве node_modules виден, .git — нет. */
-const SKIP = new Set(['node_modules', '.git']);
+/** Сколько ждать git, папки без захода, пределы обхода — в project-files; LIMITS — тот же объект, проба меняет пределы через tree.LIMITS. */
+const { SKIP, LIMITS, GIT_MS } = files;
 /** Сколько строк отдаётся окну при раскрытии одной папки; остальные — числом. */
 const MAX_LIST = 3000;
 /** Сколько находок отдаёт поиск: окну больше не нужно, а обход на этом останавливается. */
@@ -26,18 +24,12 @@ const TEXT_POOL = 3;
 /** Двоичный файл — нулевой байт в первых 8 КБ (так решает и git). */
 const SNIFF = 8192;
 /**
- * Жёсткие пределы обхода и чтения (t454): какую бы папку ни открыли проектом — корень диска, большую папку без git, — «Файлы» дальше не читают.
- * Не настройка: 11.10 широкий поиск прочитал весь D:, дошёл до испорченного файла, и ноутбук завис. Объект, а не константы, — проба ставит пределы меньше.
- * walkMax — записей обхода папки без git: в папке D:\TERMINALUS git отдаёт 5 тыс. файлов, обход без .gitignore видел 86 тыс.; 50 тыс. — около секунды чтения каталогов.
- * walkMs — время обхода, запасной предел для сетевой или зависающей папки: диск занят не дольше минуты. Нагрузку держит walkMax; холодный диск HDD
- *   на 50 тыс. записей может идти десятки секунд, поэтому не меньше.
+ * Пределы чтения текста (t454) — дописаны к пределам обхода project-files (walkMax, walkMs, dirMs): весь объект — tree.LIMITS.
  * textBytes — байт за один поиск в тексте: весь текст D:\TERMINALUS по git — 42 МБ; 100 МБ — 1–2 с чтения с SSD, на диске HDD — около 10 с.
- * dirMs — чтение одной папки при обходе (t466 д): readdir не прерывается, и walkMs между папками его не ловит. Здоровая папка читается
- *   за миллисекунды, и на холодном HDD — меньше секунды; 10 с — как GIT_MS: папка не отвечает (сетевая, зависший диск), обход останавливается.
  * textIdleMs — поиск в тексте не прочитал ни одного нового файла (t480 а, ревью 1011d): файл не больше TEXT_MAX читается за доли секунды
  *   и на просыпающемся HDD или сетевой папке — за секунды; 30 с без продвижения — чтение не вернулось. Срок на весь поиск ломал большие медленные папки.
  */
-const LIMITS = { walkMax: 50000, walkMs: 60000, textBytes: 100 * 1024 * 1024, dirMs: 10000, textIdleMs: 30000 };
+Object.assign(LIMITS, { textBytes: 100 * 1024 * 1024, textIdleMs: 30000 });
 /** Расширения заведомо двоичных файлов: их не открываем на чтение вовсе. */
 const BINARY = /\.(?:png|jpe?g|gif|webp|ico|icns|bmp|tiff?|psd|pdf|zip|7z|rar|gz|tgz|bz2|xz|zst|tar|exe|dll|so|dylib|node|pdb|lib|obj|o|a|class|jar|wasm|woff2?|ttf|otf|eot|mp3|wav|ogg|flac|mp4|mov|avi|mkv|webm|sqlite3?|db|kdbx|asar|bin|dat|pak|iso|dmg|msi)$/i;
 
@@ -83,63 +75,6 @@ async function listDir(dir) {
   }
   items.sort((a, b) => (a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })));
   return { items: items.slice(0, MAX_LIST), more: Math.max(0, items.length - MAX_LIST) };
-}
-
-/**
- * Обход папки проекта в ширину: каждую запись отдаёт visit. Папки SKIP и ссылки не раскрываются.
- * Останавливается, когда stop() вернул true (окно закрыто), и на пределе LIMITS.walkMax записей или LIMITS.walkMs.
- * Папка, которая не прочиталась за LIMITS.dirMs (и не дольше остатка walkMs), — обход останавливается с cut 'time' и hung — эта папка.
- * @param {string} root
- * @param {(rel: string, name: string, isDir: boolean) => Promise<void> | void} visit
- * @param {() => boolean} stop
- * @returns {Promise<{ seen: number, cut: 'max' | 'time' | null, hung: string | null, pending: boolean }>} сколько записей просмотрено; cut — на каком пределе остановлен,
- *   а записи ещё были; hung — папка, которая не ответила (от папки проекта, '' — она сама)
- */
-async function walk(root, visit, stop) {
-  // Сроки обхода — по performance.now (t492): Date.now сдвигается вместе с часами системы.
-  const t0 = performance.now();
-  let seen = 0;
-  /** @type {'max' | 'time' | null} */
-  let cut = null;
-  /** @type {string | null} */
-  let hung = null;
-  let pending = false;
-  /** @type {string[]} */
-  const queue = [''];
-  while (queue.length && !stop() && !cut) {
-    if (seen >= LIMITS.walkMax) { cut = 'max'; break; }
-    if (performance.now() - t0 > LIMITS.walkMs) { cut = 'time'; break; }
-    const rel = /** @type {string} */ (queue.shift());
-    /** @type {fs.Dirent[] | null} */
-    let ents;
-    /** @type {ReturnType<typeof setTimeout> | undefined} */
-    let late;
-    const wait = Math.max(0, Math.min(LIMITS.dirMs, LIMITS.walkMs - (performance.now() - t0)));
-    const rd = fs.promises.readdir(path.join(root, rel), { withFileTypes: true });
-    try {
-      ents = await Promise.race([rd, new Promise((r) => { late = setTimeout(() => r(null), wait); })]);
-    } catch { continue; } finally { clearTimeout(late); }
-    if (!ents) {
-      // Ждали меньше dirMs — кончился весь срок обхода, а не эта папка зависла.
-      cut = 'time'; hung = wait >= LIMITS.dirMs ? rel : null; pending = true;
-      // Брошенное ожидание не прерывает само чтение: оно держит поток пула libuv, общего с главным процессом (4 потока).
-      // Вернулось — сказать главному процессу: до этого он держит поток живым и новый обход этой папки не начинает (t463).
-      rd.then(readdirBack, readdirBack);
-      break;
-    }
-    for (const e of ents) {
-      if (stop()) break;
-      if (seen >= LIMITS.walkMax) { cut = 'max'; break; }
-      seen++;
-      const r = rel ? path.join(rel, e.name) : e.name;
-      if (e.isDirectory()) {
-        if (SKIP.has(e.name)) continue;
-        queue.push(r);
-        await visit(r, e.name, true);
-      } else if (e.isFile()) await visit(r, e.name, false);
-    }
-  }
-  return { seen, cut, hung, pending };
 }
 
 /** Брошенное по сроку чтение папки вернулось — сообщение главному процессу, если обход шёл в потоке (search-worker.js). */
@@ -237,77 +172,11 @@ function profSummary(prof, elu) {
 }
 
 /**
- * Файлы git-папки без игнорируемых (.gitignore): git ls-files — отслеживаемые и новые. Так ищет и Орка (ripgrep тоже читает .gitignore):
- * в папке D:\TERMINALUS обход видит 86 тыс. записей, git — 24 тыс. файлов, за секунду. Не git-папка, нет git, таймаут — null.
- * @param {string} root
- * @returns {Promise<string | null>} вывод git: пути через нулевой байт, разделитель «/»
- */
-function gitFiles(root) {
-  // -x node_modules: неотслеживаемый node_modules без .gitignore git иначе обходит целиком (проба t454: 5050 путей вместо 50), а мы потом выбрасываем.
-  // С -x git в такую папку не заходит. Отслеживаемые файлы под ней (в индексе) -x не убирает — их отсекает entriesOf.
-  const skip = [...SKIP].flatMap((s) => ['-x', s]);
-  return new Promise((resolve) => {
-    execTree('git', ['--no-optional-locks', '-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', ...skip],
-      { timeout: GIT_MS, windowsHide: true, maxBuffer: 256 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' } },
-      (err, stdout) => resolve(err ? null : String(stdout)));
-  });
-}
-
-/** Отдать цикл событий: разбор списка в десятки тысяч путей не должен держать главный процесс подолгу. */
-const breathe = () => new Promise((r) => setImmediate(r));
-
-/**
- * Что ищет поиск: файлы и папки проекта. В git-папке — по git ls-files (папки — из путей файлов), иначе — обход без SKIP.
+ * Что ищет поиск: файлы и папки проекта (project-files.entriesOf). Брошенное чтение папки вернулось — сообщение readdirBack главному процессу.
  * @param {string} root
  * @param {() => boolean} [cancelled] поток остановлен (окно закрыто) — обход прекращается
- * @returns {Promise<{ entries: { rel: string, dir: boolean }[], git: boolean, cut?: 'max' | 'time' | null, seen?: number, hung?: string | null, pending?: boolean }>}
- *   cut — обход остановлен на пределе, список неполный; hung — папка, которая не ответила за LIMITS.dirMs;
- *   pending — брошенное чтение ещё не вернулось (придёт сообщение readdirBack)
  */
-async function entriesOf(root, cancelled = () => false) {
-  // Этапы списка (t585): git ls-files, разбор путей, lstat папок (поиск ссылок); без git — обход.
-  let t = performance.now();
-  const lap = () => { const n = performance.now(); const d = Math.round(n - t); t = n; return d; };
-  const raw = await gitFiles(root);
-  const stages = { git: lap(), parse: 0, links: 0, walk: 0 };
-  const all = raw ? raw.split('\0') : [];
-  // Пустой список — папка проекта внутри чужого репозитория и вписана в его .gitignore (или пустой репозиторий): тогда обход.
-  if (all.some(Boolean)) {
-    /** @type {string[]} */
-    let files = [];
-    let dirs = new Set();
-    const seen = new Set();
-    for (let i = 0; i < all.length; i++) {
-      if (i % 4000 === 3999) await breathe();
-      const f = path.sep === '/' ? all[i] : all[i].replace(/\//g, path.sep);
-      // Повторы (конфликт слияния) — один раз. node_modules, не вписанный в .gitignore, git отдаёт как новые файлы — пропускаем, как и обход.
-      if (!f || seen.has(f) || f.split(path.sep).some((x) => SKIP.has(x))) continue;
-      seen.add(f);
-      files.push(f);
-      for (let d = path.dirname(f); d !== '.' && !dirs.has(d); d = path.dirname(d)) dirs.add(d);
-    }
-    // Папка-ссылка (junction, symlink): git на Windows перечисляет файлы за ней как новые (проверено: jump\s.txt из папки снаружи).
-    // Такие папки и всё под ними выкидываем, как и обход. Папок в списке в разы меньше, чем файлов, — lstat по ним дёшев.
-    stages.parse = lap();
-    const links = new Set();
-    const ds = [...dirs];
-    for (let i = 0; i < ds.length; i += 64) {
-      await Promise.all(ds.slice(i, i + 64).map((d) => fs.promises.lstat(path.join(root, d)).then((st) => { if (st.isSymbolicLink()) links.add(d); }, () => {})));
-    }
-    if (links.size) {
-      const under = (/** @type {string} */ f) => { for (let d = path.dirname(f); d !== '.'; d = path.dirname(d)) if (links.has(d)) return true; return false; };
-      files = files.filter((f) => !under(f));
-      dirs = new Set([...dirs].filter((d) => !links.has(d) && !under(d)));
-    }
-    stages.links = lap();
-    return { entries: [...[...dirs].map((rel) => ({ rel, dir: true })), ...files.map((rel) => ({ rel, dir: false }))], git: true, stages };
-  }
-  /** @type {{ rel: string, dir: boolean }[]} */
-  const entries = [];
-  const w = await walk(root, (rel, _name, dir) => { entries.push({ rel, dir }); }, cancelled);
-  stages.walk = lap();
-  return { entries, git: false, cut: w.cut, seen: w.seen, hung: w.hung, pending: w.pending, stages };
-}
+const entriesOf = (root, cancelled) => files.entriesOf(root, cancelled, { onLate: readdirBack });
 
 /**
  * Поиск по списку entries (entriesOf). По имени — часть имени файла или папки без учёта регистра; text — строка внутри текстовых файлов.

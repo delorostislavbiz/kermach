@@ -235,7 +235,8 @@ module.exports = (ctx) => {
       if (!root) return { error: 'noProject' };
       if (cmd === 'list') {
         const p = args[0] || '';
-        return onDisk(p, async () => { const r = await resolve(p); return 'error' in r ? r : tree.listDir(r.full); }, 'раскрытие папки');
+        // Корень не нашёлся — нет самой папки проекта (t861): так и сказать, а не «нет файла» с пустым путём.
+        return onDisk(p, async () => { const r = await resolve(p); return 'error' in r ? (!p && r.error === 'noFile' ? { error: 'noRoot', path: root } : r) : tree.listDir(r.full); }, 'раскрытие папки');
       }
       if (cmd === 'open') {
         const p = args[0];
@@ -293,6 +294,8 @@ module.exports = (ctx) => {
         // Поток списка остановлен (окно закрыли) или упал — пустой ответ не запоминается.
         if (!got) { if (list === l) list = null; return cancelled() ? { cancelled: true } : { error: 'searchFailed' }; }
         if (cancelled()) return { cancelled: true };
+        // Папки проекта нет (t861): «Ничего не найдено» было бы неправдой. Список не запоминается — вернётся папка, следующий поиск её обойдёт.
+        if (got.missing) { if (list === l) list = null; return { error: 'noRoot', path: root }; }
         const { entries, git, cut } = got;
         // Поиск в тексте тоже читает диск: пока прежнее чтение не вернулось, новый не начинается (t486) — иначе каждый поиск по зависшему файлу
         // занимал бы ещё один поток пула libuv.

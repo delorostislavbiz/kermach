@@ -53,6 +53,9 @@ html:is([data-ui="kermach"], [data-ui="termius"]) .gcard { display: flex; flex-d
 html:is([data-ui="kermach"], [data-ui="termius"]) .gcard:first-child { margin-top: 0; }
 /* Свёрнутая группа — одна строка заголовка, нижний отступ карточки не нужен. */
 html:is([data-ui="kermach"], [data-ui="termius"]) .gcard:has(> .group.shut) { padding-bottom: 0; }
+/* Группы (t774): над карточкой несут проект — рамка цвета акцента; пустая группа — подсказка под заголовком. */
+html:is([data-ui="kermach"], [data-ui="termius"]) .gcard.drop { border-color: var(--accent); background: rgba(var(--accent-rgb), .06); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .gempty { padding: 2px 12px 10px 32px; font-size: var(--fs-desc); }
 /* Заголовок 40 px, 11.5/600 --muted; справа число проектов или сводка свёрнутой группы. Фон свёрнутой — у карточки, не у заголовка. */
 html:is([data-ui="kermach"], [data-ui="termius"]) .group { height: 40px; margin: 0 -4px; padding: 0 12px; gap: 8px; border-radius: 10px; font-size: var(--fs-desc); font-weight: 600; letter-spacing: .04em; }
 html:is([data-ui="kermach"], [data-ui="termius"]) .group .gn { flex: 1; min-width: 0; text-transform: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -29,6 +29,11 @@ contextBridge.exposeInMainWorld('terminalus', {
     remove: (id) => ipcRenderer.invoke('projects:remove', id),
     collapse: (keys, shut) => ipcRenderer.invoke('projects:collapse', keys, shut),
     setMode: (mode) => ipcRenderer.invoke('projects:mode', mode),
+    groupAdd: (name, projectId) => ipcRenderer.invoke('projects:groupAdd', name, projectId),
+    groupRename: (id, name) => ipcRenderer.invoke('projects:groupRename', id, name),
+    groupMove: (id, step) => ipcRenderer.invoke('projects:groupMove', id, step),
+    groupRemove: (id) => ipcRenderer.invoke('projects:groupRemove', id),
+    setGroup: (id, groupId) => ipcRenderer.invoke('projects:setGroup', id, groupId),
     onChanged: (cb) => ipcRenderer.on('projects:changed', () => cb()),
   },
   // Окно проекта: какой у него проект и значок для панели задач. onChanged — у проекта сменились цвет или значок.
@@ -120,6 +125,10 @@ contextBridge.exposeInMainWorld('terminalus', {
     views: () => ipcRenderer.invoke('browser:views'),
     setViews: (patch) => ipcRenderer.invoke('browser:views-set', patch),
     onViews: (cb) => { const f = (_e, v) => cb(v); ipcRenderer.on('browser:views', f); return () => ipcRenderer.removeListener('browser:views', f); },
+    // Закладки проекта (t881): [{ url, title }] по порядку; setMarks пишет весь список и отвечает записанным, onMarks — список от другого окна проекта.
+    marks: () => ipcRenderer.invoke('browser:marks'),
+    setMarks: (list) => ipcRenderer.invoke('browser:marks-set', list),
+    onMarks: (cb) => { const f = (_e, v) => cb(v); ipcRenderer.on('browser:marks', f); return () => ipcRenderer.removeListener('browser:marks', f); },
   },
   // Настройки программы (main\settings.js, t181): { uiZoom, termFont, sound, lang }. set принимает часть полей и отвечает всеми.
   settings: {
@@ -142,11 +151,18 @@ contextBridge.exposeInMainWorld('terminalus', {
     list: () => ipcRenderer.invoke('agents:list'),
     named: () => ipcRenderer.invoke('agents:named'),
   },
+  // Хук Codex (main\terminals.js, t797): итог проверки у самого Codex — { state: 'ok' | 'fixed' | 'off', version, why, at } или null, пока
+  // не проверяли (проверка — при первой вкладке Codex); recheck — проверить снова, ответ тот же или { error }.
+  codexHook: {
+    status: () => ipcRenderer.invoke('codexHook:status'),
+    recheck: () => ipcRenderer.invoke('codexHook:recheck'),
+  },
   log: (msg) => ipcRenderer.send('term:log', msg),
   // Путь брошенного файла (t62): у File в Electron нет поля path, путь даёт только webUtils — и только здесь.
   filePath: (file) => webUtils.getPathForFile(file),
   // Ссылка из терминала (t58): адрес http(s) или полный путь к файлу. Ответ {} или { error }.
-  openLink: (target) => ipcRenderer.invoke('link:open', target),
+  // from — кто открыл, только для журнала (t895): 'browser' — кнопка вкладки сайта, 'agents' — окно «Агенты», 'markdown' — просмотр markdown (t902); без него — терминал.
+  openLink: (target, from) => ipcRenderer.invoke('link:open', target, from),
   clipRead: () => ipcRenderer.invoke('clip:read'),
   clipWrite: (text) => ipcRenderer.send('clip:write', text),
 });

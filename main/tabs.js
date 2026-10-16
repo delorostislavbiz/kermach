@@ -11,16 +11,18 @@ const fs = require('fs');
 const path = require('path');
 
 /**
- * @typedef {{ sid: string, kind: string, title: string, color: string, icon: string, claudeSessionId?: string, createdAt?: string, autoTitle?: string, titleManual?: string, extra?: string, agent?: string, agentMode?: string }} TabEntry
+ * @typedef {{ sid: string, kind: string, title: string, color: string, icon: string, claudeSessionId?: string, codexSessionId?: string, createdAt?: string, autoTitle?: string, titleManual?: string, extra?: string, agent?: string, agentMode?: string, bypass?: string }} TabEntry
  * @typedef {{ v: 1, tabs: TabEntry[] }} TabsData
  */
 
 /**
  * Поля записи — в этом порядке и пишутся. Все строки: признак titleManual — '1', иначе поля нет ('false' читалось бы как да).
  * agent, agentMode — именованный агент Claude (t251): имя для --agent и режим для --permission-mode; revive повторяет оба.
+ * bypass — Claude без вопросов о разрешениях (t851): '1' или нет поля; revive повторяет режим, с которым вкладку открыли.
+ * codexSessionId — разговор Codex, продолженный плагином (t768): revive продолжает его через codex resume.
  * extra — запуск вкладки от плагина (t253): JSON { args, cwd, env }, чтобы revive повторил его. Первого сообщения в нём нет — revive его не повторяет.
  */
-const FIELDS = /** @type {const} */ (['sid', 'kind', 'title', 'autoTitle', 'titleManual', 'color', 'icon', 'claudeSessionId', 'createdAt', 'extra', 'agent', 'agentMode']);
+const FIELDS = /** @type {const} */ (['sid', 'kind', 'title', 'autoTitle', 'titleManual', 'color', 'icon', 'claudeSessionId', 'codexSessionId', 'createdAt', 'extra', 'agent', 'agentMode', 'bypass']);
 
 /** Прочитанные файлы: номер проекта → вкладки. Файл читается один раз, дальше правится здесь и записывается целиком. @type {Map<string, TabsData>} */
 const cache = new Map();

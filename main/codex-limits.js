@@ -11,6 +11,12 @@ const path = require('path');
 const { spawn, execFile } = require('child_process');
 const { findProgram, notFound } = require('./find-program');
 
+// Системные программы — по полному пути (t802): PATH у программы бывает урезан, как у демона (TASKKILL в daemon.js).
+// Снимок тоже: без него killOrphans и sweep при урезанном PATH получали пустой список и не гасили ничего.
+const SYSTEM32 = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
+const TASKKILL = path.join(SYSTEM32, 'taskkill.exe');
+const POWERSHELL = path.join(SYSTEM32, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+
 const FILE_NAME = 'codex-rate-limits.json';
 /** Окно определяется по длине в минутах, а не по имени primary/secondary — как у Орки. Имена — как в rate_limits Claude. */
 const WINDOWS = { 300: 'five_hour', 10080: 'seven_day' };
@@ -56,9 +62,10 @@ function windowsOf(limit) {
  * /T здесь не задевает чужих (t98): зовётся только для живого своего процесса — Node держит его хэндл, номер не достанется другому.
  * Чужой сирота с тем же номером родителя может быть только старше нашего процесса, а таких taskkill /T не трогает:
  * проба spikes\t71-find\taskkill-probe.txt, Windows 11 26300.
- * @param {number} pid
+ * @param {number} pid @param {(m: string) => void} [log] строка в main.log, если taskkill не сработал, а корень жив
+ * @param {() => boolean} [alive] жив ли ещё корень: код не 0 бывает и по делу — корень вышел сам, пока taskkill шёл
  */
-function killTree(pid) {
+function killTree(pid, log = () => {}, alive = () => true) {
   // macOS (t229): taskkill нет, дерево — по снимку ps: члены группы корня (он запущен detached) и его потомки, общий сервер не трогаем.
   if (process.platform !== 'win32') {
     return snapshot().then((all) => {
@@ -67,7 +74,11 @@ function killTree(pid) {
     });
   }
   // Срок, как у taskkill в exec-worker.js: без него зависший taskkill держал бы остановку опроса и выход программы (t480 б).
-  return new Promise((resolve) => execFile('taskkill', ['/T', '/F', '/PID', String(pid)], { windowsHide: true, timeout: 10000 }, () => resolve()));
+  // Текст taskkill — в кодировке консоли, в журнал не пишем: только код.
+  return new Promise((resolve) => execFile(TASKKILL, ['/T', '/F', '/PID', String(pid)], { windowsHide: true, timeout: 10000 }, (err) => {
+    if (err && alive()) log(`лимиты Codex: taskkill дерева ${pid} — ${/** @type {any} */ (err).killed ? 'не ответил за 10 с' : `код ${/** @type {any} */ (err).code}`}`);
+    resolve();
+  }));
 }
 
 /** Общий сервер Codex: им пользуются Codex человека — не гасим никогда, даже если он оказался в нашем дереве. */
@@ -145,7 +156,7 @@ function snapshot() {
       (err, out) => resolve(err ? [] : parseSnapshot(out, process.platform))));
   }
   const ps = '[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)|$($_.ParentProcessId)|$([DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds())|$($_.CommandLine)" }';
-  return new Promise((resolve) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps],
+  return new Promise((resolve) => execFile(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', ps],
     { encoding: 'utf8', windowsHide: true, timeout: 20000, maxBuffer: 64 * 1024 * 1024 }, (err, out) => {
       if (err) return resolve([]);
       resolve(parseSnapshot(out, 'win32'));
@@ -172,10 +183,10 @@ async function killOrphans(root, from, to) {
 
 /**
  * Прочитать лимиты один раз. Не бросает исключений: любая беда — { ok: false, reason, message }.
- * @param {{ dataDir: string, env?: NodeJS.ProcessEnv, cwd?: string, timeoutMs?: number, signal?: AbortSignal }} o
+ * @param {{ dataDir: string, env?: NodeJS.ProcessEnv, cwd?: string, timeoutMs?: number, signal?: AbortSignal, log?: (m: string) => void }} o
  * @returns {Promise<ReadResult>}
  */
-function readOnce({ dataDir, env = process.env, cwd, timeoutMs = 30000, signal }) {
+function readOnce({ dataDir, env = process.env, cwd, timeoutMs = 30000, signal, log = () => {} }) {
   const found = findCodex(env);
   if (!found) return Promise.resolve({ ok: false, reason: 'not_installed', message: `Codex не найден: ${notFound(['codex'])}.` });
   /** @type {NodeJS.ProcessEnv} */
@@ -215,7 +226,7 @@ function readOnce({ dataDir, env = process.env, cwd, timeoutMs = 30000, signal }
       // Только пока корень жив (t98): после 'exit' Node закрывает его хэндл, и номер может достаться чужому процессу,
       // а 'close' ждёт ещё и внука, который держит вывод (spikes\t71-find\exit-vs-close.txt).
       if (!closed && child.pid && child.exitCode === null && child.signalCode === null) {
-        await killTree(child.pid);
+        await killTree(child.pid, log, () => child.exitCode === null && child.signalCode === null);
         await Promise.race([closedPromise, new Promise((r) => setTimeout(r, 3000))]);
       }
       // Корень вышел, а вывод всё ещё держат: внук пережил корень (t118).
@@ -320,7 +331,7 @@ function start({ dataDir, log = () => {}, intervalMs = 5 * 60 * 1000, env, cwd, 
     if (stopped) return Promise.resolve(null);
     if (running) return running;
     ctrl = new AbortController();
-    running = readOnce({ dataDir, env, cwd, timeoutMs, signal: ctrl.signal }).then((r) => {
+    running = readOnce({ dataDir, env, cwd, timeoutMs, signal: ctrl.signal, log }).then((r) => {
       if (r.ok || r.reason !== 'stopped') {
         try { save(dataDir, r); } catch (e) { log(`лимиты Codex: файл не записан: ${e.message}`); }
         const state = r.ok ? 'ok' : r.reason;

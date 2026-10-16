@@ -103,11 +103,13 @@
   .dlg .chk input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
   .dlg .chk.ntfr { margin-top: 8px; }
   /* «Агенты» (t407): в «Настройках» — кнопка, список — своим окошком; прокручивается тело окошка, у списка своей прокрутки нет. */
-  .dlg .agt .row { display: flex; align-items: center; gap: 10px; }
-  .dlg .agt .open, .dlg .agt .how button { height: 30px; padding: 0 14px; border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 4px; background: none; color: var(--text);
+  .dlg .agt .row, .dlg .cxh .row { display: flex; align-items: center; gap: 10px; }
+  /* Хук Codex (t797): итог проверки у самого Codex и кнопка «Проверить снова». */
+  .dlg .cxh .st { flex: 1; min-width: 0; }
+  .dlg .agt .open, .dlg .cxh .re, .dlg .agt .how button { height: 30px; padding: 0 14px; border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 4px; background: none; color: var(--text);
     font: 13px 'Segoe UI', system-ui, sans-serif; outline-offset: 2px; flex-shrink: 0; }
-  .dlg .agt .open:hover, .dlg .agt .how button:hover { background: var(--hover); }
-  .dlg .agt .open:focus-visible, .dlg .agt .how button:focus-visible { outline: 1px solid var(--text); }
+  .dlg .agt .open:hover, .dlg .cxh .re:hover, .dlg .agt .how button:hover { background: var(--hover); }
+  .dlg .agt .open:focus-visible, .dlg .cxh .re:focus-visible, .dlg .agt .how button:focus-visible { outline: 1px solid var(--text); }
   .dlg .agt .list { display: flex; flex-direction: column; gap: 12px; }
   .dlg .agt .chk { align-items: flex-start; }
   .dlg .agt .chk > input { margin-top: 1px; flex-shrink: 0; }
@@ -638,6 +640,7 @@
         <label class="chk ntfr"><input type="checkbox" class="ntf"><span class="ntft"></span></label></div>
       <div class="sec plg" hidden><div class="cap"></div></div>
       <div class="sec agt"><div class="cap"></div><div class="row"><button class="open"></button><span class="sub hint"></span></div></div>
+      <div class="sec cxh"><div class="cap"></div><div class="row"><span class="sub hint st"></span><button class="re"></button></div></div>
       <div class="btns"><button class="reset"></button><button class="cancel ok"></button></div>`;
     /** Селектор, ключ, русский текст, свойство. @type {[string, string, string, string][]} */
     const STATIC = [
@@ -649,6 +652,7 @@
       ['.ntft', 'dialogs.notifyAgent', 'Всплывающее уведомление, когда агент закончил или ждёт ответа', 'textContent'],
       ['.plg .cap', 'dialogs.plaginy', 'Плагины', 'textContent'], ['.agt .cap', 'dialogs.agenty', 'Агенты', 'textContent'],
       ['.agt .open', 'dialogs.agentyOtkryt', 'Агенты…', 'textContent'], ['.agt .hint', 'dialogs.agentyPodskazka', 'включить установленных и узнать, как поставить остальных', 'textContent'],
+      ['.cxh .cap', 'dialogs.codexHook', 'Codex', 'textContent'], ['.cxh .re', 'dialogs.codexHookRecheck', 'Проверить снова', 'textContent'],
       ['.reset', 'dialogs.sbrosit', 'Сбросить', 'textContent'], ['.cancel', 'common.close', 'Закрыть', 'textContent'],
     ];
     /** @type {() => void} */
@@ -694,7 +698,7 @@
       // Плагины (t182): у каждого выключатель; окна проектов включают и выключают плагин сразу, без перезагрузки.
       const plg = q('.plg');
       // «Браузер» встроен и в списке плагинов главного процесса его нет (t188): выключатель добавляется здесь, после Git и «Лимитов».
-      t.plugins.list().catch(() => []).then((/** @type {{ id: string, name: string, defaultOn?: boolean, langs?: Record<string, string> }[]} */ list) => {
+      t.plugins.list().catch(() => []).then((/** @type {{ id: string, name: string, defaultOn?: boolean, own?: boolean, langs?: Record<string, string> }[]} */ list) => {
         for (const pl of Array.isArray(list) ? list : []) plgDefault.set(pl.id, pl.defaultOn !== false);
         const withLangs = (Array.isArray(list) ? list : []).filter((pl) => pl.langs && Object.keys(pl.langs).length);
         list = [...(Array.isArray(list) ? list : []), { id: 'browser', name: 'Браузер' }];
@@ -721,6 +725,15 @@
           if (pl.id === 'browser') tx(sp, 'dialogs.brauzer', 'Браузер'); else tx(sp, 'plugin.' + pl.id, pl.name);
           lab.append(cb, sp);
           plg.appendChild(lab);
+          // Плагин пользователя (main\plugins.js own, t855) выключен, пока его не включили здесь; права программы — строкой под выключателем, видно до включения.
+          if (pl.own) {
+            const warn = document.createElement('div');
+            warn.className = 'muted pown';
+            warn.dataset.id = pl.id;
+            warn.style.cssText = 'margin:-4px 0 6px 22px;font-size:11px';
+            tx(warn, 'dialogs.pluginOwn', 'Свой плагин: у него те же права, что у программы — запускает команды и агентов, читает и меняет файлы. Включайте, только если доверяете автору.');
+            plg.appendChild(warn);
+          }
           if (pl.id === 'browser') browserViews(t, plg, tx);
           if (pl.id === 'frame') frame = frameRow(t, lab, tx, (s) => (s.plugins && typeof s.plugins.frame === 'boolean' ? s.plugins.frame : plgDefault.get('frame') !== false));
         }
@@ -732,6 +745,23 @@
       // Агенты из системы (t183) — своим окошком (t407): агентов в каталоге 21, в «Настройках» список не помещался. Окошко одно за раз,
       // поэтому «Настройки» закрываются; после «Агентов» они заново не открываются.
       q('.agt .open').onclick = () => { done(null); agents(t); };
+      // Хук Codex (t797): по нему вкладка узнаёт номер разговора и новый номер после /clear. Проверяет демон у самого Codex при первой вкладке Codex.
+      const cxSt = q('.cxh .st');
+      const cxRe = /** @type {HTMLButtonElement} */ (q('.cxh .re'));
+      const cxPaint = (/** @type {any} */ r) => {
+        if (r && r.error) tx(cxSt, 'dialogs.codexHookError', 'Хук Codex не проверен: {err}', 'textContent', { err: String(r.error) });
+        else if (!r) tx(cxSt, 'dialogs.codexHookNotYet', 'Хук Codex ещё не проверяли: проверка — при первой вкладке Codex');
+        else if (r.state === 'off') tx(cxSt, 'dialogs.codexHookOff', 'Хук Codex не работает (версия {v}): после /clear вкладка продолжит прежний разговор', 'textContent', { v: r.version || '?' });
+        else tx(cxSt, 'dialogs.codexHookOk', 'Номер разговора Codex: по хуку — работает');
+        cxSt.title = r && r.why ? String(r.why) : '';
+      };
+      Promise.resolve(t.codexHook && t.codexHook.status()).then(cxPaint, () => cxPaint(null));
+      cxRe.onclick = async () => {
+        cxRe.disabled = true;
+        tx(cxSt, 'dialogs.codexHookChecking', 'Проверяю хук Codex…');
+        try { cxPaint(await t.codexHook.recheck()); } catch (err) { cxPaint({ error: /** @type {any} */ (err).message || err }); }
+        cxRe.disabled = false;
+      };
       dlg.querySelectorAll('.seg button[data-z]').forEach((b) => b.addEventListener('click', () => change(t, { uiZoom: Number(/** @type {HTMLElement} */ (b).dataset.z) })));
       const font = (/** @type {number} */ v) => {
         const n = Math.round(v);
@@ -827,7 +857,7 @@
         if (it.url) {
           const link = el('button', 'link', I18n.t('dialogs.stranicaAgenta', 'Страница агента'));
           link.title = it.url;
-          link.onclick = () => { Promise.resolve(t.openLink(it.url)).catch(() => {}); };
+          link.onclick = () => { Promise.resolve(t.openLink(it.url, 'agents')).catch(() => {}); };
           box.appendChild(link);
         }
         return box;

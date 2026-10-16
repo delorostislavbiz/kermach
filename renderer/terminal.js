@@ -428,7 +428,9 @@ function createTerminal(pane, io, fontSize = 17) {
   }, true);
   pane.addEventListener('mousemove', (ev) => { if (moved(ev)) { press = null; release(); } }, true);
   // Мышь ушла с терминала: щелчка не будет, придержанное — программе (у Орки — mouseleave).
-  pane.addEventListener('mouseleave', () => { press = null; release(); });
+  // Нажатия уже нет — щелчок открыл ссылку, придержанное ждёт выброса (setTimeout ниже). Окошко или меню, открытое щелчком,
+  // ложится под указатель и даёт mouseleave раньше таймера — тогда придержанное не отдаётся (t892).
+  pane.addEventListener('mouseleave', () => { const p = press; press = null; if (p) release(); });
   pane.addEventListener('mouseup', (ev) => {
     const p = press;
     press = null;

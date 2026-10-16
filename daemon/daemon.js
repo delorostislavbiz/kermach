@@ -12,7 +12,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { execFile } = require('child_process');
+const { execFile, execFileSync, spawn } = require('child_process');
 const pty = require('node-pty');
 const { Terminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
@@ -37,6 +37,14 @@ const PIPE_KEY = crypto.randomBytes(32).toString('hex');
 // Секунды. Без него Claude ждёт ответа http-хука до 600 с — зависший демон подвесил бы все вкладки.
 const HOOK_TIMEOUT = 5;
 const HOOK_EVENTS = ['UserPromptSubmit', 'PermissionRequest', 'Stop', 'StopFailure'];
+// Хук SessionStart Codex (t777): обёртка шлёт событие на /hook/codex — по нему вкладка узнаёт номер разговора.
+const CODEX_HOOK = path.join(__dirname, 'codex-hook.js');
+// Секунды; входит в хэш доверия хуку (codexHookArgs) — менять только вместе с ним.
+const CODEX_HOOK_TIMEOUT = 10;
+// Итог проверки хука у самого Codex (t797): ключ — версия программы и строка хука, при обновлении Codex проверка заново.
+const CODEX_HOOK_FILE = path.join(DATA_DIR, 'codex-hook.json');
+// Сколько ждать один ответ app-server, мс: initialize около 0,5 с, hooks/list около 0,15 с (spikes\t785-hash\applist-right.txt).
+const CODEX_ASK_MS = 5000;
 
 fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
 try {
@@ -154,6 +162,9 @@ function terminalEnv(extra, tabKey) {
     if (!FOREIGN_ENV.test(k) && v !== undefined) env[k] = v;
   }
   env.COLORTERM = 'truecolor';
+  // cmd.exe не ищет программу в текущей папке (t799): node.bat или git.bat, подложенные в папку проекта, не запустятся вместо настоящих
+  // ни у человека, ни у Codex и MCP-серверов, которых вкладка запускает через cmd /c. PowerShell текущую папку и так не смотрит.
+  if (process.platform === 'win32') env.NoDefaultCurrentDirectoryInExePath = '1';
   // Порт приёмника — для обёртки строки состояния (t82): у хуков он в url файла настроек, у обёртки только окружение.
   const port = hookServer.listening ? String(/** @type {import('net').AddressInfo} */ (hookServer.address()).port) : '';
   return { ...env, ...(extra || {}), TERMINALUS_HOOK_TOKEN: HOOK_TOKEN, TERMINALUS_TAB_KEY: tabKey, TERMINALUS_HOOK_PORT: port };
@@ -291,6 +302,8 @@ class Session {
     this.busyDue = 0;
     // Когда сменился номер разговора Claude (мс). Строка состояния, запущенная раньше, — о прежнем разговоре (t82).
     this.claudeIdAt = 0;
+    // Искали ли номер разговора Codex в журналах (codexRollout, t777): один раз на вкладку.
+    this.codexLooked = false;
     // Терминал закрыли командой kill — выход с любым кодом не ошибка.
     this.killed = false;
     this.term.parser.registerOscHandler(9, (d) => this.onOsc9(d));
@@ -298,12 +311,17 @@ class Session {
     // Консоль из node-pty (conpty.dll + OpenConsole): одна версия на любой Windows. На вопрос DA1 при запуске отвечает answerDa1.
     this.da1Tail = '';
     this.da1Until = Date.now() + DA1_MS;
-    // Корень создаётся внутри pty.spawn (node-pty 1.1: connect синхронный) — по этим двум отметкам terminate сверит, что номер свой (t141).
+    // По окну spawnFrom..spawnTo terminate сверит, что номер свой (t141). В node-pty 1.2 корень создаётся не внутри pty.spawn,
+    // а когда подключился поток вывода (connect из onReady, t909): pty.pid до этого 0. Поэтому конец окна — время, когда номер стал виден.
     this.spawnFrom = Date.now();
     this.pty = pty.spawn(o.file, this.desc.args, {
       name: 'xterm-256color', cols, rows, cwd, env: terminalEnv(o.env, this.sid), useConptyDll: true,
     });
     this.spawnTo = Date.now();
+    /** Номер корня виден или терминал вышел без него: только после этого create отвечает. @type {Promise<void>} */
+    this.pidReady = ownRoot.whenPid(this.pty).then(({ at }) => { this.spawnTo = at; });
+    /** Номер виден и ответ на create ушёл — терминал есть в list (t909). */
+    this.ready = false;
     this.pty.onData((d) => this.onData(d));
     this.pty.onExit(({ exitCode }) => this.onExit(exitCode));
     // Запись в pty асинхронная: ввод в процесс, который как раз выходит, даёт «write EAGAIN» (или EOF) на сокете ввода node-pty 1.1.
@@ -378,6 +396,8 @@ class Session {
     if (this.agent !== 'codex' || /^\d{1,2};/.test(d)) return false;
     this.settleUntil = Date.now() + SETTLE_MS;
     this.setState(CODEX_ASK.test(d) ? 'waiting' : 'done', 'osc9');
+    // Первый ход закончен, а номера нет — SessionStart не пришёл (t777): запасной поиск по журналам разговоров.
+    if (!(this.desc.meta || {}).codexSessionId) codexRollout(this);
     return true;
   }
 
@@ -816,24 +836,68 @@ function handle(c, msg) {
     c.role = String(msg.role || 'client');
     c.name = String(msg.name || '');
     // hooksSettings — новое поле договора версии 1: путь для claude --settings. Нет поля (старый демон) — claude запускается без хуков.
-    return c.reply(id, { v: PROTOCOL_VERSION, pid: process.pid, hooksSettings });
+    // codexHookArgs (t777) — флаги -c для codex: хук SessionStart и доверие к нему. Нет поля или пусто — codex без хука.
+    return c.reply(id, { v: PROTOCOL_VERSION, pid: process.pid, hooksSettings, codexHookArgs });
   }
+
+  // Демон останавливается: c.sock.end() закрыл у канала только запись, команды ещё читаются (t1027). Проходит только shutdown.
+  // create и codexHook родили бы процессы мимо снимка, который гасит shutdown; update переписал бы sessions.json после flushSessions;
+  // kill запустил бы второй terminate рядом с shutdown. Ответ на чтение (list, read) окно уже не получит: запись в канал закрыта.
+  if (shuttingDown && cmd !== 'shutdown') return c.fail(id, 'демон останавливается');
 
   const s = sessions.get(msg.sid);
   if (NEEDS_SESSION.has(cmd) && !s) return c.fail(id, `нет терминала ${msg.sid}`);
 
   switch (cmd) {
     case 'list':
-      return c.reply(id, { sessions: [...sessions.values()].map((x) => x.info()) });
+      // Без номера корня терминала в списке нет (t909): клиент ещё не получил ответ на create и не записал вкладку — окно добавило бы её второй раз.
+      return c.reply(id, { sessions: [...sessions.values()].filter((x) => x.ready).map((x) => x.info()) });
     case 'create': {
       let ns;
       try { ns = new Session(msg); } catch (e) { return c.fail(id, String(/** @type {any} */ (e).message || e)); }
       sessions.set(ns.sid, ns);
-      log(`открыл терминал ${ns.sid}: ${ns.desc.file} в ${ns.desc.cwd}, pid ${ns.pty.pid}`);
       saveSessions();
       checkIdle();
-      broadcast({ ev: 'created', session: ns.info() });
-      return c.reply(id, { session: ns.info() });
+      // Журнал, рассылка и ответ — когда номер корня виден (t909): иначе клиент получит pid 0.
+      return void ns.pidReady.then(() => {
+        // Демон останавливается: дерево гасит shutdown, он ждёт тот же pidReady (t1013). Терминал не открываем — ни ready, ни created.
+        if (shuttingDown) {
+          log(`терминал ${ns.sid}: номер ${ns.pty.pid || 'не появился'} уже при остановке демона — не открываю`);
+          return c.fail(id, 'демон останавливается: терминал не открыт');
+        }
+        // Без номера: node-pty 1.2 не дождался потока вывода (5 с под нагрузкой) и уже вышел с кодом -1, или номер не появился за PID_WAIT_MS.
+        if (!ns.pty.pid) {
+          log(`терминал ${ns.sid} не запустился: ${ns.desc.file} в ${ns.desc.cwd} — консоль не подключилась`);
+          // Запись снимаем сами, как onExit: без выхода от node-pty она осталась бы в sessions.json и поднялась бы после перезапуска (t1013).
+          if (sessions.get(ns.sid) === ns) {
+            sessions.delete(ns.sid);
+            saveSessions();
+            ns.terminate();
+            checkIdle();
+          }
+          return c.fail(id, 'терминал не запустился: консоль не подключилась, попробуйте открыть вкладку ещё раз');
+        }
+        // Номер есть, но терминал уже вышел (onExit снял запись): открывать нечего, окну — отказ, а не вкладка без терминала.
+        if (sessions.get(ns.sid) !== ns) {
+          log(`терминал ${ns.sid} вышел раньше, чем ушёл ответ на create: ${ns.desc.file} в ${ns.desc.cwd}, pid ${ns.pty.pid}`);
+          return c.fail(id, 'терминал вышел сразу после запуска');
+        }
+        ns.ready = true;
+        log(`открыл терминал ${ns.sid}: ${ns.desc.file} в ${ns.desc.cwd}, pid ${ns.pty.pid}`);
+        broadcast({ ev: 'created', session: ns.info() });
+        c.reply(id, { session: ns.info() });
+      }).catch((e) => {
+        // Сбой в ожидании номера или в колбэке выше: без catch запрос остался бы без ответа, а терминал — в sessions (t1027).
+        log(`терминал ${ns.sid}: create не закончен — ${/** @type {any} */ (e) && /** @type {any} */ (e).stack || e}`);
+        ns.ready = false;
+        if (sessions.get(ns.sid) === ns && !shuttingDown) {
+          sessions.delete(ns.sid);
+          saveSessions();
+          ns.terminate();
+          checkIdle();
+        }
+        c.fail(id, 'терминал не запустился: внутренняя ошибка демона, попробуйте открыть вкладку ещё раз');
+      });
     }
     case 'attach':
       if (msg.cols && msg.rows) s.resize(msg.cols, msg.rows);
@@ -863,6 +927,14 @@ function handle(c, msg) {
     case 'kill':
       s.terminate();
       return c.reply(id);
+    // Флаги хука Codex, проверенные у самого Codex (t797): окно присылает программу Codex мимо обёртки .cmd и папку вкладки.
+    case 'codexHook': {
+      if (!codexHookArgs.length) return c.reply(id, { args: [], check: { args: [], state: 'off', version: '', why: 'у демона нет хука Codex', at: Date.now() } });
+      const pre = Array.isArray(msg.pre) ? msg.pre.map(String) : [];
+      if (typeof msg.file !== 'string' || !msg.file) return c.fail(id, 'нет программы Codex');
+      return void codexHookCheck(msg.file, pre, typeof msg.cwd === 'string' && msg.cwd ? msg.cwd : os.homedir(), msg.again === true)
+        .then((r) => c.reply(id, { args: r.args, check: r }), (e) => c.fail(id, String(e)));
+    }
     case 'shutdown':
       log(`остановка по просьбе клиента ${c.role} ${c.name}`);
       c.reply(id);
@@ -892,11 +964,17 @@ function shutdown() {
   hookServer.close();
   // До kill: после него терминалы уходят из списка, а описания должны остаться для перезагрузки.
   flushSessions();
-  const trees = Promise.all([...sessions.values()].map((s) => s.terminate()));
+  // terminate — после pidReady (t1013): без номера он гасит только консоль, а её kill node-pty 1.2 откладывает до первого вывода.
+  // Корень, родившийся в эти 0,5 с до выхода, уводил бы отвязанных детей (codex.exe) мимо taskkill /T.
+  // Отказ pidReady не отменяет terminate. Отказ terminate не роняет Promise.all: race с cap тогда тоже отказал бы, и демон не вышел бы совсем.
+  const trees = Promise.all([...sessions.values()].map((s) => s.pidReady.catch(() => {}).then(() => s.terminate())
+    .catch((e) => log(`терминал ${s.sid}: остановка дерева упала — ${e && e.stack || e}`))));
   for (const c of clients) c.sock.end();
   // Выход — только после taskkill: он ребёнок демона и с выходом демона гибнет раньше, чем дойдёт до внуков (как t72 у главного процесса).
-  // terminate — сверка номера (до QUERY_MS, t141) и taskkill (до TREE_KILL_MS).
-  const cap = new Promise((r) => setTimeout(r, ownRoot.QUERY_MS + TREE_KILL_MS + 1000));
+  // Потолок — сумма худших ожиданий одного терминала: номер корня (до PID_WAIT_MS), сверка номера (до QUERY_MS, t141), taskkill (до TREE_KILL_MS).
+  // Под нагрузкой номер приходит через секунды, и потолок без ожидания номера выходил раньше taskkill: отвязанные дети вкладки жили (t1028).
+  // Обычно trees кончается за доли секунды. stop-all.js ждёт выхода дольше этого потолка (DAEMON_EXIT_MS), иначе гасит демон, пока тот гасит деревья.
+  const cap = new Promise((r) => setTimeout(r, ownRoot.PID_WAIT_MS + ownRoot.QUERY_MS + TREE_KILL_MS + 1000));
   Promise.race([trees, cap]).then(() => setTimeout(() => process.exit(0), 500));
 }
 
@@ -942,7 +1020,7 @@ function retryStaleSocket() {
 }
 
 /**
- * Приёмник событий хуков. Общий для всех программ: путь /hook/<откуда> (claude; позже codex), ключ — заголовок X-Terminalus-Token.
+ * Приёмник событий хуков. Общий для всех программ: путь /hook/<откуда> (claude; codex — SessionStart, t777), ключ — заголовок X-Terminalus-Token.
  * Вкладка находится по ключу вкладки — заголовок X-Terminalus-Tab (см. onHook); без него — по session_id в теле.
  * Ответ — 200 с пустым телом, всегда и сразу: решений за человека приёмник не принимает (PermissionRequest показывает обычный вопрос).
  * Как в Орке (MIT): только POST, чужой ключ — 403, тело не дольше 5 с.
@@ -1000,6 +1078,12 @@ function onHook(source, e, tabKey) {
   }
   if (!s) return log(`приёмник: ${source} ${event} без вкладки, session_id ${sessionId || 'нет'}`);
   const meta = s.desc.meta || {};
+  // SessionStart Codex (t777) — только номер разговора: состояние вкладки не меняет. Приходит с первым сообщением (Codex заводит разговор лениво),
+  // при codex resume — тот же номер, после /clear — новый (source: clear).
+  if (source === 'codex') {
+    if (event === 'SessionStart' && meta.kind === 'codex' && UUID.test(sessionId) && meta.codexSessionId !== sessionId) newCodexId(s, sessionId, `SessionStart ${String(e.source || '')}`.trim());
+    return;
+  }
   // Строка состояния — не событие: она обновляется много раз за ответ. Ни s.hook, ни рассылки hook, ни лога, если номер тот же.
   if (event === STATUS_EVENT) {
     // Запущена раньше прошлой смены номера — это строка прежнего разговора, пришедшая с опозданием.
@@ -1032,6 +1116,59 @@ function newClaudeId(s, sessionId, why) {
   s.claudeIdAt = Date.now();
   if (!shuttingDown) saveSessions();
   broadcast({ ev: 'updated', session: s.info() });
+}
+
+/**
+ * Номер разговора Codex у вкладки (t777): в meta (по нему окно делает codex resume, «История» видит «идёт во вкладке»), в sessions.json, окнам — updated.
+ * @param {Session} s @param {string} sessionId @param {string} why
+ */
+function newCodexId(s, sessionId, why) {
+  const meta = s.desc.meta || {};
+  log(`вкладка ${s.sid}: разговор Codex ${meta.codexSessionId || 'нет'} → ${sessionId} (${why})`);
+  s.desc.meta = { ...meta, codexSessionId: sessionId };
+  if (!shuttingDown) saveSessions();
+  broadcast({ ev: 'updated', session: s.info() });
+}
+
+/**
+ * Запасной путь (t777): первый ответ Codex закончился, а SessionStart не пришёл (хука нет: старый демон у окна, codex через cmd без npm,
+ * другая формула хэша в новой версии Codex, hooks выключены). Номер — из журнала разговора: rollout-*.jsonl за сегодня и вчера,
+ * первая строка session_meta с папкой вкладки и временем не раньше её запуска, номер не занят другой живой вкладкой.
+ * Подходящих несколько (две вкладки в одной папке) — номер не ставится: чужой номер хуже, чем никакого. Один раз на вкладку.
+ * @param {Session} s
+ */
+function codexRollout(s) {
+  const meta = s.desc.meta || {};
+  if (s.codexLooked || meta.kind !== 'codex' || meta.codexSessionId) return;
+  s.codexLooked = true;
+  const since = Date.parse(s.desc.createdAt) - 2000;
+  const root = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions');
+  const same = (/** @type {string} */ a, /** @type {string} */ b) => process.platform === 'win32' ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase() : path.resolve(a) === path.resolve(b);
+  const taken = new Set([...sessions.values()].map((x) => x.desc.meta && x.desc.meta.codexSessionId).filter(Boolean));
+  /** @type {string[]} */
+  const found = [];
+  for (const back of [0, 1]) {
+    const d = new Date(Date.now() - back * 86400000);
+    const day = path.join(root, String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
+    let names = [];
+    try { names = fs.readdirSync(day).filter((f) => /^rollout-.*\.jsonl$/.test(f)); } catch { continue; }
+    for (const f of names) {
+      const file = path.join(day, f);
+      try {
+        if (fs.statSync(file).mtimeMs < since) continue;
+        // Первая строка — session_meta, около 20 КБ (инструкции модели); читается только начало файла.
+        const fd = fs.openSync(file, 'r');
+        const b = Buffer.alloc(256 * 1024);
+        const n = fs.readSync(fd, b, 0, b.length, 0);
+        fs.closeSync(fd);
+        const m = JSON.parse(b.subarray(0, n).toString('utf8').split('\n')[0]);
+        const p = m && m.type === 'session_meta' && m.payload;
+        if (p && UUID.test(String(p.id)) && !taken.has(p.id) && Date.parse(p.timestamp) >= since && same(String(p.cwd || ''), s.desc.cwd)) found.push(p.id);
+      } catch {}
+    }
+  }
+  if (found.length === 1) newCodexId(s, found[0], 'SessionStart не пришёл после первого ответа — номер из журнала разговора');
+  else log(`вкладка ${s.sid}: SessionStart от Codex не пришёл после первого ответа; журналов разговора в ${s.desc.cwd} с её запуска: ${found.length} — номер не ставлю`);
 }
 
 /**
@@ -1071,6 +1208,176 @@ function writeHooksSettings(port) {
 
 /** Путь для claude --settings; отдаётся клиентам в ответе на hello. */
 let hooksSettings = '';
+/** Флаги -c хука Codex (t777); отдаются клиентам в ответе на hello. @type {string[]} */
+let codexHookArgs = [];
+/** Строка command хука из codexHookArgs: по ней свой хук находится в ответе hooks/list (t797). */
+let codexHookCommand = '';
+
+/**
+ * Начало команды хука Codex: node полным путём (t793). Голое node cmd.exe без NoDefaultCurrentDirectoryInExePath ищет сначала в папке
+ * проекта — node.cmd из чужого репозитория запустился бы (spikes\t793-fix\shells-result.txt).
+ * Codex 0.162 зовёт хук оболочкой сессии (core/src/session/mod.rs:5141): по умолчанию PowerShell «-Command <команда>», иначе
+ * «%COMSPEC% /C "<команда>"» (hooks/src/engine/command_runner.rs, build_command). Путь в кавычках в начале PowerShell считает строкой,
+ * а не командой (SessionStart Failed, spikes\t777-hook\args-result.txt). Путь без пробелов и кавычек работает в обеих: путь с пробелом
+ * (C:\Program Files\nodejs) — коротким именем 8.3. Коротких имён на томе нет — «& "путь"»: работает в PowerShell, в cmd хук не запустится
+ * (номер тогда найдёт codexRollout). Не Windows — как строка состояния.
+ * @returns {string} пусто — node.exe в PATH нет
+ */
+function codexHookNode() {
+  const node = nodeCommand();
+  if (process.platform !== 'win32') return node;
+  if (!node.startsWith('"')) return '';
+  const full = node.slice(1, -1).replace(/\//g, '\\');
+  if (!/\s/.test(full)) return full.replace(/\\/g, '/');
+  let short = '';
+  try {
+    short = execFileSync(process.env.ComSpec || 'cmd.exe', [`/d /s /c "for %I in ("${full}") do @echo %~sI"`],
+      { windowsVerbatimArguments: true, windowsHide: true, encoding: 'utf8', timeout: 5000 }).trim();
+  } catch (e) { log(`короткое имя ${full} не узнал: ${e}`); }
+  if (short && !/\s/.test(short) && fs.existsSync(short)) return short.replace(/\\/g, '/');
+  log(`у ${full} нет короткого имени 8.3 — хук Codex через «& "путь"», он сработает только в PowerShell`);
+  return `& "${full.replace(/\\/g, '/')}"`;
+}
+
+/**
+ * Хук SessionStart Codex и доверие к нему — только флагами -c, ~/.codex не меняется (t777, spikes\t777-hook).
+ * Хук из -c Codex запускает, только если в hooks.state есть его хэш (иначе молча пропускает). Ключ — слой флагов (SessionFlags):
+ * «<session-flags>/config.toml» от корня диска (codex hooks/src/engine/discovery.rs, synthetic_layer_path), событие, номера группы и хука.
+ * Хэш — sha256 от JSON хука с отсортированными ключами (hook_hash + config/src/fingerprint.rs, codex 0.162). Новая формула в другой версии
+ * Codex — хук молча не запустится; тогда номер найдёт codexRollout.
+ * hooks.state — таблицей значением: «hooks.state."ключ".trusted_hash=» Codex режет по точкам внутри кавычек и пропускает (is ignored).
+ * Таблица из -c не заменяет записи доверия из ~/.codex/config.toml: Codex сводит их по ключам (hook_states_from_stack).
+ * Строки TOML — в записи JSON: те же кавычки и \", \\, \uXXXX.
+ * @returns {string[]}
+ */
+function makeCodexHookArgs() {
+  const node = codexHookNode();
+  if (!node) { log('node.exe в PATH не найден — Codex будет без хука SessionStart, номер найдёт codexRollout'); return []; }
+  const command = `${node} ${platform.shellArg(process.platform, CODEX_HOOK)}`;
+  /** @param {any} v @returns {any} */
+  const sorted = (v) => Array.isArray(v) ? v.map(sorted) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted(v[k])])) : v;
+  const identity = { event_name: 'session_start', hooks: [{ type: 'command', command, timeout: CODEX_HOOK_TIMEOUT, async: false }] };
+  const hash = `sha256:${crypto.createHash('sha256').update(JSON.stringify(sorted(identity))).digest('hex')}`;
+  const key = `${process.platform === 'win32' ? 'C:\\<session-flags>\\config.toml' : '/<session-flags>/config.toml'}:session_start:0:0`;
+  codexHookCommand = command;
+  return ['-c', `hooks.SessionStart=[{hooks=[{type="command",command=${JSON.stringify(command)},timeout=${CODEX_HOOK_TIMEOUT}}]}]`, ...codexTrust(key, hash)];
+}
+
+/** Флаги доверия хуку: ключ и хэш — строки TOML в записи JSON. @param {string} key @param {string} hash */
+const codexTrust = (key, hash) => ['-c', `hooks.state={${JSON.stringify(key)}={trusted_hash=${JSON.stringify(hash)}}}`];
+
+/**
+ * Спросить сам Codex о своём хуке (t797): codex app-server с флагами хука, initialize и hooks/list — так делает Орка
+ * (ref\orca-out\relay\win32-x64\managed-hook-runtime.js). Процесс гасится деревом в любом исходе. ~/.codex только читается.
+ * @param {string} file @param {string[]} pre программа Codex мимо обёртки .cmd — как у вкладки (main\terminals.js) @param {string} cwd
+ * @param {string[]} args флаги хука
+ * @returns {Promise<{ version: string, hook: any } | { error: string }>} hook — запись нашего хука из hooks/list, null — её нет
+ */
+function codexAsk(file, pre, cwd, args) {
+  return new Promise((resolve) => {
+    /** @type {import('child_process').ChildProcess} */
+    let p;
+    try { p = spawn(file, [...pre, 'app-server', ...args], { cwd, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true }); } catch (e) { resolve({ error: `не запустился: ${e}` }); return; }
+    let done = false;
+    /** @param {{ version: string, hook: any } | { error: string }} r */
+    const finish = (r) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (process.platform === 'win32' && p.pid) {
+        // Код не 0 бывает и по делу: app-server вышел сам раньше taskkill. Текст taskkill — в кодировке консоли, не пишем.
+        execFile(TASKKILL, ['/T', '/F', '/PID', String(p.pid)], { windowsHide: true }, (err) => {
+          if (err && p.exitCode === null) log(`codex app-server ${p.pid}: taskkill дерева — код ${/** @type {any} */ (err).code}`);
+        });
+      }
+      else try { p.kill(); } catch {}
+      resolve(r);
+    };
+    const timer = setTimeout(() => finish({ error: `app-server не ответил за ${CODEX_ASK_MS / 1000} с` }), CODEX_ASK_MS);
+    p.on('error', (e) => finish({ error: `не запустился: ${e.message}` }));
+    p.on('exit', (code) => finish({ error: `app-server вышел с кодом ${code}` }));
+    let version = '';
+    const send = (/** @type {any} */ m) => { try { /** @type {any} */ (p.stdin).write(JSON.stringify(m) + '\n'); } catch {} };
+    /** @type {any} */ (p.stdin).on('error', () => {});
+    /** @type {any} */ (p.stdout).setEncoding('utf8');
+    /** @type {any} */ (p.stdout).on('data', lineReader((/** @type {any} */ m) => {
+      if (m.id === 1) {
+        if (m.error) return finish({ error: `initialize: ${JSON.stringify(m.error).slice(0, 200)}` });
+        // userAgent — «<клиент>/<версия Codex> (…)».
+        version = (/\/(\d+\.\d+\.\d+\S*)/.exec(String(m.result && m.result.userAgent || '')) || ['', ''])[1];
+        send({ method: 'initialized' });
+        send({ method: 'hooks/list', id: 2, params: { cwds: [cwd] } });
+      } else if (m.id === 2) {
+        if (m.error) return finish({ error: `hooks/list: ${JSON.stringify(m.error).slice(0, 200)}` });
+        /** @type {any[]} */
+        const all = [];
+        const walk = (/** @type {any} */ v) => { if (Array.isArray(v)) v.forEach(walk); else if (v && typeof v === 'object') { if (typeof v.key === 'string' && typeof v.currentHash === 'string') all.push(v); else Object.values(v).forEach(walk); } };
+        walk(m.result);
+        const hook = all.find((h) => h.command === codexHookCommand && /<session-flags>/.test(h.key)) || null;
+        finish({ version, hook });
+      }
+    }));
+    send({ method: 'initialize', id: 1, params: { clientInfo: { name: 'kermach', title: 'Kermach', version: '1' } } });
+  });
+}
+
+/** Проверки по ключу — одна на запуск демона: вкладки Codex ждут одну и ту же. @type {Map<string, Promise<CodexHookCheck>>} */
+const codexChecks = new Map();
+/** @typedef {{ args: string[], state: 'ok' | 'fixed' | 'off', version: string, why: string, at: number }} CodexHookCheck */
+
+/**
+ * Флаги хука, которым Codex доверяет (t797). Хэш считает codexHookArgs по формуле Codex 0.162; другая версия могла её сменить —
+ * тогда хук молча не запустится, а в окне Codex появится меню «Hooks need review». Поэтому: спросить Codex; не trusted — взять его
+ * currentHash и спросить ещё раз. Не вышло — без хука (state off), номер найдёт codexRollout. Итог ok, fixed и off с ответом Codex
+ * пишется в CODEX_HOOK_FILE по версии и строке хука; нет ответа (таймаут, не запустился) — только в памяти до «Проверить снова».
+ * @param {string} file @param {string[]} pre @param {string} cwd @param {boolean} again «Проверить снова»: прежний итог забыть
+ * @returns {Promise<CodexHookCheck>}
+ */
+function codexHookCheck(file, pre, cwd, again) {
+  /** Отметка программы: обновили Codex — другой ключ. */
+  let stamp = '';
+  for (const f of [pre[0], file]) { try { const st = fs.statSync(f); stamp += `${f}:${st.size}:${st.mtimeMs};`; break; } catch {} }
+  const key = crypto.createHash('sha256').update(JSON.stringify([codexHookArgs, file, pre, stamp])).digest('hex').slice(0, 16);
+  if (again) codexChecks.delete(key);
+  const was = codexChecks.get(key);
+  if (was) return was;
+  const run = (async () => {
+    if (!again) {
+      try {
+        const saved = JSON.parse(fs.readFileSync(CODEX_HOOK_FILE, 'utf8'));
+        if (saved && saved.key === key && saved.check && Array.isArray(saved.check.args)) {
+          log(`хук Codex: итог прошлой проверки из ${CODEX_HOOK_FILE} — ${saved.check.state}`);
+          return /** @type {CodexHookCheck} */ (saved.check);
+        }
+      } catch {}
+    }
+    /** @type {CodexHookCheck} */
+    let r;
+    const first = await codexAsk(file, pre, cwd, codexHookArgs);
+    if ('error' in first) r = { args: [], state: 'off', version: '', why: first.error, at: Date.now() };
+    else if (!first.hook) r = { args: [], state: 'off', version: first.version, why: 'нашего хука нет в hooks/list', at: Date.now() };
+    else if (first.hook.trustStatus === 'trusted') r = { args: codexHookArgs, state: 'ok', version: first.version, why: '', at: Date.now() };
+    else {
+      const args = [...codexHookArgs.slice(0, 2), ...codexTrust(first.hook.key, first.hook.currentHash)];
+      const second = await codexAsk(file, pre, cwd, args);
+      if (!('error' in second) && second.hook && second.hook.trustStatus === 'trusted') {
+        r = { args, state: 'fixed', version: second.version, why: `было ${first.hook.trustStatus}`, at: Date.now() };
+        log(`Codex ${second.version || '?'} сменил формулу хэша хука: был ${first.hook.trustStatus}, хэш взят у Codex`);
+      } else {
+        const why = 'error' in second ? second.error : `и с хэшем Codex — ${second.hook ? second.hook.trustStatus : 'хука нет'}`;
+        r = { args: [], state: 'off', version: first.version, why: `${first.hook.trustStatus}, ${why}`, at: Date.now() };
+      }
+    }
+    log(`хук Codex${r.version ? ' ' + r.version : ''}: ${r.state === 'off' ? `не работает (${r.why}) — вкладки Codex без хука, номер найдёт codexRollout` : r.state === 'fixed' ? 'работает с хэшем от Codex' : 'работает'}`);
+    // Нет ответа Codex — не запоминать: в следующий запуск проверить снова.
+    if (r.state !== 'off' || r.version) {
+      try { fs.writeFileSync(CODEX_HOOK_FILE, JSON.stringify({ key, check: r }, null, 2)); } catch (e) { log(`не записал ${CODEX_HOOK_FILE}: ${e}`); }
+    }
+    return r;
+  })();
+  codexChecks.set(key, run);
+  return run;
+}
 
 // Сначала порт приёмника, потом канал: к первому клиенту файл настроек уже записан. Записывает его только демон, занявший канал, —
 // лишний демон выходит, не тронув файл рабочего.
@@ -1086,6 +1393,7 @@ function startPipe(port) {
     try { if (fs.existsSync(SESSIONS_FILE)) fs.renameSync(SESSIONS_FILE, SESSIONS_FILE.replace(/\.json$/, '.previous.json')); } catch {}
     writeKey();
     if (port) hooksSettings = writeHooksSettings(port);
+    if (port) codexHookArgs = makeCodexHookArgs();
     // Режим и папка — для проверки запуска: демон должен работать как Node (не как окно Electron) и не держать чужую папку.
     log(`слушаю ${PIPE}, версия договора ${PROTOCOL_VERSION}; режим ${/** @type {any} */ (process).type || 'node'}, папка ${process.cwd()}, родитель ${process.ppid}`);
     log(port ? `приёмник хуков: 127.0.0.1:${port}, файл настроек ${hooksSettings || 'не записан'}` : 'приёмника хуков нет — Claude без хуков');

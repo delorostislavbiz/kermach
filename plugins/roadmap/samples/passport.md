@@ -4,6 +4,7 @@
 Vite dev на :5173, API на :8080 (`docker compose up api`). Подробно — `docs/dev.md`.
 
 ## 2. Инструменты проекта
+Стек: vite, typescript, vitest, playwright
 npm, TypeScript 5, vitest, playwright для e2e, eslint — `package.json`.
 
 ## 3. Команда проверки и ожидаемый итог

@@ -24,6 +24,9 @@
   let turned = '';
   /** Список уже показывали — каскад появления только в первый раз (t664). */
   let shownOnce = false;
+  /** Номер проекта, который сейчас перетаскивают (t774); пока жест идёт, новый список не рисуется — рисуется в конце жеста. */
+  let dragId = '';
+  let renderLater = false;
 
   // Имена и пути — из файла пользователя, в разметку только через замену опасных знаков.
   const esc = (/** @type {string} */ s) => String(s).replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
@@ -36,6 +39,7 @@
     $('appIcon').innerHTML = svg('terminal', tc('accent', '#21B568'), 14);
     $('searchIcon').innerHTML = svg('search', tc('muted', '#8D91A5'), 15);
     $('plusIcon').innerHTML = svg('plus', tc('accent', '#21B568'), 14);
+    $('groupIcon').innerHTML = svg('plus', tc('text', '#C9D0DC'), 12);
     $('stopIcon').innerHTML = svg('power', tc('danger', '#F24E50'), 14);
     $('autosIcon').innerHTML = svg('clock', tc('accent', '#21B568'), 14);
     // Значок «Настройки» виден только в новом виде (t663): там у кнопок справа нет подписей.
@@ -140,7 +144,8 @@
     const need = state.projects.reduce((s, p) => s + needOf(p.id), 0);
     $('allNeed').innerHTML = q || !need ? '' : `· ${glyph('waiting')}${need} ${plural(need, STATES.waiting.words)}`;
     // Сверху «Закреплённые» — закреплённый проект только здесь, в своей группе не повторяется.
-    // Дальше группы заголовками в порядке Орки; проекты без группы — в конце, под «Без группы».
+    // Дальше группы заголовками в порядке файла (сначала порядок Орки, дальше его меняют «Выше» и «Ниже», t774); проекты без группы — в конце, под «Без группы».
+    // Пустая группа видна: только что созданную надо видеть, чтобы перетащить в неё проект. При поиске пустых блоков нет; пустые «Закреплённые» и «Без группы» не видны никогда.
     // Внутри блока — недавно открытые выше; ни разу не открытые — после них, в порядке файла (ручной порядок Орки).
     // Свёрнутая группа — одна строка заголовка со сводкой. При поиске найденное видно и в свёрнутых группах:
     // искали — значит хотят увидеть; стрелки на время поиска не работают, свёрнутое запомнено как было.
@@ -152,7 +157,8 @@
     const tiles = state.mode === 'tiles';
     const parts = [{ key: '', name: I18n.t('projects.zakreplennye', 'Закреплённые'), items: shown.filter((p) => p.pinned) },
       ...state.groups.map((g) => ({ key: g.id, name: g.name, items: rest.filter((p) => p.group === g.id) })),
-      { key: NO_GROUP, name: I18n.t('projects.bezGruppy', 'Без группы'), items: rest.filter((p) => !p.group || !known.has(p.group)) }].filter((g) => g.items.length);
+      { key: NO_GROUP, name: I18n.t('projects.bezGruppy', 'Без группы'), items: rest.filter((p) => !p.group || !known.has(p.group)) }]
+      .filter((g) => g.items.length || (!q && g.key && g.key !== NO_GROUP));
     // Каскад появления блоков (k-in, шаг 40 мс) — только при первом показе и только в видном окне: render() идёт на каждый ответ агента,
     // список «вспыхивал» бы; в скрытом окне проверок анимация стоит, и блоки остались бы прозрачными на снимке (t664).
     // Окно показывается по ready-to-show (projects-window.js), первый список может прийти ещё в скрытое — тогда каскад у первого списка в видном окне.
@@ -167,6 +173,7 @@
       // Блок — обёртка .gcard: в новом виде карточка, в старых темах её нет (display: contents). Заголовок — первым в ней: t164-pin ищет блок строки через previousElementSibling.
       const open = `<div class="gcard${cascade ? ' k-in' : ''}"${cascade ? ` style="animation-delay:${i * 40}ms"` : ''}>`;
       if (shut) return `${open}${head}</div>`;
+      if (!g.items.length) return `${open}${head}<div class="gempty">${I18n.t('projects.peretaschiteSyudaProekt', 'Перетащите сюда проект')}</div></div>`;
       const items = recent(g.items);
       return open + head + (tiles ? `<div class="tiles">${items.map(tile).join('')}</div>` : items.map(row).join('')) + '</div>';
     }).join('');
@@ -225,7 +232,7 @@
     if (my < applied) return;
     applied = my;
     state = s;
-    render();
+    if (dragId) renderLater = true; else render();
   }
 
   // События демона (смена темы терминала, открыт, закрыт) идут пачками — на каждое весь список не перерисовывается (t63).
@@ -252,6 +259,9 @@
   /** @param {string} msg */
   const showError = (msg) => { $('error').textContent = msg; $('error').style.display = msg ? 'block' : 'none'; };
 
+  // Фокус в поиск сразу, кодом. Атрибут autofocus Chromium применяет только на ближайшем кадре: окошко, открытое раньше,
+  // уже держит фокус, и в консоли «Autofocus processing was blocked» (t897).
+  $('q').focus();
   $('q').addEventListener('input', render);
   $('q').addEventListener('keydown', (e) => { if (e.key === 'Escape') { /** @type {HTMLInputElement} */ ($('q')).value = ''; render(); } });
   // Ctrl K (на macOS Cmd K) — в поиск, текст выделен (t679). Открыто окошко (настройки, меню, вопрос) — клавиша его, не поиска.
@@ -298,6 +308,27 @@
     await refresh();
     document.querySelector(`#list [data-id="${fresh}"]`)?.scrollIntoView({ block: 'nearest' });
   };
+  // Группы (t774). Запись — в главном процессе (projects:group*), отказ (пустое имя, повтор) — строкой ошибки.
+  /** Новая группа последней; projectId — сразу перенести в неё проект («Новая группа…» в меню проекта). @param {string} [projectId] */
+  async function newGroup(projectId) {
+    showError('');
+    const name = await D.rename({ title: I18n.t('projects.novayaGruppa', 'Новая группа'), value: '' });
+    if (!name) return;
+    const r = await t.projects.groupAdd(name, projectId);
+    if (r.error) return showError(r.error);
+    await refresh();
+  }
+  /** Перенести проект в группу (null — «Без группы»). Блок, куда он встал, свёрнут — развернуть, как после «Добавить папку». @param {any} p @param {string | null} groupId */
+  async function moveTo(p, groupId) {
+    showError('');
+    if ((p.group || null) === groupId) return;
+    const r = await t.projects.setGroup(p.id, groupId);
+    if (r.error) return showError(r.error);
+    const key = p.pinned ? '' : groupId || NO_GROUP;
+    if (key && state.collapsed.includes(key)) await t.projects.collapse([key], false);
+    await refresh();
+  }
+  $('newGroup').onclick = () => newGroup();
   // «Свернуть незакреплённые» сворачивает все группы и «Без группы», даже пустые сейчас: видны остаются только закреплённые.
   $('fold').onclick = () => {
     const all = [...state.groups.map((g) => g.id), NO_GROUP];
@@ -325,8 +356,142 @@
     const el = /** @type {HTMLElement} */ (e.target).closest('.row, .tile');
     if (el) t.projects.open(/** @type {HTMLElement} */ (el).dataset.id);
   });
-  // Правый щелчок по проекту (строке или плитке): «Закрепить» / «Открепить», «Цвет и значок», «Убрать из списка». Окошки — dialogs.js, внутри страницы.
+  // Перетаскивание проекта на блок группы (t774): блок под курсором подсвечен (.drop на .gcard), отпустили — проект в этой группе.
+  // Блок узнаётся по заголовку .group[data-key]: при поиске ключей нет, бросить некуда. У «Закреплённых» ключа нет — закрепляет меню.
+  // На событиях мыши, как вкладки в окне проекта (project-page.js, t211), а не HTML5 drag (t803): тот на Windows после dragstart
+  // ведёт системный цикл, и проверка мышью (sendInputEvent) до drop не доходит. Сдвиг меньше DRAG_MIN — обычный щелчок, проект открывается.
+  /** Блок группы в точке экрана: обёртка и ключ (номер группы или NO_GROUP); не блок группы — null. @param {number} x @param {number} y */
+  const dropAt = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    const card = el ? el.closest('#list .gcard') : null;
+    const head = card && /** @type {HTMLElement | null} */ (card.querySelector(':scope > .group[data-key]'));
+    return card && head ? { card, key: /** @type {string} */ (head.dataset.key) } : null;
+  };
+  const unlight = () => { for (const c of document.querySelectorAll('#list .drop')) c.classList.remove('drop'); };
+  const DRAG_MIN = 4;
+  /** Жест: номер проекта, точка нажатия, последняя точка, начался ли (сдвиг больше DRAG_MIN), «призрак» под курсором. */
+  /** @type {{ id: string, x: number, y: number, lx: number, ly: number, on: boolean, ghost: HTMLElement | null } | null} */
+  let drag = null;
+  /** Щелчок, которым закончился жест, проект не открывает и группу не сворачивает. После отмены (Esc) — до отпускания кнопки; следующее нажатие сбрасывает. */
+  let dragged = false;
+  /** Подсветить блок под точкой; null — снять. @param {number} x @param {number} y */
+  const light = (x, y) => {
+    const d = dropAt(x, y);
+    if (d && d.card.classList.contains('drop')) return d;
+    unlight();
+    if (d) d.card.classList.add('drop');
+    return d;
+  };
+  /** Конец жеста. ev — отпускание: блок берётся по его точке; без него — отмена. @param {MouseEvent} [ev] */
+  function endDrag(ev) {
+    const d = drag;
+    drag = null;
+    if (!d || !d.on) return;
+    dragId = '';
+    dragged = true;
+    if (ev) setTimeout(() => { dragged = false; }, 80);
+    if (d.ghost) d.ghost.remove();
+    document.body.classList.remove('drag-on');
+    const to = ev ? dropAt(ev.clientX, ev.clientY) : null;
+    unlight();
+    for (const el of document.querySelectorAll('#list .dragging')) el.classList.remove('dragging');
+    if (renderLater) { renderLater = false; render(); }
+    const p = to && state.projects.find((x) => x.id === d.id);
+    if (p && to) moveTo(p, to.key === NO_GROUP ? null : to.key);
+  }
+  $('list').addEventListener('mousedown', (e) => {
+    if (drag && drag.on) endDrag();
+    drag = null;
+    dragged = false;
+    if (e.button !== 0) return;
+    const el = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.row, .tile'));
+    if (el && el.dataset.id) drag = { id: el.dataset.id, x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, on: false, ghost: null };
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!drag) return;
+    // Кнопку отпустили за окном и вернулись — жест снимается, проект никуда не переезжает.
+    if (!(e.buttons & 1)) return void endDrag();
+    if (!drag.on) {
+      if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < DRAG_MIN) return;
+      const el = /** @type {HTMLElement | null} */ (document.querySelector(`#list [data-id="${CSS.escape(drag.id)}"]`));
+      const p = state.projects.find((x) => x.id === drag?.id);
+      if (!el || !p) { drag = null; return; }
+      drag.on = true;
+      dragId = drag.id;
+      el.classList.add('dragging');
+      document.body.classList.add('drag-on');
+      drag.ghost = document.createElement('div');
+      drag.ghost.className = 'dghost';
+      drag.ghost.textContent = p.name;
+      document.body.appendChild(drag.ghost);
+    }
+    drag.lx = e.clientX;
+    drag.ly = e.clientY;
+    if (drag.ghost) drag.ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 8}px)`;
+    light(e.clientX, e.clientY);
+  });
+  // Колесо во время жеста двигает список под неподвижной мышью — блок под курсором другой, подсветка — по последней точке.
+  $('list').addEventListener('scroll', () => { if (drag && drag.on) light(drag.lx, drag.ly); });
+  document.addEventListener('mouseup', (e) => {
+    if (e.button !== 0) return;
+    if (drag) endDrag(drag.on ? e : undefined);
+    else if (dragged) setTimeout(() => { dragged = false; }, 80);
+  });
+  window.addEventListener('blur', () => endDrag());
+  // Esc во время жеста — отмена: проект остаётся в своей группе.
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !drag || !drag.on) return;
+    e.preventDefault();
+    e.stopPropagation();
+    endDrag();
+  }, true);
+  document.addEventListener('click', (e) => { if (dragged) { e.stopPropagation(); e.preventDefault(); } }, true);
+  // Правый щелчок по заголовку группы (t774): «Переименовать», «Выше», «Ниже», «Удалить группу». У «Без группы» и «Закреплённых» меню нет.
+  /** @param {MouseEvent} e @param {string} id */
+  async function groupMenu(e, id) {
+    const i = state.groups.findIndex((g) => g.id === id);
+    const g = state.groups[i];
+    if (!g) return;
+    showError('');
+    const pick = await D.menu(e.clientX, e.clientY, [
+      { id: 'rename', label: I18n.t('common.rename', 'Переименовать'), icon: 'pen' },
+      ...(i > 0 ? [{ id: 'up', label: I18n.t('projects.vyshe', 'Выше') }] : []),
+      ...(i < state.groups.length - 1 ? [{ id: 'down', label: I18n.t('projects.nizhe', 'Ниже') }] : []),
+      '-',
+      { id: 'remove', label: I18n.t('projects.udalitGruppu', 'Удалить группу'), icon: 'trash', danger: true },
+    ]);
+    /** @type {any} */
+    let r = null;
+    if (pick === 'rename') {
+      const name = await D.rename({ title: I18n.t('projects.pereimenovatGruppu', 'Переименовать группу'), value: g.name, icon: 'layers' });
+      if (!name) return;
+      r = await t.projects.groupRename(g.id, name);
+    } else if (pick === 'up' || pick === 'down') {
+      r = await t.projects.groupMove(g.id, pick === 'up' ? -1 : 1);
+    } else if (pick === 'remove') {
+      // Проекты группы не удаляются: остаются в списке, «Без группы» (в Орке так по умолчанию).
+      const n = state.projects.filter((p) => p.group === g.id).length;
+      const ok = await D.confirm({
+        title: I18n.t('projects.udalitGruppu', 'Удалить группу'),
+        text: I18n.t('projects.udalitGruppuName', 'Удалить группу «{name}»?', { name: g.name }),
+        note: n ? I18n.t('projects.proektyOstanutsya', 'Проекты останутся в списке, в «Без группы»: {n}.', { n }) : I18n.t('projects.vGruppeNetProektov', 'В группе нет проектов.'),
+        ok: I18n.t('projects.udalit', 'Удалить'),
+        danger: true,
+      });
+      if (!ok) return;
+      r = await t.projects.groupRemove(g.id);
+    } else return;
+    if (r.error) return showError(r.error);
+    await refresh();
+  }
+  // Правый щелчок по проекту (строке или плитке): «Закрепить» / «Открепить», «Цвет и значок», «В группу ▸», «Новая группа…», «Убрать из списка». Окошки — dialogs.js, внутри страницы.
   $('list').addEventListener('contextmenu', async (e) => {
+    const head = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.group[data-key]'));
+    if (head) {
+      e.preventDefault();
+      if (head.dataset.key !== NO_GROUP) groupMenu(e, /** @type {string} */ (head.dataset.key));
+      return;
+    }
     const el = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.row, .tile'));
     if (!el) return;
     e.preventDefault();
@@ -336,10 +501,42 @@
     const pick = await D.menu(e.clientX, e.clientY, [
       { id: 'pin', label: p.pinned ? I18n.t('projects.otkrepit', 'Открепить') : I18n.t('projects.zakrepit', 'Закрепить'), icon: 'pin' },
       { id: 'look', label: I18n.t('projects.cvetIZnachok', 'Цвет и значок'), icon: 'palette' },
+      // Настройка проекта (t851): все новые вкладки Claude — с --dangerously-skip-permissions. Включена — галочка.
+      { id: 'bypass', label: I18n.t('projects.bypass', 'Claude без вопросов о разрешениях'), icon: p.bypass ? 'check' : 'bolt' },
+      { id: 'move', label: I18n.t('projects.vGruppu', 'В группу ▸'), icon: 'layers' },
+      { id: 'newGroup', label: I18n.t('projects.novayaGruppaMenu', 'Новая группа…'), icon: 'plus' },
       '-',
       { id: 'remove', label: I18n.t('projects.ubratIzSpiska', 'Убрать из списка'), icon: 'trash', danger: true },
     ]);
-    if (pick === 'pin') {
+    if (pick === 'move') {
+      // Подменю в dialogs.js нет — второе меню в той же точке: группы (текущая с галочкой), «Без группы», «Новая группа…».
+      const cur = state.groups.some((g) => g.id === p.group) ? p.group : null;
+      const to = await D.menu(e.clientX, e.clientY, [
+        ...state.groups.map((g) => ({ id: `g:${g.id}`, label: g.name, icon: g.id === cur ? 'check' : 'folder' })),
+        { id: 'g:', label: I18n.t('projects.bezGruppy', 'Без группы'), icon: cur ? 'folder' : 'check' },
+        '-',
+        { id: 'new', label: I18n.t('projects.novayaGruppaMenu', 'Новая группа…'), icon: 'plus' },
+      ]);
+      if (to === 'new') return newGroup(p.id);
+      if (to) return moveTo(p, to.slice(2) || null);
+    } else if (pick === 'newGroup') {
+      return newGroup(p.id);
+    } else if (pick === 'bypass') {
+      // Включить — после вопроса: режим опасный. Выключить — сразу. Открытые вкладки не меняются, revive повторяет режим, с которым их открыли.
+      if (!p.bypass) {
+        const ok = await D.confirm({
+          title: I18n.t('projects.bypass', 'Claude без вопросов о разрешениях'),
+          text: I18n.t('projects.bypassAsk', 'Новые вкладки Claude в «{name}» будут работать без вопросов о разрешениях?', { name: p.name }),
+          note: I18n.t('projects.bypassNote', 'Claude сам правит файлы и запускает команды, ничего не спрашивая. Открытые вкладки не меняются.'),
+          ok: I18n.t('projects.bypassOk', 'Включить'),
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      const r = await t.projects.update(p.id, { bypass: !p.bypass });
+      if (r.error) return showError(r.error);
+      await refresh();
+    } else if (pick === 'pin') {
       const r = await t.projects.update(p.id, { pinned: !p.pinned });
       if (r.error) return showError(r.error);
       await refresh();

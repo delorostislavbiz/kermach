@@ -13,11 +13,14 @@
 //   settings.get() / settings.set(obj) — свой мешок pluginSettings[id] (main\settings.js). set заменяет весь мешок, не сливает:
 //   дописать поле — set({ ...settings.get(), поле }), null — мешок удалить (t502). send(event, payload) — событие окну проекта,
 //   readTab(sid, format) — вывод вкладки проекта (команда read демона),
-//   writeTab(sid, data) — записать байты во вкладку проекта, Enter — '\r' (t276); terminals() — живые вкладки проекта со state (t276);
+//   writeTab(sid, data) — записать байты во вкладку проекта, Enter — '\r' (t276); terminals() — живые вкладки проекта со state (t276)
+//   и номером разговора: claudeSessionId у Claude, codexSessionId у продолженного Codex (t768);
 //   onState(cb) — смена состояния вкладки проекта { sid, state, by, at }, ответ — отписка; при остановке экземпляра отписка сама (t276),
 //   openTab({ kind, args, cwd, env, title, prompt, focus }) — открыть и показать вкладку (t253, terminals.js checkExtra);
-//   focus: false — открыть, не переводя на неё окно (t706);
+//   focus: false — открыть, не переводя на неё окно (t706); agent — агент Claude (t251);
+//   resume — номер разговора Claude или Codex: ядро проверяет, что он есть на диске, и ставит claude --resume или codex resume (t768);
 //   agents() — найденные и включённые агенты { id, title, prompt } для вида claude, codex или agent:<id> (t576).
+//   followBypass: true в openTab — вкладка Claude следует настройке проекта «без вопросов о разрешениях» (t852); только плагинам при программе.
 //
 // Кто может звать: любой код страницы окна проекта, с любым id. Код всех плагинов работает в одной странице и видит один мост
 // (main\sender.js), поэтому «только свой id» главный процесс проверить не может — такое ограничение было бы видимостью.
@@ -71,6 +74,25 @@ function forget(id, dir) {
   for (const i of insts.values()) if (i.id === id && i.dir === dir) return;
   const pre = dir.endsWith(path.sep) ? dir : dir + path.sep;
   for (const k of Object.keys(require.cache)) if (k.startsWith(pre)) delete require.cache[k];
+}
+
+/**
+ * Плагин при программе (t852): папка внутри src\plugins. По папке, а не по id: плагин пользователя с тем же именем заменяет встроенный (plugins.js full).
+ * @param {string} dir
+ */
+function builtIn(dir) {
+  const c = /** @type {{ dataDir: string }} */ (ctx);
+  const r = path.relative(plugins.dirsOf(c.dataDir)[0], dir);
+  return !!r && !r.startsWith('..') && !path.isAbsolute(r);
+}
+
+/**
+ * Проект из общего списка (t852): экземпляр плагина держит объект с первого вызова, а настройку bypass окно «Проекты» меняет в списке.
+ * Нет списка или проекта в нём — тот, что был. @param {Project} p @returns {Project}
+ */
+function projectNow(p) {
+  const d = /** @type {any} */ (ctx).data;
+  return (d && d.projects.find((/** @type {Project} */ x) => x.id === p.id)) || p;
 }
 
 /** Экземпляр плагина для проекта: есть — он, нет — новый (первый вызов). @param {import('./plugins').PluginFull} pl @param {Project} p @returns {Inst} */
@@ -134,7 +156,7 @@ function instOf(pl, p) {
      * prompt — первое сообщение аргументом. Окно покажет её сразу; focus: false — нет, выбранная вкладка остаётся (t706). Ответ { session } или { error }.
      * @param {any} opts
      */
-    openTab: async (opts) => (insts.get(key) !== inst ? { error: 'плагин остановлен' } : require('./terminals').openFromPlugin(p, opts)),
+    openTab: async (opts) => (insts.get(key) !== inst ? { error: 'плагин остановлен' } : require('./terminals').openFromPlugin(projectNow(p), opts, { core: builtIn(pl.dir) })),
   });
   try {
     fs.mkdirSync(dataDir, { recursive: true });

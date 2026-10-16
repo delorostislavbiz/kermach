@@ -110,6 +110,7 @@ function filesSetup(host) {
     if (r.error === 'failed') return I18n.t('files.failed', 'Не открылся: {path} — {why}', { path: p, why: r.why || '' });
     if (r.error === 'searchFailed') return I18n.t('files.searchFailed', 'Поиск не удался — попробуйте ещё раз');
     if (r.error === 'noProject') return I18n.t('files.noProject', 'У окна нет папки проекта');
+    if (r.error === 'noRoot') return I18n.t('files.noRoot', 'Папки проекта нет: {path}', { path: p });
     return I18n.t('files.err', 'Не получилось: {why}', { why: r.why || r.error });
   };
   /** Сообщение внизу панели на несколько секунд. @param {string} text */

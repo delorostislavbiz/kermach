@@ -172,11 +172,14 @@ function look() {
 /**
  * Схемы плагина «Темы» из themes.json (t257): { dir, conf, all } или null — плагина нет или файл не прочитан.
  * Файл читается с диска при каждом вызове: новая схема видна, как только окно переоткрыли, без перезапуска программы.
+ * Схемы из <данные>\plugins\themes — только когда «Темы» включены записью plugins.themes: true (t866), как свой плагин (t855);
+ * иначе — встроенные, даже если своя папка лежит.
  */
 function schemeFile() {
   // require здесь, а не в начале файла: main\plugins.js сам требует settings.js — кольцо.
   const { dirsOf } = require('./plugins');
-  const dir = dirsOf(dataDir()).map((d) => path.join(d, 'themes')).reverse().find((d) => fs.existsSync(path.join(d, 'plugin.json')));
+  const dirs = dirsOf(dataDir()).map((d) => path.join(d, 'themes'));
+  const dir = (cur.plugins.themes === true ? dirs.reverse() : dirs.slice(0, 1)).find((d) => fs.existsSync(path.join(d, 'plugin.json')));
   if (!dir) return null;
   try {
     const conf = JSON.parse(fs.readFileSync(path.join(dir, 'plugin.json'), 'utf8'));
@@ -204,7 +207,7 @@ function scheme() {
   return { id: t.id, kind: t.kind === 'light' ? 'light' : 'dark', window: t.window, terminal: t.terminal };
 }
 
-/** Схемы для списка «Тема» в «Настройках» (t723): [{ id, name, kind }] — все из themes.json, кроме termius-dark; выключатель плагина не важен. */
+/** Схемы для списка «Тема» в «Настройках» (t723): [{ id, name, kind }] — все из themes.json, кроме termius-dark; выключатель плагина не важен, кроме выбора папки (schemeFile, t866). */
 function schemes() {
   const f = schemeFile();
   if (!f) return [];
