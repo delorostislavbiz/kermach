@@ -20,6 +20,8 @@ const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { langs } = require('./i18n');
+/** Имя папки плагина — как ключ выключателя в settings.js и ID_RE в plugin-bridge.js. */
+const PLUGIN_ID = /^[\w.-]{1,64}$/;
 
 /**
  * @typedef {{ id: string, name: string, url: string, defaultOn: boolean, own?: boolean, langs?: Record<string, string> }} Plugin
@@ -77,6 +79,9 @@ function full(dirs, log) {
       // а выключатель plugins.browser общий — свой browser включался бы выключателем встроенного.
       if (!own) core.add(it.name);
       else if (core.has(it.name)) { log(`плагин ${it.name} из ${dir} пропущен: так зовут плагин при программе, его он не заменяет`); continue; }
+      // Имя папки — ключ выключателя и имя для моста: settings.js cleanFlags и plugin-bridge.js ID_RE берут только [\w.-]{1,64} (t1140).
+      // Кириллица или пробел — выключатель молча не сохранялся бы, плагин был бы виден, но не включался.
+      if (!PLUGIN_ID.test(it.name)) { log(`плагин ${it.name} пропущен: имя папки — только латиница, цифры, _ . - и до 64 знаков (${dir})`); continue; }
       const conf = path.join(dir, 'plugin.json');
       if (!fs.existsSync(conf)) continue;
       try {

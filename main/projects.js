@@ -1,7 +1,7 @@
 // @ts-check
 // Список проектов — projects.json в папке данных, версия 2: группы и проекты с цветом и значком.
 // Версия 1 (этапы 1–2) знала только пути и последний открытый проект. При первом чтении она переводится во 2-ю,
-// копия старого файла остаётся рядом (projects.v1.json), и список один раз дополняется проектами из Орки.
+// копия старого файла остаётся рядом (projects.v1.json), и список один раз дополняется проектами из Орки — только при переводе версии 1 или явном orcaFile; чистая папка данных Орку не читает.
 // Файл Орки только читается.
 const fs = require('fs');
 const os = require('os');
@@ -125,7 +125,7 @@ function save(dataDir, data) {
 }
 
 /**
- * Читает список проектов. Версию 1 переводит во 2-ю, Орку переносит один раз и сразу сохраняет.
+ * Читает список проектов. Версию 1 переводит во 2-ю, Орку переносит один раз (версия 1 или явный orcaFile; чистая папка — нет) и сразу сохраняет.
  * Испорченный файл не затирает — откладывает рядом как projects.json.broken-<время>.
  * @param {string} dataDir папка данных
  * @param {{ orcaFile?: string, log?: (m: string) => void }} [opt]
@@ -158,7 +158,14 @@ function load(dataDir, opt = {}) {
     data = fromV1(raw);
     changed = true;
   }
-  if (!data.importedFromOrca && importOrca(data, opt.orcaFile || ORCA_FILE, log)) changed = true;
+  if (!data.importedFromOrca) {
+    // Папка данных без projects.json — новый пользователь: чужие проекты Орки не тянем. Явный orcaFile — перенос по просьбе (пробы).
+    if (!raw && !opt.orcaFile) {
+      data.importedFromOrca = { at: new Date().toISOString(), count: 0, note: 'чистая папка: Орку не читаем' };
+      log('перенос из Орки пропущен: чистая папка данных');
+      changed = true;
+    } else if (importOrca(data, opt.orcaFile || ORCA_FILE, log)) changed = true;
+  }
   // Последний открытый — в том же написании, что у проекта в списке: по этой строке ищутся терминалы проекта у демона.
   const lastProject = data.last ? data.projects.find((p) => p.id === projectId(data.last)) : null;
   if (lastProject && lastProject.path !== data.last) { data.last = lastProject.path; changed = true; }
@@ -208,15 +215,15 @@ function add(dataDir, data, dir) {
  */
 function checkLook(f, keys) {
   if (!f || typeof f !== 'object') return { error: 'нечего менять' };
-  /** @type {{ title?: string, color?: string, icon?: string, pinned?: boolean, bypass?: boolean }} */
+  /** @type {{ title?: string, name?: string, color?: string, icon?: string, pinned?: boolean, bypass?: boolean }} */
   const out = {};
   for (const k of keys) {
     if (!(k in f)) continue;
     const v = f[k];
-    if (k === 'title') {
+    if (k === 'title' || k === 'name') {
       const s = typeof v === 'string' ? v.trim() : '';
       if (!s || s.length > 60) return { error: 'имя — от 1 до 60 знаков' };
-      out.title = s;
+      out[k] = s;
     } else if (k === 'color') {
       if (typeof v !== 'string' || !/^#[0-9a-f]{6}$/i.test(v)) return { error: `не цвет: ${v}` };
       out.color = v;
@@ -238,12 +245,13 @@ function checkLook(f, keys) {
  * Цвет, значок и закрепление проекта. Меняются поля того же объекта, а не подменяется сам объект: окно проекта держит ссылку на него
  * (project-window.js), и после смены оно видит новые цвет и значок.
  * Открепленный проект поля pinned не держит: оно пропадает из записи, как у проекта, никогда не бывшего закреплённым. Так же bypass (t851).
- * @param {string} dataDir @param {ProjectsData} data @param {string} id @param {{ color?: string, icon?: string, pinned?: boolean, bypass?: boolean }} look
+ * @param {string} dataDir @param {ProjectsData} data @param {string} id @param {{ name?: string, color?: string, icon?: string, pinned?: boolean, bypass?: boolean }} look
  * @returns {Project | null} нет такого проекта — null
  */
 function setLook(dataDir, data, id, look) {
   const p = data.projects.find((x) => x.id === id);
   if (!p) return null;
+  if (look.name) p.name = look.name;
   if (look.color) p.color = look.color;
   if (look.icon) p.icon = look.icon;
   if (look.pinned === true) p.pinned = true;

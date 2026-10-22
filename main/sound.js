@@ -1,6 +1,6 @@
 // @ts-check
 // Звук: агент закончил ответ, просит разрешения или остановился с ошибкой (t15). Играет главный процесс (решение t12):
-// после закрытия окон он остаётся значком у часов (t34), и звук слышен без единого окна.
+// звук не зависит от того, какое окно открыто. Окон нет — программа вышла (t176), звучать некому: значка у часов больше нет.
 // Источник — событие демона { ev: 'state', sid, state, by }. Одно событие — один звук. Демон шлёт его при смене состояния,
 // а от хука и OSC 9 — каждый раз, даже если состояние уже стоит (кроме «работает»): иначе звук пропадал, когда заголовок или ввод опередили агента (t129).
 // Звучит только то, что сказал сам агент: by = hook (Claude) или osc9 (Codex). by = input — это ответ человека,
@@ -72,11 +72,13 @@ function attach(client, c) {
     // Проект терминала — из списка демона: в событии state только номер терминала.
     client.request('list').then((/** @type {any} */ r) => {
       const s = (r.sessions || []).find((/** @type {any} */ x) => x.sid === m.sid);
-      if (s && projectFocused(s.project)) { c.log(`звук: ${what} — молчу, окно проекта в фокусе`); return; }
+      // Скрытая вкладка (t1059) ждёт ответа или упала — её в окне не видно, поэтому фокус окна не глушит (t1061).
+      const hidden = !!(s && s.meta && s.meta.hidden) && m.state !== 'done';
+      if (s && !hidden && projectFocused(s.project)) { c.log(`звук: ${what} — молчу, окно проекта в фокусе`); return; }
       // Мигание на панели задач или точка у часов (t108) — и когда звук выключен: это другой канал.
       attention.raise(s ? s.project : '', what, c.log);
       // Бросок уведомления (имена, словарь, Electron) не глушит звук (t681).
-      try { notify.show({ sid: m.sid, state: m.state, ...names(s), on: settings.get().notify !== false }, what, c.log); }
+      try { notify.show({ sid: m.sid, state: m.state, ...names(s), hidden, on: settings.get().notify !== false }, what, c.log); }
       catch (e) { c.log(`уведомление: ${what} — не показано: ${e instanceof Error ? e.message : e}`); }
       if (off) { c.log(`звук: ${what} — выключен для проверки`); return; }
       if (!settings.get().sound) { c.log(`звук: ${what} — выключен настройкой`); return; }

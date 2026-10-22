@@ -15,14 +15,17 @@ const SKIP = new Set(['node_modules', '.git']);
 /**
  * Жёсткие пределы обхода (t454): какую бы папку ни открыли проектом — корень диска, большую папку без git, — дальше не читаем.
  * Не настройка: 11.10 широкий поиск прочитал весь D:, дошёл до испорченного файла, и ноутбук завис. Объект, а не константы, — проба ставит пределы меньше.
- * walkMax — записей обхода папки без git: в папке D:\TERMINALUS git отдаёт 5 тыс. файлов, обход без .gitignore видел 86 тыс.; 50 тыс. — около секунды чтения каталогов.
+ * walkMax — записей обхода папки без git: замер 21.10 (t1195, spikes\t1195-files\walk-out.txt) на D:\TERMINALUS с чтением .gitignore — 91 тыс. записей за 2,8–5,7 с,
+ *   50 тыс. — около 1,8 с чтения каталогов.
+ * gitMax — записей из git ls-files (t1195, d189): список от git раньше не ограничивался, а за ним идёт lstat по всем папкам. На D:\TERMINALUS git отдаёт 80 тыс.
+ *   (12,9 тыс. отслеживаемых и много неотслеживаемых проб); 300 тыс. — с запасом в разы, дальше список неполный (cut 'max').
  * walkMs — время обхода, запасной предел для сетевой или зависающей папки: диск занят не дольше минуты. Нагрузку держит walkMax; холодный диск HDD
  *   на 50 тыс. записей может идти десятки секунд, поэтому не меньше.
  * dirMs — чтение одной папки при обходе (t466 д): readdir не прерывается, и walkMs между папками его не ловит. Здоровая папка читается
  *   за миллисекунды, и на холодном HDD — меньше секунды; 10 с — как GIT_MS: папка не отвечает (сетевая, зависший диск), обход останавливается.
  * Пределы чтения текста (textBytes, textIdleMs) — у поиска «Файлов», tree.js дописывает их в этот же объект.
  */
-const LIMITS = { walkMax: 50000, walkMs: 60000, dirMs: 10000 };
+const LIMITS = { walkMax: 50000, gitMax: 300000, walkMs: 60000, dirMs: 10000 };
 
 /** Сколько «*» в одном имени правила .gitignore (t870 а): «*a*a*a» на имени в 255 знаков — 25 мс, четыре пары — секунда, пять — 38 с. */
 const MAX_STARS = 3;
@@ -214,8 +217,8 @@ async function walk(root, visit, stop, onLate = () => {}, o = {}) {
 }
 
 /**
- * Файлы git-папки без игнорируемых (.gitignore): git ls-files — отслеживаемые и новые. Так ищет и Орка (ripgrep тоже читает .gitignore):
- * в папке D:\TERMINALUS обход видит 86 тыс. записей, git — 24 тыс. файлов, за секунду.
+ * Файлы git-папки без игнорируемых (.gitignore): git ls-files — отслеживаемые и новые. Так ищет и Орка (ripgrep тоже читает .gitignore).
+ * Замер 21.10: в папке D:\TERMINALUS обход видит 91 тыс. записей, git — 80 тыс. за 1,3–1,5 с (из них 12,9 тыс. отслеживаемых).
  * @param {string} root
  * @returns {Promise<{ out: string } | { why: 'notRepo' | 'noGit' | 'timeout' | 'error' }>} out — пути через нулевой байт, разделитель «/»;
  *   why — почему списка нет: папка не в git, git не найден, не ответил за GIT_MS, упал
@@ -258,6 +261,9 @@ async function entriesOf(root, cancelled = () => false, o = {}) {
   const g = await gitFiles(root);
   const stages = { git: lap(), parse: 0, links: 0, walk: 0 };
   const all = 'out' in g ? g.out.split('\0') : [];
+  // Предел записей от git (t1195, d189): остальное отбрасывается, список помечается неполным (cut 'max').
+  const capped = all.length > LIMITS.gitMax;
+  if (capped) all.length = LIMITS.gitMax;
   // Пустой список — папка проекта внутри чужого репозитория и вписана в его .gitignore (или пустой репозиторий): тогда обход.
   if (all.some(Boolean)) {
     /** @type {string[]} */
@@ -279,14 +285,17 @@ async function entriesOf(root, cancelled = () => false, o = {}) {
     stages.parse = lap();
     const links = new Set();
     const ds = [...dirs];
-    // Срок на пачку (t870): одна зависшая папка держала весь список. Завис — списка нет, как у зависшей папки обхода: cut 'time', pending, onLate.
+    // Срок на каждый lstat (t870): одна зависшая папка держала весь список. Завис — списка нет, как у зависшей папки обхода: cut 'time', pending, onLate.
     // Пропустить зависшие папки нельзя: не узнали, ссылка ли это, — файлы за ней могли быть снаружи проекта.
-    for (let i = 0; i < ds.length; i += 64) {
-      const part = ds.slice(i, i + 64);
-      const batch = Promise.all(part.map((d) => fs.promises.lstat(path.join(root, d)).then((st) => { if (st.isSymbolicLink()) links.add(d); }, () => {})));
-      if (await within(batch) === HUNG) {
-        batch.then(() => (o.onLate || (() => {}))());
-        return { entries: [], git: true, gitignore: true, cut: 'time', seen: i, hung: part[0], pending: true, stages };
+    // По одному, а не пачкой (t481): пачка под зависшей папкой занимала все потоки пула libuv (проба — 9 висящих вызовов сразу), и вставал диск всех окон.
+    // Цена — 0,3 с на 6 тыс. папок D:\TERMINALUS вместо 0,05 с (spikes\t481-one\cost.js).
+    for (let i = 0; i < ds.length; i++) {
+      if (i % 256 === 255) { if (cancelled()) return { entries: [], git: true, gitignore: true, cut: null, seen: i, stages }; await breathe(); }
+      const d = ds[i];
+      const one = fs.promises.lstat(path.join(root, d)).then((st) => { if (st.isSymbolicLink()) links.add(d); }, () => {});
+      if (await within(one) === HUNG) {
+        one.then(() => (o.onLate || (() => {}))());
+        return { entries: [], git: true, gitignore: true, cut: 'time', seen: i, hung: d, pending: true, stages };
       }
     }
     if (links.size) {
@@ -295,7 +304,8 @@ async function entriesOf(root, cancelled = () => false, o = {}) {
       dirs = new Set([...dirs].filter((d) => !links.has(d) && !under(d)));
     }
     stages.links = lap();
-    return { entries: [...[...dirs].map((rel) => ({ rel, dir: true })), ...files.map((rel) => ({ rel, dir: false }))], git: true, gitignore: true, stages };
+    return { entries: [...[...dirs].map((rel) => ({ rel, dir: true })), ...files.map((rel) => ({ rel, dir: false }))], git: true, gitignore: true, stages,
+      ...(capped ? { cut: /** @type {'max'} */ ('max'), seen: LIMITS.gitMax } : {}) };
   }
   /** @type {{ rel: string, dir: boolean }[]} */
   const entries = [];

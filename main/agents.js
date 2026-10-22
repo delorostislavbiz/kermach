@@ -13,7 +13,7 @@ const os = require('os');
 const path = require('path');
 const sender = require('./sender');
 const settings = require('./settings');
-const { findProgram, notFound } = require('./find-program');
+const { findProgram, findProgramsAsync, notFound } = require('./find-program');
 const i18n = require('./i18n');
 
 /**
@@ -72,6 +72,42 @@ const enabled = (a) => !!a.builtin || settings.agentOn(a.id);
 
 /** Список для настроек, меню «+» и подсказок браузера (pics, t438): весь каталог, найден ли каждый сейчас. @returns {{ id: string, title: string, found: boolean, enabled: boolean, builtin: boolean, pics: boolean }[]} */
 const list = () => CATALOG.map((a) => ({ id: a.id, title: a.title, found: !!find(a), enabled: enabled(a), builtin: !!a.builtin, pics: !!a.pics }));
+
+/**
+ * То же, что list, но поиск идёт асинхронно: главный процесс не стоит на 22 именах × папках PATH (t204, ~100 мс). Кэша нет —
+ * агента удалили, следующий запрос его уже не видит. Поиск делят только запросы одного тика (t1090): запрос, пришедший, когда поиск
+ * уже идёт, не берёт его результат — файл могли удалить после начала поиска; он ждёт следующий поиск, один на всех поздних.
+ */
+/** @type {Promise<Map<string, { file: string, pre: string[] } | null>> | null} */
+let listOpen = null;
+/** @type {Promise<Map<string, { file: string, pre: string[] } | null>> | null} */
+let listRunning = null;
+/** @type {Promise<Map<string, { file: string, pre: string[] } | null>> | null} */
+let listNext = null;
+/** Новый поиск; пока идёт текущий тик, к нему присоединяются другие запросы. */
+const startSearch = () => {
+  const p = findProgramsAsync(CATALOG.flatMap((a) => a.cmd)).finally(() => { if (listRunning === p) listRunning = null; });
+  listRunning = p;
+  listOpen = p;
+  setImmediate(() => { if (listOpen === p) listOpen = null; });
+  return p;
+};
+/** Найденные программы: свежие для этого запроса — поиск начат не раньше, чем запрос пришёл. */
+const searchFresh = () => {
+  if (listOpen) return listOpen;
+  if (!listRunning) return startSearch();
+  if (!listNext) {
+    const after = listRunning.catch(() => null);
+    listNext = after.then(() => { listNext = null; return startSearch(); });
+  }
+  return listNext;
+};
+/** @returns {Promise<ReturnType<typeof list>>} */
+const listAsync = async () => {
+  // «Включён» читается у каждого запроса в свой момент — включили во время поиска, список уже верный.
+  const found = await searchFresh();
+  return CATALOG.map((a) => ({ id: a.id, title: a.title, found: a.cmd.some((n) => !!found.get(n)), enabled: enabled(a), builtin: !!a.builtin, pics: !!a.pics }));
+};
 
 /**
  * Как передать первое сообщение агенту из каталога (t576): '' — последним аргументом, строка — флаг перед текстом,
@@ -137,13 +173,14 @@ function readAgents(dir, source) {
 }
 
 /**
- * Именованные агенты Claude для проекта (t251): ~/.claude/agents и <папка проекта>\.claude\agents. Одно имя в обеих — берётся агент проекта,
- * как у самого Claude. Порядок — по имени.
+ * Именованные агенты Claude для проекта (t251): ~/.claude/agents (CLAUDE_CONFIG_DIR, если задана, t1193) и <папка проекта>\.claude\agents.
+ * Одно имя в обеих — берётся агент проекта, как у самого Claude. Порядок — по имени.
  * @param {string} projectPath
  */
 function named(projectPath) {
   const by = new Map();
-  for (const a of readAgents(path.join(os.homedir(), '.claude', 'agents'), 'user')) by.set(a.name, a);
+  const home = process.env.CLAUDE_CONFIG_DIR ? path.resolve(process.env.CLAUDE_CONFIG_DIR) : path.join(os.homedir(), '.claude');
+  for (const a of readAgents(path.join(home, 'agents'), 'user')) by.set(a.name, a);
   for (const a of readAgents(path.join(projectPath, '.claude', 'agents'), 'project')) by.set(a.name, a);
   return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -549,7 +586,7 @@ function register(c) {
   registered = true;
   ipcMain.handle('agents:list', (e) => {
     if (!sender.allowed(e, 'agents:list')) return sender.refused();
-    try { return list(); } catch (err) { c.log(`агенты: список не собран: ${err}`); return []; }
+    return listAsync().catch((err) => { c.log(`агенты: список не собран: ${err}`); return []; });
   });
   // Именованные агенты Claude проекта этого окна (t251): [{ name, description, mode, source }].
   ipcMain.handle('agents:named', (e) => {
@@ -560,4 +597,4 @@ function register(c) {
   });
 }
 
-module.exports = { register, list, promptFlag, takesPics, launchOf, extra, named, LOOK, CATALOG, NAME_RE, watchShells, pokeShell, pokeShells, runningIn, onRunning, agentNow, isShell, agentOfProcess };
+module.exports = { register, list, listAsync, promptFlag, takesPics, launchOf, extra, named, LOOK, CATALOG, NAME_RE, watchShells, pokeShell, pokeShells, runningIn, onRunning, agentNow, isShell, agentOfProcess };

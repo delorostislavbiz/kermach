@@ -85,46 +85,58 @@
    */
   function grips(box, kind, fr, onMove, onEnd) {
     for (const g of [...box.querySelectorAll(':scope > .lgrip')]) g.remove();
+    // Доли общие для всех разделителей этой раскладки: два пальца на двух разделителях не затирают сдвиг друг друга (t1214, d305).
+    const now = [...fr];
     for (const l of lines(kind, fr)) {
       const g = document.createElement('div');
       g.className = `lgrip ${l.dir}`;
       g.dataset.i = String(l.i);
       place(g, l);
       g.addEventListener('pointerdown', (ev) => {
-        if (ev.button !== 0) return;
+        // Второй палец на том же разделителе второго перетаскивания не начинает (t430).
+        if (ev.button !== 0 || g.classList.contains('drag')) return;
         ev.preventDefault();
         const r = box.getBoundingClientRect();
-        let cur = [...fr];
+        let cur = [...now];
         let frame = 0;
+        const cls = l.dir === 'v' ? 'rdrag' : 'rdragh';
         g.setPointerCapture(ev.pointerId);
         g.classList.add('drag');
-        document.body.classList.add(l.dir === 'v' ? 'rdrag' : 'rdragh');
+        document.body.classList.add(cls);
         /** @param {PointerEvent} e */
         const move = (e) => {
+          if (e.pointerId !== ev.pointerId) return;
           const v = l.dir === 'v' ? (e.clientX - r.left) / r.width : (e.clientY - r.top) / r.height;
-          cur = [...cur];
-          cur[l.i] = clamp(kind, cur, l.i, v);
+          now[l.i] = clamp(kind, now, l.i, v);
+          cur = [...now];
           // Все разделители — по новым долям: у «1 + 2» горизонтальный начинается от вертикального и едет вместе с ним (t398).
           const all = box.querySelectorAll(':scope > .lgrip');
           lines(kind, cur).forEach((m, k) => { const x = /** @type {HTMLElement | undefined} */ (all[k]); if (x) place(x, m); });
-          if (!frame) frame = requestAnimationFrame(() => { frame = 0; onMove(cur); });
+          // Разделитель убрали до кадра (смена раскладки, t429) — доли старой раскладки в новую не пишутся.
+          if (!frame) frame = requestAnimationFrame(() => { frame = 0; if (g.isConnected) onMove(cur); });
         };
         // Отпускание и потерю захвата слушает окно: разделитель могут убрать посреди перетаскивания (смена раскладки, t422),
         // тогда потеря захвата приходит документу, а не ему. Убрали — классы снимаются, доли старой раскладки не записываются.
-        /** @param {PointerEvent} e */
-        const up = (e) => {
-          if (e.pointerId !== ev.pointerId) return;
+        // Окно потеряло фокус (Alt+Tab с зажатой кнопкой, t430): отпускание может не прийти до следующего движения мыши,
+        // а rdrag отключает мышь у страниц сайтов — перетаскивание кончается сразу, доли записываются как при отпускании.
+        const end = () => {
           g.removeEventListener('pointermove', move);
           window.removeEventListener('pointerup', up, true);
           window.removeEventListener('lostpointercapture', up, true);
+          window.removeEventListener('blur', end);
           if (frame) { cancelAnimationFrame(frame); frame = 0; }
           g.classList.remove('drag');
-          document.body.classList.remove('rdrag', 'rdragh');
-          if (g.isConnected) onEnd(cur);
+          try { g.releasePointerCapture(ev.pointerId); } catch {}
+          // Класс снимает последнее перетаскивание: второй палец ещё тянет другой разделитель или край «Файлов» (right-resize.js).
+          if (!document.querySelector(cls === 'rdrag' ? '.lgrip.v.drag, #rightGrip.drag' : '.lgrip.h.drag')) document.body.classList.remove(cls);
+          if (g.isConnected) onEnd([...now]);
         };
+        /** @param {PointerEvent} e */
+        const up = (e) => { if (e.pointerId === ev.pointerId) end(); };
         g.addEventListener('pointermove', move);
         window.addEventListener('pointerup', up, true);
         window.addEventListener('lostpointercapture', up, true);
+        window.addEventListener('blur', end);
       });
       box.appendChild(g);
     }

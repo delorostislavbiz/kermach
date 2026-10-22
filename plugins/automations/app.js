@@ -14,6 +14,8 @@ const settings = require('../../main/settings');
 const i18n = require('../../main/i18n');
 const store = require('./store');
 const schedule = require('./schedule');
+const { notifyDir } = require('./run');
+const notify = require('../../main/notify');
 const { execWorker } = require('../../main/exec-worker');
 
 const PAGE = path.join(__dirname, 'window.html');
@@ -110,8 +112,50 @@ function changed() {
   }, 300);
 }
 
-/** Живые слежения по папкам; упавшее убирается и включается снова при открытии окна. @type {Map<string, fs.FSWatcher>} */
+/** Живые слежения по папкам; упавшее убирается и включается снова при открытии окна. @type {Map<string, { close: () => void }>} */
 const watchers = new Map();
+
+/** Как часто опрашивается .terminalus проекта. */
+const POLL_MS = 2000;
+
+/**
+ * Слежение за .terminalus проекта опросом, а не fs.watch (t535): на Windows fs.watch держит папку и все папки выше,
+ * и проект нельзя переименовать, пока окно открыто (EPERM). Смотрим <dir>/<id>/* и <dir>/automation-runs/<id>/<время прогона>/*:
+ * подпись «имя mtime размер»; изменилась — событие. Круги не накладываются: следующий ставится после конца предыдущего.
+ * @param {string} dir @param {() => void} onChange
+ */
+function pollDir(dir, onChange) {
+  let closed = false, sig = /** @type {string | null} */ (null), timer = /** @type {NodeJS.Timeout | null} */ (null);
+  const names = async (/** @type {string} */ d) => { try { return await fs.promises.readdir(d, { withFileTypes: true }); } catch { return []; } };
+  const lap = async () => {
+    /** @type {string[]} */
+    const out = [];
+    const files = async (/** @type {string} */ d) => {
+      for (const e of await names(d)) {
+        const f = path.join(d, e.name);
+        if (e.isFile()) { const s = await fs.promises.stat(f).catch(() => null); if (s) out.push(`${f} ${s.mtimeMs} ${s.size}`); }
+        else if (e.isDirectory()) out.push(`${f}/`);
+      }
+    };
+    for (const e of await names(dir)) {
+      if (!e.isDirectory()) continue;
+      if (e.name === store.RUNS) {
+        // <id>/<время прогона>/итог.json; <id>/работа — копия проекта для прогона, её не смотрим (старое слежение стреляло на каждый её файл)
+        for (const r of await names(path.join(dir, e.name))) {
+          if (!r.isDirectory()) continue;
+          for (const st of await names(path.join(dir, e.name, r.name))) if (st.isDirectory() && st.name !== 'работа') await files(path.join(dir, e.name, r.name, st.name));
+        }
+      }
+      else await files(path.join(dir, e.name));
+    }
+    const now = out.sort().join('\n');
+    if (sig !== null && now !== sig && !closed) onChange();
+    sig = now;
+  };
+  const next = () => { if (!closed) timer = setTimeout(() => lap().catch(() => {}).then(next), POLL_MS); };
+  lap().catch(() => {}).then(next);
+  return { close() { closed = true; if (timer) clearTimeout(timer); } };
+}
 
 /**
  * Прогоны и описания меняет и процесс прогона, без программы: следим за папками данных. Папки нет — создаём, иначе watch бросит.
@@ -127,11 +171,44 @@ function watch() {
     try {
       if (own.includes(dir)) fs.mkdirSync(dir, { recursive: true });
       else if (!fs.existsSync(dir)) continue;
-      const w = fs.watch(dir, { recursive: true }, changed);
-      w.on('error', (e) => { log(`слежение за ${dir} остановлено: ${e.message}`); w.close(); watchers.delete(dir); });
-      watchers.set(dir, w);
+      if (own.includes(dir)) {
+        const w = fs.watch(dir, { recursive: true }, () => { changed(); toastsSoon(); });
+        w.on('error', (e) => { log(`слежение за ${dir} остановлено: ${e.message}`); w.close(); watchers.delete(dir); });
+        watchers.set(dir, w);
+      } else watchers.set(dir, pollDir(dir, changed));
     } catch (e) { log(`слежение за ${dir} не включено: ${e instanceof Error ? e.message : e}`); }
   }
+}
+
+/** Запрос старше этого — прогон уже показал тост сам или упал: удаляется без показа (например, лежал с прошлого запуска программы). */
+const TOAST_STALE_MS = 30000;
+
+/**
+ * Запросы тоста от прогонов (t1233, run.js handoff): взять файл — удалить его — и показать тост от имени программы.
+ * Не удалился (ENOENT) — его уже забрал прогон и показывает через PowerShell. Решение «показывать ли» — здесь (настройка «уведомления»):
+ * файл удаляется и при выключенной настройке, иначе прогон показал бы тост в обход неё. Щелчок — окно автоматизаций с отбором по проекту.
+ */
+function toasts() {
+  const c = /** @type {Ctx} */ (ctx);
+  const dir = notifyDir(c.dataDir);
+  let names;
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.json')); } catch { return; }
+  for (const n of names) {
+    const f = path.join(dir, n);
+    let q = null;
+    try { if (fs.statSync(f).size < 65536) q = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {}
+    try { fs.unlinkSync(f); } catch { continue; }
+    if (!q || typeof q.title !== 'string' || !(Date.now() - Number(q.at) < TOAST_STALE_MS)) { log(`запрос уведомления ${n} ${q ? 'устарел' : 'не прочитан'} — удалён без показа`); continue; }
+    const project = String(q.project || '');
+    notify.remind({ key: `auto:${q.id}`, title: q.title, body: String(q.text || ''), on: settings.get().notify !== false, click: () => open(project) }, log);
+  }
+}
+
+/** События fs.watch идут пачкой на каждую запись прогона: запросы смотрим один раз на пачку. */
+let toastTick = /** @type {NodeJS.Timeout | null} */ (null);
+function toastsSoon() {
+  if (toastTick) return;
+  toastTick = setTimeout(() => { toastTick = null; try { toasts(); } catch (e) { log(`уведомление прогона: ${e instanceof Error ? e.message : e}`); } }, 50);
 }
 
 /**
@@ -221,6 +298,7 @@ function register(c) {
   ctx = c;
   ex = execWorker(log);
   watch();
+  toastsSoon(); // запросы, оставшиеся с прошлого запуска, — без показа
   ipcMain.handle('auto:summary', (e, project) => {
     if (!sender.allowed(e, 'auto:summary')) return sender.refused();
     // Плагин выключен в «Настройках» — кнопки «Проектов» нет; задачи Планировщика при этом остаются.
@@ -267,10 +345,19 @@ function register(c) {
     if (f.dir && !item) return { error: 'описание не найдено' };
     if (item) store.update(item, cfg, task);
     else { const id = store.create(c.dataDir, { project: f.project ? String(f.project) : '', cfg, task }); item = store.find(c.dataDir, id); }
-    item = /** @type {store.Item} */ (itemOf(/** @type {store.Item} */ (item).dir));
-    if (!!f.on !== item.on) store.setOn(c.dataDir, item, !!f.on);
-    item = /** @type {store.Item} */ (itemOf(item.dir));
-    const warn = await inQueue(() => schedulePut(/** @type {store.Item} */ (itemOf(/** @type {store.Item} */ (item).dir)) || /** @type {store.Item} */ (item)));
+    const saved = itemOf(/** @type {store.Item} */ (item).dir);
+    if (!saved) return { error: 'описание не найдено' };
+    item = saved;
+    // Номер занят своей (копия проекта) — setOn переносит папку под новый номер: искать по номеру, а не по старой папке.
+    if (!!f.on !== item.on) {
+      const moved = store.find(c.dataDir, store.setOn(c.dataDir, item, !!f.on));
+      // Папку убрали посреди сохранения: искать нечего.
+      if (!moved) return { error: 'описание не найдено' };
+      item = moved;
+    }
+    item = /** @type {store.Item} */ (itemOf(item.dir) || item);
+    // Пришедшая с папкой проекта и не включённая здесь: её задачи в Планировщике нет, а номер может быть у своей — schedulePut выключил бы ту (t472).
+    const warn = item.foreign ? '' : await inQueue(() => schedulePut(item));
     watch();
     changed();
     return { ok: true, dir: item.dir, warn };
@@ -279,7 +366,9 @@ function register(c) {
     const i = itemOf(dir);
     if (!i) return { error: 'описание не найдено' };
     const id = store.setOn(c.dataDir, i, !!on);
-    const now = /** @type {store.Item} */ (store.find(c.dataDir, id));
+    const now = store.find(c.dataDir, id);
+    // Описание убрали между поиском и записью (t1202): без этой проверки окно получало бы TypeError про null.
+    if (!now) return { error: 'описание не найдено' };
     const warn = await inQueue(() => schedulePut(/** @type {store.Item} */ (itemOf(now.dir)) || now));
     watch();
     changed();

@@ -52,7 +52,7 @@ function candidates(b, alike) {
   /** @type {Set<string>} записи, уже собранные в паттерн */
   const used = new Set();
   for (const d of b.decisions) if (d.type === PATTERN && !d.cancelled) for (const id of field(d, 'from')) used.add(id);
-  const ok = new Map(b.decisions.filter((d) => !d.cancelled && !(d.wrong && d.wrong.length) && d.type !== 'договорённость' && d.type !== PATTERN && !board.section(d) && !used.has(d.id))
+  const ok = new Map(b.decisions.filter((d) => !d.cancelled && !(d.wrong && d.wrong.length) && d.type !== 'договорённость' && d.type !== PATTERN && d.type !== 'заметка' && !board.section(d) && !used.has(d.id))
     .map((d) => [d.id, d]));
   /** @type {Map<string, Set<string>>} центр → записи */
   const star = new Map();

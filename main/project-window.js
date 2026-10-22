@@ -37,7 +37,8 @@ const iconFile = (p) => path.join(iconDir(), `${p.id}-${String(p.color).replace(
 /** Обработчики — один раз на процесс. @param {Ctx} c */
 function register(c) {
   if (ctx) return;
-  ctx = c;
+  // Берём только dataDir и log (t683): notify.reopen зовёт open с урезанным ctx, остальные поля главного ctx здесь не читаются.
+  ctx = { dataDir: c.dataDir, log: c.log };
   windowState.init(c.dataDir, c.log);
   settings.register(c);
   windowButtons.register();

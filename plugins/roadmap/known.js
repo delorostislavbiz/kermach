@@ -1,7 +1,8 @@
 // @ts-check
 // Общая база записей на все проекты (t844, И7): known\ в папке данных плагина (ctx.dataDir, %APPDATA%\TERMINALUS\plugins-data\roadmap\).
 // Проверенное решение или тупик со stack и разделом «## Переносимый вывод» копируется в known\s<N>.md, агент другого проекта получает его
-// в части 6 после своих записей. Копируются заголовок, type, stack, первая «Текст ошибки:» и раздел — без текста записи, files, card и имени проекта.
+// в части 6 после своих записей. Запись с «global: да» (t698, «для всех проектов» — галочка окна, kermach roadmap new d --global) идёт и без раздела — текстом записи.
+// Отзывы карт о s<N> («s5 помогла» в used:) — счётчик в state.json (used, tallyUsed), видны в окне и в known.md. Копируются заголовок, type, stack, первая «Текст ошибки:» и раздел — без текста записи, files, card и имени проекта.
 // Откуда запись (номер проекта и dN) и отпечаток последней копии — в known\state.json: имя папки бывает именем клиента.
 // Номер проекта — uuid в .kermach\id (t1029): путь как ключ после переименования папки заводил те же записи заново, и агент получал свои как чужие.
 // Пишет сборка промпта (prompt.build с dataDir) — сама, без «да» (Ростислав, 16.10). Перед копией фильтр: адрес, IP, почта, путь с именем
@@ -109,7 +110,8 @@ function reasonCode(d, today, approved = { ok: new Set(), from: new Map() }) {
   if (d.wrong && d.wrong.length) return r('not.wrong');
   if (pat && !approved.ok.has(d.id)) return r('not.unapproved');
   if (!d.stack || !d.stack.length) return r('not.nostack');
-  if (!d.portable) return r('not.noportable');
+  // global: да (t698) — человек сам пометил запись «для всех проектов»: раздел не нужен, в базу идёт текст записи. stack нужен: без него pick её никому не подаст.
+  if (!d.portable && !d.global) return r('not.noportable');
   // Запись собрана в утверждённый паттерн — вместо неё идёт паттерн (t1019). Утверждение слетело — причина пропадает, копия возвращается.
   const p = approved.from.get(d.id);
   if (p && !pat) return r('not.inpattern', { d: p });
@@ -127,7 +129,9 @@ function reasonOf(d, today, approved) {
  */
 function render(d, id, project) {
   const err = String(d.text || '').split(/\r?\n/).map((l) => l.trim()).find((l) => l.startsWith(board.ERROR_LINE) && !/^Текст ошибки:\s*—\s*$/.test(l)) || '';
-  const port = d.portable.split(/\r?\n/).filter((l) => !MERGED.test(l.trim()));
+  // Без раздела (global, t698) — текст записи без строк «Текст ошибки:»: первая уже идёт отдельной строкой. Фильтр утечек тот же, по каждой строке.
+  const src = d.portable || String(d.text || '').split(/\r?\n/).filter((l) => !l.trim().startsWith(board.ERROR_LINE)).join('\n');
+  const port = src.split(/\r?\n/).filter((l) => !MERGED.test(l.trim()));
   /** @type {Array<[Args, string]>} */
   const check = [[{ where: 'title' }, d.title], ...(err ? /** @type {Array<[Args, string]>} */ ([[{ where: 'error' }, err]]) : []),
     ...port.map((l, i) => /** @type {[Args, string]} */ ([{ where: 'line', n: String(i + 1) }, l]))];
@@ -202,7 +206,9 @@ function write(file, text) {
  * state.json: записи «номер проекта|dN» → { s, sha1, off }, off — запись больше не подаётся (причина); projects: номер → последняя папка.
  * Номер не записался (папка только для чтения) — вместо него путь папки (pathKey).
  * @typedef {{ s: string, sha1: string, off?: string }} Entry
- * @typedef {{ items: Record<string, Entry>, projects: Record<string, { path: string }> }} State
+ * used (t698): s<N> → «номер проекта|tN» → отзыв агента карты из её used: («помогла», «не пригодилась», «неверна»). Ключ — карта,
+ * а не прибавка: sync зовут на каждую сборку промпта и правку доски, повторный обход ту же карту второй раз не считает.
+ * @typedef {{ items: Record<string, Entry>, projects: Record<string, { path: string }>, used?: Record<string, Record<string, string>> }} State
  * @param {string} dir @returns {State}
  */
 function readState(dir) {
@@ -210,7 +216,54 @@ function readState(dir) {
   if (raw === null) return { items: {}, projects: {} };
   const o = JSON.parse(raw);
   const obj = (/** @type {any} */ v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
-  return { items: obj(o && o.items), projects: obj(o && o.projects) };
+  const st = { items: obj(o && o.items), projects: obj(o && o.projects) };
+  // used — только если есть: state.json старых версий и без отзывов остаётся байт в байт прежним.
+  return o && o.used ? { ...st, used: obj(o.used) } : st;
+}
+
+const VERDICTS = ['помогла', 'не пригодилась', 'неверна'];
+/**
+ * Отзывы карт проекта о записях базы — в st.used (t698). Карта убрала s<N> из used: — её отзыв уходит. Возвращает, изменилось ли что-то.
+ * @param {State} st @param {string} who ключ проекта (ownerOf) @param {import('./board').Board} b
+ */
+function tallyUsed(st, who, b) {
+  const pre = `${who}|`;
+  /** @type {Record<string, Record<string, string>>} */
+  const now = {};
+  for (const c of b.cards) for (const [s, v] of Object.entries(c.used || {})) if (/^s\d+$/.test(s) && VERDICTS.includes(v)) (now[s] = now[s] || {})[`${pre}${c.id}`] = v;
+  const used = st.used || {};
+  const before = JSON.stringify(used);
+  for (const s of Object.keys(used)) {
+    for (const k of Object.keys(used[s])) if (k.startsWith(pre) && !(now[s] && now[s][k])) delete used[s][k];
+    if (!Object.keys(used[s]).length) delete used[s];
+  }
+  for (const [s, m] of Object.entries(now)) used[s] = { ...(used[s] || {}), ...m };
+  if (JSON.stringify(used) === before) return false;
+  if (Object.keys(used).length) st.used = used; else delete st.used;
+  return true;
+}
+
+/** Счётчик отзывов записи базы: { помогла, не пригодилась, неверна } — сколько карт всех проектов. @param {State} st @param {string} s */
+function countOf(st, s) {
+  /** @type {Record<string, number>} */
+  const n = Object.fromEntries(VERDICTS.map((v) => [v, 0]));
+  for (const v of Object.values((st.used || {})[s] || {})) if (v in n) n[v]++;
+  return n;
+}
+
+/**
+ * Свести отзывы проекта без записи копий (t698): main зовёт на правку доски — агент закрыл карту с «s5 помогла», а следующей сборки промпта
+ * может не быть долго. Папки базы нет — отзывам не о чем быть. @param {string} dataDir @param {string} project @param {import('./board').Board} b
+ */
+function tally(dataDir, project, b) {
+  if (!b.cards.some((c) => Object.keys(c.used || {}).some((k) => /^s\d+$/.test(k)))) return false;
+  const dir = dirOf(dataDir, false);
+  if (!fs.existsSync(dir)) return false;
+  const st = readState(dir);
+  if (!tallyUsed(st, ownerOf(st, project, false), b)) return false;
+  write(path.join(dir, STATE), `${JSON.stringify(st, null, 1)}\n`);
+  write(path.join(dir, SUMMARY), summary(list(dir), st));
+  return true;
 }
 
 const today = () => board.stamp().slice(0, 10);
@@ -313,7 +366,8 @@ function conflicted(dir, f) {
  * Пометка для окна. kind: shared — в базе (s), new — уйдёт при следующей сборке промпта, not — не годится (why), leak — фильтр (why),
  * edited — s<N>.md правили руками, запись в проекте изменилась, removed — s<N>.md удалён из базы, conflict — в s<N>.md метки конфликта git.
  * code и args — та же причина кодом из WHY (t1021): окно переводит по коду; why — текст по-русски, для старых читателей.
- * @typedef {{ id: string, s: string, kind: 'shared' | 'new' | 'not' | 'leak' | 'edited' | 'removed' | 'conflict', why: string, code: string, args: Args }} Mark
+ * @typedef {{ id: string, s: string, kind: 'shared' | 'new' | 'not' | 'leak' | 'edited' | 'removed' | 'conflict', why: string, code: string, args: Args, used?: Record<string, number> }} Mark
+ * used (t698) — у пометки с s<N>: сколько карт всех проектов отозвались о копии «помогла», «не пригодилась», «неверна» (countOf).
  */
 /** @param {string} id @param {string} s @param {Mark['kind']} kind @param {string} code @param {Args} [args] @returns {Mark} */
 const mark = (id, s, kind, code, args = {}) => ({ id, s, kind, why: whyOf(code, args), code, args });
@@ -336,7 +390,7 @@ function syncOne(dir, st, project, b, save, approved, who) {
     if (rc) {
       const m = mark(d.id, ent ? ent.s : '', 'not', rc.code, rc.args);
       // Запись без stack и раздела в базу и не собиралась — без пометки, иначе ею помечена каждая запись.
-      if ((d.stack && d.stack.length) || d.portable || ent) marks.push(m);
+      if ((d.stack && d.stack.length) || d.portable || d.global || ent) marks.push(m);
       if (ent && save) ent.off = m.why;
       continue;
     }
@@ -381,9 +435,10 @@ function syncOne(dir, st, project, b, save, approved, who) {
   return marks;
 }
 
-/** Сводка known.md: строка на запись базы. @param {ReturnType<typeof list>} r */
-function summary(r) {
-  const lines = r.items.map((x) => `${x.id} ${x.type} [${x.stack.join(', ')}] ${x.title}${x.error ? ` | ${x.error}` : ''}`);
+/** Сводка known.md: строка на запись базы, с отзывами карт (t698). @param {ReturnType<typeof list>} r @param {State} [st] */
+function summary(r, st) {
+  const said = (/** @type {string} */ s) => { const n = st ? countOf(st, s) : {}; const t = VERDICTS.filter((v) => n[v]).map((v) => `${v} ${n[v]}`).join(', '); return t ? ` (${t})` : ''; };
+  const lines = r.items.map((x) => `${x.id} ${x.type} [${x.stack.join(', ')}] ${x.title}${said(x.id)}${x.error ? ` | ${x.error}` : ''}`);
   const cut = r.cut ? `Старых записей ${r.cut} здесь нет: читаются последние ${MAX_FILES} файлов s<N>.md.\n\n` : '';
   return `# Общая база записей (пишет программа, правьте s<N>.md)\n\n${cut}${lines.join('\n')}\n`;
 }
@@ -415,7 +470,7 @@ function sync(dataDir, project, b) {
   const pb = b || board.read(project);
   // Записи под базу нет и в state.json проекта нет — папку known\ не заводим.
   const dir0 = path.join(dataDir, KNOWN);
-  const has = pb.decisions.some((d) => d.stack && d.stack.length && d.portable);
+  const has = pb.decisions.some((d) => d.stack && d.stack.length && (d.portable || d.global));
   if (!fs.existsSync(dir0) && !has) return [];
   const dir = dirOf(dataDir, true);
   const st = readState(dir);
@@ -424,11 +479,13 @@ function sync(dataDir, project, b) {
   // Номер уже есть — тоже проверка копии: копия без записей под базу иначе сняла бы (off) записи оригинала как удалённые.
   const pre = `${pathKey(project)}|`;
   const need = has || !!readId(project) || Object.keys(st.items).some((k) => k.startsWith(pre));
-  const marks = syncOne(dir, st, project, pb, true, approvedOf(dataDir, project, pb), ownerOf(st, project, need));
+  const who = ownerOf(st, project, need);
+  const marks = syncOne(dir, st, project, pb, true, approvedOf(dataDir, project, pb), who);
+  tallyUsed(st, who, pb);
   if (JSON.stringify(st) !== before) {
     write(path.join(dir, STATE), `${JSON.stringify(st, null, 1)}\n`);
     const r = list(dir);
-    write(path.join(dir, SUMMARY), summary(r));
+    write(path.join(dir, SUMMARY), summary(r, st));
     // pick в той же сборке задания берёт этот же обход, а не второй lstat всех файлов (t1017): на 2000 файлах ~60 мс.
     fresh = { key: path.resolve(dir), r };
     queueMicrotask(() => { fresh = null; });
@@ -456,6 +513,7 @@ function marks(dataDir, project, b, info) {
   const out = syncOne(dir, st, project, pb, false, approvedOf(dataDir, project, pb), ownerOf(st, project, false));
   const r = list(dir);
   for (const x of r.conflicts) out.push(mark('', x, 'conflict', 'conflict', { s: x }));
+  for (const m of out) if (m.s && st.used && st.used[m.s]) m.used = countOf(st, m.s);
   if (info) info.cut = r.cut;
   return out;
 }
@@ -574,4 +632,4 @@ function restore(dataDir, project, id) {
   return true;
 }
 
-module.exports = { KNOWN, SHARED_LIMIT, MAX_FILES, WHY, LEAK, WHERE, whyOf, leakOf, reasonOf, sync, marks, pick, restore, list, stackOf, warnOf, keyOf };
+module.exports = { KNOWN, SHARED_LIMIT, MAX_FILES, WHY, LEAK, WHERE, whyOf, leakOf, reasonOf, sync, marks, pick, restore, list, stackOf, warnOf, keyOf, tally };

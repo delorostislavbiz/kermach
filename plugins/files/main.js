@@ -8,7 +8,7 @@ const fs = require('fs');
 const { Worker } = require('worker_threads');
 const tree = require('./tree');
 const osRules = require('../../main/os-rules');
-const { STOP_MS, watchKids, hold, diskThread, diskEnding, diskStuck, diskThreads, diskRead } = require('../../main/exec-worker');
+const { STOP_MS, watchKids, hold, diskThread, diskEnding, diskStuck, diskThreads, diskRead, diskTurn } = require('../../main/exec-worker');
 
 const MAC = process.platform === 'darwin';
 /**
@@ -131,7 +131,8 @@ module.exports = (ctx) => {
   /**
    * Список файлов для поиска. at — когда собран; 0 — поток ещё собирает: тогда и новый поиск, и «Обновить» ждут его, второй обход не запускается (t454:
    * обход дольше LIST_TTL_MS запускал следующий рядом, пять поисков — пять живых обходов). null в p — поток списка остановлен или упал.
-   * @type {{ at: number, p: Promise<{ entries: { rel: string, dir: boolean }[], git: boolean, cut?: 'max' | 'time' | null, seen?: number } | null> } | null}
+   * stale — нажали «Обновить», пока поток собирал (t469): этот список поиск не берёт, собирает следующий.
+   * @type {{ at: number, stale?: boolean, p: Promise<{ entries: { rel: string, dir: boolean }[], git: boolean, cut?: 'max' | 'time' | null, seen?: number } | null> } | null}
    */
   let list = null;
   let stopped = false;
@@ -148,23 +149,34 @@ module.exports = (ctx) => {
     let mine = null;
     /** @type {ReturnType<typeof setTimeout> | null} */
     let late = null;
-    const got = inWorker({ mode: 'list', root }, (c) => { if (c) listers.add(mine = c); else if (mine) listers.delete(mine); }, ctx.log);
-    // Срок списка (t466 д): поток не ответил за LIST_MS — строка в журнал, git потока гасится, поиск отвечает ошибкой.
-    // Сам поток застрял в вызове диска, который не прервать: он держится до ответа (hold), и до тех пор новый обход папки не начинается (mark).
-    const over = new Promise((r) => {
-      late = setTimeout(() => {
-        ctx.log(`список файлов не собран за ${LIST_MS / 1000} с — поиск ответил ошибкой, новый обход не начну, пока поток не ответит — ${root}`);
-        if (mine && listers.has(mine)) { mine.hold(); mine.mark(); quit(mine, ctx.log); listers.delete(mine); }
-        r(null);
-      }, LIST_MS);
-      if (late.unref) late.unref();
+    // Обход — в общей очереди чтений диска (t481 в, е): окна, начавшие обход разом, и раскрытие папки ждут друг друга, а не висят каждое на своём чтении.
+    // Очередь держится до ответа потока или до срока LIST_MS; ответил pending — поток уже помечен, следующий в очереди получит отказ (diskStuck).
+    const run = diskTurn(() => {
+      if (stopped) return Promise.resolve(null);
+      const got = inWorker({ mode: 'list', root }, (c) => { if (c) listers.add(mine = c); else if (mine) listers.delete(mine); }, ctx.log);
+      // Срок списка (t466 д): поток не ответил за LIST_MS — строка в журнал, git потока гасится, поиск отвечает ошибкой.
+      // Сам поток застрял в вызове диска, который не прервать: он держится до ответа (hold), и до тех пор новый обход папки не начинается (mark).
+      const over = new Promise((r) => {
+        late = setTimeout(() => {
+          ctx.log(`список файлов не собран за ${LIST_MS / 1000} с — поиск ответил ошибкой, новый обход не начну, пока поток не ответит — ${root}`);
+          if (mine && listers.has(mine)) { mine.hold(); mine.mark(); quit(mine, ctx.log); listers.delete(mine); }
+          r(null);
+        }, LIST_MS);
+        if (late.unref) late.unref();
+      });
+      got.then((r) => {
+        if (late) clearTimeout(late);
+        // Брошенное чтение ещё не вернулось — папку не обходить заново, пока поток жив.
+        if (r && r.pending && mine && mine.out()) mine.mark();
+      });
+      return Promise.race([got, over]);
     });
-    const l = { at: 0, p: Promise.race([got, over]) };
-    got.then((r) => {
-      if (late) clearTimeout(late);
-      // Брошенное чтение ещё не вернулось — папку не обходить заново, пока поток жив.
-      if (r && r.pending && mine && mine.out()) mine.mark();
-    });
+    const l = { at: 0, p: run.then((t) => {
+      if ('value' in t) return t.value;
+      // Пока ждали очередь, чтение другого окна застряло или начат выход: обхода нет, поиск — ошибка.
+      if ('stuck' in t) tellStuck(t.stuck, 'новый обход');
+      return null;
+    }) };
     l.p.then((r) => {
       l.at = performance.now();
       if (r && typeof r.hung === 'string') ctx.log(`папка не ответила за ${tree.LIMITS.dirMs / 1000} с — обход остановлен, список файлов неполный: ${r.hung || '.'} — ${root}`);
@@ -229,6 +241,21 @@ module.exports = (ctx) => {
     return { error: 'stuck', path: p, why: 'папка не отвечает' };
   };
 
+  // Записи openIn удалённых и переименованных проектов (t1196, d210): при старте плагина. Нет папки проекта, а папка выше есть — запись лишняя;
+  // нет и папки выше (диск отключён) и свой ключ — не трогаем. Пустой openIn при старом общем open открыл бы все проекты (t547) — тогда не чистим.
+  try {
+    const s = ctx.settings.get();
+    const all = s && s.openIn && typeof s.openIn === 'object' && !Array.isArray(s.openIn) ? s.openIn : null;
+    if (all) {
+      const keep = Object.fromEntries(Object.entries(all).filter(([k]) => k === key || !path.isAbsolute(k) || fs.existsSync(k) || !fs.existsSync(path.dirname(k))));
+      const dropped = Object.keys(all).length - Object.keys(keep).length;
+      if (dropped && !(s.open && !Object.keys(keep).length)) {
+        ctx.settings.set({ ...s, openIn: keep });
+        ctx.log(`настройки: убраны записи ${dropped} проектов, которых нет на диске`);
+      }
+    }
+  } catch (e) { ctx.log(`настройки: очистка записей не удалась: ${(e && /** @type {any} */ (e).message) || e}`); }
+
   return {
     /** @param {string} cmd @param {any[]} args */
     async handle(cmd, ...args) {
@@ -274,10 +301,11 @@ module.exports = (ctx) => {
         const cancelled = () => stopped || my !== gen;
         const q = typeof args[0] === 'string' ? args[0].slice(0, 200) : '';
         const text = !!(args[1] && args[1].text);
-        const old = () => !list || (list.at && performance.now() - list.at > LIST_TTL_MS);
+        const old = () => !list || (list.at && (list.stale || performance.now() - list.at > LIST_TTL_MS));
         // Сроки этапов для журнала (t585): ожидание списка, поток поиска в тексте целиком.
         const t0 = performance.now();
-        const fresh = old();
+        // Список ещё собирает прошлый поиск (at === 0) — ждать придётся, подпись «готовый» в журнале была бы неверной (t1195, d227).
+        let fresh = old() || !!(list && !list.at);
         if (old()) {
           // Прежнее чтение диска не вернулось (t463): новый обход не начинается — поиск идёт по прежнему списку, а без него отвечает ошибкой.
           // Застрявший поток уже есть — отказ сразу; нет — дожидаемся останавливаемых (до END_MS): не вышел — застрял (t485 — окно закрыли и открыли снова).
@@ -285,11 +313,22 @@ module.exports = (ctx) => {
           if (cancelled()) return { cancelled: true };
           if (s) {
             tellStuck(s, 'новый обход');
-            if (!list) return { error: 'searchFailed' };
+            fresh = false;
+            if (!list) return { error: 'searchFailed', why: 'stuck' };
           } else if (old()) list = newList();
         }
-        const l = /** @type {NonNullable<typeof list>} */ (list);
-        const got = await l.p;
+        let l = /** @type {NonNullable<typeof list>} */ (list);
+        let got = await l.p;
+        // «Обновить» во время обхода (t469): обход мог не увидеть новый файл — дождались его и сразу собираем ещё раз, по очереди, а не рядом.
+        if (got && l.stale && !cancelled()) {
+          const s = await diskStuck();
+          if (cancelled()) return { cancelled: true };
+          if (!s) {
+            if (list === l) list = newList();
+            l = /** @type {NonNullable<typeof list>} */ (list);
+            got = await l.p;
+          }
+        }
         const listMs = Math.round(performance.now() - t0);
         // Поток списка остановлен (окно закрыли) или упал — пустой ответ не запоминается.
         if (!got) { if (list === l) list = null; return cancelled() ? { cancelled: true } : { error: 'searchFailed' }; }
@@ -302,7 +341,7 @@ module.exports = (ctx) => {
         if (text) {
           const s = await diskStuck();
           if (cancelled()) return { cancelled: true };
-          if (s) { tellStuck(s, 'поиск в тексте'); return { error: 'searchFailed' }; }
+          if (s) { tellStuck(s, 'поиск в тексте'); return { error: 'searchFailed', why: 'stuck' }; }
         }
         const t1 = performance.now();
         const r = text ? await inText(my, entries, q) : await tree.search(root, entries, q, { cancelled });
@@ -314,11 +353,13 @@ module.exports = (ctx) => {
         if (text) ctx.log(`поиск в тексте: ${q.length} знаков, файлов ${r.files}, находок ${r.items.length}${r.more ? '+' : ''}, ${r.ms} мс${git ? ', по git ls-files' : ''}, прочитано ${mb(r.read || 0)} МБ`
           + `${r.textCut ? ` — остановлен на пределе ${mb(r.cap)} МБ` : ''}${cut ? ', список файлов неполный' : ''}`
           + slowTail({ fresh, listMs, stages: got.stages, textMs, r }));
-        return { items: r.items, more: r.more, files: r.files, ms: r.ms, git, max: tree.MAX_HITS, cut: cut || null, textCut: !!r.textCut, read: r.read || 0 };
+        // Почему список неполный (t1195, d188, d190): папка не ответила, git не уложился в срок и список собран обходом, или предел числа записей / времени.
+        const cutWhy = !cut ? null : typeof got.hung === 'string' ? 'hung' : (!git && got.noIgnore === 'timeout') ? 'git' : cut;
+        return { items: r.items, more: r.more, files: r.files, ms: r.ms, git, max: tree.MAX_HITS, cut: cut || null, cutWhy, textCut: !!r.textCut, read: r.read || 0 };
       }
-      // Обновить — список для поиска собрать заново при следующем поиске. Поток ещё собирает — его список и останется: второй обход рядом не запускается.
-      // Чтение папки застряло — прежний список остаётся до его ответа (t463).
-      if (cmd === 'refresh') { if (list && list.at && !diskThreads().stuck) list = null; return {}; }
+      // Обновить — список для поиска собрать заново при следующем поиске. Поток ещё собирает — второй обход рядом не запускается (t454),
+      // список помечается stale: поиск дождётся этого обхода и соберёт следующий (t469). Чтение папки застряло — прежний список остаётся до его ответа (t463).
+      if (cmd === 'refresh') { if (list && !diskThreads().stuck) { if (list.at) list = null; else list.stale = true; } return {}; }
       // Старое общее open — только пока openIn пуст: одноразовый переход со старого вида (t547). Дальше проекта нет в openIn — панель закрыта.
       if (cmd === 'state') { const s = ctx.settings.get(); const o = s.openIn && typeof s.openIn === 'object' ? s.openIn : {}; return { open: Object.keys(o).length ? Object.hasOwn(o, key) && !!o[key] : !!s.open }; }
       // set заменяет весь мешок (t502): прежние поля сливаются, иначе второе поле пропадало бы при каждом setState.

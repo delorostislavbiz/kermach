@@ -29,7 +29,9 @@
     desktop: '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/>',
     mobile: '<rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/>',
     tablet: '<rect x="4.5" y="3" width="15" height="18" rx="2"/><path d="M11 18h2"/>',
+    more: '<rect x="2.5" y="8" width="19" height="8" rx="1"/><path d="M6.5 8v3M10.5 8v4M14.5 8v3M18.5 8v4"/>',
     dev: '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/>',
+    lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
     agent: '<rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/>',
     mark: '<path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z"/>',
     out: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
@@ -54,16 +56,27 @@
     .bview .bmsg .bmhead { margin-bottom: 10px; text-align: center; }
     .bmrow { display: flex; gap: 12px; padding: 6px 10px; border-radius: 4px; color: var(--text); text-align: left; cursor: default; }
     .bmrow span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .bmrow span:last-child { margin-left: auto; max-width: 50%; color: var(--muted); }`;
+    .bmrow span:last-child { margin-left: auto; max-width: 50%; color: var(--muted); }
+    .bbar { position: relative; }
+    .bvmenu { position: absolute; top: 32px; z-index: 5; min-width: 200px; max-width: 320px; padding: 4px; border-radius: 6px; background: var(--panel, var(--bg));
+      border: 1px solid var(--line, rgba(141,145,165,.14)); box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+    .bvmenu[hidden] { display: none; }
+    .bvitem { display: flex; gap: 12px; padding: 5px 10px; border-radius: 4px; color: var(--text); font-size: 12px; cursor: default; white-space: nowrap; }
+    .bvitem span:first-child { overflow: hidden; text-overflow: ellipsis; }
+    .bvitem span:last-child { margin-left: auto; color: var(--muted); }
+    .bvitem:hover { background: var(--hover); }
+    .bvitem.on { color: var(--accent); background: var(--accent-bg); }`;
   /** Виды вкладки сайта (t207): кнопка — подпись. Считается при каждом показе — язык меняется на лету (t287). @param {'desktop' | 'mobile' | 'tablet'} k */
   const viewTitle = (k) => (k === 'mobile' ? I18n.t('browser.mobilnyy', 'Мобильный') : k === 'tablet' ? I18n.t('browser.planshet', 'Планшет') : I18n.t('browser.kompyuter', 'Компьютер'));
+  /** Вид «свой размер» (t1146): 'c:' и номер размера из «Настроек». */
+  const isCustom = (/** @type {string} */ k) => /^c:/.test(k);
   /** Сколько держится строка о неудаче рядом с адресом. */
   const NOTE_MS = 5000;
-  /** Клавиши вкладок, которые страница окна понимает в host.tabKey (t131): как у терминала, плюс конец выбора и отмена. */
-  const TAB_KEYS = new Set(['recent', 'prev', 'next', 'up', 'cancel']);
+  /** Клавиши вкладок, которые страница окна понимает в host.tabKey (t131): как у терминала, плюс конец выбора, отмена и закрытие вкладки (Ctrl+Shift+W, t1198). */
+  const TAB_KEYS = new Set(['recent', 'prev', 'next', 'up', 'cancel', 'close']);
   /**
    * Кому можно отдать снимок и выбранный элемент (t438): агенты каталога с признаком pics (main\agents.js, t416), новый с pics попадёт сам.
-   * Каталог ищет программы на диске (agents:list, около 100 мс главного процесса), поэтому список читается не на открытии окна:
+   * Каталог ищет программы на диске (agents:list, поиск асинхронный — listAsync, t204; главный процесс не стоит), но запрос тяжёлый для диска, поэтому список читается не на открытии окна:
    * через 2 с после открытия вкладки сайта (t443), при наведении на кнопку или строке «некуда вставить». До этого — общее «агента, понимающего картинки».
    * @type {string[] | null}
    */
@@ -105,9 +118,10 @@
 
   /**
    * @typedef {{ sid: string, url: string, title: string, pane: HTMLElement, input: HTMLInputElement, view: any, msg: HTMLElement,
-   *   note: HTMLElement, btn: Record<'back' | 'fwd' | 'reload' | 'mark' | 'out' | 'shot' | 'pick' | 'desktop' | 'mobile' | 'tablet' | 'dev' | 'agent' | 'any', HTMLElement>, picking: boolean,
-   *   tab: { pos: number }, savedPos: number, kind: 'desktop' | 'mobile' | 'tablet', box: HTMLElement, untitled: boolean, badUrl: boolean, agent: boolean, site: string, any: boolean,
-   *   bar: HTMLElement }} BTab
+   *   note: HTMLElement, btn: Record<'back' | 'fwd' | 'reload' | 'mark' | 'out' | 'shot' | 'pick' | 'desktop' | 'mobile' | 'tablet' | 'more' | 'dev' | 'human' | 'agent' | 'any', HTMLElement>, picking: boolean,
+   *   tab: { pos: number }, savedPos: number, kind: string, box: HTMLElement, untitled: boolean, badUrl: boolean, agent: boolean, human: boolean, site: string, any: boolean,
+   *   bar: HTMLElement, menu: HTMLElement, acts: { at: number, text: string }[], agentLine: boolean, actsBox: HTMLElement }} BTab
+   * kind — 'desktop', 'mobile', 'tablet' или свой размер 'c:<id>' (t1146).
    * @typedef {{ url: string, title: string }} Mark
    */
 
@@ -124,7 +138,14 @@
     /** Снятие подписок onOpen, onViews (t195) и settings.onChanged (t218): выключение «Браузера» снимает их, повторное включение подписывается заново. @type {(() => void)[]} */
     const offs = [];
     /** Размеры видов (t207) из «Настроек» и масштаб окна: тег меряется в CSS-пикселях окна, страница — в точках экрана. */
-    let views = { mobile: { width: 390, height: 844 }, tablet: { width: 820, height: 1180 } };
+    /** @type {{ mobile: { width: number, height: number }, tablet: { width: number, height: number }, custom: { id: string, name: string, width: number, height: number }[] }} */
+    let views = { mobile: { width: 390, height: 844 }, tablet: { width: 820, height: 1180 }, custom: [] };
+    /** Размер вида вкладки; «Компьютер» или удалённый свой размер — null. @param {string} k */
+    const sizeOf = (k) => {
+      if (k === 'mobile' || k === 'tablet') return views[k];
+      const c = isCustom(k) ? views.custom.find((x) => `c:${x.id}` === k) : null;
+      return c || null;
+    };
     let zoom = 1;
     /** Последняя показанная вкладка сайта (t381): агент зовёт terminalus browser из своего терминала, и на виду тогда терминал, а не сайт. */
     let shown = '';
@@ -177,7 +198,7 @@
       timer = setTimeout(() => {
         timer = 0;
         for (const x of list) x.savedPos = x.tab.pos;
-        b.save(list.filter((x) => x.url).map((x) => ({ id: x.sid, url: x.url, title: x.title, pos: posOf(x), view: x.kind === 'desktop' ? undefined : x.kind, agent: x.agent || undefined, site: x.agent && x.site || undefined, any: x.agent && x.any || undefined })),
+        b.save(list.filter((x) => x.url).map((x) => ({ id: x.sid, url: x.url, title: x.title, pos: posOf(x), view: x.kind === 'desktop' ? undefined : x.kind, agent: x.agent || undefined, human: x.human || undefined, site: x.agent && x.site || undefined, any: x.agent && x.any || undefined })),
           list.filter((x) => !x.url).length);
       }, SAVE_MS);
     }
@@ -208,12 +229,23 @@
       s.btn.pick.title = s.picking ? I18n.t('browser.vyborElementaIdetSchelknite', 'Выбор элемента идёт — щёлкните элемент на странице; Esc или эта кнопка — отмена')
         : to ? I18n.t('browser.vybratElementOpisanieV', 'Выбрать элемент — описание в терминал агента') : I18n.t('browser.vybratElementVOkne', 'Выбрать элемент: в окне нет {names}', { names: picNames() });
       for (const k of /** @type {const} */ (['desktop', 'mobile', 'tablet'])) s.btn[k].classList.toggle('on', s.kind === k);
+      // «Свои размеры» (t1146): видна, когда в «Настройках» есть свои; горит, когда вкладка в одном из них, подпись — его имя.
+      const mine = sizeOf(s.kind);
+      s.btn.more.style.display = views.custom.length ? '' : 'none';
+      s.btn.more.classList.toggle('on', isCustom(s.kind));
+      s.btn.more.title = isCustom(s.kind) && mine ? I18n.t('browser.vid', 'Вид: {v1}', { v1: `${/** @type {any} */ (mine).name} ${mine.width} × ${mine.height}` })
+        : I18n.t('browser.svoiRazmery', 'Свои размеры');
       let dev = false;
       try { dev = !!v && v.isDevToolsOpened(); } catch {}
       s.btn.dev.classList.toggle('off', !v);
       s.btn.dev.classList.toggle('on', dev);
       s.btn.dev.title = dev ? I18n.t('browser.zakrytPanelRazrabotchika', 'Закрыть панель разработчика') : I18n.t('browser.panelRazrabotchikaStranicy', 'Панель разработчика страницы');
       // «Агенту» (t382): вкладка отдана агенту — подсвечена; действовать (terminalus browser click, fill…) агент может только в такой.
+      // «Только для меня» (t885): своё хранилище, агент в вкладке ничего не читает и не делает; «Агенту» тогда скрыта.
+      s.btn.human.classList.toggle('on', s.human);
+      s.btn.human.title = s.human ? I18n.t('browser.humanOn', 'Вкладка только для вас: отдельное хранилище, агент её не видит. Щёлкните, чтобы вернуть в общее (страница откроется заново).')
+        : I18n.t('browser.humanOff', 'Сделать вкладку только для вас: отдельное хранилище, агент её не увидит и ничего в ней не сделает (страница откроется заново).');
+      s.btn.agent.style.display = s.human ? 'none' : '';
       s.btn.agent.classList.toggle('on', s.agent);
       s.btn.agent.title = s.agent ? I18n.t('browser.agentuOn', 'Вкладка отдана агенту: Claude может нажимать, заполнять поля и открывать адреса в ней. Щёлкните, чтобы забрать.')
         : I18n.t('browser.agentuOff', 'Отдать вкладку агенту: Claude сможет нажимать, заполнять поля и открывать адреса в ней. Читать страницу он может и без этого.');
@@ -232,12 +264,12 @@
     function layout(s) {
       const box = s.box.style;
       const v = s.view;
-      if (s.kind === 'desktop') {
+      const size = sizeOf(s.kind);
+      if (!size) {
         box.display = box.justifyContent = box.alignItems = box.overflow = box.background = '';
         if (v) v.style.position = v.style.flex = v.style.width = v.style.height = '';
         return;
       }
-      const size = views[s.kind];
       box.display = 'flex';
       box.justifyContent = 'safe center';
       box.alignItems = 'flex-start';
@@ -268,7 +300,32 @@
       if (r.changed) s.view.reload();
     }
 
-    /** Переключить вид вкладки (t207). @param {BTab} s @param {'desktop' | 'mobile' | 'tablet'} kind */
+    /**
+     * Меню «Свои размеры» (t1146): пункт — имя и ширина × высота, щелчок — вид вкладки. Открыто — повторный щелчок по кнопке закрывает.
+     * @param {BTab} s
+     */
+    function toggleMenu(s) {
+      const m = s.menu;
+      if (!m.hidden || !views.custom.length) { m.hidden = true; return; }
+      m.innerHTML = '';
+      for (const c of views.custom) {
+        const it = document.createElement('div');
+        it.className = 'bvitem';
+        it.dataset.v = `c:${c.id}`;
+        it.classList.toggle('on', s.kind === it.dataset.v);
+        const a = document.createElement('span');
+        a.textContent = c.name;
+        const z = document.createElement('span');
+        z.textContent = `${c.width} × ${c.height}`;
+        it.append(a, z);
+        it.onclick = () => { m.hidden = true; setView(s, `c:${c.id}`); };
+        m.appendChild(it);
+      }
+      m.style.left = `${s.btn.more.offsetLeft}px`;
+      m.hidden = false;
+    }
+
+    /** Переключить вид вкладки (t207). @param {BTab} s @param {string} kind 'desktop', 'mobile', 'tablet' или 'c:<id>' (t1146) */
     function setView(s, kind) {
       if (s.kind === kind) return;
       s.kind = kind;
@@ -288,8 +345,55 @@
     function note(s, text) {
       s.note.textContent = text;
       s.note.hidden = false;
+      s.note.title = '';
+      s.note.style.cursor = '';
       clearTimeout(Number(s.note.dataset.timer));
-      s.note.dataset.timer = String(setTimeout(() => { s.note.hidden = true; }, NOTE_MS));
+      s.note.dataset.timer = String(setTimeout(() => { if (s.acts && s.acts.length && s.agentLine) showAgent(s); else s.note.hidden = true; }, NOTE_MS));
+    }
+
+    /** Строка «Агент: …» (t1236): последнее действие, остаётся до щелчка человека в странице. Щелчок по ней — список действий. @param {BTab} s */
+    function showAgent(s) {
+      const last = s.acts[s.acts.length - 1];
+      clearTimeout(Number(s.note.dataset.timer));
+      s.note.textContent = I18n.t('browser.agentDeystvuet', 'Агент: {v1}', { v1: last.text });
+      s.note.title = I18n.t('browser.agentSpisok', 'Щелчок — последние действия агента');
+      s.note.classList.add('agentline');
+      s.note.style.cursor = 'pointer';
+      s.note.hidden = false;
+      if (s.actsBox && !s.actsBox.hidden) drawActs(s);
+    }
+
+    /** Гасит строку агента после щелчка человека в странице. @param {BTab} s */
+    function hideAgent(s) {
+      if (!s.agentLine) return;
+      s.agentLine = false;
+      s.note.hidden = true;
+      s.note.classList.remove('agentline');
+      s.note.style.cursor = '';
+      s.note.title = '';
+      if (s.actsBox) s.actsBox.hidden = true;
+    }
+
+    /** Список последних действий агента со временем. @param {BTab} s */
+    function drawActs(s) {
+      if (!s.actsBox) {
+        s.actsBox = document.createElement('div');
+        s.actsBox.className = 'bvmenu bacts';
+        s.actsBox.hidden = true;
+        s.actsBox.style.cssText = 'right:8px;left:auto;max-width:480px;max-height:320px;overflow-y:auto';
+        /** @type {HTMLElement} */ (s.pane.querySelector('.bbar')).appendChild(s.actsBox);
+      }
+      s.actsBox.textContent = '';
+      for (const a of [...s.acts].reverse()) {
+        const row = document.createElement('div');
+        row.className = 'bvitem';
+        const t = document.createElement('span');
+        t.textContent = a.text;
+        const when = document.createElement('span');
+        when.textContent = new Date(a.at).toLocaleTimeString();
+        row.append(t, when);
+        s.actsBox.appendChild(row);
+      }
     }
 
     /** Размер для строки загрузки: КБ или МБ. @param {number} n */
@@ -484,7 +588,7 @@
       const v = document.createElement('webview');
       // Хранилище и разрешение новых окон — до вставки в окно: потом тег их не меняет.
       // allowpopups нужен, чтобы главный процесс узнал о новом окне (setWindowOpenHandler); окно он всё равно не открывает.
-      v.setAttribute('partition', partition);
+      v.setAttribute('partition', s.human ? `${partition}-human` : partition);
       v.setAttribute('allowpopups', '');
       v.setAttribute('src', url);
       const nav = (/** @type {string} */ u) => {
@@ -514,8 +618,9 @@
       // так же, как по клавишам терминала (t59).
       v.addEventListener('ipc-message', (/** @type {any} */ e) => {
         const [kind, shift] = e.args || [];
-        if (e.channel === 'browser:tab-key' && TAB_KEYS.has(kind) && typeof host.tabKey === 'function') host.tabKey(kind, !!shift);
+        if (e.channel === 'browser:tab-key' && TAB_KEYS.has(kind) && typeof host.tabKey === 'function') host.tabKey(kind, !!shift, s.sid);
         if (e.channel === 'browser:download' && kind && typeof kind === 'object') downloadNote(s, kind);
+        if (e.channel === 'browser:human') hideAgent(s);
       });
       v.addEventListener('did-fail-load', (/** @type {any} */ e) => {
         // -3 — загрузку прервал новый переход, это не ошибка.
@@ -582,13 +687,15 @@
      * Новая вкладка сайта. Без адреса — пустая, курсор в адресной строке.
      * pos — место в полосе из файла (t133). Вкладка из файла без места — после терминалов (Infinity); новая (без id) — в конец полосы.
      * view — вид из файла (t207), нет — «Компьютер». agent — отметка «Агенту» из файла (t382); новая вкладка не отдана.
-     * @param {{ id?: string, url?: string, title?: string, pos?: number, view?: string, agent?: boolean, site?: string, any?: boolean, select: boolean }} o
+     * @param {{ id?: string, url?: string, title?: string, pos?: number, view?: string, agent?: boolean, human?: boolean, site?: string, any?: boolean, select: boolean }} o
      */
     function open(o) {
       const sid = o.id || `b:${crypto.randomUUID()}`;
       /** @type {BTab} */
       const s = /** @type {any} */ ({ sid, url: '', title: o.title || I18n.t('browser.novayaVkladka', 'Новая вкладка'), untitled: !o.title, badUrl: false, view: null, picking: false,
-        kind: o.view === 'mobile' || o.view === 'tablet' ? o.view : 'desktop', agent: o.agent === true, site: typeof o.site === 'string' ? o.site : '', any: o.agent === true && o.any === true });
+        kind: o.view && sizeOf(o.view) ? o.view : 'desktop', agent: o.agent === true, site: typeof o.site === 'string' ? o.site : '', any: o.agent === true && o.any === true });
+      s.human = o.human === true;
+      if (s.human) { s.agent = false; s.any = false; s.site = ''; }
       // Окно может попросить фокус ещё внутри addTab (раскладка восстанавливает часть с фокусом, t419), когда поля ввода и страницы ещё нет:
       // тогда фокус ставится в конце open(), если вкладка всё ещё выбрана.
       let focusLater = false;
@@ -617,6 +724,8 @@
         + `<div class="bb" data-b="desktop" style="margin-left:6px">${glyph('desktop')}</div>`
         + `<div class="bb" data-b="mobile">${glyph('mobile')}</div>`
         + `<div class="bb" data-b="tablet">${glyph('tablet')}</div>`
+        + `<div class="bb" data-b="more">${glyph('more')}</div><div class="bvmenu" hidden></div>`
+        + `<div class="bb" data-b="human" style="margin-left:6px">${glyph('lock')}</div>`
         + `<div class="bb" data-b="agent" style="width:auto;padding:0 7px 0 5px;gap:4px;margin-left:6px">${glyph('agent')}<span></span></div>`
         + `<div class="bb" data-b="any" style="width:auto;padding:0 7px;margin-left:2px;display:none"><span></span></div>`
         + `<div class="bb" data-b="dev" style="margin-left:6px">${glyph('dev')}</div>`
@@ -627,6 +736,14 @@
       s.msg = /** @type {HTMLElement} */ (s.pane.querySelector('.bmsg'));
       s.box = /** @type {HTMLElement} */ (s.pane.querySelector('.bview'));
       s.note = /** @type {HTMLElement} */ (s.pane.querySelector('.bnote'));
+      s.menu = /** @type {HTMLElement} */ (s.pane.querySelector('.bvmenu'));
+      s.acts = [];
+      s.agentLine = false;
+      s.note.addEventListener('click', () => {
+        if (!s.agentLine) return;
+        drawActs(s);
+        s.actsBox.hidden = !s.actsBox.hidden;
+      });
       s.btn = /** @type {any} */ ({});
       for (const el of s.pane.querySelectorAll('.bb')) s.btn[/** @type {'back'} */ (/** @type {HTMLElement} */ (el).dataset.b)] = /** @type {HTMLElement} */ (el);
       label(s);
@@ -654,9 +771,19 @@
       // заранее, через PICS_EARLY_MS после открытия вкладки сайта: не на открытии окна и только в окне, где есть вкладка сайта.
       setTimeout(() => { if (!picTitles) loadPics().then(() => { if (picTitles) buttons(s); }); }, PICS_EARLY_MS);
       for (const k of /** @type {const} */ (['desktop', 'mobile', 'tablet'])) s.btn[k].onclick = () => setView(s, k);
+      s.btn.more.onclick = () => toggleMenu(s);
+      // Щелчок мимо меню своих размеров закрывает его.
+      s.pane.addEventListener('mousedown', (e) => { if (s.actsBox && !s.actsBox.hidden && !s.actsBox.contains(/** @type {Node} */ (e.target)) && !s.note.contains(/** @type {Node} */ (e.target))) s.actsBox.hidden = true; if (!s.menu.hidden && !s.menu.contains(/** @type {Node} */ (e.target)) && !s.btn.more.contains(/** @type {Node} */ (e.target))) s.menu.hidden = true; });
       s.btn.dev.onclick = () => devtools(s);
       // Включили «Агенту» — вкладка привязана к сайту, открытому сейчас; выключили — «Все сайты» тоже выключается.
       s.btn.agent.onclick = () => { s.agent = !s.agent; s.site = s.agent ? siteOf(s.url) : ''; if (!s.agent) s.any = false; buttons(s); persist(); };
+      // «Только для меня» (t885): хранилище гостя задаётся до вставки тега, поэтому тег пересоздаётся — страница открывается заново.
+      s.btn.human.onclick = () => {
+        s.human = !s.human;
+        if (s.human) { s.agent = false; s.any = false; s.site = ''; }
+        if (s.view) { const url = s.url; s.view.remove(); s.view = null; if (url) attach(s, url); }
+        buttons(s); persist();
+      };
       s.btn.any.onclick = () => { s.any = !s.any; buttons(s); persist(); };
       s.input.addEventListener('keydown', (ev) => {
         if (ev.key === 'Enter') { ev.preventDefault(); go(s); }
@@ -682,13 +809,13 @@
     // Размеры видов и масштаб окна (t207) — до вкладок из файла: тег узкого вида сразу получает свою ширину.
     // Закладки (t881) — тоже до вкладок: полоса и список в пустой вкладке рисуются при открытии.
     Promise.all([b.list(), b.views().catch(() => null), host.bridge.settings.get().catch(() => null), b.marks().catch(() => null)]).then(([/** @type {any} */ r, /** @type {any} */ v, /** @type {any} */ st, /** @type {any} */ mk]) => {
-      if (v && v.mobile && v.tablet) views = v;
+      if (v && v.mobile && v.tablet) views = { ...v, custom: Array.isArray(v.custom) ? v.custom : [] };
       if (Array.isArray(mk)) marks = mk;
       if (st && Number(st.uiZoom) > 0) zoom = Number(st.uiZoom) / 100;
       if (dead) return;
       if (!r || r.error) { host.log(`вкладки сайта не получены: ${r ? r.error : 'нет ответа'}`); return; }
       partition = String(r.partition);
-      for (const x of r.tabs) open({ id: x.id, url: x.url, title: x.title, pos: x.pos, view: x.view, agent: x.agent, site: x.site, any: x.any, select: false });
+      for (const x of r.tabs) open({ id: x.id, url: x.url, title: x.title, pos: x.pos, view: x.view, agent: x.agent, human: x.human, site: x.site, any: x.any, select: false });
       plus = () => host.addButton('addBrowser', I18n.t('browser.brauzer', 'Браузер'), () => open({ select: true }), { icon: 'globe', color: COLOR });
       plus();
       // Агент открылся или закрылся — «Скриншот» и «Выбрать элемент» становятся доступными или нет.
@@ -696,8 +823,14 @@
       // Размеры видов поменяли в «Настройках» (t207) — вкладки в узком виде меняют размер сразу, без перезапуска.
       offs.push(b.onViews((/** @type {any} */ v) => {
         if (dead || !v || !v.mobile || !v.tablet) return;
-        views = v;
-        for (const x of list) if (x.kind !== 'desktop') applyView(x).catch((e) => host.log(`вид вкладки сайта: ${e}`));
+        views = { ...v, custom: Array.isArray(v.custom) ? v.custom : [] };
+        for (const x of list) {
+          x.menu.hidden = true;
+          // Свой размер вкладки удалили в «Настройках» (t1146) — вкладка возвращается в «Компьютер».
+          if (isCustom(x.kind) && !sizeOf(x.kind)) { setView(x, 'desktop'); continue; }
+          buttons(x);
+          if (x.kind !== 'desktop') applyView(x).catch((e) => host.log(`вид вкладки сайта: ${e}`));
+        }
       }));
       // Закладки записало другое окно этого проекта (t881) — полоса здесь та же.
       offs.push(b.onMarks((/** @type {any} */ v) => { if (!dead && Array.isArray(v)) { marks = v; redrawMarks(); } }));
@@ -736,14 +869,18 @@
         return [...list].sort((x, y) => (Number(x.tab.pos) || 0) - (Number(y.tab.pos) || 0)).map((x) => {
           let guest = 0;
           try { if (x.view) guest = x.view.getWebContentsId(); } catch {}
-          return { guest, url: x.url, title: x.untitled ? '' : x.title, active: x.sid === live, agent: x.agent, site: x.site, any: x.any };
+          return { guest, url: x.url, title: x.untitled ? '' : x.title, active: x.sid === live, agent: x.agent, human: x.human, site: x.site, any: x.any };
         });
       };
       // Агент действует во вкладке (t382): строка рядом с адресом — Ростислав видит, что сделал агент, если вкладка на виду.
       w.TerminalusBrowserAct = (/** @type {number} */ guest, /** @type {unknown} */ what) => {
         const x = list.find((s) => { try { return !!s.view && s.view.getWebContentsId() === guest; } catch { return false; } });
         if (!x) return false;
-        note(x, I18n.t('browser.agentDeystvuet', 'Агент: {v1}', { v1: String(what).slice(0, 200) }));
+        if (!x.acts) x.acts = [];
+        x.acts.push({ at: Date.now(), text: String(what).slice(0, 200) });
+        if (x.acts.length > 20) x.acts.splice(0, x.acts.length - 20);
+        x.agentLine = true;
+        showAgent(x);
         return true;
       };
       // Снимок для команды (t381): вкладка на время снимка видима для Chromium, но не человеку (reveal выше).

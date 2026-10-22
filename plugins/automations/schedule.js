@@ -70,7 +70,7 @@ const here = (file, args, opts) => new Promise((resolve) => {
  */
 async function schtasks(args, run = here) {
   const alt = process.env.TERMINALUS_SCHTASKS;
-  const [file, argv, env] = !alt ? ['schtasks.exe', args, process.env]
+  const [file, argv, env] = !alt ? [path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'schtasks.exe'), args, process.env] // полный путь (t1191)
     : alt.endsWith('.js') ? [process.execPath, [alt, ...args], { ...process.env, ELECTRON_RUN_AS_NODE: '1' }] : [alt, args, process.env];
   const r = await run(file, argv, { windowsHide: true, timeout: 20000, env });
   const out = `${r.stdout || ''}${r.stderr || ''}`.trim();

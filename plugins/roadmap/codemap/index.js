@@ -572,14 +572,42 @@ function writeMap(file, map) {
   }
 }
 
-/** Прочитать карту: шапка и файлы. Другая версия формата или испорченная строка — null (строить заново). @param {string} file */
-function readMap(file) {
+/**
+ * Путь файла карты остаётся внутри проекта (t1200, d277): только относительный, без «..», диска, «:» и управляющих знаков.
+ * Карту могли подменить (закоммиченная карта в чужом репозитории) — такой путь ушёл бы в чтение файла и в промпт агента.
+ * @param {any} file
+ */
+function inside(file) {
+  if (typeof file !== 'string' || !file || file.includes(':') || /[\u0000-\u001f]/.test(file)) return false;
+  if (path.isAbsolute(file) || /^[\\/]/.test(file)) return false;
+  return !file.split(/[\\/]/).includes('..');
+}
+
+/** Текст карты → шапка и файлы; записи с путём вне проекта отброшены. @param {string} text */
+function parseMap(text) {
   try {
-    const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    const lines = text.split('\n').filter(Boolean);
     const head = JSON.parse(lines[0]);
     if (head.codemap !== FORMAT || head.extract !== EXTRACT || head.cancelled) return null;
-    return { head, files: lines.slice(1).map((l) => JSON.parse(l)) };
+    return { head, files: lines.slice(1).map((l) => JSON.parse(l)).filter((r) => r && inside(r.file)) };
   } catch { return null; }
 }
 
-module.exports = { build, extract, fill, openParser, toJsonl, writeMap, readMap, LANG_OF, MAX_BYTES, VENDOR, FORMAT, EXTRACT };
+/** Прочитать карту: шапка и файлы. Другая версия формата или испорченная строка — null (строить заново). @param {string} file */
+function readMap(file) {
+  try { return parseMap(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+/**
+ * То же без остановки потока (t1200, d267): исполнитель карты не встаёт на зависшем диске.
+ * Чтение не ответило за срок — ошибка hungError (повтор, когда чтение вернётся, как у файлов проекта); карты нет или она испорчена — null.
+ * @param {string} file
+ */
+async function readMapAsync(file) {
+  const p = fs.promises.readFile(file, 'utf8').catch(() => null);
+  const got = await within(p);
+  if (got === HUNG) throw hungError(`карта ${file}`, p);
+  return typeof got === 'string' ? parseMap(got) : null;
+}
+
+module.exports = { build, extract, fill, openParser, toJsonl, writeMap, readMap, readMapAsync, inside, LANG_OF, MAX_BYTES, VENDOR, FORMAT, EXTRACT };

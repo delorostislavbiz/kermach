@@ -10,18 +10,18 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
 const { findProgram, notFound } = require('./find-program');
+const { snapshot, parseSnapshot } = require('./proc-table');
 
 // Системные программы — по полному пути (t802): PATH у программы бывает урезан, как у демона (TASKKILL в daemon.js).
 // Снимок тоже: без него killOrphans и sweep при урезанном PATH получали пустой список и не гасили ничего.
 const SYSTEM32 = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
 const TASKKILL = path.join(SYSTEM32, 'taskkill.exe');
-const POWERSHELL = path.join(SYSTEM32, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 
 const FILE_NAME = 'codex-rate-limits.json';
 /** Окно определяется по длине в минутах, а не по имени primary/secondary — как у Орки. Имена — как в rate_limits Claude. */
-const WINDOWS = { 300: 'five_hour', 10080: 'seven_day' };
+const WINDOWS = { 300: 'five_hour', 10080: 'seven_day', 43200: 'month' };
 /** Переменные, которые не должны дойти до Codex (РЕШЕНИЯ.md, «Переменные окружения в терминалах»). */
-const FOREIGN_ENV = /^(CLAUDE|ANTHROPIC_|MCP_|ORCA_|ELECTRON_|CCD_)/i;
+const FOREIGN_ENV = /^(?!CLAUDE_CONFIG_DIR$)(CLAUDE|ANTHROPIC_|MCP_|ORCA_|ELECTRON_|CCD_)/i;
 /**
  * Ответы «не вошёл». Без входа app-server отвечает «codex account authentication required to read rate limits»,
  * с одним API-ключом — «chatgpt authentication required…». Остальное — из shared\codex-auth-errors.js Орки.
@@ -33,7 +33,7 @@ const ARGS = ['-c', 'approval_policy=never', '-c', 'features.plugins=false', '-c
 
 /**
  * @typedef {{ used_percentage: number, resets_at: number | null }} Window  resets_at — секунды Unix, как у Claude
- * @typedef {{ five_hour?: Window, seven_day?: Window }} Limits
+ * @typedef {{ five_hour?: Window, seven_day?: Window, month?: Window }} Limits
  * @typedef {'not_installed' | 'not_logged_in' | 'timeout' | 'bad_response' | 'stopped'} Reason
  * @typedef {{ ok: true, rate_limits: Limits, extra: Record<string, Limits & { name: string | null, model: string | null }>, plan_type: string | null }
  *   | { ok: false, reason: Reason, message: string }} ReadResult
@@ -84,31 +84,6 @@ function killTree(pid, log = () => {}, alive = () => true) {
 /** Общий сервер Codex: им пользуются Codex человека — не гасим никогда, даже если он оказался в нашем дереве. */
 const SHARED = /app-server\b.*--managed-daemon|pid-update-loop/i;
 
-const MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
-
-/**
- * Разбор снимка процессов — чистая функция, ветка задаётся параметром (t229; на Windows проверяется ветка macOS).
- * win32: строки «номер|родитель|мс Unix|команда» от powershell. Иначе: вывод `LC_ALL=C ps -axo pid=,ppid=,pgid=,lstart=,command=`,
- * время запуска lstart — «Mon Oct  5 22:10:00 2026», местное, с точностью до секунды (мс округляются вниз).
- * @param {string} text @param {NodeJS.Platform} [platform]
- * @returns {{ pid: number, ppid: number, pgid: number, started: number, cmd: string }[]}
- */
-function parseSnapshot(text, platform = process.platform) {
-  const lines = String(text).split(/\r?\n/);
-  if (platform === 'win32') {
-    return lines.map((l) => /^(\d+)\|(\d+)\|(\d+)\|(.*)$/.exec(l)).filter(Boolean)
-      .map((m) => ({ pid: Number(m[1]), ppid: Number(m[2]), pgid: 0, started: Number(m[3]), cmd: m[4] }));
-  }
-  const out = [];
-  for (const l of lines) {
-    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+[A-Z][a-z]{2}\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d\d):(\d\d):(\d\d)\s+(\d{4})\s+(.*)$/.exec(l);
-    if (!m || !(m[4] in MONTHS)) continue;
-    const started = new Date(Number(m[9]), MONTHS[m[4]], Number(m[5]), Number(m[6]), Number(m[7]), Number(m[8])).getTime();
-    out.push({ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), started, cmd: m[10] });
-  }
-  return out;
-}
-
 /**
  * Что гасить из снимка — чистая функция (t229). root — номер корня, from — время перед spawn, to — выход корня или «сейчас».
  * win32: как было с t118 — ребёнок корня запущен между from и to (±50 мс), дальше не старше родителя.
@@ -143,24 +118,6 @@ function pickTree(all, root, from, to, platform = process.platform) {
     for (const c of kids.get(p.pid) || []) if (c.pid !== root && c.started >= p.started) q.push(c);
   }
   return out.filter((p) => !SHARED.test(p.cmd));
-}
-
-/**
- * Снимок процессов: номер, родитель, группа (только macOS), время запуска (мс), команда. Асинхронно — главный процесс не замирает. Сбой — пустой список.
- * @returns {Promise<{ pid: number, ppid: number, pgid: number, started: number, cmd: string }[]>}
- */
-function snapshot() {
-  if (process.platform !== 'win32') {
-    return new Promise((resolve) => execFile('ps', ['-axo', 'pid=,ppid=,pgid=,lstart=,command='],
-      { encoding: 'utf8', timeout: 20000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } },
-      (err, out) => resolve(err ? [] : parseSnapshot(out, process.platform))));
-  }
-  const ps = '[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)|$($_.ParentProcessId)|$([DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds())|$($_.CommandLine)" }';
-  return new Promise((resolve) => execFile(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', ps],
-    { encoding: 'utf8', windowsHide: true, timeout: 20000, maxBuffer: 64 * 1024 * 1024 }, (err, out) => {
-      if (err) return resolve([]);
-      resolve(parseSnapshot(out, 'win32'));
-    }));
 }
 
 /**
@@ -277,7 +234,7 @@ function readOnce({ dataDir, env = process.env, cwd, timeoutMs = 30000, signal, 
           const r = m.result || {};
           const main = r.rateLimits || {};
           const rate = windowsOf(main);
-          if (!rate.five_hour && !rate.seven_day) { finish({ ok: false, reason: 'bad_response', message: `в ответе нет окон 5 часов и недели: ${JSON.stringify(r).slice(0, 300)}` }); return; }
+          if (!rate.five_hour && !rate.seven_day && !rate.month) { finish({ ok: false, reason: 'bad_response', message: `в ответе нет окон 5 часов, недели и 30 дней: ${JSON.stringify(r).slice(0, 300)}` }); return; }
           // Другие лимиты (например Luna Reserve — base_model_inference): показывать ли, решает t54; в файл кладём.
           const extra = {};
           for (const [id, lim] of Object.entries(r.rateLimitsByLimitId || {})) {

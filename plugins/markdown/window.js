@@ -212,6 +212,10 @@
    */
   w.TerminalusMarkdownOff = async (target) => {
     if (typeof target !== 'string') return { ok: false, error: I18n.t('md.nePut', 'не путь') };
+    // Файла нет или путь за пределами папки проекта (t1209, d161): предлагать открыть нечего. { ok: false } — вызвавший откроет «как раньше»,
+    // а главный процесс скажет причину («нет такого файла», «вне папки проекта») — сообщением в терминале, не окошком про редактор.
+    const has = w.terminalus && typeof w.terminalus.linkHas === 'function' ? await w.terminalus.linkHas(target).catch(() => null) : null;
+    if (has && !has.has) return { ok: false };
     const sys = POSIX ? I18n.t('md.otkrytProgrammoyMac', 'Открыть программой по умолчанию') : I18n.t('md.otkrytProgrammoyWindows', 'Открыть программой Windows');
     // Фокус до окошка (терминал) — вернуть после «Отмена» и «Открыть программой»: иначе набор с клавиатуры уходит в никуда.
     const back = /** @type {HTMLElement | null} */ (document.activeElement);
@@ -454,6 +458,42 @@
       ta.setSelectionRange(r.selA, r.selB);
     }
 
+    /**
+     * Tab / Shift+Tab в поле правки: отступ в два пробела. Текст меняется родным insertText, чтобы Ctrl+Z возвращал его одним шагом.
+     * Выделение на двух и более строках — отступ у всех строк (последняя, если выделение кончается в её начале, не трогается).
+     * @param {Doc} d @param {boolean} back
+     */
+    function indentEdit(d, back) {
+      const ta = d.ta;
+      const text = ta.value;
+      const s = ta.selectionStart;
+      const e = ta.selectionEnd;
+      const multi = text.slice(s, e).includes('\n');
+      let a = s;
+      let b = e;
+      let repl = '  ';
+      let selA;
+      let selB;
+      if (!multi && !back) {
+        selA = selB = s + 2;
+      } else {
+        a = text.lastIndexOf('\n', s - 1) + 1;
+        if (multi && text[e - 1] === '\n') b = e - 1;
+        else { const nl = text.indexOf('\n', e); b = nl < 0 ? text.length : nl; }
+        const rows = text.slice(a, b).split('\n');
+        const cut = rows.map((r) => (back ? (/^\t/.test(r) ? 1 : (/^ {1,2}/.exec(r) || [''])[0].length) : 0));
+        repl = rows.map((r, i) => (back ? r.slice(cut[i]) : '  ' + r)).join('\n');
+        if (multi) { selA = a; selB = e + repl.length - (b - a); } else { selA = Math.max(a, s - cut[0]); selB = Math.max(a, e - cut[0]); }
+      }
+      if (back && repl === text.slice(a, b)) return;
+      ta.focus();
+      ta.setSelectionRange(a, b);
+      const want = text.slice(0, a) + repl + text.slice(b);
+      if (repl === '') document.execCommand('delete'); else document.execCommand('insertText', false, repl);
+      if (ta.value !== want) { ta.setRangeText(repl, a, b, 'end'); ta.dispatchEvent(new Event('input')); }
+      ta.setSelectionRange(selA, selB);
+    }
+
     /** @param {Doc} d @param {'view' | 'edit' | 'split'} v */
     function setView(d, v) {
       d.view = v;
@@ -567,6 +607,8 @@
       label(d);
       fontTo(d);
       d.ta.value = d.text;
+      // Курсор — в начало: иначе он встаёт в конец и «Правка» открывается внизу документа (t244).
+      d.ta.setSelectionRange(0, 0);
       d.ta.addEventListener('input', () => {
         d.text = d.ta.value;
         d.dirty = d.text !== d.disk;
@@ -582,10 +624,9 @@
         const kind = (ev.ctrlKey || ev.metaKey) && !ev.shiftKey && !ev.altKey ? { KeyB: 'bold', KeyI: 'italic', KeyK: 'link' }[/** @type {'KeyB'} */ (ev.code)] : '';
         if (kind && !d.plain) { ev.preventDefault(); ev.stopPropagation(); applyTool(d, kind); return; }
         // Tab — отступ в два пробела, а не уход фокуса из редактора.
-        if (ev.key === 'Tab' && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !ev.shiftKey) {
+        if (ev.key === 'Tab' && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
           ev.preventDefault();
-          d.ta.setRangeText('  ', d.ta.selectionStart, d.ta.selectionEnd, 'end');
-          d.ta.dispatchEvent(new Event('input'));
+          indentEdit(d, ev.shiftKey);
         }
       });
       d.pane.addEventListener('keydown', (ev) => {

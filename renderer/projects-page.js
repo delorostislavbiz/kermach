@@ -11,8 +11,9 @@
    * ({ claude: 2, 'agent:grok': 1, term: 1 }, t325); collapsed — ключи свёрнутых групп,
    * mode — вид «список» или «плитка» (оба — projects-view.json). states — сколько терминалов проекта в каком состоянии
    * (код демона → число, t13); старый главный процесс поля не шлёт — тогда состояний нет, строка как раньше.
+   * bg — скрытые вкладки проекта (фоновые карты «Роадмапа», t1238): номер → число; в counts, agents, states их нет.
    * @type {{ groups: { id: string, name: string }[], projects: any[], counts: Record<string, number>, agents: Record<string, number>,
-   *   kinds: Record<string, Record<string, number>>, states?: Record<string, Record<string, number>>,
+   *   kinds: Record<string, Record<string, number>>, states?: Record<string, Record<string, number>>, bg?: Record<string, number>,
    *   collapsed: string[], mode: 'list' | 'tiles' }}
    */
   let state = { groups: [], projects: [], counts: {}, agents: {}, kinds: {}, states: {}, collapsed: [], mode: 'list' };
@@ -27,6 +28,8 @@
   /** Номер проекта, который сейчас перетаскивают (t774); пока жест идёт, новый список не рисуется — рисуется в конце жеста. */
   let dragId = '';
   let renderLater = false;
+  /** Проект, выделенный стрелками (d116); класс kb ставят row() и tile(), так выделение переживает перерисовку списка. */
+  let kbSel = '';
 
   // Имена и пути — из файла пользователя, в разметку только через замену опасных знаков.
   const esc = (/** @type {string} */ s) => String(s).replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
@@ -106,27 +109,46 @@
     return keys.map((k) => `<span class="st ${k}" style="color:${STATES[k].color}" title="${st[k]} ${plural(st[k], STATES[k].words)}">${glyph(k)}${st[k]}${short ? '' : `<span class="w"> ${plural(st[k], STATES[k].words)}</span>`}</span>`).join('');
   }
 
+  /** Разговоры проекта «ждут вас» (t1127, plugins/history/app.js): номер проекта → число; плагин «История» выключен или ошибка — пусто. @type {Record<string, number>} */
+  let waits = {};
+  /** Значок «ждут вас» — тот же вид, что у строки «История» в окне проекта (t1117); ноль — значка нет. @param {string} id */
+  function waitBadge(id) {
+    const n = waits[id] || 0;
+    if (!n) return '';
+    const title = I18n.n('history.badgeTitle', n, ['{n} разговор ждёт вашего ответа', '{n} разговора ждут вашего ответа', '{n} разговоров ждут вашего ответа']);
+    return `<span class="wn" title="${esc(title)}" style="flex-shrink:0;min-width:16px;height:16px;padding:0 5px;box-sizing:border-box;border-radius:8px;background:#F59E0B;color:#111;`
+      + `font-size:10.5px;font-weight:600;line-height:16px;text-align:center">${n > 99 ? '99+' : n}</span>`;
+  }
+
+  /** Скрытых вкладок проекта (t1238). @param {string} id */
+  const bgOf = (id) => (state.bg || {})[id] || 0;
+  /** «· 1 в фоне» — скрытые вкладки отдельно от видимых (t1238); нет — пусто. @param {number} b */
+  const bgText = (b) => b ? ` · ${b} ${I18n.t('projects.vFone', 'в фоне')}` : '';
+
   /** @param {any} p */
   function row(p) {
     const n = state.counts[p.id] || 0;
     // Справа две строчки, как имя и путь слева: сверху состояния, снизу кто запущен (образец t27).
     // Состояний ещё нет (у агента ответа пока не было, обычный терминал, старый главный процесс) — сверху прежнее «N работают».
     const sl = statesLine(p.id);
-    const top = sl ? `<div class="states">${sl}</div>` : `<div class="status"><i></i>${n} ${I18n.form(n) === 0 ? I18n.t('projects.rabotaet', 'работает') : I18n.t('projects.rabotayut', 'работают')}</div>`;
-    const status = n || sl ? `<div class="right">${top}${kindsLine(p.id)}</div>` : '';
+    const b = bgOf(p.id);
+    const bgSpan = b ? `<span class="bg">${bgText(b)}</span>` : '';
+    const top = sl ? `<div class="states">${sl}${bgSpan}</div>` : n ? `<div class="status"><i></i>${n} ${I18n.form(n) === 0 ? I18n.t('projects.rabotaet', 'работает') : I18n.t('projects.rabotayut', 'работают')}${bgSpan}</div>`
+      : `<div class="status">${bgSpan.replace(' · ', '')}</div>`;
+    const status = n || sl || b ? `<div class="right">${top}${kindsLine(p.id)}</div>` : '';
     // Цвет — только вида #rrggbb, иначе серый (так же делает svg()).
     const color = /^#[0-9a-f]{6}$/i.test(p.color) ? p.color : DEFAULT_COLOR;
-    return `<div class="row${p.id === fresh ? ' fresh' : ''}${needOf(p.id) ? ' need' : ''}" data-id="${esc(p.id)}" title="${esc(p.path)}">
+    return `<div class="row${p.id === fresh ? ' fresh' : ''}${needOf(p.id) ? ' need' : ''}${p.id === kbSel ? ' kb' : ''}" data-id="${esc(p.id)}" title="${esc(p.path)}">
       <div class="pic"><div class="strip" style="background:${color}"></div>${svg(p.icon, color, 18)}</div>
-      <div class="text"><div class="n">${esc(p.name)}</div><div class="p">${esc(p.path)}</div></div>${status}</div>`;
+      <div class="text"><div class="n">${esc(p.name)}</div><div class="p">${esc(p.path)}</div></div>${waitBadge(p.id)}${status}</div>`;
   }
 
   /** Плитка: полоса цвета, значок, имя, под именем — кто запущен, внизу — состояния значками. Ничего не запущено — внизу пусто (образец t27). @param {any} p */
   function tile(p) {
     const color = /^#[0-9a-f]{6}$/i.test(p.color) ? p.color : DEFAULT_COLOR;
-    return `<div class="tile${p.id === fresh ? ' fresh' : ''}${needOf(p.id) ? ' need' : ''}" data-id="${esc(p.id)}" title="${esc(p.path)}" style="--c:${color}">
-      <div class="top">${svg(p.icon, color, 20)}<div class="n">${esc(p.name)}</div></div><div class="sub">${kindsLine(p.id)}</div>`
-      + `<div class="bot">${statesLine(p.id, true)}</div></div>`;
+    return `<div class="tile${p.id === fresh ? ' fresh' : ''}${needOf(p.id) ? ' need' : ''}${p.id === kbSel ? ' kb' : ''}" data-id="${esc(p.id)}" title="${esc(p.path)}" style="--c:${color}">
+      <div class="top">${svg(p.icon, color, 20)}<div class="n">${esc(p.name)}</div>${waitBadge(p.id)}</div><div class="sub">${kindsLine(p.id)}</div>`
+      + `<div class="bot">${statesLine(p.id, true)}${bgOf(p.id) ? `<span class="bg" title="${esc(bgText(bgOf(p.id)).slice(3))}">${bgText(bgOf(p.id))}</span>` : ''}</div></div>`;
   }
 
   // Значки переключателя: три полосы — список, четыре квадрата — плитка. Выбранный — светлее.
@@ -139,7 +161,8 @@
     $('total').textContent = q ? I18n.t('projects.naydenoIz', 'найдено {length} из {total}', { length: shown.length, total: total }) : `${total} ${plural(total, [I18n.t('projects.proekt', 'проект'), I18n.t('projects.proekta', 'проекта'), I18n.t('projects.proektov', 'проектов')])}`;
     // Рядом — сколько всего агентов (образец t27: «32 проекта · 15 агентов»). Отдельным элементом: #total сверяют проверки.
     const ag = state.projects.reduce((s, p) => s + (state.agents[p.id] || 0), 0);
-    $('allAgents').textContent = q ? '' : `· ${ag} ${plural(ag, [I18n.t('projects.agent', 'агент'), I18n.t('projects.agenta', 'агента'), I18n.t('projects.agentov', 'агентов')])}`;
+    $('allAgents').textContent = q ? '' : `· ${ag} ${plural(ag, [I18n.t('projects.agent', 'агент'), I18n.t('projects.agenta', 'агента'), I18n.t('projects.agentov', 'агентов')])}`
+      + bgText(q ? 0 : state.projects.reduce((s, p) => s + bgOf(p.id), 0));
     // И сколько всего требуют ответа (образец t27) — тоже отдельным элементом: #allAgents сверяют проверки.
     const need = state.projects.reduce((s, p) => s + needOf(p.id), 0);
     $('allNeed').innerHTML = q || !need ? '' : `· ${glyph('waiting')}${need} ${plural(need, STATES.waiting.words)}`;
@@ -168,7 +191,7 @@
       const shut = !q && !!g.key && shutKeys.has(g.key);
       // Свёрнутая группа, где кто-то требует ответа, выделена так же, как строка: проект внутри не видно, а ждать он не должен.
       const need = shut && g.items.some((p) => needOf(p.id));
-      const head = `<div class="group${shut ? ' shut' : ''}${need ? ' need' : ''}${g.key && g.key === turned ? ' turn' : ''}"${g.key && !q ? ` data-key="${esc(g.key)}" title="${shut ? I18n.t('common.maximize', 'Развернуть') : I18n.t('common.minimize', 'Свернуть')}"` : ''}>`
+      const head = `<div class="group${shut ? ' shut' : ''}${need ? ' need' : ''}${g.key && g.key === turned ? ' turn' : ''}"${g.key ? ` data-key="${esc(g.key)}"` : ''}${g.key && !q ? ` title="${shut ? I18n.t('common.maximize', 'Развернуть') : I18n.t('common.minimize', 'Свернуть')}"` : ''}>`
         + `${g.key ? chevron() : svg('pin', tc('muted', '#8D91A5'), 12)}<span class="gn">${esc(g.name)}</span>${shut ? summary(g.items) : `<span class="gc">${g.items.length}</span>`}</div>`;
       // Блок — обёртка .gcard: в новом виде карточка, в старых темах её нет (display: contents). Заголовок — первым в ней: t164-pin ищет блок строки через previousElementSibling.
       const open = `<div class="gcard${cascade ? ' k-in' : ''}"${cascade ? ` style="animation-delay:${i * 40}ms"` : ''}>`;
@@ -203,6 +226,8 @@
       + (need ? `<span class="need">${glyph('waiting')}${need} ${plural(need, STATES.waiting.words)}</span>` : '');
   }
 
+  /** Идёт поиск: в поле есть текст (как q в render). */
+  const searching = () => !!(/** @type {HTMLInputElement} */ ($('q')).value.trim());
   /** Свернуть или развернуть группы и запомнить. @param {string[]} keys @param {boolean} shut */
   async function collapse(keys, shut) {
     const r = await t.projects.collapse(keys, shut);
@@ -256,14 +281,75 @@
     }, Math.max(0, lastAt + GAP - Date.now()));
   }
 
+  // Значки «ждут вас» (t1127): журнал дописан или отметка — history:changed; вкладка ждёт или работает — событие демона (refreshSoon).
+  // Не чаще раза в WAITS_MS: главная часть пролистывает базу всех разговоров. Ответ пришёл — перерисовать, если числа изменились.
+  const WAITS_MS = 1500;
+  let waitsBusy = false, waitsAgain = false;
+  /** @type {ReturnType<typeof setTimeout> | 0} */ let waitsTimer = 0;
+  async function loadWaits(fresh = false) {
+    if (waitsBusy) { waitsAgain = true; return; }
+    waitsBusy = true;
+    const r = await t.history.waits(fresh).catch(() => null);
+    waitsBusy = false;
+    const next = r && r.counts && typeof r.counts === 'object' ? r.counts : {};
+    if (JSON.stringify(next) !== JSON.stringify(waits)) { waits = next; if (applied && !dragId) render(); }
+    if (waitsAgain) { waitsAgain = false; waitsSoon(); }
+  }
+  function waitsSoon(fresh = false) {
+    if (waitsTimer) return;
+    waitsTimer = setTimeout(() => { waitsTimer = 0; loadWaits(fresh); }, WAITS_MS);
+  }
+
   /** @param {string} msg */
   const showError = (msg) => { $('error').textContent = msg; $('error').style.display = msg ? 'block' : 'none'; };
 
   // Фокус в поиск сразу, кодом. Атрибут autofocus Chromium применяет только на ближайшем кадре: окошко, открытое раньше,
   // уже держит фокус, и в консоли «Autofocus processing was blocked» (t897).
   $('q').focus();
-  $('q').addEventListener('input', render);
-  $('q').addEventListener('keydown', (e) => { if (e.key === 'Escape') { /** @type {HTMLInputElement} */ ($('q')).value = ''; render(); } });
+  $('q').addEventListener('input', () => { kbSel = ''; render(); });
+  $('q').addEventListener('keydown', (e) => { if (e.key === 'Escape') { /** @type {HTMLInputElement} */ ($('q')).value = ''; kbSel = ''; render(); } });
+  // Стрелки и Enter (d116): фокус остаётся в поиске — можно дописывать запрос. Стрелка вниз из поиска — первый найденный проект,
+  // вверх и вниз — соседняя строка (в плитке — плитка ниже или выше, ближайшая по горизонтали), в плитке ← → — соседняя плитка.
+  // Вверх с первого — выделение снято, снова поиск. Enter — открыть выделенный. Открыто окошко (меню, настройки) — клавиши его.
+  document.addEventListener('keydown', (e) => {
+    if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(e.key) || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (document.querySelector('.dlg, .dlg-menu') || drag) return;
+    const tgt = /** @type {HTMLElement} */ (e.target);
+    if (tgt !== document.body && tgt !== $('q') && !$('list').contains(tgt)) return;
+    const items = /** @type {HTMLElement[]} */ ([...document.querySelectorAll('#list .row, #list .tile')]);
+    const i = items.findIndex((el) => el.dataset.id === kbSel);
+    if (e.key === 'Enter') {
+      if (i < 0) return;
+      e.preventDefault();
+      t.projects.open(kbSel);
+      return;
+    }
+    const tiles = state.mode === 'tiles';
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && (!tiles || i < 0)) return;
+    e.preventDefault();
+    if (!items.length) return;
+    /** @type {HTMLElement | null} */
+    let next = null;
+    if (i < 0) next = e.key === 'ArrowDown' ? items[0] : null;
+    else if (e.key === 'ArrowLeft') next = items[i - 1] || items[i];
+    else if (e.key === 'ArrowRight') next = items[i + 1] || items[i];
+    else {
+      // Ближайший ряд ниже или выше; в нём — элемент, ближайший по середине. Для списка это просто соседняя строка.
+      const cur = items[i].getBoundingClientRect();
+      const mid = cur.left + cur.width / 2;
+      const down = e.key === 'ArrowDown';
+      const rowOf = items.filter((el) => { const r = el.getBoundingClientRect(); return down ? r.top >= cur.bottom - 1 : r.bottom <= cur.top + 1; });
+      if (rowOf.length) {
+        const edge = down ? Math.min(...rowOf.map((el) => el.getBoundingClientRect().top)) : Math.max(...rowOf.map((el) => el.getBoundingClientRect().top));
+        const line = rowOf.filter((el) => Math.abs(el.getBoundingClientRect().top - edge) < 2);
+        next = line.reduce((a, b) => { const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect(); return Math.abs(rb.left + rb.width / 2 - mid) < Math.abs(ra.left + ra.width / 2 - mid) ? b : a; });
+      } else next = down ? items[i] : null;
+    }
+    for (const el of items) el.classList.remove('kb');
+    kbSel = next ? /** @type {string} */ (next.dataset.id) : '';
+    if (next) { next.classList.add('kb'); next.scrollIntoView({ block: 'nearest' }); }
+    $('q').focus();
+  });
   // Ctrl K (на macOS Cmd K) — в поиск, текст выделен (t679). Открыто окошко (настройки, меню, вопрос) — клавиша его, не поиска.
   const mac = /** @type {any} */ (window).Keys.mac;
   $('qKbd').textContent = mac ? '⌘K' : 'Ctrl K';
@@ -307,6 +393,123 @@
     if (key && state.collapsed.includes(key)) await t.projects.collapse([key], false);
     await refresh();
     document.querySelector(`#list [data-id="${fresh}"]`)?.scrollIntoView({ block: 'nearest' });
+    // Только что добавленной папке — сразу «Цвет, значок и имя» (d150): раньше цвет и значок были спрятаны в правый щелчок, имя не менялось.
+    // Отмена — проект остаётся с именем папки и серым цветом. Папка уже была в списке — окна нет.
+    if (!r.added) return;
+    const p = r.project;
+    const look = await D.colorIcon({ name: p.name, sub: p.path, color: p.color, icon: p.icon, rename: true });
+    if (!look) return;
+    const u = await t.projects.update(p.id, look);
+    if (u.error) return showError(u.error);
+    await refresh();
+  };
+  // «Новый проект» (t1174, ГИТ-устройство.md (г), макет spikes\t1165-git-design new-*.png): кнопка перед «Добавить папку».
+  // Вариант плиткой, название, папка (по умолчанию <D:\AI-PROJECTS>\<название>, пока её не правили руками), галочка истории.
+  // Окно — своя разметка на классах dlg-back / dlg / .field / .btns: темы оформляют её, как окна dialogs.js.
+  const newBtn = document.createElement('button');
+  newBtn.id = 'newProj';
+  newBtn.className = 'bbtn';
+  newBtn.innerHTML = '<span id="newIcon"></span><span id="newName"></span>';
+  $('add').before(newBtn);
+  const newText = () => {
+    $('newIcon').innerHTML = svg('plus', tc('accent', '#21B568'), 14);
+    $('newName').textContent = I18n.t('projects.newProject', 'Новый проект');
+  };
+  newText();
+  I18n.onChange(newText);
+  const npStyle = document.createElement('style');
+  npStyle.textContent = `
+    .dlg.np .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .dlg.np .tl { display: flex; gap: 10px; padding: 10px 12px; border: 1px solid rgba(var(--muted-rgb),.22); border-radius: 8px; background: var(--hover); cursor: default; }
+    .dlg.np .tl.on { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
+    .dlg.np .tl .ti { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; flex: none; }
+    .dlg.np .tl b { display: block; font-weight: 600; }
+    .dlg.np .tl span.d { font-size: 12px; color: var(--muted); }
+    .dlg.np .lead { color: var(--muted); }
+    .dlg.np .fl { display: flex; flex-direction: column; gap: 4px; }
+    .dlg.np .fl .cap { font-size: 12px; color: var(--muted); }
+    .dlg.np .field { flex: none; height: 34px; box-sizing: border-box; }
+    .dlg.np .row2 { display: flex; gap: 6px; }
+    .dlg.np .row2 .field { flex: 1; }
+    .dlg.np .pick { width: 34px; display: grid; place-items: center; border: 1px solid rgba(var(--muted-rgb),.18); border-radius: 4px; background: var(--hover); cursor: default; }
+    .dlg.np .err { color: var(--danger); font-size: 12px; min-height: 0; }
+    .dlg.np .err:empty { display: none; }
+    .dlg.np .chk { display: flex; gap: 9px; align-items: flex-start; }
+    .dlg.np .chk input { width: 16px; height: 16px; margin: 1px 0 0; accent-color: var(--button, var(--accent)); flex: none; }
+    .dlg.np .hint { font-size: 12px; color: var(--muted); }`;
+  document.head.appendChild(npStyle);
+  newBtn.onclick = async () => {
+    showError('');
+    if (document.querySelector('.dlg')) return;
+    const r = await t.projects.presets();
+    if (!r || r.error) return showError((r && r.error) || 'нет вариантов');
+    /** @type {{ name: string, desc: string, icon: string, color: string, git: boolean, files: number }[]} */
+    const list = r.presets;
+    const sep = /^[a-zA-Z]:\\|\\\\/.test(r.base) ? '\\' : '/';
+    let sel = list[0];
+    let dirTouched = false;
+    const tl = (/** @type {typeof sel} */ p, /** @type {number} */ i) => `<div class="tl${p === sel ? ' on' : ''}" data-i="${i}"><div class="ti" style="background:${esc(p.color)}">${svg(p.icon, '#FFFFFF', 17)}</div><div><b>${esc(p.name)}</b><span class="d">${esc(p.desc)}</span></div></div>`;
+    const back = document.createElement('div');
+    back.className = 'dlg-back';
+    back.innerHTML = `<div class="dlg np" tabindex="-1" style="--w:640px"><div class="dlg-title"><div class="t">${esc(I18n.t('projects.newProject', 'Новый проект'))}</div><div class="x" title="${esc(I18n.t('common.close', 'Закрыть'))}">${svg('close', tc('text', '#C9D0DC'), 12)}</div></div>
+      <div class="dlg-body scroll">
+        <div class="lead">${esc(r.fromFile ? I18n.t('projects.newLead', 'Kermach создаст папку и заготовку: CLAUDE.md, PLAN.md, SESSION.md и папки варианта.') : I18n.t('projects.newLeadBare', 'Файла заготовок project-setup.md нет — Kermach создаст только папку.'))}</div>
+        <div class="tiles">${list.map(tl).join('')}</div>
+        <label class="fl"><span class="cap">${esc(I18n.t('projects.newNameCap', 'Название'))}</span><input class="field nm" spellcheck="false" maxlength="120"><span class="err e-name"></span></label>
+        <div class="fl"><span class="cap">${esc(I18n.t('projects.newDirCap', 'Папка'))}</span><div class="row2"><input class="field dir" spellcheck="false"><div class="pick" title="${esc(I18n.t('projects.newPick', 'Выбрать папку'))}">${svg('folder', tc('muted', '#8D91A5'), 15)}</div></div><span class="err e-dir"></span></div>
+        <label class="chk"><input type="checkbox" class="git"><div>${esc(I18n.t('projects.newGit', 'Вести историю изменений (git)'))}<div class="hint">${esc(I18n.t('projects.newGitHint', 'Точки возврата после работы агентов: что поменяли и откат одной кнопкой. У Исследования по умолчанию выключено.'))}</div></div></label>
+        <span class="err e-all"></span>
+        <div class="btns"><button class="cancel">${esc(I18n.t('common.cancel', 'Отмена'))}</button><button class="ok">${esc(I18n.t('projects.newCreate', 'Создать'))}</button></div>
+      </div></div>`;
+    document.body.appendChild(back);
+    const dlg = /** @type {HTMLElement} */ (back.firstElementChild);
+    const q = (/** @type {string} */ s) => /** @type {HTMLInputElement} */ (dlg.querySelector(s));
+    const nm = q('.nm'), dir = q('.dir'), git = q('.git'), okBtn = /** @type {HTMLButtonElement} */ (/** @type {unknown} */ (q('.btns .ok')));
+    const err = (/** @type {string} */ field, /** @type {string} */ msg) => { for (const f of ['name', 'dir', 'all']) q(`.e-${f}`).textContent = f === field ? msg : ''; };
+    const follow = () => { if (!dirTouched) dir.value = nm.value.trim() ? `${r.base}${r.base.endsWith(sep) ? '' : sep}${nm.value.trim()}` : ''; };
+    const close = () => { back.remove(); document.removeEventListener('keydown', key, true); };
+    let busy = false;
+    const create = async () => {
+      if (busy) return;
+      busy = true;
+      okBtn.disabled = true;
+      err('', '');
+      try {
+        const res = await t.projects.create({ name: nm.value, dir: dir.value, preset: sel.name, git: git.checked });
+        if (!res || res.error) return err(res && res.field ? res.field : 'all', (res && res.error) || 'не создан');
+        close();
+        fresh = res.project.id;
+        /** @type {HTMLInputElement} */ ($('q')).value = '';
+        await refresh();
+        document.querySelector(`#list [data-id="${fresh}"]`)?.scrollIntoView({ block: 'nearest' });
+        if (res.warn) showError(res.warn);
+      } finally { busy = false; okBtn.disabled = false; }
+    };
+    const key = (/** @type {KeyboardEvent} */ e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+      if (e.key === 'Enter' && /** @type {HTMLElement} */ (e.target).tagName === 'INPUT') { e.preventDefault(); e.stopPropagation(); create(); }
+    };
+    document.addEventListener('keydown', key, true);
+    /** @type {HTMLElement} */ (dlg.querySelector('.dlg-title .x')).onclick = close;
+    /** @type {HTMLElement} */ (dlg.querySelector('.btns .cancel')).onclick = close;
+    okBtn.onclick = create;
+    /** @type {HTMLElement} */ (dlg.querySelector('.tiles')).addEventListener('click', (e) => {
+      const el = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.tl'));
+      if (!el) return;
+      sel = list[Number(el.dataset.i)];
+      for (const x of dlg.querySelectorAll('.tl')) x.classList.toggle('on', x === el);
+      git.checked = sel.git;
+    });
+    nm.addEventListener('input', () => { follow(); err('', ''); });
+    dir.addEventListener('input', () => { dirTouched = !!dir.value.trim(); err('', ''); });
+    /** @type {HTMLElement} */ (dlg.querySelector('.pick')).onclick = async () => {
+      const p = await t.projects.pickFolder('new');
+      if (!p) return;
+      dir.value = p;
+      dirTouched = true;
+    };
+    git.checked = sel.git;
+    nm.focus();
   };
   // Группы (t774). Запись — в главном процессе (projects:group*), отказ (пустое имя, повтор) — строкой ошибки.
   /** Новая группа последней; projectId — сразу перенести в неё проект («Новая группа…» в меню проекта). @param {string} [projectId] */
@@ -352,12 +555,13 @@
   $('vTiles').onclick = () => setMode('tiles');
   $('list').addEventListener('click', (e) => {
     const head = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.group[data-key]'));
-    if (head) return void collapse([/** @type {string} */ (head.dataset.key)], !head.classList.contains('shut'));
+    // При поиске ключ у заголовка есть (меню и перетаскивание, t791), а сворачивание стоит — как у кнопки «Свернуть незакреплённые».
+    if (head) return void (searching() || collapse([/** @type {string} */ (head.dataset.key)], !head.classList.contains('shut')));
     const el = /** @type {HTMLElement} */ (e.target).closest('.row, .tile');
     if (el) t.projects.open(/** @type {HTMLElement} */ (el).dataset.id);
   });
   // Перетаскивание проекта на блок группы (t774): блок под курсором подсвечен (.drop на .gcard), отпустили — проект в этой группе.
-  // Блок узнаётся по заголовку .group[data-key]: при поиске ключей нет, бросить некуда. У «Закреплённых» ключа нет — закрепляет меню.
+  // Блок узнаётся по заголовку .group[data-key]; ключ есть и при поиске (t791). У «Закреплённых» ключа нет — закрепляет меню.
   // На событиях мыши, как вкладки в окне проекта (project-page.js, t211), а не HTML5 drag (t803): тот на Windows после dragstart
   // ведёт системный цикл, и проверка мышью (sendInputEvent) до drop не доходит. Сдвиг меньше DRAG_MIN — обычный щелчок, проект открывается.
   /** Блок группы в точке экрана: обёртка и ключ (номер группы или NO_GROUP); не блок группы — null. @param {number} x @param {number} y */
@@ -455,8 +659,8 @@
     showError('');
     const pick = await D.menu(e.clientX, e.clientY, [
       { id: 'rename', label: I18n.t('common.rename', 'Переименовать'), icon: 'pen' },
-      ...(i > 0 ? [{ id: 'up', label: I18n.t('projects.vyshe', 'Выше') }] : []),
-      ...(i < state.groups.length - 1 ? [{ id: 'down', label: I18n.t('projects.nizhe', 'Ниже') }] : []),
+      ...(i > 0 ? [{ id: 'up', label: I18n.t('projects.vyshe', 'Выше'), icon: 'up' }] : []),
+      ...(i < state.groups.length - 1 ? [{ id: 'down', label: I18n.t('projects.nizhe', 'Ниже'), icon: 'down' }] : []),
       '-',
       { id: 'remove', label: I18n.t('projects.udalitGruppu', 'Удалить группу'), icon: 'trash', danger: true },
     ]);
@@ -498,6 +702,12 @@
     const p = state.projects.find((x) => x.id === el.dataset.id);
     if (!p) return;
     showError('');
+    // «Создать копию» — только у проектов под git (t916).
+    const canCopy = (await t.projects.canCopy(p.id)) === true;
+    // «Удалить копию» (t1071) — только у копии (папка в «<Проект>-копии»).
+    const isCopy = (await t.projects.isCopy(p.id)) === true;
+    // «Включить историю изменений» (t1171) — пока у проекта нет точек возврата; { git } — у проекта свой гит.
+    const hist = await t.projects.canHistory(p.id);
     const pick = await D.menu(e.clientX, e.clientY, [
       { id: 'pin', label: p.pinned ? I18n.t('projects.otkrepit', 'Открепить') : I18n.t('projects.zakrepit', 'Закрепить'), icon: 'pin' },
       { id: 'look', label: I18n.t('projects.cvetIZnachok', 'Цвет и значок'), icon: 'palette' },
@@ -505,7 +715,10 @@
       { id: 'bypass', label: I18n.t('projects.bypass', 'Claude без вопросов о разрешениях'), icon: p.bypass ? 'check' : 'bolt' },
       { id: 'move', label: I18n.t('projects.vGruppu', 'В группу ▸'), icon: 'layers' },
       { id: 'newGroup', label: I18n.t('projects.novayaGruppaMenu', 'Новая группа…'), icon: 'plus' },
+      ...(canCopy ? [{ id: 'copy', label: I18n.t('projects.sozdatKopiyu', 'Создать копию (git worktree)'), icon: 'layers' }] : []),
+      ...(hist ? [{ id: 'history', label: I18n.t('projects.history', 'Включить историю изменений'), icon: 'clock' }] : []),
       '-',
+      ...(isCopy ? [{ id: 'removeCopy', label: I18n.t('projects.removeCopy', 'Удалить копию'), icon: 'trash', danger: true }] : []),
       { id: 'remove', label: I18n.t('projects.ubratIzSpiska', 'Убрать из списка'), icon: 'trash', danger: true },
     ]);
     if (pick === 'move') {
@@ -548,6 +761,50 @@
       p.color = look.color;
       p.icon = look.icon;
       render();
+    } else if (pick === 'copy') {
+      const r = await t.projects.copy(p.id);
+      if (r.error) return showError(r.error);
+      await refresh();
+      t.projects.open(r.project.id);
+    } else if (pick === 'history') {
+      // Окно подтверждения по ТЗ (б), шаг 2; у проекта со своим гитом — что ветка и коммиты не меняются (ответ 1а).
+      const ok = await D.confirm({
+        title: I18n.t('projects.history', 'Включить историю изменений'),
+        text: I18n.t('projects.historyAsk', 'Вести историю изменений в «{name}»? После работы агентов появятся точки возврата.', { name: p.name }),
+        note: hist.git
+          ? I18n.t('projects.historyNoteOwn', 'У проекта свой git. Точки возврата хранятся отдельно: ветка, коммиты и .gitignore не меняются.')
+          : I18n.t('projects.historyNote', 'Будет создана папка .git. Видео, архивы, node_modules и дампы баз в историю не попадут. Список — в файле .gitignore.'),
+        ok: I18n.t('projects.historyOk', 'Включить'),
+      });
+      if (!ok) return;
+      const r = await t.projects.enableHistory(p.id);
+      if (r.error) return showError(r.error);
+      await refresh();
+    } else if (pick === 'removeCopy') {
+      const ok = await D.confirm({
+        title: I18n.t('projects.removeCopy', 'Удалить копию'),
+        text: I18n.t('projects.removeCopyAsk', 'Удалить копию «{name}» с диска?', { name: p.name }),
+        note: I18n.t('projects.removeCopyNote', 'Папка: {path}\nВкладки копии будут остановлены. Ветка git без слияния останется в основном проекте.', { path: p.path }),
+        ok: I18n.t('projects.removeCopyOk', 'Удалить'),
+        danger: true,
+      });
+      if (!ok) return;
+      let r = await t.projects.removeCopy(p.id, false);
+      if (r.error && r.dirty) {
+        // Правки списком (первые 20): без force копия не удаляется, вкладки не остановлены.
+        const list = r.dirty.slice(0, 20).join('\n') + (r.dirty.length > 20 ? `\n… ${r.dirty.length - 20}` : '');
+        const force = await D.confirm({
+          title: I18n.t('projects.removeCopy', 'Удалить копию'),
+          text: I18n.t('projects.removeCopyDirty', 'В копии есть несохранённые правки'),
+          note: list,
+          ok: I18n.t('projects.removeCopyForce', 'Удалить всё равно'),
+          danger: true,
+        });
+        if (!force) return;
+        r = await t.projects.removeCopy(p.id, true);
+      }
+      if (r.error) return showError(r.error);
+      await refresh();
     } else if (pick === 'remove') {
       // Кто продолжит работать — словами, в порядке значков строки: окошко показывает только текст, а здесь важно прочитать, кого не остановят.
       const who = kindsOf(p.id).map(([kind, n]) => `${n} ${kindName(kind, n)}`).join(' · ');
@@ -564,8 +821,11 @@
       await refresh();
     }
   });
-  t.projects.onChanged(refreshSoon);
+  t.projects.onChanged(() => { refreshSoon(); waitsSoon(true); });
+  t.history.onChanged(() => waitsSoon());
+  t.settings.onChanged(() => waitsSoon());
   // Сменился язык (t184): надписи, которые рисует JS, — заново.
   I18n.onChange(() => render());
   refresh();
+  loadWaits();
 })();

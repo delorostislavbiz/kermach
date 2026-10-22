@@ -51,7 +51,7 @@ function limitsClock(ts, now) {
 
 /**
  * @typedef {{ used_percentage: number, resets_at: number | null }} LimitsWindow  resets_at — секунды Unix
- * @typedef {{ status?: string, message?: string | null, ts?: number | null, rate_limits?: { five_hour?: LimitsWindow, seven_day?: LimitsWindow } | null }} LimitsSource
+ * @typedef {{ status?: string, message?: string | null, ts?: number | null, rate_limits?: { five_hour?: LimitsWindow, seven_day?: LimitsWindow, month?: LimitsWindow } | null }} LimitsSource
  * @typedef {{ key: string, label: string, used: number | null, note?: string, tail: string, title: string }} LimitsPart
  *   used null — «нет данных», а с note — note вместо процента («сброс был в 12:40»); tail — текст после процента; title — подсказка при наведении.
  */
@@ -80,7 +80,8 @@ function limitsParts(data, now) {
     const rl = d && d.rate_limits;
     const five = rl && rl.five_hour;
     const week = rl && rl.seven_day;
-    if (!five && !week) {
+    const mon = rl && rl.month;
+    if (!five && !week && !mon) {
       out.push({ key, label, used: null, tail: '', title: (d && d.message && reasonText(key, d)) || I18n.t('limits.dannyhOLimitahNet', '{label}: данных о лимитах нет', { label: label }) });
       continue;
     }
@@ -90,6 +91,7 @@ function limitsParts(data, now) {
     const why = old && d.status !== 'ok' && d.message ? I18n.t('limits.posledniyOprosNeUdalsya', '\nпоследний опрос не удался: {message}', { message: d.message }) : '';
     const f = live(five);
     const w = live(week);
+    const m = live(mon);
     /** Сброс прошёл, новых цифр нет: «сброс был в 12:40». @param {LimitsWindow | undefined} win */
     const gone = (win) => (win && win.resets_at && win.resets_at * 1000 <= now
       ? I18n.t('limits.sbrosBylV', 'сброс был в {v1}', { v1: limitsClock(win.resets_at * 1000, now) }) : '');
@@ -111,10 +113,10 @@ function limitsParts(data, now) {
       out.push({ key: 'claude-week', label: I18n.t('limits.nedelya', 'Неделя'), used: w ? limitsUsed(w) : null, note: gone(week), tail: stale,
         title: titleOf(I18n.t('limits.nedelya2', 'неделя'), week) + (old || gone(week) ? where : '') });
     } else {
-      out.push({ key, label, used: f ? limitsUsed(f) : null, note: gone(five),
-        tail: (w ? I18n.t('limits.nedelya3', ' · неделя {v1} %', { v1: limitsUsed(w) })
+      out.push({ key, label, used: f ? limitsUsed(f) : m && !five ? limitsUsed(m) : null, note: gone(five) || (!five ? gone(mon) : ''),
+        tail: (m && !five ? I18n.t('limits.mesyac', ' · 30 дней') : '') + (w ? I18n.t('limits.nedelya3', ' · неделя {v1} %', { v1: limitsUsed(w) })
           : gone(week) ? I18n.t('limits.nedelyaNote', ' · неделя: {v1}', { v1: gone(week) }) : week ? I18n.t('limits.nedelyaNetDannyh', ' · неделя: нет данных') : '') + stale,
-        title: `${titleOf(I18n.t('limits.5Chasov', '5 часов'), five)}\n${titleOf(I18n.t('limits.nedelya2', 'неделя'), week)}` + (gone(five) || gone(week) ? where : '') });
+        title: `${titleOf(I18n.t('limits.5Chasov', '5 часов'), five)}\n${titleOf(I18n.t('limits.nedelya2', 'неделя'), week)}` + (mon ? `\n${titleOf(I18n.t('limits.30Dney', '30 дней'), mon)}` : '') + (gone(five) || gone(week) || gone(mon) ? where : '') });
     }
   }
   return out;

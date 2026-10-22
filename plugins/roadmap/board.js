@@ -20,7 +20,8 @@ const PHASE_STATUS = ['запланирована', 'идёт', 'готова'];
 const HEALTH = ['зелёный', 'жёлтый', 'красный'];
 const HUMAN = ['без человека', 'нужен человек'];
 const KINDS = ['сделать', 'ревью', 'разведка'];
-const DTYPES = ['решение', 'тупик', 'договорённость', 'паттерн'];
+/** Виды записей d<N>. «заметка» (t1046) — находка сбоку, которая не мешает сейчас: агентам не подаётся, в паттерны не идёт, живёт на доске для человека. */
+const DTYPES = ['решение', 'тупик', 'договорённость', 'паттерн', 'заметка'];
 /** Поле how записи d<N> (t833): проверено прогоном или догадка. */
 const HOW = ['проверено', 'догадка'];
 /** Отзыв агента о поданной записи (t836): поле used карты, «d12 помогла, d40 не пригодилась». */
@@ -41,9 +42,9 @@ const PASSPORT = {
 };
 /** Ключи шапки, которые правит программа; остальные ключи файла — чужие, их сохраняем и не трогаем. */
 const HEAD_KEYS = {
-  t: ['phase', 'status', 'kind', 'agent', 'model', 'effort', 'depends', 'human', 'created', 'closed', 'source', 'used', 'served'],
+  t: ['phase', 'status', 'kind', 'agent', 'model', 'effort', 'depends', 'human', 'created', 'closed', 'source', 'used', 'served', 'from'],
   f: ['status', 'health', 'health_why', 'health_by', 'health_at'],
-  d: ['type', 'card', 'files', 'date', 'agent', 'how', 'until', 'repeats', 'cancelled', 'differs', 'wrong', 'stack', 'from', 'approved', 'pattern'],
+  d: ['type', 'card', 'files', 'date', 'agent', 'how', 'until', 'repeats', 'cancelled', 'differs', 'wrong', 'stack', 'from', 'approved', 'pattern', 'global'],
   passport: [],
 };
 /** Свои ключи шапки карты из FORMAT.md (t830): update их пишет, а читаются они, как и прочие чужие ключи, в extra. */
@@ -60,7 +61,8 @@ const OWN_HEAD = { t: ['pick', 'advisor', 'agent_why'], f: [], d: [], passport: 
  * @typedef {{ text: string, done: boolean }} Criterion
  * @typedef {{ id: string, num: number, file: string, title: string, phase: string, status: string, kind: string, agent: string, model: string,
  *   effort: string, depends: string[], human: string, created: string, closed: string, source: string, used: Record<string, string>, served: string[], fields: Record<string, string>,
- *   extra: Record<string, string> }} Card
+ *   body?: string, from: string, extra: Record<string, string> }} Card
+ * from — дело «Дел», из которого карта (t1163): k<N> в .kermach\tasks того же проекта.
  * used — отзыв агента о поданных записях (t836): d<N> → «помогла», «не пригодилась» или «неверна».
  * served — какие d<N> программа подала агенту в задании (t1008), пишет addServed.
  * @typedef {{ id: string, num: number, file: string, title: string, status: string, health: string, healthWhy: string, healthBy: string, healthAt: string,
@@ -68,7 +70,8 @@ const OWN_HEAD = { t: ['pick', 'advisor', 'agent_why'], f: [], d: [], passport: 
  * ready — отмечены все признаки готовности (и они есть).
  * @typedef {{ id: string, num: number, file: string, title: string, type: string, card: string, files: string[], date: string, agent: string, text: string,
  *   how: string, until: string, repeats: string[], cancelled: string, differs: string[], wrong: string[], wrongBare: string[],
- *   stack: string[], portable: string, from: string[], approved: string, pattern: string, extra: Record<string, string> }} Decision
+ *   stack: string[], portable: string, from: string[], approved: string, pattern: string, global: boolean, extra: Record<string, string> }} Decision
+ * global — «global: да» (t698): человек пометил запись «для всех проектов», в общую базу она идёт и без «## Переносимый вывод».
  * how — «проверено», «догадка» или пусто; until — срок годности ГГГГ-ММ-ДД, в этот день запись ещё действует; repeats — карты, где ту же причину нашли заново;
  * cancelled — дата отмены: запись больше не действует, но остаётся в истории (t833). differs — записи, на которые эта не похожа: человек нажал «не похоже» (t969), пометку «похожа» с ними не ставим.
  * stack — чей код виноват: тема, плагин, библиотека (t988); portable — раздел «## Переносимый вывод» для других проектов, в text его нет.
@@ -96,6 +99,49 @@ const isDay = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v); const d = 
 /** @param {string} v */
 const list = (v) => { const m = /^\[(.*)\]$/.exec(v.trim()); return (m ? m[1] : v).split(',').map((s) => s.trim()).filter(Boolean); };
 
+/** Вердикт в тексте отзыва (t1075): падежи и число — «не пригодились», «не помогло» (t1082), «помогло»; «пригодилась» без «не» — помогла. @param {string} s */
+const verdictOf = (s) => {
+  const t = norm(s);
+  if (/не\s+(пригод|помог)/.test(t)) return VERDICTS[1];
+  if (/неверн/.test(t)) return VERDICTS[2];
+  return /(^|[^а-я])(помог|пригод)/.test(t) ? VERDICTS[0] : '';
+};
+/** Отзыв без счёта, но и не опечатка: «учтена», «к делу не относятся», «не открывал», пояснение после тире или в скобках. */
+const NEUTRAL = /учтен|соблюд|относ|касал|касает|влия|справочн|прочитан|сведени|не открывал|не запускал|не было|ничего|заведен|создан|затронут|понадоб|договор|[—(]/;
+/**
+ * Разбор поля used (t836, мягче с t1075): «d1, d284, d285 не пригодились; d2 учтена (opus)». Отзыв — части через «;»,
+ * часть — куски через запятую. d<N> без слов ждут вердикта следующего куска; первый вердикт куска забирают все ожидающие.
+ * s<N> — запись общей базы (t698), как d<N>. t<N>, скобки и пояснения — без замечания. Замечание: d<N> без вердикта до конца отзыва; d<N> с неизвестным словом
+ * («d5 хорошая»); первый кусок части без d<N>, t<N> и вердикта («ерунда»). Куски после пояснения — его продолжение.
+ * @param {string} v @param {Record<string, string>} used
+ */
+function usedWarn(v, used) {
+  const warn = [];
+  /** @type {string[]} */
+  let wait = [];
+  let waitText = '';
+  for (const part of v.replace(/^\[(.*)\]$/, '$1').split(';')) {
+    let prose = false;
+    for (const s of part.split(',').map((x) => x.trim()).filter(Boolean)) {
+      const ds = s.match(/(?<![a-zа-яё\d-])[ds]\d{1,6}(?![\d-])/gi) || [];
+      const ts = /(?<![a-zа-яё\d-])t\d{1,6}(?!\d)/i.test(s);
+      const words = s.replace(/(?<![a-zа-яё\d-])[dst]\d{1,6}(?!\d)/gi, '').replace(/(^|\s)и(?=\s|$)/g, ' ').replace(/[\s.:—–/()-]/g, '');
+      const verdict = verdictOf(s);
+      if (verdict) { for (const d of [...wait, ...ds]) used[d.toLowerCase()] = verdict; wait = []; waitText = ''; prose = true; continue; }
+      if (!words) { wait.push(...ds); waitText = waitText ? `${waitText}, ${s}` : s; continue; }
+      const loose = NEUTRAL.test(norm(s));
+      if (ds.length || wait.length) { if (!loose) warn.push(waitText ? `${waitText}, ${s}` : s); }
+      else if (!prose && !ts && !loose) warn.push(s);
+      wait = []; waitText = ''; prose = true;
+    }
+  }
+  if (wait.length) warn.push(waitText);
+  return warn;
+}
+
+/** Путь rel выходит вверх: «..» или «..» и разделитель, а не имя «..что-то» (t1196, d207 в). @param {string} rel */
+const up = (rel) => rel === '..' || rel.startsWith(`..${path.sep}`);
+
 /** Папка доски проекта. @param {string} project */
 function root(project) {
   if (typeof project !== 'string' || !path.isAbsolute(project)) throw new Error('папка проекта — полный путь');
@@ -106,7 +152,7 @@ function root(project) {
 function inside(dir, name) {
   const file = path.join(dir, name);
   const rel = path.relative(dir, file);
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || rel.includes(path.sep)) throw new Error(`путь вне папки доски: ${name}`);
+  if (!rel || up(rel) || path.isAbsolute(rel) || rel.includes(path.sep)) throw new Error(`путь вне папки доски: ${name}`);
   return file;
 }
 
@@ -115,7 +161,7 @@ function ownRoot(project, dir) {
   const real = fs.realpathSync(dir);
   const base = fs.realpathSync(path.resolve(project));
   const rel = path.relative(base, real);
-  if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`папка доски ведёт за пределы проекта: ${real}`);
+  if (up(rel) || path.isAbsolute(rel)) throw new Error(`папка доски ведёт за пределы проекта: ${real}`);
 }
 
 /**
@@ -401,19 +447,19 @@ function item(kind, num, file, text) {
     /** @type {Record<string, string>} */
     const used = {};
     const warn = [];
-    for (const s of list(blank(h.used || ''))) {
-      const m = /^(d\d{1,6})\s+(.+)$/.exec(s);
-      const v = m ? canon(VERDICTS, m[2].trim()) : '';
-      if (m && v) used[m[1]] = v; else warn.push(`used: «${s}» — нужно d<номер> и ${VERDICTS.join(', ')}`);
-    }
+    for (const s of usedWarn(blank(h.used || ''), used)) warn.push(`used: «${s}» — нужно d<номер> и ${VERDICTS.join(', ')}`);
     const served = [];
     for (const s of list(blank(h.served || ''))) { if (/^d\d{1,6}$/.test(s)) served.push(s); else warn.push(`served: «${s}» — нужно d<номер>`); }
+    const from = blank(h.from || '');
+    if (from && !/^k\d{1,6}$/.test(from)) warn.push(`from: «${from}» — нужно k<номер> дела`);
     const sp = spans(p, CARD_FIELDS);
     /** @type {Record<string, string>} */
     const fields = {};
     for (const k of Object.keys(CARD_FIELDS)) fields[k] = sp[k] ? fieldValue(sp[k].value) : '';
+    // body (t1105) — весь текст после заголовка по порядку файла: поля, свободные строки, разделы «## Ответ оркестратора». Его подаёт часть 4 промпта.
+    const body = (tl < 0 ? [] : p.lines.slice(tl + 1)).map((l) => l.replace(/\s+$/, '')).join('\n').trim();
     return { item: { id, num, file, title, phase, status, kind: kindOf, agent: blank(h.agent || ''), model: blank(h.model || ''), effort: blank(h.effort || ''),
-      depends, human, created: h.created || '', closed: blank(h.closed || ''), source: blank(h.source || ''), used, served, fields, extra }, warn };
+      depends, human, created: h.created || '', closed: blank(h.closed || ''), source: blank(h.source || ''), used, served, fields, body, from: /^k\d{1,6}$/.test(from) ? from : '', extra }, warn };
   }
   if (kind === 'f') {
     const status = canon(PHASE_STATUS, h.status || '');
@@ -455,6 +501,8 @@ function item(kind, num, file, text) {
   const patV = blank(h.pattern || '');
   const pattern = patV.toLowerCase() === 'нет' ? 'нет' : '';
   if (patV && !pattern) return { error: `pattern «${patV}»: допустимо нет или пусто` };
+  const globV = blank(h.global || '');
+  if (globV && globV.toLowerCase() !== 'да') return { error: `global «${globV}»: допустимо да или пусто` };
   // t988: «## Переносимый вывод» — не в text: обрезка подбора (t959), похожесть (t835) и section() видят только свою часть записи.
   const port = tl < 0 ? [] : portSpans(p.lines, tl + 1);
   const text0 = tl < 0 ? '' : p.lines.slice(tl + 1).filter((_, i) => !port.some((s) => i + tl + 1 >= s.start && i + tl + 1 < s.end)).join('\n').trim();
@@ -467,7 +515,7 @@ function item(kind, num, file, text) {
   if (type === 'паттерн' && !from.length) warn.push('паттерн без from — не видно, из каких записей он собран');
   if (type !== 'паттерн' && (from.length || approved)) warn.push(`${from.length ? 'from' : 'approved'} у записи «${type}» не действует — только у паттерна`);
   return { item: { id, num, file, title, type, card: blank(h.card || ''), files: list(blank(h.files || '')), date: h.date || '', agent: blank(h.agent || ''), text: text0,
-    stack, portable, how, until, repeats, cancelled, differs, wrong, wrongBare, from, approved, pattern, extra }, warn };
+    stack, portable, how, until, repeats, cancelled, differs, wrong, wrongBare, from, approved, pattern, global: !!globV, extra }, warn };
 }
 
 /** Безопасное чтение файла доски: не ссылка, не больше предела. @param {string} file */
@@ -477,6 +525,30 @@ function readSmall(file) {
   if (!st.isFile()) throw new Error('не файл');
   if (st.size > MAX_SIZE) throw new Error(`слишком большой: ${st.size} байт, предел ${MAX_SIZE}`);
   return fs.readFileSync(file, 'utf8');
+}
+
+/**
+ * Тексты файлов доски по пути (t1197): файл не менялся (mtime, ctime, размер те же) — открывать и читать его заново не нужно.
+ * Открытие файла в Electron стоит ~5 мс на файл, пока антивирус его не знает, — на доске в 950 файлов это секунды.
+ * Только для чтения доски: перед записью файла читаем набело через readSmall.
+ * @type {Map<string, { key: string, text: string }>}
+ */
+const TEXTS = new Map();
+const TEXTS_MAX = 5000;
+
+/** Как readSmall, но неизменённый файл отдаёт из памяти. @param {string} file */
+function readCached(file) {
+  const st = fs.lstatSync(file);
+  if (st.isSymbolicLink()) throw new Error('ссылка на другой файл — не читаем');
+  if (!st.isFile()) throw new Error('не файл');
+  if (st.size > MAX_SIZE) throw new Error(`слишком большой: ${st.size} байт, предел ${MAX_SIZE}`);
+  const key = `${st.mtimeMs}:${st.ctimeMs}:${st.size}`;
+  const hit = TEXTS.get(file);
+  if (hit && hit.key === key) return hit.text;
+  const text = fs.readFileSync(file, 'utf8');
+  if (TEXTS.size >= TEXTS_MAX) TEXTS.clear();
+  TEXTS.set(file, { key, text });
+  return text;
 }
 
 /** Служебные файлы редакторов и наши временные — пропускаем молча. @param {string} name */
@@ -537,7 +609,7 @@ function read(project) {
   if (fs.existsSync(path.join(dir, 'passport.md'))) todo.push(['passport', 0, 'passport.md']);
   for (const [kind, num, name] of todo) {
     let r, text = '';
-    try { text = readSmall(inside(dir, name)); r = item(kind, num, name, text); } catch (e) { r = { error: e instanceof Error ? e.message : String(e) }; }
+    try { text = readCached(inside(dir, name)); r = item(kind, num, name, text); } catch (e) { r = { error: e instanceof Error ? e.message : String(e) }; }
     if ('error' in r) { b.errors.push({ file: name, reason: r.error }); continue; }
     for (const w of ('warn' in r && r.warn) || []) b.warnings.push({ file: name, reason: w });
     // Раздел или поле только внутри блока кода (t614, t622) — замечание к файлу: иначе они пропадают из окна молча.
@@ -627,13 +699,33 @@ function locate(project, ref) {
   return { dir, kind: ref[0], num: Number(ref.slice(1)), file: inside(dir, names[0] || `${id}.md`) };
 }
 
-/** Запись через временный файл рядом; не вышло (файл открыт в редакторе) — прямо в файл. @param {string} file @param {string} text */
+const SAVE_TRIES = 3;
+const SAVE_PAUSE_MS = 150;
+/**
+ * Запись через временный файл рядом (t1196, d207 г, d219). Имя случайное и файл создаётся с wx: подложенная ссылка на предсказуемое имя
+ * не уведёт запись наружу, чужой файл не затрётся. Rename — до 3 раз с паузой (на Windows редактор или антивирус держат файл долю секунды).
+ * Прямой записи в файл карты нет: при падении в эти миллисекунды остались бы полфайла, а жёсткая ссылка на карту унесла бы запись наружу.
+ * Не вышло — ошибка (окно оставляет введённое на месте), временный файл убран.
+ * @param {string} file @param {string} text
+ */
 function save(file, text) {
-  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`);
-  try { fs.writeFileSync(tmp, text, 'utf8'); fs.renameSync(tmp, file); } catch {
-    try { fs.unlinkSync(tmp); } catch {}
-    fs.writeFileSync(file, text, 'utf8');
+  const dir = path.dirname(file);
+  let tmp = '';
+  for (let i = 0; ; i++) {
+    tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`);
+    try { fs.writeFileSync(tmp, text, { encoding: 'utf8', flag: 'wx' }); break; } catch (e) {
+      if (!e || /** @type {any} */ (e).code !== 'EEXIST' || i >= 9) throw e;
+    }
   }
+  let last;
+  for (let i = 0; i < SAVE_TRIES; i++) {
+    try { fs.renameSync(tmp, file); return; } catch (e) {
+      last = e;
+      if (i < SAVE_TRIES - 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, SAVE_PAUSE_MS);
+    }
+  }
+  try { fs.unlinkSync(tmp); } catch { /* временного файла уже нет */ }
+  throw new Error(`файл ${path.basename(file)} не записан (занят другой программой?): ${(last && /** @type {any} */ (last).message) || last}`);
 }
 
 /** Значение шапки строкой. @param {unknown} v */
@@ -760,7 +852,7 @@ function update(project, ref, changes) {
   const boxed = looseFence(p) ? 'hidden' : 'boxed';
   const has = kind === 'passport' ? sections(p) : spans(p, fields);
   for (const [key, value] of Object.entries(changes)) {
-    const own = kind === 'passport' ? key in PASSPORT : key in fields;
+    const own = kind === 'passport' ? Object.hasOwn(PASSPORT, key) : Object.hasOwn(fields, key);
     const c = !own ? '' : hid.includes(key) && !has[key] ? boxed : key === 'criteria' ? '' : kind === 'passport' ? secText(value).code : bodyText(value, fields).code;
     if (c) (bad[c] = bad[c] || []).push(key);
   }
@@ -780,7 +872,7 @@ function update(project, ref, changes) {
       const line = v ? `${key}: ${v}` : `${key}:`;
       if (h) lines[h.line] = line;
       else put(p, p.headEnd - 1, 0, [line]);
-    } else if (key in fields) {
+    } else if (Object.hasOwn(fields, key)) {
       const ls = key === 'criteria'
         ? (Array.isArray(value) ? value : []).map((c) => { const t = String(c && c.text || '').trim(); if (!t || /\n/.test(t)) throw new Error('признак — одна непустая строка'); return `- [${c.done ? 'x' : ' '}] ${t}`; })
         : bodyLines(value, fields, key);
@@ -799,7 +891,7 @@ function update(project, ref, changes) {
         const at = all.length ? Math.max(...all.map((s) => s.end)) : tl >= 0 ? tl + 1 : lines.length;
         put(p, at, 0, first);
       }
-    } else if (kind === 'passport' && key in PASSPORT) {
+    } else if (kind === 'passport' && Object.hasOwn(PASSPORT, key)) {
       // Заголовки внутри блока кода — текст раздела (t607); незакрытый ``` и заголовки вне блока отклонены выше.
       const { v } = secText(value);
       want[key] = v;
@@ -826,7 +918,14 @@ function update(project, ref, changes) {
   const got = kind === 'passport' ? sections(p) : spans(p, fields);
   const off = Object.keys(want).filter((k) => (got[k] ? (kind === 'passport' ? got[k].value : fieldValue(got[k].value)) : '') !== want[k]);
   if (off.length) throw refuse({ hidden: off });
-  if (text !== old) save(file, text);
+  const wrote = text !== old;
+  if (wrote) save(file, text);
+  // t1163: карту из дела закрыли — дело «Дел» отмечается сделанным само (ДЕЛА-устройство.md, пункт д). Сбой «Дел» правку карты не отменяет.
+  if (kind === 't' && 'from' in after.item && after.item.from && after.item.status === 'готово' && 'status' in changes) {
+    try { require('../tasks/store').syncCards(project); } catch { /* дело поправится при следующем чтении окна «Дела» */ }
+  }
+  // saved — файл правда изменился: журнал плагина не пишет «сохранено» без записи (t1196, d228). Не перечислимое — в окно не уходит.
+  Object.defineProperty(after.item, 'saved', { value: wrote, enumerable: false });
   return after.item;
 }
 
@@ -1169,7 +1268,7 @@ async function ownRootAsync(project, dir) {
   const real = await fs.promises.realpath(dir);
   const base = await fs.promises.realpath(path.resolve(project));
   const rel = path.relative(base, real);
-  if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`папка доски ведёт за пределы проекта: ${real}`);
+  if (up(rel) || path.isAbsolute(rel)) throw new Error(`папка доски ведёт за пределы проекта: ${real}`);
 }
 
 module.exports = { DIR, MAX_SIZE, ERROR_LINE, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, HOW, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, update, addServed, merge, reviewed, differ, section, nextId, create, watch, codeMask, edges, sameField, alike };

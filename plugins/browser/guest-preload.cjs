@@ -157,6 +157,8 @@ function off() {
   removeEventListener('keydown', onKey, true);
 }
 
+// Человек щёлкнул в странице (t1236): окно гасит строку «Агент: …». Только настоящая мышь — el.click() агента (cli.js) не isTrusted.
+addEventListener('mousedown', (e) => { if (e.isTrusted && !armed) ipcRenderer.sendToHost('browser:human'); }, true);
 ipcRenderer.on('browser:pick-arm', on);
 ipcRenderer.on('browser:pick-off', off);
 // Клавиши вкладок (t131): главный процесс поймал их до страницы и отдаёт окну через тег webview (ipc-message в window.js).

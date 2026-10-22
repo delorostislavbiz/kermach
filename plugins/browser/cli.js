@@ -43,7 +43,7 @@ const LIMIT = { req: 64 * 1024, text: 20000, textMax: 200000, logs: 500, logShow
 
 /** @typedef {{ dataDir: string, log: (m: string) => void }} Ctx */
 /** @typedef {{ level: string, text: string, src: string, at: number }} Entry */
-/** @typedef {{ n: number, guest: number, url: string, title: string, active: boolean, agent: boolean, site: string, any: boolean }} Tab */
+/** @typedef {{ n: number, guest: number, url: string, title: string, active: boolean, agent: boolean, human: boolean, site: string, any: boolean }} Tab */
 
 /** @type {Ctx | null} */
 let ctx = null;
@@ -51,6 +51,8 @@ let ctx = null;
 let projectOf = () => null;
 /** Консоль страниц: номер гостя → сообщения с начала текущей страницы. @type {Map<number, { list: Entry[], dropped: number }>} */
 const logs = new Map();
+/** Гости вкладок «только для меня» (t885). Решает главный процесс по хранилищу гостя, а не страница окна. @type {Set<number>} */
+const humanGuests = new Set();
 /** @type {Buffer | null} */
 let key = null;
 
@@ -124,7 +126,7 @@ function envFor(p, extra) {
  * Действия (t382) — только во вкладках с «Агенту»: подсказка говорит, что отметку ставит человек, — агент попросит, а не будет искать обход.
  * Только знаки из cmd-shim SAFE, без кавычек: у установки через npm без обёртки текст пошёл бы через cmd.exe.
  */
-const HINT = 'This Kermach terminal has the command kermach browser for the built-in browser tabs of this project, not Chrome: it reads any tab - text, console, screenshot - '
+const HINT = 'This Kermach terminal has the command kermach browser for built-in browser tabs of this project, not Chrome: it reads any tab but only-for-me ones - text, console, screenshot - '
   + 'and acts - click, fill, goto, eval - only in tabs the user marked Agent, on that site unless Any site is on, otherwise ask the user to mark it. '
   + 'Use it when asked about the open site or tab. Details: kermach browser --help.';
 
@@ -170,6 +172,19 @@ function watch(g) {
   g.once('destroyed', () => logs.delete(id));
 }
 
+/** Гость во вкладке «только для меня»: команды агента в нём — отказ. @param {import('electron').WebContents} g */
+function markHuman(g) {
+  humanGuests.add(g.id);
+  g.once('destroyed', () => humanGuests.delete(g.id));
+}
+
+/** Отказ агенту во вкладке «только для меня» (t885) — с записью в журнал, чтобы Ростислав видел попытку. @param {any} q @param {number} n */
+const refuseHuman = (q, n) => {
+  if (ctx) ctx.log(`браузер: команда kermach — ${clean(q && q.cmd).slice(0, 40)} отклонена, вкладка ${n} «только для меня»`);
+  return fail(5, humanMsg(n));
+};
+const humanMsg = (n) => `вкладка ${n} открыта «только для меня» — агенту она недоступна; попросите открыть нужное в обычной вкладке`;
+
 /** Окно проекта по номеру; закрыто — null. */
 function hostOf(/** @type {string} */ id) {
   for (const w of webContents.getAllWebContents()) {
@@ -191,8 +206,10 @@ async function tabsOf(host) {
     n: i + 1,
     // Гость — только живой тег этого окна: страница окна могла ошибиться номером, чужого гостя команда не тронет.
     guest: guestIn(host, t && t.guest) ? Number(t.guest) : 0,
-    url: clean(t && t.url).slice(0, 4096),
-    title: clean(t && t.title).replace(/\s+/g, ' ').slice(0, 300),
+    // Вкладка «только для меня» (t885): адрес и заголовок агенту не показываем, видно лишь что она есть.
+    human: humanGuests.has(Number(t && t.guest)),
+    url: humanGuests.has(Number(t && t.guest)) ? '' : clean(t && t.url).slice(0, 4096),
+    title: humanGuests.has(Number(t && t.guest)) ? '' : clean(t && t.title).replace(/\s+/g, ' ').slice(0, 300),
     active: !!(t && t.active),
     agent: !!(t && t.agent === true),
     site: clean(t && t.site).toLowerCase().slice(0, 300),
@@ -266,7 +283,8 @@ const inPage = (body) => `(() => {
   const name = (el) => {
     const lab = el.labels && el.labels.length ? el.labels[0].innerText : "";
     const by = el.getAttribute("aria-labelledby");
-    const ref = by ? by.split(/\\s+/).map((i) => { const e = document.getElementById(i); return e ? e.innerText : ""; }).join(" ") : "";
+    const root = el.getRootNode();
+    const ref = by ? by.split(/\\s+/).map((i) => { const e = root.getElementById ? root.getElementById(i) : null; return e ? e.innerText : ""; }).join(" ") : "";
     const img = el.querySelector && el.querySelector("img[alt]");
     // Значение как имя — только у кнопок-input (submit, button, reset): у них надпись и есть значение.
     return txt(el.getAttribute("aria-label") || ref || lab || (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) ? "" : el.innerText)
@@ -286,11 +304,48 @@ const inPage = (body) => `(() => {
   const shown = (el) => {
     const b = el.getBoundingClientRect();
     if (b.width < 1 && b.height < 1) return false;
-    const cs = getComputedStyle(el);
+    const cs = (el.ownerDocument.defaultView || window).getComputedStyle(el);
     return cs.visibility !== "hidden" && cs.display !== "none" && !el.closest("[aria-hidden=true],[hidden]");
   };
+  // Обход страницы вглубь (t395): открытые shadow root и фреймы того же адреса (contentDocument есть только у них).
+  // Фрейм с другого адреса и закрытый shadow root отсюда не видны. visit(el, where) — по порядку документа; where — «iframe#id» или «shadow».
+  const frameName = (f) => f.tagName.toLowerCase() + (f.id ? "#" + f.id : f.getAttribute("name") ? "[name=" + f.getAttribute("name") + "]" : "");
+  const walk = (root, visit, where, depth) => {
+    if (depth > 8) return;
+    for (const el of root.querySelectorAll("*")) {
+      if (visit(el, where) === false) return;
+      if (el.shadowRoot) walk(el.shadowRoot, visit, where || "shadow", depth + 1);
+      if ((el.tagName === "IFRAME" || el.tagName === "FRAME") && shown(el)) {
+        let d = null;
+        try { d = el.contentDocument; } catch {}
+        if (d && d.documentElement) walk(d, visit, frameName(el), depth + 1);
+      }
+    }
+  };
+  // Элемент с фокусом вглубь: внутри shadow root и фрейма того же адреса.
+  const focused = () => {
+    let el = document.activeElement;
+    for (let i = 0; el && i < 8; i++) {
+      let next = null;
+      if (el.shadowRoot && el.shadowRoot.activeElement) next = el.shadowRoot.activeElement;
+      else if (el.tagName === "IFRAME" || el.tagName === "FRAME") { try { const d = el.contentDocument; if (d && d.activeElement && d.activeElement !== d.body) next = d.activeElement; } catch {} }
+      if (!next) break;
+      el = next;
+    }
+    return el;
+  };
+  const query = (css) => {
+    let found = document.querySelector(css);
+    if (!found) walk(document, (el) => { if (found) return false; if (el.shadowRoot || el.tagName === "IFRAME" || el.tagName === "FRAME") {
+      let r = null;
+      if (el.shadowRoot) r = el.shadowRoot.querySelector(css);
+      else { try { r = el.contentDocument && el.contentDocument.querySelector(css); } catch {} }
+      if (r) { found = r; return false; }
+    } }, "", 0);
+    return found;
+  };
   const pick = (ref, css) => {
-    if (css) { let el = null; try { el = document.querySelector(css); } catch (e) { return { error: "--css: не CSS-селектор: " + e.message, code: 1 }; } return el ? { el } : { error: "по селектору " + css + " на странице ничего нет", code: 4 }; }
+    if (css) { let el = null; try { el = query(css); } catch (e) { return { error: "--css: не CSS-селектор: " + e.message, code: 1 }; } return el ? { el } : { error: "по селектору " + css + " на странице ничего нет", code: 4 }; }
     const el = st.refs[ref - 1];
     if (!el || !el.isConnected) return { error: "ссылки e" + ref + " нет на странице — она от старого snapshot или страница сменилась; сделайте kermach browser snapshot заново", code: 4 };
     return { el };
@@ -306,6 +361,50 @@ function settled(g, ms) {
     function done() { clearTimeout(t); resolve(true); }
     g.once('did-stop-loading', done);
   });
+}
+
+/**
+ * Текст страницы вместе с фреймами (t1198, d299): главный документ, фреймы того же адреса (в странице, через contentDocument) и фреймы с другого адреса
+ * (через webFrameMain страницы: их документ из главного не виден). Каждый фрейм — после основного текста, с заголовком «[фрейм: имя]».
+ * @param {import('electron').WebContents} g @param {number} max @returns {Promise<{ text: string, total: number }>}
+ */
+async function pageText(g, max) {
+  /** @type {any} */
+  const r = await g.executeJavaScriptInIsolatedWorld(WORLD, [{ code: `(() => {
+    const all = [];
+    // innerText не заходит в shadow root: его текст добавляем отдельно (открытые корни, один уровень).
+    const shadows = (d) => { const o = []; for (const el of d.querySelectorAll("*")) if (el.shadowRoot) { const s = [...el.shadowRoot.children].map((c) => c.innerText || "").join("\\n").trim(); if (s) o.push(s); } return o.join("\\n"); };
+    const own = (d) => String(d.body ? d.body.innerText : (d.documentElement ? d.documentElement.textContent : "")) + (d.body ? "\\n" + shadows(d) : "");
+    const rec = (d, depth) => {
+      for (const f of d.querySelectorAll("iframe,frame")) {
+        let dd = null;
+        try { dd = f.contentDocument; } catch {}
+        if (!dd || !dd.documentElement || (!f.offsetWidth && !f.offsetHeight)) continue; // скрытый фрейм человек не видит
+        const t = own(dd);
+        if (t.trim()) all.push({ name: String(f.name || f.title || f.getAttribute("src") || "").slice(0, 80), text: t.slice(0, ${max}), total: t.length });
+        if (depth < 4) rec(dd, depth + 1);
+      }
+    };
+    const t = own(document);
+    rec(document, 0);
+    return { text: t.slice(0, ${max}), total: t.length, frames: all };
+  })()` }]);
+  const parts = [{ text: String(r && r.text || ''), total: Number(r && r.total) || 0 }];
+  const frames = Array.isArray(r && r.frames) ? r.frames : [];
+  for (const f of frames) parts.push({ text: `\n\n[фрейм: ${f.name}]\n${f.text}`, total: Number(f.total) || 0 });
+  // Фреймы с другого адреса: главный документ их не читает. Цепочка предков того же адреса — читалась в странице выше.
+  const top = g.mainFrame;
+  const reach = (/** @type {any} */ f) => f === top || (f.origin === top.origin && f.parent && reach(f.parent));
+  // Все разом и с коротким сроком на каждый, не больше 20: зависший рекламный фрейм не должен отнимать время у основного текста.
+  const alien = (top.framesInSubtree || []).filter((/** @type {any} */ f) => !reach(f) && !f.detached).slice(0, 20);
+  const got = await Promise.allSettled(alien.map((/** @type {any} */ f) => within(f.executeJavaScript('String(document.body ? document.body.innerText : "")'), 1500, '')));
+  alien.forEach((/** @type {any} */ f, /** @type {number} */ k) => {
+    const res = got[k];
+    const t = res.status === 'fulfilled' ? String(res.value || '') : '';
+    if (t.trim()) parts.push({ text: `\n\n[фрейм: ${String(f.name || f.url || '').slice(0, 80)}]\n${t.slice(0, max)}`, total: t.length });
+  });
+  const text = parts.map((p) => p.text).join('');
+  return { text: text.slice(0, max), total: parts.reduce((s, p) => s + p.total, 0) };
 }
 
 /** Новая страница после действия: подождать начала перехода (до 600 мс) и его конца. @param {import('electron').WebContents} g @param {string} before */
@@ -344,13 +443,13 @@ async function act(q, g, still, tab) {
       st.refs = [];
       const SEL = "a[href],button,input:not([type=hidden]),select,textarea,summary,[contenteditable=''],[contenteditable=true],[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=option],[role=switch],[role=textbox],[role=combobox],[onclick]";
       let total = 0;
-      for (const el of document.querySelectorAll(SEL)) {
-        if (!shown(el)) continue;
+      walk(document, (el, where) => {
+        if (!el.matches(SEL) || !shown(el)) return;
         total++;
-        if (st.refs.length >= ${ACT.refs}) continue;
+        if (st.refs.length >= ${ACT.refs}) return;
         st.refs.push(el);
-        list.push({ ref: st.refs.length, ...describe(el) });
-      }
+        list.push({ ref: st.refs.length, ...describe(el), ...(where ? { in: where } : {}) });
+      }, "", 0);
       return { list, total };`);
     const list = (Array.isArray(r && r.list) ? r.list : []).slice(0, ACT.refs).map((/** @type {any} */ x) => {
       /** @type {Record<string, any>} */
@@ -369,7 +468,7 @@ async function act(q, g, still, tab) {
       if (el.disabled) return { error: "элемент выключен (disabled) — нажать нельзя", code: 4 };
       el.scrollIntoView({ block: "center", inline: "center" });
       const d = describe(el);
-      const b = el.getBoundingClientRect(), at = { bubbles: true, cancelable: true, composed: true, view: window, clientX: b.x + b.width / 2, clientY: b.y + b.height / 2, button: 0 };
+      const b = el.getBoundingClientRect(), at = { bubbles: true, cancelable: true, composed: true, view: el.ownerDocument.defaultView || window, clientX: b.x + b.width / 2, clientY: b.y + b.height / 2, button: 0 };
       el.dispatchEvent(new PointerEvent("pointerdown", { ...at, pointerId: 1, isPrimary: true }));
       el.dispatchEvent(new MouseEvent("mousedown", at));
       if (typeof el.focus === "function") el.focus();
@@ -421,7 +520,8 @@ async function act(q, g, still, tab) {
     // а переводить фокус в неё нельзя — человек в это время печатает в терминале. Поэтому у страницы isTrusted у этих событий — false.
     const r = await iso(`
       const key = ${JSON.stringify(key)}, ch = key.length === 1 ? key : key === "Space" ? " " : "";
-      const el = document.activeElement && document.activeElement !== document.body ? document.activeElement : document.body;
+      const fe = focused();
+      const el = fe && fe !== document.body ? fe : document.body;
       const ev = (type) => el.dispatchEvent(new KeyboardEvent(type, { key: ch || key, code: ch === " " ? "Space" : key.length === 1 ? "" : key, bubbles: true, cancelable: true, composed: true, view: window }));
       const go = ev("keydown");
       if (ch || key === "Enter") ev("keypress");
@@ -499,8 +599,9 @@ async function act(q, g, still, tab) {
     const end = Date.now() + (ms || 10000);
     for (;;) {
       if (!g.isLoading()) {
-        const r = await iso(css ? `try { return !!document.querySelector(${JSON.stringify(css)}); } catch (e) { return { error: "--css: не CSS-селектор: " + e.message, code: 1 }; }`
-          : `return String(document.body ? document.body.innerText : "").includes(${JSON.stringify(text)});`).catch((/** @type {any} */ e) => { if (e && e.code === 5) throw e; return false; });
+        // Фреймы и shadow root — как у click (t1198, d299): --css через query, текст — pageText вместе с фреймами.
+        const r = await (css ? iso(`try { return !!query(${JSON.stringify(css)}); } catch (e) { return { error: "--css: не CSS-селектор: " + e.message, code: 1 }; }`)
+          : ready().then(() => within(pageText(g, 100000), LIMIT.wait, "страница не ответила за 8 с")).then((p) => p.text.includes(text))).catch((/** @type {any} */ e) => { if (e && e.code === 5) throw e; return false; });
         if (r && r.error) return { error: clean(r.error), code: r.code };
         if (r === true) return { say: `дождался ${css ? clean(css).slice(0, 60) : `«${clean(text).slice(0, 60)}»`}` };
       }
@@ -537,6 +638,12 @@ async function handle(q) {
   if (!q || typeof q !== 'object' || q.v !== 1) return fail(1, 'запрос не той формы — команда и программа разных версий?');
   const id = projectFromAuth(q.auth);
   if (!id) return fail(2, 'нет доступа: команду можно вызвать только из терминала Kermach, открытого в этом проекте');
+  // kermach roadmap run (t1050) идёт тем же каналом и той же подписью — свой канал повторил бы ключ, подпись и окружение терминала. «Браузер» ему не нужен.
+  if (q.cmd === 'roadmap-run') return roadmapRun(q, id);
+  // kermach tab list / close (t1052) — вкладки терминалов окна, тоже без «Браузера».
+  if (q.cmd === 'tab-list' || q.cmd === 'tab-close') return termTab(q, id);
+  // kermach tab buffer (t1231) — экран вкладки в окне против текста демона.
+  if (q.cmd === 'tab-buffer') return termBuffer(q, id);
   if (!settings.pluginOn('browser')) return fail(3, '«Браузер» выключен: «Настройки» → «Плагины» → «Браузер»');
   const n = busy.get(id) || 0;
   if (n >= LIMIT.busy) return fail(3, `занято: окно проекта уже выполняет ${n} команды kermach browser — повторите через несколько секунд`);
@@ -545,6 +652,124 @@ async function handle(q) {
     const left = (busy.get(id) || 1) - 1;
     if (left) busy.set(id, left); else busy.delete(id);
   }
+}
+
+/** Одна папка: регистр букв и косые на Windows не различаются. @param {string} a @param {string} b */
+const samePath = (a, b) => {
+  const n = (/** @type {string} */ s) => { const r = path.resolve(s).replace(/[\\/]+$/, ''); return process.platform === 'win32' ? r.toLowerCase() : r; };
+  return n(a) === n(b);
+};
+
+/**
+ * kermach roadmap run tN (t1050): тот же run плагина «Роадмап», что у кнопки «Запустить» (проверки карты, t554, ярус, served, «в работе»).
+ * Доска, которую нашла команда от своей папки, должна быть доской проекта подписи: терминал проекта Б не запускает карты проекта А — код 2.
+ * Отказ run — код 4 с его текстом.
+ * @param {any} q @param {string} id номер проекта
+ */
+async function roadmapRun(q, id) {
+  // t703: пачка одним агентом — refs (номера по порядку) или phase; ref — первый номер или фаза, для журнала.
+  const one = q.one === true;
+  const refs = one && Array.isArray(q.refs) ? q.refs.filter((/** @type {unknown} */ x) => typeof x === 'string' && /^t\d{1,6}$/.test(x)).slice(0, 50) : [];
+  const phase = one && typeof q.phase === 'string' && /^f\d{1,6}$/.test(q.phase) ? q.phase : '';
+  const ref = one ? refs[0] || phase : typeof q.ref === 'string' && /^t\d{1,6}$/.test(q.ref) ? q.ref : '';
+  if (!ref) return fail(1, one ? 'нужны номера карт или --phase fN' : 'нужен номер карты, например t12');
+  const host = hostOf(id);
+  const p = host ? /** @type {any} */ (projectOf(host)) : null;
+  if (!p) return fail(3, 'окно проекта закрыто — откройте проект в Kermach и повторите');
+  if (typeof q.board !== 'string' || !q.board || !p.path || !samePath(q.board, p.path)) {
+    /** @type {Ctx} */ (ctx).log(`roadmap run ${ref}: отказ — доска не в проекте терминала (${clean(p.path).slice(0, 300)})`);
+    return { ...fail(2, `нет доступа: доска ${clean(q.board).slice(0, 300)} не в проекте этого терминала «${clean(p.name).slice(0, 200)}» (${clean(p.path).slice(0, 300)})`), signed: true };
+  }
+  // t1060: --bg — скрытая вкладка; без флага run берёт настройку «в фоне» панели.
+  // from (t1126) — вкладка-источник: только живая вкладка этого проекта, иначе не передаём — сообщения карты пойдут уведомлением.
+  let from = '';
+  if (typeof q.from === 'string' && /^[\w.:-]{1,80}$/.test(q.from)) {
+    const tl = await Promise.resolve(require('../../main/terminals').projectTabs(id)).catch(() => null);
+    if (tl && Array.isArray(tl.tabs) && tl.tabs.some((/** @type {any} */ t) => t && t.sid === q.from)) from = q.from;
+    else /** @type {Ctx} */ (ctx).log(`roadmap run ${ref}: вкладка-источник ${q.from} не из проекта — сообщения карты пойдут уведомлением`);
+  }
+  const opt = { ...(q.bg === true ? { bg: true } : {}), ...(from ? { from } : {}) };
+  const bridge = require('../../main/plugin-bridge');
+  const r = one ? await bridge.callFor(id, 'roadmap', 'runOne', [refs, phase, opt])
+    : await bridge.callFor(id, 'roadmap', 'run', [ref, opt]);
+  const str = (/** @type {unknown} */ v) => clean(v).slice(0, 300);
+  const skip = (/** @type {any} */ s) => Array.isArray(s) ? s.map((x) => `${x.id} — ${x.why}${x.st ? ` (${x.st})` : ''}`).join(', ') : s;
+  if (!r || 'error' in r) return fail(r && r.closed ? 3 : 4, r ? `${String(r.error)}${r.skipped && r.skipped.length ? `; пропущены: ${skip(r.skipped)}` : ''}` : 'нет ответа');
+  const l = r.launch || {};
+  if (one) {
+    return { ok: true, project: clean(p.name).slice(0, 200), ref: str((r.ids || []).join(', ')), sid: str(r.session && r.session.sid), agent: str(l.agent), model: str(l.model), effort: str(l.effort),
+      skipped: str(skip(r.skipped)), warn: str(r.warn),hidden: !!r.hidden, log: str(r.log) };
+  }
+  return { ok: true, project: clean(p.name).slice(0, 200), ref, sid: str(r.session && r.session.sid), agent: str(l.agent), model: str(l.model), effort: str(l.effort),
+    skipped: str(r.skipped), warn: str(r.warn), hidden: !!r.hidden, log: str(r.log) };
+}
+
+/**
+ * kermach tab list / tab close sid [--force] (t1052): терминалы окна знает его страница (project-page.js, TerminalusTermTabs и TerminalusTermClose).
+ * Закрытие — как кнопка «Закрыть терминал» без вопроса; живой Claude или Codex — отказ код 4, с force — закрыть.
+ * @param {any} q @param {string} id номер проекта
+ */
+async function termTab(q, id) {
+  const host = hostOf(id);
+  const p = host ? /** @type {any} */ (projectOf(host)) : null;
+  if (!host || !p) return fail(3, 'окно проекта закрыто — откройте проект в Kermach и повторите');
+  const project = clean(p.name).slice(0, 200);
+  if (q.cmd === 'tab-list') {
+    const raw = await within(host.executeJavaScript('typeof window.TerminalusTermTabs === "function" ? window.TerminalusTermTabs() : null', false), LIMIT.wait, 'окно не ответило').catch(() => null);
+    if (!Array.isArray(raw)) return fail(3, 'окно проекта ещё не готово или не отвечает — повторите через несколько секунд');
+    const str = (/** @type {unknown} */ v, n = 300) => clean(v).replace(/\s+/g, ' ').slice(0, n);
+    return { ok: true, project, tabs: raw.slice(0, 200).map((t) => ({ sid: str(t && t.sid, 80), kind: str(t && t.kind, 80), title: str(t && t.title), alive: !!(t && t.alive), page: !!(t && t.page), agent: !!(t && t.agent), hidden: !!(t && t.hidden) })) };
+  }
+  const sid = typeof q.sid === 'string' && /^[\w.:-]{1,80}$/.test(q.sid) ? q.sid : '';
+  if (!sid) return fail(1, 'нужен номер вкладки из kermach tab list');
+  const r = await within(host.executeJavaScript(`typeof window.TerminalusTermClose === "function" ? window.TerminalusTermClose(${JSON.stringify(sid)}, ${q.force === true}) : null`, true), ACT.load, 'окно не закрыло вкладку за 15 с').catch((e) => ({ error: String(e && e.message || e), code: 3 }));
+  if (!r || typeof r !== 'object') return fail(3, 'окно проекта ещё не готово или не отвечает — повторите через несколько секунд');
+  if (!r.ok) return fail([3, 4].includes(r.code) ? r.code : 4, clean(r.error).slice(0, 500));
+  /** @type {Ctx} */ (ctx).log(`tab close ${sid}${q.force === true ? ' --force' : ''}: закрыта`);
+  return { ok: true, project, sid, title: clean(r.title).slice(0, 300) };
+}
+
+/**
+ * kermach tab buffer [sid] (t1231): видимые ряды xterm вкладки в окне (TerminalusTermBuffer в project-page.js) и read text демона сразу следом.
+ * Номера рядов у окна и демона разные: окно при attach берёт снимок, история короче, а демон срезает пустые строки в конце.
+ * Поэтому ряды окна прикладываются к хвосту текста демона со сдвигом, при котором совпало больше всего рядов; пробелы в конце не считаются.
+ * Отдаются только расходящиеся ряды, с клетками окна (знак, код, ширина) — у демона только текст.
+ * @param {any} q @param {string} id номер проекта
+ */
+async function termBuffer(q, id) {
+  const host = hostOf(id);
+  if (!host || !projectOf(host)) return fail(3, 'окно проекта закрыто — откройте проект в Kermach и повторите');
+  const sid = typeof q.sid === 'string' && /^[\w.:-]{1,80}$/.test(q.sid) ? q.sid : '';
+  if (!sid) return fail(1, 'нужен номер вкладки из kermach tab list');
+  /** @type {any} */
+  const win = await within(host.executeJavaScript(`typeof window.TerminalusTermBuffer === "function" ? window.TerminalusTermBuffer(${JSON.stringify(sid)}) : null`, false), LIMIT.wait, 'окно не ответило').catch(() => null);
+  if (!win || typeof win !== 'object') return fail(3, 'окно проекта ещё не готово или не отвечает — повторите через несколько секунд');
+  if (!win.ok) return fail([3, 4].includes(win.code) ? win.code : 4, clean(win.error).slice(0, 500));
+  const d = await require('../../main/terminals').readTab(id, sid, 'text');
+  if (!d || 'error' in d) return fail(4, `демон не отдал текст вкладки: ${clean(d && d.error).slice(0, 300)}`);
+  const trim = (/** @type {unknown} */ s) => String(s == null ? '' : s).replace(/\s+$/, '');
+  const dl = d.text.split('\n');
+  const wl = (Array.isArray(win.lines) ? win.lines : []).map((/** @type {any} */ l) => ({ ...l, t: trim(l.text) }));
+  const rows = wl.length;
+  // Сдвиг: ряд окна y ↔ строка демона off + y. Перебор — от «экран целиком ниже текста демона» до ста строк выше хвоста.
+  let best = -1;
+  let off = Math.max(0, dl.length - rows);
+  for (let o = Math.max(0, dl.length - rows - 100); o <= dl.length; o++) {
+    let same = 0;
+    for (let y = 0; y < rows; y++) if (wl[y].t === trim(dl[o + y])) same++;
+    if (same > best || (same === best && o > off)) { best = same; off = o; }
+  }
+  const diff = [];
+  for (let y = 0; y < rows && diff.length < 200; y++) {
+    const dt = trim(dl[off + y]);
+    if (wl[y].t === dt) continue;
+    // Клетки — только там, где текст расходится, и знаки не ASCII: остальное видно по тексту.
+    const cells = (wl[y].cells || []).filter((/** @type {any[]} */ c) => (c[1] || ' ') !== (dt[c[0]] || ' ') || !/^[ -~]?$/.test(c[1]) || c[3] !== 1).slice(0, 300);
+    diff.push({ y, win: clean(wl[y].text).slice(0, 2000), daemon: clean(dt).slice(0, 2000), cells: cells.map((c) => [c[0], clean(c[1]), c[2], c[3]]) });
+  }
+  return { ok: true, sid, kind: clean(win.kind).slice(0, 80), title: clean(win.title).slice(0, 300), state: clean(win.state).slice(0, 40), cols: win.cols, rows: win.rows, type: clean(win.type),
+    baseY: win.baseY, viewportY: win.viewportY, length: win.length, cursor: win.cursor, daemonLines: dl.length, offset: off, same: best, diff,
+    screen: wl.map((/** @type {any} */ l) => clean(l.text).slice(0, 2000)) };
 }
 
 /** Запрос с проверенной подписью → ответ. @param {any} q @param {string} id номер проекта */
@@ -571,12 +796,14 @@ async function work(q, id) {
     const given = tabs.filter((t) => t.agent);
     if (want) {
       tab = tabs.find((t) => t.n === want);
+      if (tab && tab.human) return refuseHuman(q, tab.n);
       if (tab && !tab.agent) return fail(5, `вкладка ${want} не отдана агенту — попросите включить «Агенту» на этой вкладке браузера`);
     } else if (!given.length) return fail(5, 'ни одна вкладка не отдана агенту — попросите включить «Агенту» на вкладке браузера, в которой действовать');
     else if (given.length > 1) return fail(1, `агенту отданы вкладки ${given.map((t) => t.n).join(', ')} — укажите, в какой действовать: --tab N`);
     else tab = given[0];
   } else tab = want ? tabs.find((t) => t.n === want) : tabs.find((t) => t.active && t.guest) || tabs.find((t) => t.guest);
   if (!tab) return fail(1, want ? `нет вкладки ${want}: вкладок ${tabs.length}, список — kermach browser tabs` : 'во всех вкладках браузера пусто — откройте адрес');
+  if (tab.human) return refuseHuman(q, tab.n);
   const g = guestIn(host, tab.guest);
   if (!g) return fail(3, `во вкладке ${tab.n} нет страницы — в ней не открыт адрес`);
   const head = { ok: true, project, tab: { ...tab, url: clean(g.getURL()).slice(0, 4096), title: clean(g.getTitle()).replace(/\s+/g, ' ').slice(0, 300) }, count: tabs.length };
@@ -608,10 +835,7 @@ async function work(q, id) {
     try {
       // Свой изолированный мир: страница не подменит функции, которыми читается текст. DOM общий — читаем то, что видит человек.
       // Режем в странице (t388): в главный процесс приходит не больше max знаков, а не весь текст страницы в 5 МБ.
-      r = await within(g.executeJavaScriptInIsolatedWorld(1381, [{ code: `(() => {
-        const t = String(document.body ? document.body.innerText : (document.documentElement ? document.documentElement.textContent : ""));
-        return { text: t.slice(0, ${max}), total: t.length };
-      })()` }]), LIMIT.wait, 'страница не ответила за 8 с');
+      r = await within(pageText(g, max), LIMIT.wait, 'страница не ответила за 8 с');
     } catch (err) { return fail(4, `текст страницы не прочитан: ${clean(/** @type {any} */ (err).message || err)}`); }
     const text = clean(r && r.text).slice(0, max);
     // Не обрезано — длина после чистки (иначе команда напишет «обрезано» из-за вычищенных знаков); обрезано — длина в странице.
@@ -677,7 +901,7 @@ function start(c, of) {
       let q = null;
       try { q = JSON.parse(buf.slice(0, nl)); } catch {}
       handle(q).catch((err) => fail(4, `ошибка программы: ${err}`)).then((r) => {
-        if (!r.ok && r.code === 2) c.log(`браузер: команда terminalus — отказ (${q && typeof q.auth === 'string' ? 'подпись не та' : 'без подписи'})`);
+        if (!r.ok && r.code === 2 && !r.signed) c.log(`браузер: команда terminalus — отказ (${q && typeof q.auth === 'string' ? 'подпись не та' : 'без подписи'})`);
         if (!sock.destroyed) sock.end(`${JSON.stringify(r)}\n`);
       });
     });
@@ -691,4 +915,4 @@ function start(c, of) {
   });
 }
 
-module.exports = { start, watch, envFor, hintArgs, HINT, SOCK, BIN };
+module.exports = { start, watch, markHuman, envFor, hintArgs, HINT, SOCK, BIN };

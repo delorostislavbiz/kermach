@@ -15,13 +15,14 @@ const TERM_MIN = 10;
 const TERM_MAX = 28;
 /** Сдвиг шрифта просмотра Markdown от «Шрифта терминала», px: кнопки A−/A+ (t242). Видимый размер окно держит в TERM_MIN…TERM_MAX. */
 const MD_SHIFT = TERM_MAX - TERM_MIN;
-const DEFAULTS = { uiZoom: 100, termFont: 17, mdShift: 0, sound: true, notify: true, theme: '', ui: uiThemes.DEFAULT_UI, appearance: 'system', lang: '', plugins: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
+const DEFAULTS = { uiZoom: 100, termFont: 17, mdShift: 0, sound: true, notify: true, copySelect: true, theme: '', ui: uiThemes.DEFAULT_UI, appearance: 'system', lang: '', plugins: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
 /** Предел мешка настроек одного плагина в JSON, знаков (t256): больше — запись отклоняется, остаётся прежняя. */
 const BAG_MAX = 64 * 1024;
 /** Пресеты раскладок окна проекта (t397): не больше PRESETS_MAX, имя до 60 знаков. */
 const PRESETS_MAX = 20;
 const LAYOUTS = ['cols2', 'cols3', 'one2', 'grid4'];
-const PART_KINDS = ['', 'claude', 'codex', 'terminal', 'browser', 'markdown'];
+/** Виды частей пресета: терминалы и вкладки-страницы (браузер и плагины, project-page.js kindOf). Нет в списке — часть пресета сохраняется пустой (t1103). */
+const PART_KINDS = ['', 'claude', 'codex', 'terminal', 'browser', 'markdown', 'roadmap', 'history', 'prompts'];
 /** Вид части пресета: из списка или агент из системы 'agent:<id>' (t183, t398). @param {any} k */
 const partKind = (k) => (PART_KINDS.includes(k) || (typeof k === 'string' && /^agent:[\w.-]{1,40}$/.test(k)) ? k : '');
 
@@ -38,7 +39,7 @@ const partKind = (k) => (PART_KINDS.includes(k) || (typeof k === 'string' && /^a
  * lang — язык надписей (t258): '' — русский; иначе ключ из поля "lang" plugin.json включённого плагина (main\i18n.js).
  * layoutPresets — пресеты раскладок окна проекта (t397), общие для всех проектов: { name, kind, fr, parts, files: { open, width } };
  *   parts — вид вкладки в каждой части ('' — часть пустая), files — панель «Файлы» (открыта ли, ширина в px).
- * @typedef {{ uiZoom: number, termFont: number, mdShift: number, sound: boolean, notify: boolean, theme: string, ui: string, appearance: string, lang: string, plugins: Record<string, boolean>, agents: Record<string, boolean>,
+ * @typedef {{ uiZoom: number, termFont: number, mdShift: number, sound: boolean, notify: boolean, copySelect: boolean, theme: string, ui: string, appearance: string, lang: string, plugins: Record<string, boolean>, agents: Record<string, boolean>,
  *   pluginSettings: Record<string, Record<string, any>>, layoutPresets: any[] }} Settings
  */
 
@@ -112,6 +113,7 @@ function clean(raw, base) {
     mdShift: Number.isFinite(shift) && Math.abs(shift) <= MD_SHIFT ? shift : base.mdShift,
     sound: typeof r.sound === 'boolean' ? r.sound : base.sound,
     notify: typeof r.notify === 'boolean' ? r.notify : base.notify,
+    copySelect: typeof r.copySelect === 'boolean' ? r.copySelect : base.copySelect,
     // Строка без проверки по списку схем (t257): схемы — файл плагина, его меняют без перезапуска программы.
     theme: typeof r.theme === 'string' && r.theme.length <= 64 ? r.theme : base.theme,
     // Тема не этой системы («Скло» в файле, перенесённом с Mac) — прежняя или умолчание (t506). «Тема Ростислава» теперь Termius Dark (t651).
@@ -262,7 +264,7 @@ function set(patch) {
   const bags = { ...cur.pluginSettings, ...part(pt.pluginSettings) };
   const merged = { ...cur, ...pt, plugins: { ...cur.plugins, ...part(pt.plugins) }, agents: { ...cur.agents, ...part(pt.agents) }, pluginSettings: bags };
   const next = clean(merged, cur);
-  if (next.uiZoom === cur.uiZoom && next.termFont === cur.termFont && next.mdShift === cur.mdShift && next.sound === cur.sound && next.notify === cur.notify && next.theme === cur.theme && next.lang === cur.lang
+  if (next.uiZoom === cur.uiZoom && next.termFont === cur.termFont && next.mdShift === cur.mdShift && next.sound === cur.sound && next.notify === cur.notify && next.copySelect === cur.copySelect && next.theme === cur.theme && next.lang === cur.lang
     && next.ui === cur.ui && next.appearance === cur.appearance
     && JSON.stringify(next.plugins) === JSON.stringify(cur.plugins) && JSON.stringify(next.agents) === JSON.stringify(cur.agents)
     && JSON.stringify(next.pluginSettings) === JSON.stringify(cur.pluginSettings) && JSON.stringify(next.layoutPresets) === JSON.stringify(cur.layoutPresets)) return get();
@@ -270,7 +272,7 @@ function set(patch) {
   const restyle = next.ui !== cur.ui || next.appearance !== cur.appearance || next.theme !== cur.theme || next.plugins.themes !== cur.plugins.themes;
   cur = next;
   save();
-  log(`настройки: шрифт окон ${cur.uiZoom} %, шрифт терминала ${cur.termFont}, сдвиг Markdown ${cur.mdShift}, звук ${cur.sound ? 'вкл' : 'выкл'}, уведомления ${cur.notify ? 'вкл' : 'выкл'}, тема ${cur.theme || 'по умолчанию'}${cur.ui === 'termius' ? '' : `, интерфейс ${cur.ui} (${cur.appearance})`}, язык ${cur.lang || 'ru'}, выключены плагины: ${Object.keys(cur.plugins).filter((k) => !cur.plugins[k]).join(', ') || 'нет'}, включены агенты: ${Object.keys(cur.agents).filter((k) => cur.agents[k]).join(', ') || 'нет'}`);
+  log(`настройки: шрифт окон ${cur.uiZoom} %, шрифт терминала ${cur.termFont}, сдвиг Markdown ${cur.mdShift}, звук ${cur.sound ? 'вкл' : 'выкл'}, уведомления ${cur.notify ? 'вкл' : 'выкл'}, копирование выделенного ${cur.copySelect ? 'вкл' : 'выкл'}, тема ${cur.theme || 'по умолчанию'}${cur.ui === 'termius' ? '' : `, интерфейс ${cur.ui} (${cur.appearance})`}, язык ${cur.lang || 'ru'}, выключены плагины: ${Object.keys(cur.plugins).filter((k) => !cur.plugins[k]).join(', ') || 'нет'}, включены агенты: ${Object.keys(cur.agents).filter((k) => cur.agents[k]).join(', ') || 'нет'}`);
   if (restyle) syncNative();
   for (const w of pages()) apply(w);
   if (restyle) dressAll();

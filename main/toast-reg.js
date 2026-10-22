@@ -7,6 +7,10 @@
 // Чистый node, без Electron: проба зовёт те же функции со своим ключом.
 
 const { execFile } = require('child_process');
+const path = require('path');
+
+// Системная утилита по полному пути (t1191): reg.exe из текущей папки или PATH не должен подменить настоящую.
+const REG = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe') : 'reg.exe';
 
 const ROOT = 'HKCU\\Software\\Classes\\AppUserModelId\\';
 
@@ -16,7 +20,7 @@ const keyOf = (id) => ROOT + id;
 /** @param {string[]} args @returns {Promise<{ code: number, out: string }>} */
 function reg(args) {
   return new Promise((resolve) => {
-    execFile('reg.exe', args, { windowsHide: true, timeout: 10000, encoding: 'utf8' }, (e, stdout, stderr) => {
+    execFile(REG, args, { windowsHide: true, timeout: 10000, encoding: 'utf8' }, (e, stdout, stderr) => {
       const code = e ? (typeof e.code === 'number' ? e.code : 1) : 0;
       resolve({ code, out: String(stdout || '') + String(stderr || '') });
     });

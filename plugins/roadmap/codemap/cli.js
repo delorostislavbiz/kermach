@@ -63,6 +63,26 @@ function wordsOf(q) {
 }
 
 /**
+ * Окно «вне функций» (t1124): на 44 запросах t944 окна 20–50 строк дают одно и то же. 15 теряет верный ответ про i18n.js
+ * (слова в строке 20 и в шапке), 100 снова даёт уверенный ответ без ответа у terminals.js — spikes/t1124-weak/rule-W*.txt.
+ * Тексты запросов в комментарии не писать: их слова найдутся здесь же.
+ */
+const TOP_LINES = 30;
+
+/** Больше всего разных слов в TOP_LINES соседних строк — один проход двумя указателями. @param {[number, number][]} at строка → номер слова */
+function inWindow(at) {
+  /** @type {Map<number, number>} */
+  const c = new Map();
+  let most = 0;
+  for (let a = 0, b = 0; b < at.length; b++) {
+    c.set(at[b][1], (c.get(at[b][1]) || 0) + 1);
+    while (at[b][0] - at[a][0] >= TOP_LINES) { const k = at[a++][1]; const left = /** @type {number} */ (c.get(k)) - 1; if (left) c.set(k, left); else c.delete(k); }
+    most = Math.max(most, c.size);
+  }
+  return most;
+}
+
+/**
  * По словам: у каждого объявления — сколько разных слов запроса нашлось в его имени, подписи, пути файла и строках тела.
  * Строка тела засчитывается самому вложенному объявлению: слово в методе — методу, а не всему классу.
  * @param {{ head: any, files: any[] }} map @param {string} root @param {string} q
@@ -92,26 +112,35 @@ function byWords(map, root, q) {
     const best = new Map();
     const add = (/** @type {any} */ s, /** @type {number} */ w, /** @type {number} */ k) => { let m = got.get(s); if (!m) got.set(s, (m = new Map())); m.set(w, Math.max(m.get(w) || 0, k)); };
     const fileLow = rec.file.toLowerCase();
+    /** @type {Set<any>} слово в имени, подписи, пути или строке кода — не только рассказ в комментарии (t1187) */
+    const named = new Set();
     for (const s of rec.symbols) {
       const head = `${s.q} ${s.sig}`;
       words.forEach((w, k) => {
         if (s.name.toLowerCase() === w) add(s, k, 10);
         else if (res[k].test(head)) add(s, k, 4);
         else if (fileLow.includes(w)) add(s, k, 1);
+        else return;
+        named.add(s);
       });
     }
+    /** @type {[number, number][]} строка «вне функций» → номер слова, по возрастанию строк (t1124) */
+    const topAt = [];
     for (let i = 0; lines && i < lines.length; i++) {
       const s = owner[i + 1] || top;
       let n = 0;
-      res.forEach((re, k) => { if (re.test(/** @type {string[]} */ (lines)[i])) { add(s, k, 1); n++; } });
+      res.forEach((re, k) => { if (re.test(/** @type {string[]} */ (lines)[i])) { add(s, k, 1); n++; if (s === top) topAt.push([i, k]); } });
       // При равном числе слов строка кода лучше комментария: место, а не рассказ о нём.
       const k = n && n + (/^\s*(?:\/\/|\/?\*|#)/.test(/** @type {string[]} */ (lines)[i]) ? 0 : 0.5);
+      if (k % 1) named.add(s);
       if (k && (!best.has(s) || /** @type {any} */ (best.get(s)).k < k)) best.set(s, { k, at: i + 1 });
     }
     for (const [s, m] of got) {
       for (const k of m.keys()) seen.add(k);
       const b = best.get(s);
-      hits.push({ s: { file: rec.file, ...s }, file: rec.file, n: m.size, score: [...m.values()].reduce((a, c) => a + c, 0), at: b ? b.at : 0, text: b && lines ? lines[b.at - 1].trim().slice(0, 100) : '' });
+      // «Вне функций» — весь файл: слова из несвязанных комментариев шапки и середины давали уверенный ответ о том, чего нет
+      // (t1124: запрос t944 без ответа — все слова у terminals.js). Здесь слова считаются в окне соседних строк.
+      hits.push({ s: { file: rec.file, ...s }, file: rec.file, n: s === top ? inWindow(topAt) : m.size, score: [...m.values()].reduce((a, c) => a + c, 0), at: b ? b.at : 0, talk: !named.has(s), text: b && lines ? lines[b.at - 1].trim().slice(0, 100) : '' });
     }
   }
   // Больше разных слов — выше; при равенстве — слово в имени или подписи, потом короче объявление: большая функция собирает слова из одних строк текста.
@@ -122,9 +151,11 @@ function byWords(map, root, q) {
 /**
  * Слабый ответ (t952, правило t944): какого-то слова запроса нет нигде в коде или у лучшего места совпала половина слов и меньше.
  * На 44 запросах по src: «нет ответа» распознаёт 21 из 23, ответ не трогает в 20 из 21 (ОТЧЁТ-t944-noanswer.md). Места не скрываются — помечаются.
- * @param {string[]} words @param {string[]} missing @param {{ n: number }[]} found места с порогом, лучшее первым
+ * С ростом src слова находились в чужих комментариях: 20 из 23 (t1187). Место, где все слова только в комментариях, слабое и при
+ * перевесе в одно слово — 21 из 23 и 20 из 21. Окно строк для всех объявлений не помогло: 20 из 23 при 20–50 строк (spikes/t1187-weak).
+ * @param {string[]} words @param {string[]} missing @param {{ n: number, talk?: boolean }[]} found места с порогом, лучшее первым
  */
-const weakOf = (words, missing, found) => missing.length > 0 || (found.length > 0 && found[0].n * 2 <= words.length);
+const weakOf = (words, missing, found) => missing.length > 0 || (found.length > 0 && found[0].n * 2 <= words.length + (found[0].talk ? 1 : 0));
 
 /**
  * Имя по тексту файлов карты — для find, когда объявления нет: карта хранит функции, классы, методы и переменные верхнего уровня (t929), а поля объектов и переменные внутри функций — нет.
@@ -199,7 +230,7 @@ function main(argv) {
     const weak = cmd === 'meaning' && found.length > 0 && weakOf(words, missing, found);
     ask(found, weak);
     // Места при слабом ответе не скрываем: правило ошибается в 1 из 21 (t944) — агент решает сам, но знает, что ответ, скорее всего, не про то.
-    if (weak) out.push(`слабый ответ: ${missing.length ? `в коде нет слов «${missing.join('», «')}»` : `у лучшего места совпало слов ${found[0].n} из ${words.length}`} — скорее всего, это не то; ищите grep по файлам или другими словами`);
+    if (weak) out.push(`слабый ответ: ${missing.length ? `в коде нет слов «${missing.join('», «')}»` : `у лучшего места совпало слов ${found[0].n} из ${words.length}${found[0].talk ? ', и только в комментариях' : ''}`} — скорее всего, это не то; ищите grep по файлам или другими словами`);
     // У объявления — лучшая строка: где слов запроса больше всего (обработчик 'term:write' внутри большой register — строка 1269).
     show(found,(h) => `${h.s.kind === 'строки' ? `${h.file}:${h.at} строки (вне функций)` : line(h.s)} (слов ${h.n} из ${words.length})${h.at ? `${h.s.kind === 'строки' ? ' —' : ` — :${h.at}`} ${h.text}` : ''}`, (h) => h.file);
   } else {

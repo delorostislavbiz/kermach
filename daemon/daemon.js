@@ -20,6 +20,7 @@ const { Unicode11Addon } = require('@xterm/addon-unicode11');
 const { PROTOCOL_VERSION, PIPE, DATA_DIR, KEY_FILE, lineReader, frame } = require('./protocol');
 const ownRoot = require('./own-root');
 const platform = require('./platform');
+const { hideSecrets } = require('./secrets');
 
 const SCROLLBACK = 5000;
 const IDLE_MS = Number(process.env.TERMINALUS_IDLE_MS) || 10000;
@@ -37,8 +38,11 @@ const PIPE_KEY = crypto.randomBytes(32).toString('hex');
 // Секунды. Без него Claude ждёт ответа http-хука до 600 с — зависший демон подвесил бы все вкладки.
 const HOOK_TIMEOUT = 5;
 const HOOK_EVENTS = ['UserPromptSubmit', 'PermissionRequest', 'Stop', 'StopFailure'];
-// Хук SessionStart Codex (t777): обёртка шлёт событие на /hook/codex — по нему вкладка узнаёт номер разговора.
+// Хуки Codex (t777, t1210): обёртка шлёт событие на /hook/codex. SessionStart — номер разговора, остальные — состояние вкладки, как у Claude.
+// Значение — имя события в ключе доверия и в хэше Codex (hooks/src/engine/discovery.rs). Interrupt у Codex нет: прерванный ход — по экрану (t648).
 const CODEX_HOOK = path.join(__dirname, 'codex-hook.js');
+/** @type {Record<string, string>} */
+const CODEX_HOOK_EVENTS = { SessionStart: 'session_start', UserPromptSubmit: 'user_prompt_submit', PermissionRequest: 'permission_request', Stop: 'stop' };
 // Секунды; входит в хэш доверия хуку (codexHookArgs) — менять только вместе с ним.
 const CODEX_HOOK_TIMEOUT = 10;
 // Итог проверки хука у самого Codex (t797): ключ — версия программы и строка хука, при обновлении Codex проверка заново.
@@ -57,7 +61,9 @@ const log = (msg) => {
 
 // Переменные запускающей сессии (Claude Code, Орка, сам Electron) в терминалы не попадают:
 // иначе claude внутри подключится к чужой сессии или сработают чужие хуки (журнал 17:09).
-const FOREIGN_ENV = /^(CLAUDE|ANTHROPIC_|MCP_|ORCA_|ELECTRON_|CCD_)/i;
+// Исключение — CLAUDE_CONFIG_DIR (t1193): своя папка настроек человека; без неё Claude во вкладке писал бы в ~/.claude,
+// а «История», «Продолжить» и kermach sessions искали бы разговор в этой папке.
+const FOREIGN_ENV = /^(?!CLAUDE_CONFIG_DIR$)(CLAUDE|ANTHROPIC_|MCP_|ORCA_|ELECTRON_|CCD_)/i;
 
 // Вопрос терминалу «кто ты» (DA1) и ответ на него — тот же, что даёт xterm.js в окне. Смотрится только начало вывода (DA1_MS).
 const DA1_QUERIES = ['\x1b[c', '\x1b[0c'];
@@ -167,6 +173,12 @@ function terminalEnv(extra, tabKey) {
   if (process.platform === 'win32') env.NoDefaultCurrentDirectoryInExePath = '1';
   // Порт приёмника — для обёртки строки состояния (t82): у хуков он в url файла настроек, у обёртки только окружение.
   const port = hookServer.listening ? String(/** @type {import('net').AddressInfo} */ (hookServer.address()).port) : '';
+  // Windows не различает регистр имён (t1211): grok_config от плагина рядом с GROK_CONFIG программы дал бы ребёнку обе, и какая победит — не определено.
+  // Переменная плагина заменяет одноимённую в любом регистре.
+  if (process.platform === 'win32' && extra) {
+    const over = new Set(Object.keys(extra).map((k) => k.toUpperCase()));
+    for (const k of Object.keys(env)) if (over.has(k.toUpperCase())) delete env[k];
+  }
   return { ...env, ...(extra || {}), TERMINALUS_HOOK_TOKEN: HOOK_TOKEN, TERMINALUS_TAB_KEY: tabKey, TERMINALUS_HOOK_PORT: port };
 }
 
@@ -183,11 +195,18 @@ function rowCells(b, y, cols) {
 /**
  * Сменить размер копии экрана и вернуть курсор на прежнее место в длинной строке (t451) — как keepCursor окна (src\renderer\terminal.js),
  * там подробности. Иначе снимок для окна, которое подключается заново, ставит курсор у правого края.
- * @param {any} term @param {() => void} resize
+ * В колбэке пустой записи — после разбора уже пришедшего вывода (t465). Смена высоты на Windows — низ экрана на месте, как у окна (t1181).
+ * @param {any} term @param {() => void} resize @param {() => number} [rowsTo] новая высота, если меняется только она, иначе 0
  */
-function keepCursor(term, resize) {
+function keepCursor(term, resize, rowsTo) {
+  term.write('', () => keepCursorNow(term, resize, rowsTo));
+}
+
+/** @param {any} term @param {() => void} resize @param {() => number} [rowsTo] */
+function keepCursorNow(term, resize, rowsTo) {
   const before = term.buffer.active;
   if (before.type !== 'normal' || term.modes.originMode) return resize();
+  if (process.platform === 'win32' && rowsTo && rowsTo() && rowsTo() !== term.rows) return keepBottom(term, resize);
   const cols0 = term.cols;
   let y = before.baseY + before.cursorY;
   let offset = before.cursorX;
@@ -203,6 +222,20 @@ function keepCursor(term, resize) {
   const vy = row - b.baseY;
   if (vy < 0 || vy >= term.rows || (vy === b.cursorY && col === b.cursorX)) return;
   term.write(`\x1b[${vy + 1};${col + 1}H`);
+}
+
+/**
+ * Смена высоты на Windows (t1181), как keepBottom окна (src\renderer\terminal.js), там подробности.
+ * @param {any} term @param {() => void} resize
+ */
+function keepBottom(term, resize) {
+  const buf = term._core._bufferService.buffer;
+  const line = buf.ybase + buf.y;
+  let low = term.rows - 1;
+  while (low > buf.y && !buf.lines.get(buf.ybase + low).translateToString(true)) low--;
+  buf.y = low > buf.y ? term.rows - 1 : buf.y;
+  resize();
+  buf.y = Math.max(0, Math.min(term.rows - 1, line - buf.ybase));
 }
 
 /** @type {Map<string, Session>} */
@@ -231,6 +264,30 @@ class Client {
   fail(/** @type {any} */ id, /** @type {string} */ error) {
     if (id !== undefined) this.send({ id, ok: false, error });
   }
+}
+
+/** Аргумент целиком в кавычках и с пробелом: node-pty (argsToCommandLine) его не закавычит, и он распадётся на два (t1216, d137). @param {string} a */
+const quotedSpace = (a) => a.length > 1 && a.startsWith('"') && a.endsWith('"') && /\s/.test(a);
+/** Аргумент для командной строки Windows по правилам CommandLineToArgvW: в кавычках, " → \", обратные черты перед " и в конце удваиваются. @param {string} a */
+const winArg = (a) => (a && !/[\s"]/.test(a) ? a : `"${a.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`);
+/**
+ * Аргументы для pty.spawn. На Windows с аргументом вида "a b" — готовая командная строка (node-pty берёт строку как есть):
+ * программа получит его одним аргументом без изменений. Остальные случаи — массив, как раньше.
+ * @param {string[]} args
+ * @returns {string[] | string}
+ */
+function ptyArgs(args) {
+  return process.platform === 'win32' && args.some(quotedSpace) ? args.map(winArg).join(' ') : args;
+}
+/**
+ * Ошибка запуска терминала для человека. Папку node-pty подменили при живом демоне (перенос новой версии): conpty.dll по старому пути нет,
+ * новые терминалы не открываются, пока демон не перезапущен (t1216, d276). Остальные ошибки — как есть.
+ * @param {string} msg
+ */
+function spawnError(msg) {
+  return /Cannot find conpty\.dll/i.test(msg)
+    ? `Файлы программы заменены, пока она работала: новый терминал не открыть. Остановите программу полностью («Остановить всё» в окне «Проекты») и откройте снова. (${msg})`
+    : msg;
 }
 
 class Session {
@@ -282,7 +339,11 @@ class Session {
     // Не в desc — в sessions.json не пишется: после перезапуска демона вкладка запускается заново, прежнее состояние уже неправда.
     // Не в meta — update принимает meta целиком, окно со старой meta затёрло бы состояние (карта t83).
     this.state = '';
+    // Чем поставлено состояние (by): повтор того же от хука и OSC 9 Codex рассылается один раз (t1210).
+    this.stateBy = '';
     this.stateAt = '';
+    // Меню Codex до разговора («Hooks need review», t1210) стоит на экране: «ждёт ответа» поставлено им, после выбора — снова без состояния.
+    this.menu = false;
     // До этого времени спиннер в заголовке не значит «работает» (SETTLE_MS).
     this.settleUntil = 0;
     // Когда началось «работает» (мс) — для звука «готов» у агентов без хуков (LOUD_WORK_MS).
@@ -304,6 +365,8 @@ class Session {
     this.claudeIdAt = 0;
     // Искали ли номер разговора Codex в журналах (codexRollout, t777): один раз на вкладку.
     this.codexLooked = false;
+    // Когда в вкладку последний раз ввели Enter (мс): с него идёт ход, журнал своего Codex пишется после (t1057).
+    this.enterAt = 0;
     // Терминал закрыли командой kill — выход с любым кодом не ошибка.
     this.killed = false;
     this.term.parser.registerOscHandler(9, (d) => this.onOsc9(d));
@@ -314,7 +377,7 @@ class Session {
     // По окну spawnFrom..spawnTo terminate сверит, что номер свой (t141). В node-pty 1.2 корень создаётся не внутри pty.spawn,
     // а когда подключился поток вывода (connect из onReady, t909): pty.pid до этого 0. Поэтому конец окна — время, когда номер стал виден.
     this.spawnFrom = Date.now();
-    this.pty = pty.spawn(o.file, this.desc.args, {
+    this.pty = pty.spawn(o.file, ptyArgs(this.desc.args), {
       name: 'xterm-256color', cols, rows, cwd, env: terminalEnv(o.env, this.sid), useConptyDll: true,
     });
     this.spawnTo = Date.now();
@@ -350,7 +413,9 @@ class Session {
     // Хук и OSC 9 — событие самого агента: рассылаем, даже если состояние уже стоит. Иначе звук пропадает,
     // когда заголовок или ввод успели поставить его раньше (разрешил без спиннера, ✳ раньше Stop, «Action Required» раньше OSC 9 — t129).
     // «работает» не повторяем: звука у него нет, а лишние события ломают последовательности t13.
-    const told = (by === 'hook' || by === 'osc9') && state !== 'working';
+    // Codex сообщает конец хода и вопрос дважды: хуком (t1210) и OSC 9. Второе то же состояние от другого из них — не новое событие: иначе два звука.
+    const twice = this.agent === 'codex' && state === this.state && (this.stateBy === 'hook' || this.stateBy === 'osc9') && this.stateBy !== by;
+    const told = (by === 'hook' || by === 'osc9') && state !== 'working' && !twice;
     if (!this.agent || (state === this.state && !told)) return;
     // loud — звук и мигание по заголовку (t338): у агента без хуков заголовок — единственный голос. Claude и Codex звучат от хука и OSC 9.
     const now = Date.now();
@@ -361,6 +426,7 @@ class Session {
     if (state !== this.state) { this.busyOn = 0; this.busyOff = 0; }
     log(`терминал ${this.sid}: состояние ${this.state || 'нет'} → ${state} (${by})${loud ? ' звук' : ''}`);
     this.state = state;
+    this.stateBy = by;
     this.stateAt = new Date(now).toISOString();
     broadcast({ ev: 'state', sid: this.sid, state, by, at: this.stateAt, ...(loud ? { loud: true } : {}) });
   }
@@ -409,7 +475,8 @@ class Session {
    * @param {string} d
    */
   onInput(d) {
-    if (this.state !== 'waiting' || !(d.includes('\r') || /^[\x1b\x030-9a-zA-Z]$/.test(d))) return;
+    // Ответ на меню до разговора — не начало хода: состояние снимет уход меню с экрана (busyState).
+    if (this.state !== 'waiting' || this.menu || !(d.includes('\r') || /^[\x1b\x030-9a-zA-Z]$/.test(d))) return;
     // Ответ человека сильнее позднего кадра: спиннер сразу после быстрого «разрешить» — уже работа.
     this.settleUntil = 0;
     this.setState(this.agent === 'codex' && d !== '\x1b' && d !== '\x03' ? 'working' : 'done', 'input');
@@ -476,6 +543,12 @@ class Session {
    * «Ждёт» строка не меняет: при вопросе её нет.
    */
   busyState() {
+    // Меню до разговора (t1210, d254): вкладка без состояния, а Codex ждёт выбора. Ушло меню — снова без состояния; дальше — как обычно.
+    if (!this.state || this.menu) {
+      const menu = this.menuShown();
+      if (menu && !this.state) { this.menu = true; this.setState('waiting', 'menu'); return; }
+      if (!menu && this.menu) { this.menu = false; if (this.state === 'waiting') this.setState('', 'menu'); }
+    }
     const now = Date.now();
     const on = this.busyLine();
     if (on) { this.busyOff = 0; this.busyOn ||= now; } else { this.busyOn = 0; this.busyOff ||= now; }
@@ -513,6 +586,25 @@ class Session {
       if (end >= this.busyRow) return true;
     }
     return false;
+  }
+
+  /**
+   * Меню выбора Codex на экране (t1210): пункт под курсором «› 1. …», ещё пункт «2. …» и подсказка «enter confirm» или «press enter»
+   * (меню «Hooks need review», spikes\t785-hash\shot-menu.png). Смотрится только до разговора — вопросы в ходе ставят хук и OSC 9.
+   * @returns {boolean}
+   */
+  menuShown() {
+    const b = this.term.buffer.active;
+    let cur = false;
+    let other = false;
+    let hint = false;
+    for (let y = b.baseY; y < b.baseY + this.term.rows; y++) {
+      const s = b.getLine(y)?.translateToString(true) || '';
+      if (/^\s*›\s*\d+\.\s+\S/.test(s)) cur = true;
+      else if (/^\s*\d+\.\s+\S/.test(s)) other = true;
+      else if (/\benter\b.*\b(confirm|continue|select)|\bpress enter\b/i.test(s)) hint = true;
+    }
+    return cur && other && hint;
   }
 
   /** Есть ли на экране живая строка хода Codex: снизу вверх первая подходящая, с буквы в первой клетке, «esc» жирный, скобка тусклая; шире панели — обрезана у края. @returns {boolean} */
@@ -614,22 +706,55 @@ class Session {
   attach(client, reqId) {
     const attachId = ++attachSeq;
     this.subs.set(client, { held: [], attachId });
+    // Два прохода очереди (t465): attach с новым размером зовёт resize, keepCursor ставит курсор записью ESC в своём колбэке,
+    // и эта запись встаёт в очередь после первого прохода. Придержанное до первого прохода разберётся до второго — оно уже в снимке.
     this.term.write('', () => {
-      const sub = this.subs.get(client);
-      if (!sub || sub.attachId !== attachId) return client.fail(reqId, 'подписка отменена');
-      let replied = false;
-      // Бросок здесь остановил бы копию экрана вкладки навсегда (t633): ошибку в журнал, клиенту — отказ, придержанный вывод не копится.
-      try {
-        const snapshot = this.serializer.serialize();
-        client.reply(reqId, { sid: this.sid, snapshot, cols: this.cols, rows: this.rows });
-        replied = true;
-        for (const d of sub.held || []) client.send({ ev: 'data', sid: this.sid, data: d });
-      } catch (e) {
-        log(`терминал ${this.sid}: снимок для подписки не отправлен: ${/** @type {any} */ (e).stack || e}`);
-        if (!replied) { this.subs.delete(client); try { client.fail(reqId, 'снимок не снят'); } catch {} }
-      }
-      sub.held = null;
+      const first = this.subs.get(client);
+      if (first && first.attachId === attachId) first.held = [];
+      this.term.write('', () => this.sendSnapshot(client, reqId, attachId));
     });
+  }
+
+  /** Снимок для attach — вторым проходом очереди. @param {Client} client @param {any} reqId @param {number} attachId */
+  sendSnapshot(client, reqId, attachId) {
+    const sub = this.subs.get(client);
+    if (!sub || sub.attachId !== attachId) return client.fail(reqId, 'подписка отменена');
+    let replied = false;
+    // Бросок здесь остановил бы копию экрана вкладки навсегда (t633): ошибку в журнал, клиенту — отказ, придержанный вывод не копится.
+    try {
+      const snapshot = this.snapshot();
+      client.reply(reqId, { sid: this.sid, snapshot, cols: this.cols, rows: this.rows });
+      replied = true;
+      for (const d of sub.held || []) client.send({ ev: 'data', sid: this.sid, data: d });
+    } catch (e) {
+      log(`терминал ${this.sid}: снимок для подписки не отправлен: ${/** @type {any} */ (e).stack || e}`);
+      if (!replied) { this.subs.delete(client); try { client.fail(reqId, 'снимок не снят'); } catch {} }
+    }
+    sub.held = null;
+  }
+
+  /**
+   * Снимок экрана с цветами. addon-serialize не сохраняет область прокрутки (DECSTBM) и сохранённый курсор (ESC 7): Claude Code
+   * с областью прокрутки (флаг tengu_marlin_porch, CLAUDE_CODE_DECSTBM=1) после повторного открытия окна прокручивал весь экран,
+   * рамка поля ввода «────» уезжала в текст (t1230). Дописываем их сами, курсор — обратно на место: DECSTBM уводит его в начало.
+   * Как у Орки нет: там тот же addon-serialize без добавки.
+   */
+  snapshot() {
+    let s = this.serializer.serialize();
+    const core = /** @type {any} */ (this.term)._core;
+    const b = core.buffer;
+    const origin = !!core.coreService.decPrivateModes.origin;
+    const region = b.scrollTop !== 0 || b.scrollBottom !== this.term.rows - 1;
+    const saved = b.savedX !== 0 || b.savedY !== 0;
+    if (!region && !saved) return s;
+    // Позиции ниже — от верха экрана: на время добавки режим origin выключен.
+    if (origin) s += '\x1b[?6l';
+    if (saved) s += `\x1b[${b.savedY + 1};${b.savedX + 1}H\x1b7`;
+    if (region) s += `\x1b[${b.scrollTop + 1};${b.scrollBottom + 1}r`;
+    // Включение origin тоже уводит курсор — в начало области, и строки дальше считаются от её верха.
+    if (origin) s += `\x1b[?6h\x1b[${b.y - b.scrollTop + 1};${b.x + 1}H`;
+    else s += `\x1b[${b.y + 1};${b.x + 1}H`;
+    return s;
   }
 
   /** Вывод терминала целиком: 'text' — простой текст, 'ansi' — с цветами (как снимок). @param {string} format */
@@ -638,7 +763,7 @@ class Session {
       this.term.write('', () => {
         // Бросок здесь остановил бы копию экрана вкладки навсегда (t633) — ошибку в журнал, клиенту отказ.
         try {
-          if (format === 'ansi') return resolve(this.serializer.serialize());
+          if (format === 'ansi') return resolve(this.snapshot());
           const b = this.term.buffer.active;
           const lines = [];
           for (let i = 0; i < b.length; i++) lines.push(b.getLine(i)?.translateToString(true) ?? '');
@@ -665,7 +790,7 @@ class Session {
     if (!this.ptyExited) {
       try { this.pty.resize(cols, rows); } catch (e) { log(`терминал ${this.sid}: resize не прошёл: ${/** @type {any} */ (e).message || e}`); }
     }
-    keepCursor(this.term, () => this.term.resize(cols, rows));
+    keepCursor(this.term, () => this.term.resize(cols, rows), () => (cols === this.term.cols ? rows : 0));
   }
 
   /**
@@ -744,7 +869,22 @@ class Session {
     log(`терминал ${this.sid} вышел, код ${code}`);
     sessions.delete(this.sid);
     if (this.busyTimer) clearTimeout(this.busyTimer);
-    this.term.dispose();
+    // Журнал вкладки (t1059): meta.logPath от плагина — буфер экрана простым текстом в файл. Вывод до выхода дочитывается write('').
+    const logPath = (this.desc.meta || {}).logPath;
+    if (typeof logPath === 'string' && path.isAbsolute(logPath)) {
+      this.term.write('', () => {
+        try {
+          const b = this.term.buffer.active;
+          const lines = [];
+          for (let i = 0; i < b.length; i++) lines.push(b.getLine(i)?.translateToString(true) ?? '');
+          while (lines.length && !lines[lines.length - 1]) lines.pop();
+          fs.mkdirSync(path.dirname(logPath), { recursive: true });
+          fs.writeFileSync(logPath, lines.join('\n') + '\n');
+          log(`терминал ${this.sid}: экран записан в ${logPath} (${lines.length} строк)`);
+        } catch (e) { log(`терминал ${this.sid}: экран не записан в ${logPath}: ${/** @type {any} */ (e).message || e}`); }
+        this.term.dispose();
+      });
+    } else this.term.dispose();
     // Состояние «завершён» или «ошибка» — в самом событии: терминала после него в списке уже нет. Обычный терминал — всегда завершён.
     // «Ошибка» — только у Claude и Codex: коды выхода других агентов (Ctrl+C и т. п.) не проверены, ложное «оборвался» хуже (t334).
     const known = this.agent === 'claude' || this.agent === 'codex';
@@ -854,7 +994,7 @@ function handle(c, msg) {
       return c.reply(id, { sessions: [...sessions.values()].filter((x) => x.ready).map((x) => x.info()) });
     case 'create': {
       let ns;
-      try { ns = new Session(msg); } catch (e) { return c.fail(id, String(/** @type {any} */ (e).message || e)); }
+      try { ns = new Session(msg); } catch (e) { return c.fail(id, spawnError(String(/** @type {any} */ (e).message || e))); }
       sessions.set(ns.sid, ns);
       saveSessions();
       checkIdle();
@@ -909,6 +1049,7 @@ function handle(c, msg) {
       return void s.read(msg.format).then((text) => c.reply(id, { text }), () => c.fail(id, 'вывод не прочитан'));
     case 'write':
       s.onInput(String(msg.data));
+      if (String(msg.data).includes('\r')) s.enterAt = Date.now();
       s.pty.write(String(msg.data));
       return c.reply(id);
     case 'resize':
@@ -916,7 +1057,8 @@ function handle(c, msg) {
       return c.reply(id);
     case 'update': {
       const was = s.agent;
-      for (const k of ['title', 'color', 'icon', 'project', 'meta']) if (k in msg) /** @type {any} */ (s.desc)[k] = msg[k];
+      for (const k of ['title', 'color', 'icon', 'project']) if (k in msg) /** @type {any} */ (s.desc)[k] = msg[k];
+      if (msg.meta && typeof msg.meta === 'object') s.desc.meta = mergeMeta(s.desc.meta || {}, msg.meta);
       if (was !== s.agent) s.agentChanged(was);
       // Имя дали вручную — оно главнее заголовка от программы.
       if ('title' in msg) s.desc.titleManual = true;
@@ -1058,6 +1200,32 @@ hookServer.on('error', (e) => {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Что просит PermissionRequest (t1133): tool — имя инструмента, what — начало команды, пути или адреса из tool_input, одной строкой.
+ * Окно пишет это тому, кто запустил скрытую вкладку: «просит разрешение», а не «ждёт ответа». Другие события — пусто.
+ * @param {string} event @param {any} e
+ */
+function permOf(event, e) {
+  if (event !== 'PermissionRequest') return {};
+  const inp = e.tool_input && typeof e.tool_input === 'object' ? e.tool_input : {};
+  const raw = inp.command || inp.file_path || inp.path || inp.url || inp.pattern || inp.description || '';
+  const line = (s, n) => String(s || '').replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
+  // Строка уходит во вкладку оркестратора и в уведомление Windows (t1135): секреты скрыть до обрезки, чтобы не остался обрезок ключа.
+  return { tool: line(e.tool_name, 60), what: line(hideSecrets(hideCmdSecrets(String(raw))), 160) };
+}
+
+/**
+ * Секреты в аргументах команды любой длины (t1135): у hideSecrets bearer — от 20 знаков, а заголовок и пароль в команде короче бывают.
+ * Заголовок Authorization и *-Token/*-Key, curl -u user:пароль, --password/--token значение. @param {string} s
+ */
+function hideCmdSecrets(s) {
+  return s
+    .replace(/((?:authorization|proxy-authorization)\s*:\s*(?:[A-Za-z]+\s+)?)([^\s"'`]+)/gi, '$1[REDACTED:заголовок]')
+    .replace(/([\w-]*(?:token|api-?key|secret)\s*:\s*)([^\s"'`]+)/gi, '$1[REDACTED:заголовок]')
+    .replace(/((?:^|\s)(?:-u|--user)\s+["'`]?[^\s:"'`]*:)([^\s"'`]+)/g, '$1[REDACTED:пароль]')
+    .replace(/((?:^|\s)--?(?:password|passwd|pass|token|api-key|secret)(?:\s+|=)["'`]?)([^\s"'`]+)/gi, '$1[REDACTED:пароль]');
+}
+
+/**
  * Событие хука — к его вкладке.
  * Ключ вкладки главнее session_id: он из окружения процесса и не меняется, а session_id Claude меняет на /clear.
  * Ключ есть, а вкладки нет — событие отбрасывается: процесс закрытой вкладки не должен зажигать чужую.
@@ -1081,28 +1249,63 @@ function onHook(source, e, tabKey) {
   // SessionStart Codex (t777) — только номер разговора: состояние вкладки не меняет. Приходит с первым сообщением (Codex заводит разговор лениво),
   // при codex resume — тот же номер, после /clear — новый (source: clear).
   if (source === 'codex') {
-    if (event === 'SessionStart' && meta.kind === 'codex' && UUID.test(sessionId) && meta.codexSessionId !== sessionId) newCodexId(s, sessionId, `SessionStart ${String(e.source || '')}`.trim());
-    return;
+    if (meta.kind !== 'codex') return;
+    if (event === 'SessionStart') {
+      if (UUID.test(sessionId) && meta.codexSessionId !== sessionId) newCodexId(s, sessionId, `SessionStart ${String(e.source || '')}`.trim());
+      return;
+    }
+    // Остальные хуки Codex (t1210) — состояние, как у Claude. Чужой номер во время хода — вложенный codex с ключом вкладки (как t1056 у Claude).
+    if (meta.codexSessionId && sessionId && meta.codexSessionId !== sessionId && s.state === 'working') {
+      return log(`приёмник: codex ${event} — чужой номер разговора ${sessionId}, у вкладки ${s.sid} ${meta.codexSessionId}, состояние working; отброшено`);
+    }
   }
   // Строка состояния — не событие: она обновляется много раз за ответ. Ни s.hook, ни рассылки hook, ни лога, если номер тот же.
   if (event === STATUS_EVENT) {
     // Запущена раньше прошлой смены номера — это строка прежнего разговора, пришедшая с опозданием.
     const startedAt = Number(e.startedAt) || 0;
     if (source !== 'claude' || meta.kind !== 'claude' || !UUID.test(sessionId) || meta.claudeSessionId === sessionId || startedAt < s.claudeIdAt) return;
+    // Вложенный claude вкладки зовёт строку состояния с тем же ключом (t1067): другой номер во время ответа — чужой, как у хуков ниже (t1056).
+    // Строка приходит много раз — в журнал один раз на номер.
+    if (meta.claudeSessionId && s.state === 'working') {
+      if (s.foreignSl !== sessionId) { s.foreignSl = sessionId; log(`приёмник: строка состояния — чужой номер разговора ${sessionId}, у вкладки ${s.sid} ${meta.claudeSessionId}, состояние working; отброшено`); }
+      return;
+    }
     const had = !!meta.claudeSessionId;
     newClaudeId(s, sessionId, 'строка состояния');
     // Номер сменился (/clear) — Claude ждёт вопроса, прежнее состояние уже неправда. Повторный «готов» с by не hook не рассылается.
     if (had) { s.settleUntil = Date.now() + SETTLE_MS; s.setState('done', 'clear'); }
     return;
   }
+  // Ключ вкладки наследуют все её процессы (t1056): вложенный claude с теми же настройками или субагент шлют хуки со своим номером.
+  // Верхний Claude меняет номер только в покое (/clear, /resume), поэтому другой номер во время ответа или с agent_id — чужое событие целиком:
+  // иначе вкладка запомнит чужой разговор для --resume, а Stop вложенного погасит «работает» посреди ответа. Номера ещё нет — берём первый.
+  if (source === 'claude' && meta.kind === 'claude' && meta.claudeSessionId && sessionId && meta.claudeSessionId !== sessionId && (s.state === 'working' || e.agent_id)) {
+    return log(`приёмник: claude ${event} — чужой номер разговора ${sessionId}${e.agent_id ? ` (agent_id ${e.agent_id})` : ''}, у вкладки ${s.sid} ${meta.claudeSessionId}, состояние ${s.state || 'нет'}; отброшено`);
+  }
   if (source === 'claude' && meta.kind === 'claude' && UUID.test(sessionId) && meta.claudeSessionId !== sessionId) newClaudeId(s, sessionId, event);
-  s.hook = { event, at: new Date().toISOString(), sessionId, source };
+  s.hook = { event, at: new Date().toISOString(), sessionId, source, ...permOf(event, e) };
   broadcast({ ev: 'hook', sid: s.sid, hook: s.hook });
   const state = HOOK_STATE[event];
   if (state) {
     s.settleUntil = state === 'working' ? 0 : Date.now() + SETTLE_MS;
     s.setState(state, 'hook');
   }
+}
+
+/**
+ * meta из update — по полям (t83): у окна может быть старая копия. Поле со значением null удаляется.
+ * Номера разговоров ставит демон по хукам; окно их не меняет, пока вид вкладки тот же (сменился вид — в вкладке другая программа).
+ */
+function mergeMeta(had, patch) {
+  const out = { ...had };
+  const same = !('kind' in patch) || patch.kind === had.kind;
+  for (const [k, v] of Object.entries(patch)) {
+    if (same && (k === 'claudeSessionId' || k === 'codexSessionId') && had[k]) continue;
+    if (v === null) delete out[k];
+    else out[k] = v;
+  }
+  if (!same) for (const k of ['claudeSessionId', 'codexSessionId']) if (!(k in patch)) delete out[k];
+  return out;
 }
 
 /**
@@ -1135,6 +1338,8 @@ function newCodexId(s, sessionId, why) {
  * другая формула хэша в новой версии Codex, hooks выключены). Номер — из журнала разговора: rollout-*.jsonl за сегодня и вчера,
  * первая строка session_meta с папкой вкладки и временем не раньше её запуска, номер не занят другой живой вкладкой.
  * Подходящих несколько (две вкладки в одной папке) — номер не ставится: чужой номер хуже, чем никакого. Один раз на вкладку.
+ * Журнал должен меняться во время хода вкладки (t1057): mtime не раньше последнего Enter (иначе — начала «работает», иначе — запуска вкладки).
+ * Так Codex из другой программы в той же папке, давно закончивший ход, не принимается за свой.
  * @param {Session} s
  */
 function codexRollout(s) {
@@ -1142,6 +1347,7 @@ function codexRollout(s) {
   if (s.codexLooked || meta.kind !== 'codex' || meta.codexSessionId) return;
   s.codexLooked = true;
   const since = Date.parse(s.desc.createdAt) - 2000;
+  const turnFrom = Math.max(since, (s.enterAt || s.workingAt || 0) - 2000);
   const root = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions');
   const same = (/** @type {string} */ a, /** @type {string} */ b) => process.platform === 'win32' ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase() : path.resolve(a) === path.resolve(b);
   const taken = new Set([...sessions.values()].map((x) => x.desc.meta && x.desc.meta.codexSessionId).filter(Boolean));
@@ -1155,7 +1361,7 @@ function codexRollout(s) {
     for (const f of names) {
       const file = path.join(day, f);
       try {
-        if (fs.statSync(file).mtimeMs < since) continue;
+        if (fs.statSync(file).mtimeMs < turnFrom) continue;
         // Первая строка — session_meta, около 20 КБ (инструкции модели); читается только начало файла.
         const fd = fs.openSync(file, 'r');
         const b = Buffer.alloc(256 * 1024);
@@ -1197,7 +1403,9 @@ function writeHooksSettings(port) {
   const statusLine = { type: 'command', command: `${nodeCommand()} ${fwd(STATUSLINE)} ${fwd(RATE_LIMITS_FILE)}` };
   try {
     const tmp = HOOKS_SETTINGS + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify({ hooks, statusLine }, null, 2));
+    // Сообщения других сессий (SendMessage) вкладка принимает сразу (t1211): в bypass Claude держит их на подтверждении и через 5 минут
+    // выбрасывает молча (spikes\peers-research\ВЫВОДЫ-сессии-видят-друг-друга.md, «Риски» п. 2). Значение --settings главнее settings.json человека.
+    fs.writeFileSync(tmp, JSON.stringify({ hooks, statusLine, crossSessionInbound: 'accept' }, null, 2));
     fs.renameSync(tmp, HOOKS_SETTINGS);
     return HOOKS_SETTINGS;
   } catch (e) {
@@ -1252,26 +1460,35 @@ function codexHookNode() {
  */
 function makeCodexHookArgs() {
   const node = codexHookNode();
-  if (!node) { log('node.exe в PATH не найден — Codex будет без хука SessionStart, номер найдёт codexRollout'); return []; }
+  if (!node) { log('node.exe в PATH не найден — Codex будет без хуков, номер найдёт codexRollout'); return []; }
   const command = `${node} ${platform.shellArg(process.platform, CODEX_HOOK)}`;
   /** @param {any} v @returns {any} */
   const sorted = (v) => Array.isArray(v) ? v.map(sorted) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted(v[k])])) : v;
-  const identity = { event_name: 'session_start', hooks: [{ type: 'command', command, timeout: CODEX_HOOK_TIMEOUT, async: false }] };
-  const hash = `sha256:${crypto.createHash('sha256').update(JSON.stringify(sorted(identity))).digest('hex')}`;
-  const key = `${process.platform === 'win32' ? 'C:\\<session-flags>\\config.toml' : '/<session-flags>/config.toml'}:session_start:0:0`;
+  const args = [];
+  /** @type {{ key: string, hash: string }[]} */
+  const trust = [];
+  // Каждое событие — свой -c и свой ключ доверия; таблица hooks.state одна на все: второй -c с той же таблицей заменил бы первую (t1210).
+  for (const [ev, name] of Object.entries(CODEX_HOOK_EVENTS)) {
+    const identity = { event_name: name, hooks: [{ type: 'command', command, timeout: CODEX_HOOK_TIMEOUT, async: false }] };
+    trust.push({
+      key: `${process.platform === 'win32' ? 'C:\\<session-flags>\\config.toml' : '/<session-flags>/config.toml'}:${name}:0:0`,
+      hash: `sha256:${crypto.createHash('sha256').update(JSON.stringify(sorted(identity))).digest('hex')}`,
+    });
+    args.push('-c', `hooks.${ev}=[{hooks=[{type="command",command=${JSON.stringify(command)},timeout=${CODEX_HOOK_TIMEOUT}}]}]`);
+  }
   codexHookCommand = command;
-  return ['-c', `hooks.SessionStart=[{hooks=[{type="command",command=${JSON.stringify(command)},timeout=${CODEX_HOOK_TIMEOUT}}]}]`, ...codexTrust(key, hash)];
+  return [...args, ...codexTrust(trust)];
 }
 
-/** Флаги доверия хуку: ключ и хэш — строки TOML в записи JSON. @param {string} key @param {string} hash */
-const codexTrust = (key, hash) => ['-c', `hooks.state={${JSON.stringify(key)}={trusted_hash=${JSON.stringify(hash)}}}`];
+/** Флаги доверия хукам — одна таблица: ключи и хэши — строки TOML в записи JSON. @param {{ key: string, hash: string }[]} trust */
+const codexTrust = (trust) => ['-c', `hooks.state={${trust.map((t) => `${JSON.stringify(t.key)}={trusted_hash=${JSON.stringify(t.hash)}}`).join(',')}}`];
 
 /**
  * Спросить сам Codex о своём хуке (t797): codex app-server с флагами хука, initialize и hooks/list — так делает Орка
  * (ref\orca-out\relay\win32-x64\managed-hook-runtime.js). Процесс гасится деревом в любом исходе. ~/.codex только читается.
  * @param {string} file @param {string[]} pre программа Codex мимо обёртки .cmd — как у вкладки (main\terminals.js) @param {string} cwd
  * @param {string[]} args флаги хука
- * @returns {Promise<{ version: string, hook: any } | { error: string }>} hook — запись нашего хука из hooks/list, null — её нет
+ * @returns {Promise<{ version: string, hooks: any[] } | { error: string }>} hooks — записи наших хуков из hooks/list (пусто — их нет)
  */
 function codexAsk(file, pre, cwd, args) {
   return new Promise((resolve) => {
@@ -1279,7 +1496,7 @@ function codexAsk(file, pre, cwd, args) {
     let p;
     try { p = spawn(file, [...pre, 'app-server', ...args], { cwd, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true }); } catch (e) { resolve({ error: `не запустился: ${e}` }); return; }
     let done = false;
-    /** @param {{ version: string, hook: any } | { error: string }} r */
+    /** @param {{ version: string, hooks: any[] } | { error: string }} r */
     const finish = (r) => {
       if (done) return;
       done = true;
@@ -1313,8 +1530,7 @@ function codexAsk(file, pre, cwd, args) {
         const all = [];
         const walk = (/** @type {any} */ v) => { if (Array.isArray(v)) v.forEach(walk); else if (v && typeof v === 'object') { if (typeof v.key === 'string' && typeof v.currentHash === 'string') all.push(v); else Object.values(v).forEach(walk); } };
         walk(m.result);
-        const hook = all.find((h) => h.command === codexHookCommand && /<session-flags>/.test(h.key)) || null;
-        finish({ version, hook });
+        finish({ version, hooks: all.filter((h) => h.command === codexHookCommand && /<session-flags>/.test(h.key)) });
       }
     }));
     send({ method: 'initialize', id: 1, params: { clientInfo: { name: 'kermach', title: 'Kermach', version: '1' } } });
@@ -1353,19 +1569,24 @@ function codexHookCheck(file, pre, cwd, again) {
     }
     /** @type {CodexHookCheck} */
     let r;
+    // Все ли наши хуки (по одному на событие CODEX_HOOK_EVENTS) есть и доверены; иначе — первый недоверенный, «нет», если хуков меньше.
+    const want = Object.keys(CODEX_HOOK_EVENTS).length;
+    /** @param {any[]} hooks */
+    const untrusted = (hooks) => hooks.length < want ? `хуков ${hooks.length} из ${want}` : (hooks.find((h) => h.trustStatus !== 'trusted') || { trustStatus: '' }).trustStatus;
     const first = await codexAsk(file, pre, cwd, codexHookArgs);
     if ('error' in first) r = { args: [], state: 'off', version: '', why: first.error, at: Date.now() };
-    else if (!first.hook) r = { args: [], state: 'off', version: first.version, why: 'нашего хука нет в hooks/list', at: Date.now() };
-    else if (first.hook.trustStatus === 'trusted') r = { args: codexHookArgs, state: 'ok', version: first.version, why: '', at: Date.now() };
+    else if (!first.hooks.length) r = { args: [], state: 'off', version: first.version, why: 'наших хуков нет в hooks/list', at: Date.now() };
+    else if (!untrusted(first.hooks)) r = { args: codexHookArgs, state: 'ok', version: first.version, why: '', at: Date.now() };
     else {
-      const args = [...codexHookArgs.slice(0, 2), ...codexTrust(first.hook.key, first.hook.currentHash)];
+      const was = untrusted(first.hooks);
+      const args = [...codexHookArgs.slice(0, -2), ...codexTrust(first.hooks.map((h) => ({ key: h.key, hash: h.currentHash })))];
       const second = await codexAsk(file, pre, cwd, args);
-      if (!('error' in second) && second.hook && second.hook.trustStatus === 'trusted') {
-        r = { args, state: 'fixed', version: second.version, why: `было ${first.hook.trustStatus}`, at: Date.now() };
-        log(`Codex ${second.version || '?'} сменил формулу хэша хука: был ${first.hook.trustStatus}, хэш взят у Codex`);
+      if (!('error' in second) && second.hooks.length && !untrusted(second.hooks)) {
+        r = { args, state: 'fixed', version: second.version, why: `было ${was}`, at: Date.now() };
+        log(`Codex ${second.version || '?'} сменил формулу хэша хука: был ${was}, хэш взят у Codex`);
       } else {
-        const why = 'error' in second ? second.error : `и с хэшем Codex — ${second.hook ? second.hook.trustStatus : 'хука нет'}`;
-        r = { args: [], state: 'off', version: first.version, why: `${first.hook.trustStatus}, ${why}`, at: Date.now() };
+        const why = 'error' in second ? second.error : `и с хэшем Codex — ${untrusted(second.hooks) || 'хуков нет'}`;
+        r = { args: [], state: 'off', version: first.version, why: `${was}, ${why}`, at: Date.now() };
       }
     }
     log(`хук Codex${r.version ? ' ' + r.version : ''}: ${r.state === 'off' ? `не работает (${r.why}) — вкладки Codex без хука, номер найдёт codexRollout` : r.state === 'fixed' ? 'работает с хэшем от Codex' : 'работает'}`);

@@ -170,8 +170,10 @@ function termius(scheme) {
   const m = W.mutedRgb || (/^#[0-9a-f]{6}$/i.test(W.muted || '') ? rgb(W.muted) : '141,145,165');
   const light = scheme.kind === 'light';
   const ok = (scheme.terminal && scheme.terminal.green) || W.accent;
+  // Текст окна — цвет текста терминала схемы (t757; в Termius Dark без схемы то же делает ui-kermach.css, t753). Нет цвета у терминала — text схемы.
+  const fg = (scheme.terminal && /^#[0-9a-f]{6}$/i.test(scheme.terminal.foreground || '') && scheme.terminal.foreground) || W.text;
   return {
-    ...scheme, ui: 'termius', window: { ...W, ok },
+    ...scheme, ui: 'termius', window: { ...W, ok, text: fg, tabActiveFg: fg },
     vars: { ...shape('termius'), '--card': W.tabActive || W.bg, '--term': (scheme.terminal && scheme.terminal.background) || W.bg, '--line-strong': `rgba(${m},.26)`,
       '--off': `rgba(${m},.3)`, '--knob': light ? '#FFFFFF' : W.text, '--tint-a': light ? '.14' : '.18' },
   };

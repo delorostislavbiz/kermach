@@ -27,9 +27,10 @@ function readCodex(dataDir) {
   catch (e) { return /** @type {any} */ (e).code === 'ENOENT' ? none('no_file', 'Codex ещё не опрошен: файла лимитов нет') : none('bad_file', 'файл лимитов Codex не читается'); }
   const five = windowOf(d && d.rate_limits && d.rate_limits.five_hour);
   const week = windowOf(d && d.rate_limits && d.rate_limits.seven_day);
+  const month = windowOf(d && d.rate_limits && d.rate_limits.month);
   return { source: 'codex', status: d.status === 'ok' ? 'ok' : 'no_data', reason: d.reason || null, message: d.message || null,
     checked_ts: typeof d.checked_ts === 'number' ? d.checked_ts : null, ts: typeof d.ts === 'number' ? d.ts : null,
-    rate_limits: five || week ? { ...(five && { five_hour: five }), ...(week && { seven_day: week }) } : null };
+    rate_limits: five || week || month ? { ...(five && { five_hour: five }), ...(week && { seven_day: week }), ...(month && { month }) } : null };
 }
 
 /**

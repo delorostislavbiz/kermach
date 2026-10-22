@@ -5,21 +5,22 @@
 // Как у Орки (ref\orca-out\main\session-scanner-service-entry.js): таблица файлов со смещением — журнал дочитывается с места остановки, а не заново.
 // Иначе, чем у Орки: в индекс идёт только текст человека и агента. Вывод инструментов не индексируется — в нём объём и секреты (решение по t767).
 // Таблицы:
-//   sessions — разговор: key = 'claude:<id>' | 'codex:<id>', поля записи из контракта (ПЛАН-история.md, раздел 3) без live, hit, projectId.
+//   sessions — разговор: key = 'claude:<id>' | 'codex:<id>', поля записи из контракта (ПЛАН-история.md, раздел 3) без live, hit, projectId;
+//              turn и turn_why — чем кончается журнал (scan.js, turnOf), из них main.js выводит состояние разговора (t1115).
 //   files    — журнал разговора: размер и время, по которым видно, что он изменился; offset — до какого байта прочитан; done — прочитан до конца.
 //   msgs     — сообщение: чьё, когда, какого разговора; msg_fts — его текст, rowid тот же (по нему удаляются сообщения разговора).
 const fs = require('fs');
 const path = require('path');
 
-/** Версия схемы: другая в файле — база создаётся заново (индекс восстановим из журналов). */
-const SCHEMA = 1;
+/** Версия схемы: другая в файле — база создаётся заново (индекс восстановим из журналов). 2 — turn и turn_why (t1115). */
+const SCHEMA = 2;
 
 const SQL = `
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS sessions (
   key TEXT PRIMARY KEY, agent TEXT, id TEXT, file TEXT, cwd TEXT, branch TEXT, model TEXT, agent_name TEXT,
   created TEXT, updated TEXT, messages INTEGER DEFAULT 0, first_prompt TEXT, custom_title TEXT, ai_title TEXT, agent_title TEXT,
-  parent TEXT, subagents INTEGER DEFAULT 0, bytes INTEGER DEFAULT 0);
+  parent TEXT, subagents INTEGER DEFAULT 0, bytes INTEGER DEFAULT 0, turn TEXT, turn_why TEXT);
 CREATE INDEX IF NOT EXISTS sessions_parent ON sessions(parent);
 CREATE TABLE IF NOT EXISTS files (file TEXT PRIMARY KEY, key TEXT, size INTEGER, mtime REAL, offset INTEGER DEFAULT 0, done INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS msgs (id INTEGER PRIMARY KEY, key TEXT, role TEXT, ts TEXT);
@@ -29,7 +30,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS msg_fts USING fts5(text, tokenize = "unicode6
 
 /** Поля sessions, которые пишет сканер. */
 const COLS = ['agent', 'id', 'file', 'cwd', 'branch', 'model', 'agent_name', 'created', 'updated', 'messages', 'first_prompt',
-  'custom_title', 'ai_title', 'agent_title', 'parent', 'subagents', 'bytes'];
+  'custom_title', 'ai_title', 'agent_title', 'parent', 'subagents', 'bytes', 'turn', 'turn_why'];
 
 /** Открыть базу; схема другая или файл испорчен — удалить и создать заново. @param {string} file @param {(m: string) => void} log */
 function open(file, log) {

@@ -77,6 +77,12 @@ function parsePs(out) {
 const LINK_PROGRAMS = /\.(exe|com|bat|cmd|ps1|psm1|ps1xml|psd1|vbs|vbe|js|jse|wsf|wsh|msc|msi|msp|msix|appx|appinstaller|scr|pif|lnk|url|reg|hta|cpl|jar|appref-ms|application|scf|inf|diagcab|settingcontent-ms|py|pyw|sh)$/i;
 
 /**
+ * Из LINK_PROGRAMS и MAC_LINK_PROGRAMS — скрипты: обычный текст, ссылку на них (src\main\main.js:120) открываем на чтение в Блокноте или TextEdit,
+ * а не программой по умолчанию, которая их выполнила бы (t1209, d127). Exe, установщики, ярлыки и файлы-ссылки сюда не входят — отказ как был.
+ */
+const LINK_TEXT = /\.(js|jse|ps1|psm1|psd1|cmd|bat|vbs|wsf|py|pyw|sh|zsh|bash|rb|pl|command)$/i;
+
+/**
  * Файлы, которые macOS не открывает, а запускает: ссылку на них из терминала программа не открывает (t58, t222-Б).
  * Программы и установщики, скрипты (Finder откроет их в Терминале и выполнит), расширения системы, файлы-ссылки на адрес или файл.
  */
@@ -88,4 +94,4 @@ const MAC_LINK_PROGRAMS = /\.(app|command|tool|sh|zsh|bash|csh|ksh|pkg|mpkg|dmg|
  */
 const executable = (mode) => (mode & 0o111) !== 0;
 
-module.exports = { parseShellPath, mergePath, loginPath, PS_ARGS, parsePs, LINK_PROGRAMS, MAC_LINK_PROGRAMS, executable, UNIX_EXTRA, SHELL_PATH_MS, MARK };
+module.exports = { parseShellPath, mergePath, loginPath, PS_ARGS, parsePs, LINK_PROGRAMS, MAC_LINK_PROGRAMS, LINK_TEXT, executable, UNIX_EXTRA, SHELL_PATH_MS, MARK };

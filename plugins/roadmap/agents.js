@@ -92,13 +92,19 @@ function launchArgs(agent, model, effort) {
   return { args, skipped: '' };
 }
 
-/** Лестница повторных попыток claude (t830): каждая следующая попытка — ступенью выше, выше верхней не идём. */
-const LADDER = [{ model: 'sonnet', effort: 'низкое' }, { model: 'sonnet', effort: 'среднее' }, { model: 'opus', effort: 'среднее' }];
+/**
+ * Лестница повторных попыток claude (t830, по ярусам t1046): каждая следующая попытка — ступенью выше, выше верхней не идём.
+ * Ступени — ярусы size.js: sonnet низкое (с советником перед сдачей) → opus низкое → opus среднее. Haiku в лестнице нет:
+ * его ставит только человек (pick: человек), а такую карту повтор не повышает.
+ */
+const LADDER = [{ model: 'sonnet', effort: 'низкое' }, { model: 'opus', effort: 'низкое' }, { model: 'opus', effort: 'среднее' }];
 /** Без регистра, «ё» как «е». @param {unknown} s */
 const low = (s) => String(s || '').trim().toLowerCase().replace(/ё/g, 'е');
 /**
  * Модель и усилие попытки tries (1 — первая). Ступень — от модели и усилия карты, плюс одна на каждую повторную попытку: понижения нет.
- * Не повышаем: не claude, модель назвал человек (pick: человек), модель и усилие карты не из лестницы (пусто — по умолчанию claude, его ступень неизвестна).
+ * Пара «модель усилие» не из лестницы, но модель в ней есть (sonnet среднее, opus высокое) — ступень последняя с этой моделью:
+ * opus высокое выше верхней — не меняется; sonnet среднее → opus низкое. Пустые model и effort — ярус size.js подставляет nextOf (main.js) до вызова.
+ * Не повышаем: не claude, модель назвал человек (pick: человек), модели карты нет в лестнице (haiku, fable, пусто).
  * note — строка для журнала плагина; первая попытка — пусто.
  * @param {string} agent @param {string} model @param {string} effort @param {number} tries @param {unknown} pick
  * @returns {{ model: string, effort: string, note: string }}
@@ -110,7 +116,8 @@ function raise(agent, model, effort, tries, pick) {
   const card = [was.model, was.effort].filter(Boolean).join(' ') || 'по умолчанию';
   if (agent !== 'claude') return { ...was, note: `${head} — модель не повышаю: исполнитель ${agent}` };
   if (low(pick) === 'человек') return { ...was, note: `${head} — модель не повышаю: её назвал человек (pick: человек)` };
-  const base = LADDER.findIndex((s) => s.model === low(was.model) && low(s.effort) === low(was.effort));
+  const exact = LADDER.findIndex((s) => s.model === low(was.model) && low(s.effort) === low(was.effort));
+  const base = exact >= 0 ? exact : LADDER.map((s) => s.model).lastIndexOf(low(was.model));
   if (base < 0) return { ...was, note: `${head} — модель не повышаю: «${card}» нет в лестнице повторных попыток` };
   const top = Math.min(base + tries - 1, LADDER.length - 1);
   if (top === base) return { ...was, note: `${head} — ${card}: выше ступени нет` };

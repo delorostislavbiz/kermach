@@ -16,6 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 const board = require('./board');
+const size = require('./size');
 
 /** Встроенные шаблоны: запасной текст, когда своей копии нет. */
 const TEMPLATES = path.join(__dirname, 'prompt.md');
@@ -27,10 +28,18 @@ const NEWCARD = 'newcard.md';
 const SAMPLE = path.join(__dirname, 'samples', 't12.md');
 const MAX_TEMPLATES = 64 * 1024;
 const RULES = 'Общие правила';
+/** «Свежее» (t1105): до стольких закрытых карт, новые первыми, и предел знаков для решений и тупиков; остальное — строкой «Ещё M». */
+const FRESH_CARDS = 8;
+const FRESH_MAX = 20000;
 const KIND_RE = /^шаблон:\s*(.+)$/i;
 const FRESH_NOTE = 'заметки карт этой фазы, закрытых после составления роадмапа; новые решения и тупики; все действующие договорённости; карты во «Входящих» по тем же файлам';
 /** Строка карты с advisor: да (t830). Инструмента нет (чужая машина без advisorModel) — агент говорит об этом, а не молчит. */
 const ADVISOR_LINE = 'Советник: позови советника (инструмент advisor) до первой правки и ещё раз перед тем, как закрыть карту. Инструмента advisor нет — напиши об этом в «Что сделано» и работай без него.';
+/**
+ * Строка карты яруса sonnet (t1046): советник один раз, перед сдачей. Замер t1042: без советника Sonnet сдал скрытую ошибку t802 в 4 прогонах из 4,
+ * с советником перед сдачей — 0 из 4; вызов «до первой правки» ошибок не ловил и стоил 20 % шагов.
+ */
+const ADVISOR_ONCE = 'Советник: перед тем, как закрыть карту, позови советника (инструмент advisor) один раз и исправь, что он нашёл. Инструмента advisor нет — напиши об этом в «Что сделано» и работай без него.';
 /** Значение «да» в шапке: без регистра, пробелы по краям не важны. @param {unknown} v */
 const isYes = (v) => typeof v === 'string' && norm(v) === 'да';
 
@@ -101,6 +110,12 @@ function templateFile(dataDir, name = OWN) {
 }
 
 /** Подстановки по ключам vars: {папка}, {образец}, {карта} — промпт карты; {проект}, {формат}, {образцы} — задание t519. Чужие скобки остаются как есть. @param {string} text @param {Record<string, string>} vars */
+/**
+ * «@» в начале слова → «＠» (U+FF20), t1128: Claude Code в первом сообщении и в набранной строке разворачивает «@путь» во вложение файла —
+ * пример в карте приложил агенту закрытый ключ. Проверено настоящим claude 2.1.304: с «＠» файл не читается (spikes/t1128-at).
+ * «@» внутри слова (e-mail, user@host) Claude Code не трогает — и мы не трогаем. @param {string} s
+ */
+const defuseAt = (s) => String(s).replace(/(^|[\s"'`([{<«„])@(?=[^\s@])/gm, '$1＠');
 const subst = (text, vars) => text.replace(/\{([^{}\n]{1,20})\}/g, (all, k) => (Object.hasOwn(vars, k) ? vars[k] : all));
 
 /**
@@ -153,20 +168,31 @@ function fresh(b, card, now = Date.now()) {
   const skipped = [];
   /** @type {string[]} записи d<N>, которые уже в «Свежем»: подбор t834 их не повторяет */
   const shown = [];
+  /** @type {{ id: string, t: number, line: string }[]} */
+  const closedLines = [];
   for (const c of b.cards) {
     if (c.id === card.id || c.status !== 'готово') continue;
     if (!card.phase || c.phase !== card.phase) { if (c.phase) skipped.push({ id: c.id, why: `закрыта в другой фазе ${c.phase}` }); continue; }
     const t = when(c.closed);
     if (!isNaN(since) && !isNaN(t) && t <= since) { skipped.push({ id: c.id, why: 'закрыта до карты (closed)' }); continue; }
     if (!isNaN(since) && isNaN(t) && !(when(c.created) > since)) { skipped.push({ id: c.id, why: 'нет closed, заведена не позже карты — когда закрыта, неизвестно' }); continue; }
+    // t1105: в большой фазе закрытых сотни — без общих файлов карта не подаётся (у карты без файлов — по фазе, как раньше).
+    if (own.length && !shared(paths(c.fields.files), own).length) { skipped.push({ id: c.id, why: 'закрыта в этой фазе, но по другим файлам' }); continue; }
     const proof = flat(c.fields.proof);
     const done = flat(c.fields.done).replace(/[.;]+$/, '');
-    lines.push(`Закрыта ${c.id} (${c.agent || 'агент не указан'}): ${done || 'заметки «Что сделано» нет'}${proof ? `; доказательство: ${proof}` : '.'}`);
+    closedLines.push({ id: c.id, t: isNaN(t) ? 0 : t, line: `Закрыта ${c.id} (${c.agent || 'агент не указан'}): ${done || 'заметки «Что сделано» нет'}${proof ? `; доказательство: ${proof}` : '.'}` });
   }
+  // Новые первыми; сверх FRESH_CARDS — в skipped и строкой «ещё M» в конце части.
+  closedLines.sort((x, y) => y.t - x.t);
+  for (const x of closedLines.slice(FRESH_CARDS)) skipped.push({ id: x.id, why: `сверх ${FRESH_CARDS} новых закрытых` });
+  lines.push(...closedLines.slice(0, FRESH_CARDS).map((x) => x.line));
+  let more = Math.max(0, closedLines.length - FRESH_CARDS);
+  let used = lines.reduce((n, l) => n + l.length, 0);
   for (const d of b.decisions) {
     if (d.cancelled) { skipped.push({ id: d.id, why: `отменена ${d.cancelled}` }); continue; }
     if (d.wrong?.length) { skipped.push({ id: d.id, why: `агент ${d.wrong.join(', ')} отметил «неверна», ждёт человека` }); continue; }
     if (d.until && when(d.until) < today) { skipped.push({ id: d.id, why: `срок до ${d.until} прошёл` }); continue; }
+    if (d.type === 'заметка') { skipped.push({ id: d.id, why: 'заметка: агенту не подаётся' }); continue; }
     const pact = d.type === 'договорённость';
     if (!pact) {
       const df = paths(d.files);
@@ -178,7 +204,11 @@ function fresh(b, card, now = Date.now()) {
     }
     const who = [d.card, d.agent, d.how === 'догадка' ? 'догадка, не проверено' : ''].filter(Boolean).join(', ');
     const text = decText(d.text);
-    lines.push(`${pact ? 'Договорённость' : d.type === 'тупик' ? 'Тупик' : 'Решение'}${who ? ` (${who})` : ''}: ${d.title}${text ? ` — ${text}` : ''}`);
+    const line = `${pact ? 'Договорённость' : d.type === 'тупик' ? 'Тупик' : 'Решение'}${who ? ` (${who})` : ''}: ${d.title}${text ? ` — ${text}` : ''}`;
+    // Предел знаков (t1105) — только для решений и тупиков: договорённости подаются всегда.
+    if (!pact && used + line.length > FRESH_MAX) { skipped.push({ id: d.id, why: `сверх ${FRESH_MAX} знаков «Свежего»` }); more++; continue; }
+    if (!pact) used += line.length;
+    lines.push(line);
     shown.push(d.id);
   }
   for (const id of b.inbox) {
@@ -188,6 +218,7 @@ function fresh(b, card, now = Date.now()) {
     if (!common.length) { skipped.push({ id: c.id, why: 'во «Входящих», но по другим файлам' }); continue; }
     lines.push(`Входящие ${c.id} (${common.join(', ')}): ${c.title}`);
   }
+  if (more) lines.push(`Ещё ${more}: не показаны, искать в папке доски ${b.root}.`);
   return { text: lines.length ? lines.join('\n') : 'Нового нет.', lines, skipped, shown };
 }
 
@@ -278,7 +309,7 @@ function queryBits(text) {
 function search(b, text, limit = PICK_LIMIT, now = Date.now()) {
   const today = dayOf(now);
   // Паттерн (t1004) notes не показывает: утверждение — в папке данных программы, а у команды её нет; неутверждённый ушёл бы агенту как «Решение».
-  const pool = b.decisions.filter((d) => d.type !== 'договорённость' && d.type !== 'паттерн' && !d.cancelled && !d.wrong?.length && !(d.until && when(d.until) < today));
+  const pool = b.decisions.filter((d) => d.type !== 'договорённость' && d.type !== 'паттерн' && d.type !== 'заметка' && !d.cancelled && !d.wrong?.length && !(d.until && when(d.until) < today));
   const files =String(text).match(/[\w.-]+[\\/][\w.\\/-]+|\b[\w-]+\.(?:js|md|json|ps1|py|cmd|php|css|html)\b/g) || [];
   return rank(pool, { text, errs: queryBits(text), files: paths(files) }, limit, SEARCH_MIN_THEME);
 }
@@ -367,7 +398,7 @@ function noteLine(d) {
   const who = [d.card, d.agent, d.how === 'догадка' ? 'догадка, не проверено' : '', d.repeats.length ? `повторы: ${d.repeats.join(', ')}` : ''].filter(Boolean).join(', ');
   const t = decText(d.text);
   const text = t.length > PICK_TEXT ? `${cutText(d.text)} (целиком — ${d.file})` : t;
-  return `${d.type === 'тупик' ? 'Тупик' : 'Решение'} ${d.id}${who ? ` (${who})` : ''}: ${d.title}${text ? ` — ${text}` : ''}`;
+  return `${d.type === 'тупик' ? 'Тупик' : d.type === 'заметка' ? 'Заметка' : 'Решение'} ${d.id}${who ? ` (${who})` : ''}: ${d.title}${text ? ` — ${text}` : ''}`;
 }
 
 /** Порог похожести записей (t835): на повторах доски t834 (t585) при 0.15 нет пометок мимо своей причины, ниже — появляются. */
@@ -477,7 +508,7 @@ function mergeTitle(old, rep) {
  */
 function notes(b, card, shown, now = Date.now()) {
   const today = dayOf(now);
-  const pool = b.decisions.filter((d) => d.type !== 'договорённость' && !d.cancelled && !d.wrong?.length && !(d.until && when(d.until) < today) && !shown.includes(d.id));
+  const pool = b.decisions.filter((d) => d.type !== 'договорённость' && d.type !== 'заметка' && !d.cancelled && !d.wrong?.length && !(d.until && when(d.until) < today) && !shown.includes(d.id));
   const r = pick(pool, card);
   const lines = r.shown.map(({ d }) => noteLine(d));
   const n = lines.length, m = r.total;
@@ -590,10 +621,23 @@ function passportText(b) {
   return { text: lines.join('\n'), empty };
 }
 
-/** Сама карта: заголовок, поля с подписями, зависимости со статусами, человек. @param {import('./board').Board} b @param {import('./board').Card} c */
-function cardText(b, c) {
+/**
+ * Сама карта: заголовок, поля с подписями, зависимости со статусами, человек.
+ * model — модель запуска (ступень лестницы из main.js nextOf); пусто — модель карты или ярус size.js.
+ * @param {import('./board').Board} b @param {import('./board').Card} c @param {string} [model]
+ */
+function cardText(b, c, model) {
   const lines = [`${c.id}: ${c.title || '(без заголовка)'}`];
-  for (const [k, label] of Object.entries(board.CARD_FIELDS)) {
+  if (c.body) {
+    // t1105: весь текст карты по порядку файла — ответы «## Ответ оркестратора» и свободные строки доходят до агента.
+    // Пустые «Что сделано: —» и «Доказательство: —» не подаём, как раньше; поле, которого в файле нет, — строкой «—» в конце.
+    const empty = new RegExp(`^(${board.CARD_FIELDS.done}|${board.CARD_FIELDS.proof}):\\s*[—-]?\\s*$`);
+    lines.push(...c.body.split('\n').filter((l) => !empty.test(l)));
+    for (const [k, label] of Object.entries(board.CARD_FIELDS)) {
+      if (k === 'done' || k === 'proof' || c.body.split('\n').some((l) => l.startsWith(`${label}:`))) continue;
+      lines.push(`${label}: —`);
+    }
+  } else for (const [k, label] of Object.entries(board.CARD_FIELDS)) {
     const v = c.fields[k];
     if (!v && (k === 'done' || k === 'proof')) continue;
     const ls = v ? v.split('\n') : ['—'];
@@ -605,15 +649,23 @@ function cardText(b, c) {
   if (c.human) lines.push(`Человек: ${c.human}`);
   // Советник (t830): карта с advisor: да — прод, деньги, необратимое; длинная правка кода по готовому брифу (t831). Без прямой строки Sonnet его не зовёт (spikes\advisor-cmp\ИТОГ.md).
   // Инструмент advisor есть только у claude: у codex и других агентов строку не даём, даже при ручном advisor: да.
-  if (isYes(c.extra.advisor) && norm(c.agent || 'claude') === 'claude') lines.push(ADVISOR_LINE);
+  const claude = norm(c.agent || 'claude') === 'claude';
+  if (isYes(c.extra.advisor) && claude) lines.push(ADVISOR_LINE);
+  else if (claude) {
+    // Ярус sonnet (t1046): советник один раз перед сдачей. Модель запуска — из nextOf; без неё — поле карты или ярус size.js (команда prompt, окно).
+    const step = size.stepOf(c);
+    const m = norm(model || c.model || (step ? step.model : ''));
+    if (m === 'sonnet') lines.push(ADVISOR_ONCE);
+  }
   return lines.join('\n');
 }
 
 /**
  * Промпт карты. Возвращает части с подписями и весь текст; ошибка — { error }.
  * opts.board — уже прочитанная доска; opts.dataDir — папка данных плагина (своя копия шаблонов); opts.templates — файл шаблонов прямо (проба);
+ * opts.model — модель этого запуска (ступень лестницы), для строки советника.
  * @param {string} project @param {string} ref
- * @param {{ board?: import('./board').Board, dataDir?: string, templates?: string }} [opts]
+ * @param {{ board?: import('./board').Board, dataDir?: string, templates?: string, model?: string }} [opts]
  */
 function build(project, ref, opts = {}) {
   const b = opts.board || board.read(project);
@@ -651,11 +703,13 @@ function build(project, ref, opts = {}) {
     { n: 1, key: 'rules', title: 'Общие правила', note: 'один текст на все проекты', v: {}, text: subst(t.rules, vars) || '(общих правил нет)' },
     { n: 2, key: 'passport', title: 'Паспорт проекта', note: `9 разделов, пустых ${pass.empty}`, v: { empty: String(pass.empty) }, text: pass.text },
     { n: 3, key: 'kind', title: 'Шаблон вида работы', note: `шаблон «${card.kind}»`, v: { kind: card.kind }, text: subst(kindText || '', vars) || '(шаблона нет)' },
-    { n: 4, key: 'card', title: 'Карта', note: `${card.id} · ${phase ? phase.title || phase.id : 'Входящие'}`, v: { id: card.id, phase: phase ? phase.title || phase.id : '' }, text: cardText(b, card) },
+    { n: 4, key: 'card', title: 'Карта', note: `${card.id} · ${phase ? phase.title || phase.id : 'Входящие'}`, v: { id: card.id, phase: phase ? phase.title || phase.id : '' }, text: cardText(b, card, opts.model) },
     { n: 5, key: 'fresh', title: 'Свежее', note: FRESH_NOTE, v: {}, text: fr.text },
     { n: 6, key: 'notes', title: 'Заметки к задаче', note: `${pt.n ? `паттернов ${pt.n}; ` : ''}показано ${nt.n} из ${nt.m}, подбор по словам карты${sh.m ? `; общая база ${sh.n} из ${sh.m}` : ''}`,
       v: { n: String(nt.n), m: String(nt.m), sn: String(sh.n), sm: String(sh.m), pn: String(pt.n) }, text: nt.text },
   ];
+  // t1128: «@путь» из карты, записей и шаблонов не должен стать вложением файла у Claude Code.
+  for (const p of parts) p.text = defuseAt(p.text);
   const text = parts.map((p) => `## ${p.n}. ${p.title}\n${p.text}`).join('\n\n') + '\n';
   // template — раздел «## Шаблон: <вид>» как в файле, без подстановок: его показывает «Открыть шаблон» (t604).
   // served (t1008) — d<N>, поданные в частях 5 и 6, с утверждёнными паттернами; s<N> общей базы — не номера этой доски, не входят.
@@ -730,4 +784,4 @@ const compose = (project, opts = {}) => task(project, COMPOSE, opts);
 /** Задание «Новая карта» (t818) из newcard.md: доска уже есть, агент заводит одну карту. @param {string} project @param {{ dataDir?: string }} [opts] */
 const newcard = (project, opts = {}) => task(project, NEWCARD, opts);
 
-module.exports = { TEMPLATES, FRESH_NOTE, ADVISOR_LINE, templates, templateFile, paths, shared, fresh, pick, search, wrongNotes, noteLine, alikeNotes, alikePattern, mergeTitle, notes, build, compose, newcard };
+module.exports = { TEMPLATES, defuseAt, FRESH_NOTE, ADVISOR_LINE, ADVISOR_ONCE, templates, templateFile, paths, shared, fresh, pick, search, wrongNotes, noteLine, alikeNotes, alikePattern, mergeTitle, notes, build, compose, newcard };

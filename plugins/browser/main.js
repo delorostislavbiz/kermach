@@ -27,10 +27,11 @@ const marks = require('./marks');
 /**
  * @typedef {{ dataDir: string, log: (m: string) => void }} Ctx
  * pos — место вкладки в общей полосе окна, считая терминалы (t133); нет — вкладка из файла до t133, встаёт после терминалов.
- * view — вид вкладки (t207): 'mobile' или 'tablet'; нет поля — «Компьютер», как до t207.
- * @typedef {{ id: string, url: string, title: string, pos?: number, view?: 'mobile' | 'tablet', agent?: true, site?: string, any?: true }} BrowserTab
+ * view — вид вкладки (t207): 'mobile', 'tablet' или свой размер 'c:<id>' (t1146); нет поля — «Компьютер», как до t207.
+ * @typedef {{ id: string, url: string, title: string, pos?: number, view?: string, agent?: true, human?: true, site?: string, any?: true }} BrowserTab
  * @typedef {{ width: number, height: number }} ViewSize
- * @typedef {{ mobile: ViewSize, tablet: ViewSize }} Views
+ * @typedef {{ id: string, name: string, width: number, height: number }} CustomView
+ * @typedef {{ mobile: ViewSize, tablet: ViewSize, custom: CustomView[] }} Views
  * @typedef {{ v: 1, tabs: BrowserTab[] }} BrowserData
  * @typedef {(wc: import('electron').WebContents) => ({ id: string, name: string } | null)} ProjectOf
  */
@@ -83,10 +84,15 @@ const editing = new Map();
  * лежат в browser.json папки данных — свой файл плагина, общий settings.json (main\settings.js) чужие поля отбрасывает.
  * @type {Views}
  */
-const VIEWS = { mobile: { width: 390, height: 844 }, tablet: { width: 820, height: 1180 } };
-/** Границы размера вида: уже 240 сайты не рассчитывают, шире 2000 — уже не мобильный и не планшет. */
-const VIEW_MIN = 240;
-const VIEW_MAX = 2000;
+const VIEWS = { mobile: { width: 390, height: 844 }, tablet: { width: 820, height: 1180 }, custom: [] };
+/** Границы размера вида (t1146, слово Ростислава): меньше 200 и больше 4000 не сохраняются. */
+const VIEW_MIN = 200;
+const VIEW_MAX = 4000;
+/** Своих размеров (t1146): всего с «Мобильным» и «Планшетом» не больше 8. Имя — не длиннее 40 знаков. */
+const CUSTOM_MAX = 6;
+const NAME_MAX = 40;
+/** Вид вкладки «свой размер»: 'c:' и номер размера. */
+const CUSTOM_RE = /^c:([0-9a-z]{1,16})$/i;
 /**
  * userAgent вида: мобильный — iPhone, как у Орки (IOr в ref\orca-out\main\index.js), планшет — iPad. Версия Chrome — своя (CriOS).
  * «Компьютер» — userAgent Electron без изменений.
@@ -105,8 +111,41 @@ function cleanSize(raw, base) {
   return { width: one(r.width, base.width), height: one(r.height, base.height) };
 }
 
+/**
+ * Свои размеры (t1146): номер — латиница и цифры, без повторов; пустое имя или неверное число — прежнее значение того же номера,
+ * нового номера с неверным размером в списке не будет. Больше CUSTOM_MAX — лишние отброшены. Не массив — прежний список.
+ * @param {any} raw @param {CustomView[]} base @returns {CustomView[]}
+ */
+function cleanCustom(raw, base) {
+  if (!Array.isArray(raw)) return base;
+  /** @type {CustomView[]} */
+  const out = [];
+  const seen = new Set();
+  for (const r of raw) {
+    if (out.length >= CUSTOM_MAX) break;
+    if (!r || typeof r.id !== 'string' || !/^[0-9a-z]{1,16}$/i.test(r.id) || seen.has(r.id)) continue;
+    const was = base.find((x) => x.id === r.id);
+    const name = typeof r.name === 'string' ? r.name.trim().slice(0, NAME_MAX) : '';
+    const size = cleanSize(r, was || { width: 0, height: 0 });
+    if (!size.width || !size.height || !(name || was)) continue;
+    seen.add(r.id);
+    out.push({ id: r.id, name: name || /** @type {CustomView} */ (was).name, width: size.width, height: size.height });
+  }
+  return out;
+}
+
 /** @param {any} raw @param {Views} base @returns {Views} */
-const cleanViews = (raw, base) => ({ mobile: cleanSize(raw && raw.mobile, base.mobile), tablet: cleanSize(raw && raw.tablet, base.tablet) });
+const cleanViews = (raw, base) => ({ mobile: cleanSize(raw && raw.mobile, base.mobile), tablet: cleanSize(raw && raw.tablet, base.tablet),
+  custom: cleanCustom(raw && raw.custom, base.custom) });
+
+/** Размер вида вкладки: 'mobile', 'tablet' или свой 'c:<id>'; такого нет — null. @param {unknown} kind @returns {ViewSize | null} */
+function sizeOf(kind) {
+  const v = getViews();
+  if (kind === 'mobile' || kind === 'tablet') return v[kind];
+  const m = typeof kind === 'string' ? CUSTOM_RE.exec(kind) : null;
+  const c = m ? v.custom.find((x) => x.id === m[1]) : null;
+  return c ? { width: c.width, height: c.height } : null;
+}
 
 /** Размеры видов. Нет файла — умолчания; испорчен — умолчания и строка в журнал. @returns {Views} */
 function getViews() {
@@ -123,12 +162,20 @@ function getViews() {
   return views;
 }
 
-/** Новые размеры видов: запись через временный файл и рассылка всем окнам — вкладки в этом виде меняют размер сразу. @param {any} patch */
+/**
+ * Новые размеры видов: запись через временный файл и рассылка всем окнам — вкладки в этом виде меняют размер сразу.
+ * custom в patch (t1146) — весь список своих размеров; длиннее CUSTOM_MAX — отказ целиком, а не обрезка.
+ * @param {any} patch
+ */
 function setViews(patch) {
   const c = /** @type {Ctx} */ (ctx);
   const had = getViews();
   const p = patch && typeof patch === 'object' ? patch : {};
-  const next = cleanViews({ mobile: { ...had.mobile, ...(p.mobile || {}) }, tablet: { ...had.tablet, ...(p.tablet || {}) } }, had);
+  if (Array.isArray(p.custom) && p.custom.length > CUSTOM_MAX) {
+    c.log(`браузер: свои размеры не приняты — ${p.custom.length}, можно не больше ${CUSTOM_MAX}`);
+    return had;
+  }
+  const next = cleanViews({ mobile: { ...had.mobile, ...(p.mobile || {}) }, tablet: { ...had.tablet, ...(p.tablet || {}) }, custom: p.custom }, had);
   if (JSON.stringify(next) === JSON.stringify(had)) return had;
   views = next;
   const file = path.join(c.dataDir, 'browser.json');
@@ -136,7 +183,8 @@ function setViews(patch) {
     fs.writeFileSync(file + '.tmp', JSON.stringify({ v: 1, views }, null, 2));
     fs.renameSync(file + '.tmp', file);
   } catch (e) { c.log(`браузер: размеры видов не записаны в ${file}: ${e}`); }
-  c.log(`браузер: вид «Мобильный» ${views.mobile.width}×${views.mobile.height}, «Планшет» ${views.tablet.width}×${views.tablet.height}`);
+  c.log(`браузер: вид «Мобильный» ${views.mobile.width}×${views.mobile.height}, «Планшет» ${views.tablet.width}×${views.tablet.height}`
+    + `, свои: ${views.custom.map((x) => `«${x.name}» ${x.width}×${x.height}`).join(', ') || 'нет'}`);
   for (const w of webContents.getAllWebContents()) if (!w.isDestroyed() && w.getType() === 'window') w.send('browser:views', views);
   return views;
 }
@@ -144,23 +192,29 @@ function setViews(patch) {
 /**
  * Вид гостя (t207): размер страницы задаёт сам тег (window.js), здесь — userAgent и эмуляция мобильного экрана (screen.width, meta viewport).
  * userAgent действует со следующей загрузки: сменился — ответ changed, страница окна перезагружает гостя.
- * @param {import('electron').WebContents} g @param {'desktop' | 'mobile' | 'tablet'} kind
+ * Свой размер (t1146) — для проверки переломов вёрстки по ширине: userAgent компьютерный, экран этого размера.
+ * Эмуляция — как у «Мобильного»: экран страницы (screen.width) того же размера. Ширина самой страницы — от размера вкладки в окне;
+ * при масштабе экрана не 100 % она дробная и может быть больше заданной меньше чем на 1 px (замер t1146: 1280,6 при 110 %).
+ * @param {import('electron').WebContents} g @param {string} kind 'desktop', 'mobile', 'tablet' или 'c:<id>'
+ * @param {ViewSize | null} size
  */
-function applyView(g, kind) {
+function applyView(g, kind, size) {
   const base = app.userAgentFallback;
-  const ua = kind === 'desktop' ? base : UA[kind]((base.match(/Chrome\/(\d+)/) || [])[1] || '134');
+  const ua = kind === 'mobile' || kind === 'tablet' ? UA[kind]((base.match(/Chrome\/(\d+)/) || [])[1] || '134') : base;
   const changed = (g.getUserAgent() || base) !== ua;
   if (changed) g.setUserAgent(ua);
-  if (kind === 'desktop') g.disableDeviceEmulation();
+  if (!size) g.disableDeviceEmulation();
   else {
-    const size = getViews()[kind];
-    g.enableDeviceEmulation({ screenPosition: 'mobile', screenSize: size, viewPosition: { x: 0, y: 0 }, deviceScaleFactor: 0, viewSize: size, scale: 1 });
+    const screenPosition = kind === 'mobile' || kind === 'tablet' ? 'mobile' : 'desktop';
+    g.enableDeviceEmulation({ screenPosition, screenSize: size, viewPosition: { x: 0, y: 0 }, deviceScaleFactor: 0, viewSize: size, scale: 1 });
   }
   return changed;
 }
 
 /** Постоянное хранилище сайта для проекта. @param {string} id номер проекта */
 const partitionOf = (id) => `persist:browser-${id}`;
+/** Хранилище вкладок «только для меня» (t885): отдельное от общего, куки и входы из него агенту недоступны. @param {string} id */
+const humanPartitionOf = (id) => `persist:browser-${id}-human`;
 
 /** Адрес, который пускаем во вкладку: только http и https. @param {unknown} u */
 function webUrl(u) {
@@ -186,9 +240,12 @@ function clean(list) {
     /** @type {BrowserTab} */
     const x = { id: t.id, url, title: typeof t.title === 'string' ? t.title.slice(0, LIMIT.title) : '' };
     if (Number.isInteger(t.pos) && t.pos >= 0 && t.pos <= LIMIT.pos) x.pos = t.pos;
-    if (t.view === 'mobile' || t.view === 'tablet') x.view = t.view;
+    // Свой размер (t1146) — только пока он есть в списке; удалили — вкладка в «Компьютере».
+    if (t.view === 'mobile' || t.view === 'tablet' || (typeof t.view === 'string' && CUSTOM_RE.test(t.view) && sizeOf(t.view))) x.view = t.view;
     // Отметка «Агенту» (t382): Ростислав отдал вкладку агенту — после перезапуска окна она остаётся отданной.
-    if (t.agent === true) x.agent = true;
+    // «Только для меня» (t885): вкладка в своём хранилище; агенту не отдаётся, отметка «Агенту» с неё снимается.
+    if (t.human === true) x.human = true;
+    if (t.agent === true && !x.human) x.agent = true;
     // Сайт, к которому привязана отметка, и «Все сайты» (решение Ростислава 09.10): без «Все сайты» агент действует только на этом сайте.
     if (x.agent && typeof t.site === 'string' && /^[0-9a-z.:\[\]-]{1,253}$/i.test(t.site)) x.site = t.site.toLowerCase();
     if (x.agent && t.any === true) x.any = true;
@@ -491,10 +548,11 @@ function register(c, of) {
     if (!sender.allowed(e, 'browser:view')) return sender.refused();
     const g = guestOf(e.sender, id);
     if (!g) return { error: 'вкладка сайта не найдена' };
-    if (kind !== 'desktop' && kind !== 'mobile' && kind !== 'tablet') return { error: 'нет такого вида' };
+    const size = kind === 'desktop' ? null : sizeOf(kind);
+    if (kind !== 'desktop' && !size) return { error: 'нет такого вида' };
     try {
-      const changed = applyView(g, kind);
-      return { kind, size: kind === 'desktop' ? null : getViews()[kind], zoom: e.sender.getZoomFactor(), changed };
+      const changed = applyView(g, kind, size);
+      return { kind, size, zoom: e.sender.getZoomFactor(), changed };
     } catch (err) {
       c.log(`браузер: вид ${kind} не применён: ${err}`);
       return { error: `вид не применён: ${err}` };
@@ -552,15 +610,17 @@ function register(c, of) {
 function attach(win, p) {
   const c = /** @type {Ctx} */ (ctx);
   const part = partitionOf(p.id);
+  const humanPart = humanPartitionOf(p.id);
   const host = win.webContents;
   host.on('will-attach-webview', (e, prefs, params) => {
     const src = webUrl(params.src);
-    if (!src || params.partition !== part) {
+    const human = params.partition === humanPart;
+    if (!src || (params.partition !== part && !human)) {
       e.preventDefault();
       c.log(`браузер: тег не подключён в окне ${p.name} — адрес ${String(params.src).slice(0, 200)}, хранилище ${params.partition}`);
       return;
     }
-    guardSession(part);
+    guardSession(human ? humanPart : part);
     delete prefs.preloadURL;
     delete /** @type {any} */ (params).preload;
     delete /** @type {any} */ (prefs).additionalArguments;
@@ -573,13 +633,15 @@ function attach(win, p) {
     prefs.allowRunningInsecureContent = false;
     prefs.enableBlinkFeatures = '';
     prefs.disableBlinkFeatures = '';
-    prefs.partition = part;
+    prefs.partition = human ? humanPart : part;
   });
   host.on('did-attach-webview', (_e, guest) => {
     const gid = guest.id;
     guest.once('destroyed', () => opened.delete(gid));
     // Консоль страницы для terminalus browser console (t381) — с подключения тега, до первой загрузки.
-    cli.watch(guest);
+    // Гость «только для меня» (t885): консоль не собирается, команды агента в нём получают отказ (cli.js, humanGuests).
+    if (guest.session === session.fromPartition(humanPart)) cli.markHuman(guest);
+    else cli.watch(guest);
     // Клавиши вкладок (t131): фокус внутри страницы — клавиши получает гость, окно их не видит. Как в Орке (oDr в ref\orca-out\main\index.js),
     // ловим их здесь, до страницы. Окну они идут через preload гостя (sendToHost → тег webview → window.js).
     // Ctrl+Tab и Ctrl+PgUp / PgDn здесь не гасятся: после погашенного нажатия Chromium не отдаёт гостю отпускания клавиш до следующего нажатия,

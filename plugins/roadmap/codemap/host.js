@@ -40,7 +40,11 @@ function onMessage(m) {
 }
 
 /** Сообщение исполнителю: у utilityProcess — postMessage, у child_process — send. @param {any} c @param {any} m */
-function postTo(c, m) { if (typeof c.postMessage === 'function') c.postMessage(m); else c.send(m); }
+// t1031: send без колбэка при упавшем исполнителе бросал EPIPE событием error без слушателя — падал главный процесс. С колбэком ошибка приходит сюда, одной строкой.
+function postTo(c, m) {
+  if (typeof c.postMessage === 'function') { c.postMessage(m); return; }
+  c.send(m, (/** @type {any} */ e) => { if (e) log(`карта кода: исполнитель не принял «${m && m.type}»: ${e.code || e.message}`); });
+}
 /** @param {any} m */
 const post = (m) => { if (child) postTo(child, m); };
 /** Падения подряд: больше RESPAWN_MAX за минуту — не поднимать, а сказать в журнал. */

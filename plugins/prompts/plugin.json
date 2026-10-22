@@ -1,0 +1,6 @@
+{
+  "name": "Промпты",
+  "window": "window.js",
+  "main": "main.js",
+  "enabled": true
+}

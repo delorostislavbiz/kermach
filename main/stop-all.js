@@ -11,10 +11,8 @@
 // демон не ответил на shutdown — до 9 с от shutdown, ответил, но не вышел — до 18,5 с (t214, t1028). Обычно — как только демон вышел.
 
 const { app, dialog, BrowserWindow } = require('electron');
-const { execFile } = require('child_process');
-const path = require('path');
 const { connect } = require('../daemon/client');
-const osRules = require('./os-rules');
+const { snapshot } = require('./proc-table');
 const i18n = require('./i18n');
 
 /** Срок ответа демона на connect, list и shutdown. Живой демон отвечает за десятки мс: на shutdown — до того, как гасит вкладки. */
@@ -38,9 +36,6 @@ const SNAP_MIN_MS = 2000;
 /** Срок первого снимка: он идёт, пока человек читает вопрос, и нужен только тогда, когда демона придётся гасить. */
 const SNAP_MS = 5000;
 
-/** powershell полным путём: PATH человека может его не содержать. */
-const PS = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-
 /** Общий сервер Codex: им пользуются Codex человека — не гасим никогда, даже если он оказался в дереве демона (как codex-limits.js). */
 const SHARED = /app-server\b.*--managed-daemon|pid-update-loop/i;
 
@@ -54,27 +49,6 @@ const within = (/** @type {Promise<any>} */ p, /** @type {number} */ ms) => Prom
 ]);
 
 /** @typedef {{ pid: number, ppid: number, started: number, cmd: string }} Proc */
-
-/**
- * Снимок процессов: номер, родитель, время запуска (мс). Асинхронно — главный процесс не замирает. Сбой или срок — пустой список.
- * Копия snapshot из codex-limits.js (тот не экспортирует).
- * @param {number} ms срок
- * @returns {Promise<Proc[]>}
- */
-function snapshot(ms) {
-  // macOS (t222-Б): ps вместо PowerShell, тот же вид процесса; время запуска — с точностью до секунды.
-  if (process.platform !== 'win32') {
-    return new Promise((resolve) => execFile('ps', osRules.PS_ARGS, { encoding: 'utf8', timeout: ms, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } },
-      (err, out) => resolve(err ? [] : osRules.parsePs(String(out)))));
-  }
-  const ps ='[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)|$($_.ParentProcessId)|$([DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds())|$($_.CommandLine)" }';
-  return new Promise((resolve) => execFile(PS, ['-NoProfile', '-NonInteractive', '-Command', ps],
-    { encoding: 'utf8', windowsHide: true, timeout: ms, maxBuffer: 64 * 1024 * 1024 }, (err, out) => {
-      if (err) return resolve([]);
-      resolve(String(out).split(/\r?\n/).map((l) => /^(\d+)\|(\d+)\|(\d+)\|(.*)$/.exec(l)).filter(Boolean)
-        .map((m) => ({ pid: Number(m[1]), ppid: Number(m[2]), started: Number(m[3]), cmd: m[4] })));
-    }));
-}
 
 /**
  * Корень и все его потомки по снимку. Ребёнок старше родителя — чужой: его родитель вышел, а номер достался нашему процессу.

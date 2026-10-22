@@ -111,3 +111,31 @@ html.k-hidden :is(.k-ring, .k-breathe, .k-sweep, .k-blink, .k-frame) { animation
   html:is([data-ui="kermach"], [data-ui="termius"]) .k-ring { opacity: 0; }
   html:is([data-ui="kermach"], [data-ui="termius"]) :is(input[type="checkbox"].k-switch, .dlg .chk input[type="checkbox"])::before { transition: none; }
 }
+
+/* Рамка цвета вкладки вокруг терминала (t1053): класс tinted и --tab-c ставит project-page.js, когда цвет вкладки не по виду.
+   Рамка — наложение ::before: размер .pane, который мерит подгонка xterm, не меняется. В старых темах — в поле 16 px вокруг xterm,
+   чтобы не лечь на полосу прокрутки; в Kermach и Termius Dark — на месте серой рамки карточки. */
+html .pane.tinted:not(.page)::before { content: ''; position: absolute; inset: -6px; border: 2px solid var(--tab-c); border-radius: 6px; pointer-events: none; z-index: 9; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .pane.tinted:not(.page)::before { inset: 0; border-radius: 10px; }
+
+/* Много вкладок (t1072), во всех темах: вкладки сжимаются до 96 px, имя — с многоточием, дальше полоса прокручивается (колесо — project-page.js).
+   Края, за которыми есть ещё вкладки, гаснут маской: классы fade-s и fade-e ставит project-page.js по scrollLeft. */
+#tabs .tab { flex-shrink: 1; min-width: 96px; }
+#tabs .tab > * { flex-shrink: 0; }
+#tabs .tab > span:not([class]) { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#tabs.fade-s { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px); }
+#tabs.fade-e { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+#tabs.fade-s.fade-e { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+
+/* Скрытые вкладки (t1061), во всех темах: кнопка «в фоне: N» после «+» и её список с «показать» (project-page.js, paintBg).
+   ask — какая-то из скрытых ждёт ответа или остановилась: кнопка цвета внимания. */
+#bgBtn { flex-shrink: 0; align-self: center; padding: 2px 8px; margin: 0 4px; border-radius: 6px; font-size: 12px; white-space: nowrap; cursor: pointer; color: var(--muted); border: 1px solid var(--line, transparent); }
+#bgBtn:hover, #bgBtn.open { background: var(--hover, var(--selected)); color: var(--text); }
+#bgBtn.ask { color: #ECA855; border-color: #ECA855; }
+html:is([data-ui="kermach"], [data-ui="termius"]) #bgBtn { order: 1; }
+#bgList { position: fixed; z-index: 1000; min-width: 220px; max-width: 420px; max-height: 60vh; overflow-y: auto; padding: 4px; border-radius: 8px; background: var(--panel, var(--bg)); color: var(--text); border: 1px solid var(--line, #444); box-shadow: 0 6px 20px rgba(0, 0, 0, .35); }
+#bgList .item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; font-size: 12px; }
+#bgList .item .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#bgList .item .st { color: #ECA855; white-space: nowrap; }
+#bgList .item button { flex-shrink: 0; font: inherit; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--line, #555); background: transparent; color: var(--text); cursor: pointer; }
+#bgList .item button:hover { background: var(--hover, var(--selected)); }

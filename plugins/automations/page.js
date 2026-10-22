@@ -44,8 +44,15 @@
   const stampDate = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(s || ''); return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : new Date(NaN); };
   const money = (/** @type {any} */ n) => (typeof n === 'number' ? `$${n.toFixed(2).replace('.', ',')}` : '—');
   // Цена прогона: меньше $0,10 или округление прячет превышение лимита ($0,0128 при $0,01 → «$0,01») — до тысячных.
-  const cost = (/** @type {any} */ n, /** @type {any} */ budget) => (typeof n === 'number' && (n < 0.1 || (typeof budget === 'number' && n > budget && n.toFixed(2) === budget.toFixed(2)))
-    ? `$${n.toFixed(3).replace('.', ',')}` : money(n));
+  // Ноль в тысячных лишний ($0,050 → «$0,05»), кроме случая, когда без него превышение не видно.
+  const cost = (/** @type {any} */ n, /** @type {any} */ budget) => {
+    if (typeof n !== 'number') return money(n);
+    const over = typeof budget === 'number' && n > budget && n.toFixed(2) === budget.toFixed(2);
+    if (!over && !(n < 0.1)) return money(n);
+    if (n > 0 && n < 0.0005) return '<$0,001';
+    const s = n.toFixed(3);
+    return `$${(over || !s.endsWith('0') ? s : s.slice(0, -1)).replace('.', ',')}`;
+  };
   const MODELS = ['auto', 'haiku', 'sonnet', 'opus'];
   /** Лимит из файла: у описания с ошибкой — если записан числом. @param {any} a */
   const budgetOf = (a) => (a.cfg ? a.cfg.budget : a.raw && typeof a.raw.budget === 'number' ? a.raw.budget : undefined);
@@ -59,6 +66,10 @@
     return I18n.n('auto.rep.hours', r.hours, ['каждый {n} час', 'каждые {n} часа', 'каждые {n} часов']);
   }
   const modelText = (/** @type {string} */ m) => (m === 'auto' ? t('model.auto', 'Авто (sonnet)') : m);
+  // В списке формы — имя и чем модель отличается (d156): по одному слову «haiku» человек выбирать не умеет.
+  /** @type {Record<string, () => string>} */
+  const MODEL_NOTE = { haiku: () => t('model.haikuNote', 'быстрая и дешёвая'), sonnet: () => t('model.sonnetNote', 'обычная работа'), opus: () => t('model.opusNote', 'самая умная, дороже всех') };
+  const modelLong = (/** @type {string} */ m) => (MODEL_NOTE[m] ? `${m} — ${MODEL_NOTE[m]()}` : modelText(m));
   /** @param {number} ms */
   function lasted(ms) {
     if (!(ms >= 0)) return '—';
@@ -68,6 +79,8 @@
   /** Итог прогона словами и цветом. @param {any} r */
   function status(r) {
     const s = r ? r.status : '';
+    // Отказы в правах (run.js пишет denials в итог.json): «Готово» без них прятало, что часть задания не выполнена (d141).
+    if (s === 'done' && r.denials > 0) return `<span class="st lim">${ic('check', 13)}${t('st.doneDenied', 'Готово, отказов: {n}', { n: r.denials })}</span>`;
     if (s === 'done') return `<span class="st ok">${ic('check', 13)}${t('st.done', 'Готово')}</span>`;
     if (s === 'budget') return `<span class="st lim">${ic('stop', 12)}${t('st.budget', 'Остановлен лимитом')}</span>`;
     if (s === 'stopped') return `<span class="st lim">${ic('stop', 12)}${t('st.stopped', 'Остановлен по времени')}</span>`;
@@ -79,8 +92,9 @@
   const projectOf = (/** @type {string} */ p) => data.projects.find((x) => x.path.toLowerCase() === String(p).toLowerCase());
   const projectName = (/** @type {string} */ p) => (p ? (projectOf(p) || { name: p.split(/[\\/]/).pop() }).name : t('common', 'Общая'));
   const itemOf = (/** @type {string} */ dir) => data.items.find((i) => i.dir === dir);
-  // Описание с ошибкой: cfg нет, имя — из файла как записано (raw).
-  const nameOf = (/** @type {any} */ i) => (i.cfg && i.cfg.name) || (i.raw && typeof i.raw.name === 'string' && i.raw.name.trim()) || i.id;
+  // Описание с ошибкой: cfg нет, имя — из файла как записано (raw), не длиннее 200 знаков, как в форме.
+  const rawName = (/** @type {any} */ i) => { const s = i.raw && typeof i.raw.name === 'string' ? i.raw.name.trim() : ''; return s.length > 200 ? `${s.slice(0, 200)}…` : s; };
+  const nameOf = (/** @type {any} */ i) => (i.cfg && i.cfg.name) || rawName(i) || i.id;
 
   // ---- Экран 02–03: список ----
   /** @param {any} a */
@@ -94,9 +108,10 @@
     const next = !a.on ? `<span class="faint">${t('off', 'выключена')}</span>` : a.next ? `${t('next', 'Следующий:')}<br>${when(new Date(a.next))}` : '—';
     const right = a.foreign ? `<button class="bbtn small" data-on="${esc(a.dir)}">${t('enable', 'Включить')}</button>`
       : `<button class="sw${a.on ? ' on' : ''}" data-toggle="${esc(a.dir)}" title="${a.on ? t('turnOff', 'Выключить') : t('turnOn', 'Включить')}"></button>`;
+    // Строка — сетка колонок шапки (Д-21, t671): плитка 30×30 цвета проекта (у общих серая), метка нового результата — капсулой.
     return `<div class="row${a.foreign ? ' foreign' : ''}${a.on ? '' : ' disabled'}${a.error ? ' broken' : ''}" data-open="${esc(a.dir)}">
-      <span class="strip"${color ? ` style="background:${esc(color)}"` : ''}></span>
-      <div class="text"><span class="n">${esc(nameOf(a))}${a.unseen ? `<span class="dot new" title="${t('unseen', 'Новый результат')}"></span>` : ''}</span><span class="p">${esc(p)}</span></div>
+      <div class="who"><span class="tile"${color ? ` style="--tc:${esc(color)}"` : ''}>${ic('clock', 15)}</span>
+      <div class="text"><span class="n"><span class="nm">${esc(nameOf(a))}</span>${a.unseen ? `<span class="dot new">${t('unseen', 'Новый результат')}</span>` : ''}</span><span class="p">${esc(p)}</span></div></div>
       <div class="col">${last}</div><div class="col2">${next}</div><div class="col3">${a.last ? cost(a.last.cost, budgetOf(a)) : '—'}</div><div class="col4">${right}</div></div>`;
   }
 
@@ -106,12 +121,14 @@
     const groups = [{ key: '', name: t('commonGroup', 'Общие'), note: t('commonNote', 'не привязаны к проекту') }]
       .concat(data.projects.filter((p) => data.items.some((a) => a.project.toLowerCase() === p.path.toLowerCase())).map((p) => ({ key: p.path, name: p.name, note: t('inProject', 'в папке проекта') })));
     const one = chip && chip !== '_common' ? projectOf(chip) : null;
-    let h = `<div class="head"><h1>${one ? esc(t('projectTitle', 'Автоматизации проекта {name}', { name: one.name })) : t('allTitle', 'Все автоматизации')}</h1><span class="sp"></span>
-      <button class="bbtn" id="new">${ic('plus')}${t('new', 'Новая автоматизация')}</button></div>`;
+    let h = `<div class="head big"><div class="ht"><h1>${one ? esc(t('projectTitle', 'Автоматизации проекта {name}', { name: one.name })) : t('allTitle', 'Все автоматизации')}</h1>
+      <span class="hs">${t('allSub', 'Агент сам выполняет задачи по расписанию')}</span></div>
+      <button class="bbtn fill" id="new">${ic('plus')}${t('new', 'Новая автоматизация')}</button></div>`;
+    // Отбор — наши фишки по каждому проекту, в виде сегментов (Д-21: точнее трёх сегментов макета «Все / Общие / Проектные»).
     const chips = [['', t('chipAll', 'Все')], ['_common', t('commonGroup', 'Общие')]].concat(groups.slice(1).map((g) => [g.key, g.name]));
-    h += `<div class="filter">${chips.map(([k, n]) => `<button class="chip${chip === k ? ' on' : ''}" data-chip="${esc(k)}">${esc(n)}</button>`).join('')}
-      <button class="chip right${view.fresh ? ' on' : ''}" id="fresh">${t('onlyNew', 'Только с новым результатом')}</button></div>`;
-    h += `<div class="count"><span style="flex:1">${t('colName', 'Название и повтор')}</span><span style="width:170px">${t('colLast', 'Последний прогон')}</span><span style="width:120px">${t('colNext', 'Следующий')}</span><span style="width:56px;text-align:right">${t('colCost', 'Цена')}</span><span style="width:84px"></span></div><div class="list">`;
+    h += `<div class="filter"><div class="segs">${chips.map(([k, n]) => `<button class="chip${chip === k ? ' on' : ''}" data-chip="${esc(k)}">${esc(n)}</button>`).join('')}</div>
+      <button class="chip right${view.fresh ? ' on' : ''}" id="fresh"><span class="dot"></span>${t('onlyNew', 'Только с новым результатом')}</button></div>`;
+    h += `<div class="count thead"><span>${t('colName', 'Название и повтор')}</span><span>${t('colLast', 'Последний прогон')}</span><span>${t('colNext', 'Следующий')}</span><span class="r" title="${esc(t('costHint', 'Сколько стоил последний прогон, в долларах'))}">${t('colCost', 'Цена')}</span><span></span></div><div class="list"><div class="tbl">`;
     // Реестр слишком большой (t527): главный процесс прочитал его пустым — причина видна над списком.
     if (data.warn) h += `<div class="card" id="regWarn" style="color:var(--danger)">${esc(data.warn)}</div>`;
     if (!data.items.length) h += `<div class="empty">${t('empty', 'Автоматизаций пока нет. Нажмите «Новая автоматизация».')}</div>`;
@@ -122,7 +139,7 @@
       h += `<div class="group"><span>${esc(g.name)}</span><span class="gc">${items.length} · ${esc(g.note)}</span><span class="sum">${foreign ? esc(I18n.n('auto.foreignSum', foreign, ['{n} пришла с папкой проекта', '{n} пришли с папкой проекта', '{n} пришли с папкой проекта'])) : ''}</span></div>`;
       h += items.map(row).join('');
     }
-    return h + '</div>';
+    return h + '</div></div>';
   }
 
   // ---- Экран 04: создание и настройки ----
@@ -162,8 +179,14 @@
     const today = new Date();
     const date = r.date || ('date' in bad ? '' : `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`);
     // Пометка у неверного поля: что записано в файле или что его нет.
-    const mark = (/** @type {string[]} */ ...ks) => ks.filter((k) => k in bad).map((k) => `<span class="hint warn" data-bad="${k}">${esc(bad[k] === undefined ? t('fieldMissing', '{k}: в файле нет — заполните', { k })
-      : t('fieldBad', '{k}: в файле «{v}» — не подходит, выберите заново', { k, v: (typeof bad[k] === 'string' ? bad[k] : JSON.stringify(bad[k])).slice(0, 60) }))}</span>`).join('');
+    // В пометке — подпись поля, а не ключ файла (model → «Модель»).
+    /** @type {Record<string, () => string>} */
+    const label = { name: () => t('fName', 'Название'), model: () => t('fModel', 'Модель'), budget: () => t('budget', 'Лимит на прогон'),
+      kind: () => t('fRepeat', 'Повтор'), time: () => t('fTime', 'Время'), date: () => t('fDate', 'Дата'), day: () => t('fDay', 'День недели'),
+      hours: () => t('k.hours', 'Каждые N часов'), catchUp: () => t('fCatchShort', 'Запуск после включения'), notify: () => t('fNotifyShort', 'Уведомление'),
+      internet: () => t('fNet', 'Выходить в интернет'), writeProject: () => t('fWrite', 'Писать в папку проекта'), commands: () => t('fCmds', 'Команды без вопроса') };
+    const mark = (/** @type {string[]} */ ...ks) => ks.filter((k) => k in bad).map((k0) => { const k = label[k0] ? label[k0]() : k0; return `<span class="hint warn" data-bad="${k0}">${esc(bad[k0] === undefined ? t('fieldMissing', '{k}: в файле нет — заполните', { k })
+      : t('fieldBad', '{k}: в файле «{v}» — не подходит, выберите заново', { k, v: (typeof bad[k0] === 'string' ? bad[k0] : JSON.stringify(bad[k0])).slice(0, 60) }))}</span>`; }).join('');
     const none = (/** @type {boolean} */ need) => (need ? '<option value="" selected>—</option>' : '');
     const project = a ? a.project : view.chip && view.chip !== '_common' ? view.chip : '';
     const opt = (/** @type {string} */ v, /** @type {string} */ n, /** @type {any} */ cur) => `<option value="${esc(v)}"${String(v) === String(cur) ? ' selected' : ''}>${esc(n)}</option>`;
@@ -182,7 +205,7 @@
         <input type="date" id="fDate" value="${esc(date)}" style="width:150px"><select id="fDay" style="width:80px">${none('day' in bad)}${DAYS().map((d, i) => opt(String(i), d, r.day === undefined ? ('day' in bad ? '' : 1) : r.day)).join('')}</select>
         <span id="fHoursBox" class="rowf"><span class="muted">N</span><input type="number" id="fHours" min="1" max="24" value="${esc(r.hours || ('hours' in bad ? '' : 6))}" style="width:70px"></span></div>
         <span class="hint" id="kindHint"></span>${mark('time', 'date', 'day', 'hours')}</div>
-      <div class="fld"><label for="fModel">${t('fModel', 'Модель')}</label><select id="fModel">${none(!c.model)}${MODELS.map((m) => opt(m, modelText(m), c.model)).join('')}</select>${mark('model')}</div>
+      <div class="fld"><label for="fModel">${t('fModel', 'Модель')}</label><select id="fModel">${none(!c.model)}${MODELS.map((m) => opt(m, modelLong(m), c.model)).join('')}</select>${mark('model')}</div>
       <div class="fld"><label for="fBudget">${t('fBudget', 'Лимит денег на прогон, $')}</label><div class="rowf"><input type="number" id="fBudget" min="0.01" max="100" step="0.01" value="${esc(c.budget === undefined ? '' : c.budget)}" style="width:90px"><span class="muted">${t('budgetHint', 'дошёл до лимита — прогон остановится')}</span></div>${mark('budget')}</div>
       <div class="fld wide">${cb('fCatch', t('fCatch', 'Компьютер был выключен в это время — запустить один раз после включения'), c.catchUp !== false && !('catchUp' in bad))}${mark('catchUp')}</div>
       <div class="fld wide">${cb('fNotify', t('fNotify', 'Показать уведомление Windows, когда прогон закончится'), c.notify !== false && !('notify' in bad))}${mark('notify')}</div>
@@ -192,7 +215,7 @@
       <div class="fld" style="gap:8px">${cb('fCmd', t('fCmd', 'Запускать команды'), !!cmds)}${cb('fMcp', t('fMcp', 'Использовать MCP'), false, true)}
         <label for="fCmds" style="margin-top:2px">${t('fCmds', 'Команды без вопроса')}</label><input type="text" id="fCmds" value="${esc(cmds)}" spellcheck="false" placeholder="git status, hostname">
         <span class="hint">${t('cmdHint', 'Через запятую, каждая целиком, без * и цепочек. Без этого команды не запускаются. MCP у автоматизаций выключены')}</span>
-        <span class="hint warn">${t('cmdWarn', 'Эти команды могут менять файлы в любой папке. Ограничение «писать только в…» действует на правку файлов, не на команды')}</span>
+        <span class="hint warn" id="cmdWarn">${t('cmdWarn', 'Эти команды могут менять файлы в любой папке. Ограничение «писать только в…» действует на правку файлов, не на команды')}</span>
         <span class="hint">${t('keep', 'Хранятся последние 50 прогонов')}</span>${mark('commands')}</div>
       </div>
       <div class="foot">${a ? `<button class="bbtn danger" id="fDel">${t('delete', 'Удалить')}</button>` : ''}<span class="msg" id="fMsg"></span><span class="sp"></span>
@@ -211,7 +234,10 @@
     /** @type {HTMLInputElement} */ ($('fWrite')).disabled = !proj;
     $('writeHint').style.display = proj ? 'none' : '';
     /** @type {HTMLElement} */ ($('fWrite').parentElement).classList.toggle('dis', !proj);
-    /** @type {HTMLInputElement} */ ($('fCmds')).disabled = !(/** @type {HTMLInputElement} */ ($('fCmd')).checked);
+    const cmdOn = /** @type {HTMLInputElement} */ ($('fCmd')).checked;
+    /** @type {HTMLInputElement} */ ($('fCmds')).disabled = !cmdOn;
+    // Предупреждение про команды — только когда они включены (d156): без команд оно пугает зря.
+    $('cmdWarn').style.display = cmdOn ? '' : 'none';
   }
 
   /** Форма → описание для auto:save. */
@@ -294,6 +320,7 @@
       <div>${t('start', 'Начало')}<b>${isNaN(start.getTime()) ? '—' : `${pad(start.getDate())}.${pad(start.getMonth() + 1)} ${pad(start.getHours())}:${pad(start.getMinutes())}:${pad(start.getSeconds())}`}</b></div>
       <div>${t('colLasted', 'Длилось')}<b>${lasted(Date.parse(r.end) - Date.parse(r.start))}</b></div>
       <div>${t('colCost', 'Цена')}<b>${cost(r.cost, budgetOf(a))}${typeof budgetOf(a) === 'number' ? ` ${t('of', 'из')} ${money(budgetOf(a))}` : ''}</b></div><div>${t('files', 'Файлов')}<b>${files.length + more}</b></div></div>
+      ${r.denials > 0 ? `<div class="card" id="denials" style="color:var(--danger)">${esc(t('denied', 'Агенту отказали в правах {n} раз — часть задания могла остаться невыполненной. Посмотрите ответ агента и добавьте нужное в «Команды без вопроса» или права', { n: r.denials }))}</div>` : ''}
       <div class="lab" style="padding:4px 20px 4px">${t('answer', 'Ответ агента')}</div>
       <div class="panel">${md || r.error ? esc(md || r.error) : `<span class="faint">${esc(noAnswer(r, a))}</span>`}</div>
       <div class="lab" style="padding:12px 20px 4px">${t('made', 'Созданные и изменённые файлы')}</div>
@@ -371,7 +398,7 @@
   A.onChanged(() => { if (view.name !== 'edit') render(); });
   A.onFilter((/** @type {string} */ p) => { if (view.name !== 'edit') go({ name: 'list', dir: '', chip: p }); });
   I18n.onChange(() => render());
-  $('appIcon').innerHTML = ic('bot', 16, 'var(--accent)');
+  $('appIcon').innerHTML = ic('clock', 15);
   (async () => {
     data = await A.list();
     view.chip = (data && data.filter) || '';

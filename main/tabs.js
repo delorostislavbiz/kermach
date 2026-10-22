@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 
 /**
- * @typedef {{ sid: string, kind: string, title: string, color: string, icon: string, claudeSessionId?: string, codexSessionId?: string, createdAt?: string, autoTitle?: string, titleManual?: string, extra?: string, agent?: string, agentMode?: string, bypass?: string }} TabEntry
+ * @typedef {{ sid: string, kind: string, title: string, color: string, icon: string, claudeSessionId?: string, codexSessionId?: string, createdAt?: string, autoTitle?: string, titleManual?: string, extra?: string, agent?: string, agentMode?: string, bypass?: string, hidden?: string, logPath?: string }} TabEntry
  * @typedef {{ v: 1, tabs: TabEntry[] }} TabsData
  */
 
@@ -22,7 +22,7 @@ const path = require('path');
  * codexSessionId — разговор Codex, продолженный плагином (t768): revive продолжает его через codex resume.
  * extra — запуск вкладки от плагина (t253): JSON { args, cwd, env }, чтобы revive повторил его. Первого сообщения в нём нет — revive его не повторяет.
  */
-const FIELDS = /** @type {const} */ (['sid', 'kind', 'title', 'autoTitle', 'titleManual', 'color', 'icon', 'claudeSessionId', 'codexSessionId', 'createdAt', 'extra', 'agent', 'agentMode', 'bypass']);
+const FIELDS = /** @type {const} */ (['sid', 'kind', 'title', 'autoTitle', 'titleManual', 'color', 'icon', 'claudeSessionId', 'codexSessionId', 'createdAt', 'extra', 'agent', 'agentMode', 'bypass', 'hidden', 'logPath']);
 
 /** Прочитанные файлы: номер проекта → вкладки. Файл читается один раз, дальше правится здесь и записывается целиком. @type {Map<string, TabsData>} */
 const cache = new Map();

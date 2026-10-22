@@ -51,7 +51,8 @@ function filesSetup(host) {
     #plugin-files-panel .frow .n { overflow: hidden; text-overflow: ellipsis; }
     #plugin-files-panel .frow .sub { overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 11.5px; }
     #plugin-files-panel .frow.hit { flex-wrap: wrap; row-gap: 0; padding-top: 3px; padding-bottom: 3px; }
-    #plugin-files-panel .frow.hit .line { flex-basis: 100%; padding-left: 20px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 11.5px; }
+    #plugin-files-panel .frow.hit .line mark { background: rgba(var(--accent-rgb),.3); color: var(--text); border-radius: 2px; }
+    #plugin-files-panel .frow.hit .line {flex-basis: 100%; padding-left: 20px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 11.5px; }
     #plugin-files-panel .fstat, #plugin-files-panel .fnote { flex-shrink: 0; padding: 4px 14px; color: var(--muted); font-size: 11.5px; white-space: normal; }
     #plugin-files-panel .fnote { border-top: 1px solid var(--line, rgba(141,145,165,.14)); }
     #right > #plugin-files-panel:not([hidden]) ~ #plugin-git-panel:not([hidden]) { max-height: 40%; flex-shrink: 0; border-top: 1px solid var(--line, rgba(141,145,165,.14)); }
@@ -108,6 +109,9 @@ function filesSetup(host) {
     if (r.error === 'outside') return I18n.t('files.outside', 'Вне папки проекта: {path}', { path: p });
     if (r.error === 'noFile') return I18n.t('files.noFile', 'Нет такого файла или папки: {path}', { path: p });
     if (r.error === 'failed') return I18n.t('files.failed', 'Не открылся: {path} — {why}', { path: p, why: r.why || '' });
+    // Повтор не поможет, пока прежнее чтение не вернулось (t1195, d190): так и сказать, а не «попробуйте ещё раз».
+    if (r.error === 'searchFailed' && r.why === 'stuck') return I18n.t('files.searchStuck', 'Папка не отвечает — поиск не начат, пока она не ответит');
+    if (r.error === 'searchFailed' && r.why === 'time') return I18n.t('files.searchLate', 'Поиск остановлен: чтение файла не вернулось');
     if (r.error === 'searchFailed') return I18n.t('files.searchFailed', 'Поиск не удался — попробуйте ещё раз');
     if (r.error === 'noProject') return I18n.t('files.noProject', 'У окна нет папки проекта');
     if (r.error === 'noRoot') return I18n.t('files.noRoot', 'Папки проекта нет: {path}', { path: p });
@@ -160,7 +164,7 @@ function filesSetup(host) {
       for (const it of k.items) {
         const r = rel ? rel + SEP + it.name : it.name;
         const on = it.dir && opened.has(r);
-        html.push(`<div class="frow" data-rel="${esc(r)}" data-dir="${it.dir ? 1 : 0}" style="padding-left:${it.dir ? pad : pad + 16}px">${it.dir ? chevron(on) : ''}${ICON(it.dir ? I_FOLDER : I_FILE)}<span class="n">${esc(it.name)}</span></div>`);
+        html.push(`<div draggable="true" class="frow" data-rel="${esc(r)}" data-dir="${it.dir ? 1 : 0}" style="padding-left:${it.dir ? pad : pad + 16}px">${it.dir ? chevron(on) : ''}${ICON(it.dir ? I_FOLDER : I_FILE)}<span class="n">${esc(it.name)}</span></div>`);
         if (on) add(r, depth + 1);
       }
       if (k.more) html.push(`<div class="fstat" style="padding-left:${pad + 16}px">${esc(I18n.t('files.more', '… и ещё {n}', { n: k.more }))}</div>`);
@@ -174,12 +178,16 @@ function filesSetup(host) {
     treeEl.innerHTML = next;
     treeEl.scrollTop = top;
   };
-  /** Перечитать все раскрытые папки: кнопка «Обновить» и возврат фокуса окну. */
-  const refresh = () => {
+  /**
+   * Перечитать все раскрытые папки: кнопка «Обновить» и возврат фокуса окну. Возврат фокуса (focus) поиск в тексте заново не запускает (t1195, d146):
+   * он читает диск секунды, а окно получает фокус при каждом переключении; результат обновится кнопкой «Обновить» или новой буквой.
+   * @param {boolean} [focus]
+   */
+  const refresh = (focus = false) => {
     if (!open) return;
     api('refresh');
     for (const rel of [...opened]) load(rel);
-    if (input.value.trim()) runSearch(0);
+    if (input.value.trim() && !(focus && inText.checked)) runSearch(0);
   };
 
   // —— действия
@@ -231,7 +239,16 @@ function filesSetup(host) {
     else if (pick === 'reveal') reveal(rel);
     else if (pick === 'open') openFile(rel);
   };
+  // Строку можно перетащить на терминал (t1147): полный путь вставится в строку ввода, как файл из Проводника (renderer\terminal.js, DRAG_PATHS).
   for (const box of [treeEl, resEl]) {
+    box.addEventListener('dragstart', (ev) => {
+      const el = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('.frow'));
+      if (!el || !ev.dataTransfer) return;
+      const full = fullOf(el.dataset.rel || '');
+      ev.dataTransfer.setData('application/x-kermach-paths', JSON.stringify([full]));
+      ev.dataTransfer.setData('text/plain', full);
+      ev.dataTransfer.effectAllowed = 'copy';
+    });
     box.addEventListener('click', (ev) => {
       const el = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('.frow'));
       if (el) activate(el);
@@ -247,21 +264,38 @@ function filesSetup(host) {
   // —— поиск
   /** @param {boolean} on */
   const showSearch = (on) => { treeEl.hidden = on; resEl.hidden = !on; statEl.hidden = !on; if (!on) { sgen++; found = null; } };
+  /** Строка найденного с выделенным искомым словом (t1195, d155): регистр не важен; длина после toLowerCase изменилась — без выделения. @param {string} s @param {string} q */
+  const mark = (s, q) => {
+    const low = s.toLowerCase();
+    const w = q.toLowerCase();
+    if (!w || low.length !== s.length) return esc(s);
+    let out = '';
+    let from = 0;
+    for (let at = low.indexOf(w); at >= 0; at = low.indexOf(w, from)) {
+      out += `${esc(s.slice(from, at))}<mark>${esc(s.slice(at, at + w.length))}</mark>`;
+      from = at + w.length;
+    }
+    return out + esc(s.slice(from));
+  };
   const drawFound = () => {
     if (!found) return;
     const html = [];
     for (const it of found.items) {
       const d = dirOf(it.rel);
       const head = `${ICON(it.dir ? I_FOLDER : I_FILE)}<span class="n">${esc(base(it.rel))}</span>${d ? `<span class="sub">${esc(d)}</span>` : ''}`;
-      if (it.line) html.push(`<div class="frow hit" data-rel="${esc(it.rel)}" data-dir="0" style="padding-left:14px">${head}<span class="line">${esc(I18n.t('files.line', 'строка {n}', { n: it.line }))}: ${esc(it.text || '')}</span></div>`);
-      else html.push(`<div class="frow" data-rel="${esc(it.rel)}" data-dir="${it.dir ? 1 : 0}" style="padding-left:14px">${head}</div>`);
+      if (it.line) html.push(`<div draggable="true" class="frow hit" data-rel="${esc(it.rel)}" data-dir="0" style="padding-left:14px">${head}<span class="line">${esc(I18n.t('files.line', 'строка {n}', { n: it.line }))}: ${mark(it.text || '', found.q || '')}</span></div>`);
+      else html.push(`<div draggable="true" class="frow" data-rel="${esc(it.rel)}" data-dir="${it.dir ? 1 : 0}" style="padding-left:14px">${head}</div>`);
     }
     resEl.innerHTML = html.join('');
     const n = found.items.length;
     const parts = [!n ? I18n.t('files.nothing', 'Ничего не найдено') : found.more ? I18n.t('files.foundMore', 'Показаны первые {n}', { n }) : I18n.t('files.found', 'Найдено: {n}', { n })];
     if (found.text) parts.push(I18n.t('files.scanned', 'просмотрено файлов: {n}, {s} с', { n: found.files, s: (found.ms / 1000).toFixed(1) }));
     // Пределы чтения (t454, tree.LIMITS): обход папки или чтение текста остановлены — искали не везде.
-    if (found.cut) parts.push(I18n.t('files.cut', 'папка большая — просмотрены не все файлы'));
+    if (found.cut) {
+      if (found.cutWhy === 'hung') parts.push(I18n.t('files.cutHung', 'папка не ответила — просмотрены не все файлы'));
+      else if (found.cutWhy === 'git') parts.push(I18n.t('files.cutGit', 'git не успел ответить — список собран обходом и может быть неполным'));
+      else parts.push(I18n.t('files.cut', 'папка большая — просмотрены не все файлы'));
+    }
     if (found.textCut) parts.push(I18n.t('files.textCut', 'прочитано {n} МБ — дальше не искал', { n: Math.round(found.read / 1048576) }));
     statEl.textContent = parts.join(' · ');
   };
@@ -278,7 +312,7 @@ function filesSetup(host) {
       const r = await api('search', q, { text });
       if (stopped || my !== sgen || !r || r.cancelled) return;
       if (r.error) { found = null; resEl.textContent = ''; statEl.textContent = errText(r); return; }
-      found = { ...r, text };
+      found = { ...r, text, q };
       drawFound();
     }, wait);
   };
@@ -304,7 +338,7 @@ function filesSetup(host) {
     if (b.dataset.act === 'refresh') refresh();
     if (b.dataset.act === 'close') setOpen(false);
   });
-  const onFocus = () => refresh();
+  const onFocus = () => refresh(true);
   window.addEventListener('focus', onFocus);
 
   labels();

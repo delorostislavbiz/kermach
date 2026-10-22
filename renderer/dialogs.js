@@ -102,14 +102,45 @@
   .dlg .chk { display: flex; align-items: center; gap: 10px; }
   .dlg .chk input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
   .dlg .chk.ntfr { margin-top: 8px; }
-  /* «Агенты» (t407): в «Настройках» — кнопка, список — своим окошком; прокручивается тело окошка, у списка своей прокрутки нет. */
-  .dlg .agt .row, .dlg .cxh .row { display: flex; align-items: center; gap: 10px; }
+  /* «Настройки» (t669, Д-19): окошко 780×640, разделы слева 200 px, справа заголовок раздела и карточки; прокручивается только правая часть.
+     Раздел прячется атрибутом hidden — элементы и классы прежние, их ищут проверки. */
+  .dlg.set { height: 640px; }
+  .dlg.set .dlg-body { gap: 14px; }
+  .dlg .set-wrap { flex: 1; min-height: 0; display: flex; gap: 20px; }
+  .dlg .set-nav { flex: 0 0 200px; display: flex; flex-direction: column; gap: 2px; }
+  .dlg .set-nav button { height: 34px; padding: 0 12px; border: 0; border-radius: 8px; background: none; color: var(--muted); text-align: left; font: 13px 'Segoe UI', system-ui, sans-serif; outline-offset: -1px; }
+  .dlg .set-nav button:hover { background: var(--hover); color: var(--text); }
+  .dlg .set-nav button.on { background: var(--hover); color: var(--text); font-weight: 600; }
+  .dlg .set-nav button:focus-visible { outline: 1px solid var(--text); }
+  .dlg .set-main { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
+  .dlg .set-main > * { flex-shrink: 0; }
+  .dlg .set-h { font-size: 17px; font-weight: 600; line-height: 24px; }
+  .dlg .set-pane { display: flex; flex-direction: column; gap: 10px; }
+  .dlg .set-pane[hidden] { display: none; }
+  .dlg .set-pane > :is(.sec, .frm) { min-height: 50px; justify-content: center; padding: 12px 14px; background: var(--card, var(--hover)); border: 1px solid var(--line, rgba(var(--muted-rgb),.14)); border-radius: 10px; }
+  .dlg .set-pane > .frm { display: flex; flex-direction: column; gap: 8px; }
+  .dlg .set-pane > .sec.bvws { margin-top: 0 !important; }
+  .bvws input.bad { outline: 1px solid #e5484d; background: rgba(229,72,77,.12); }
+  .bvws .bvadd { margin-top: 6px; }
+  .bvws .bvadd:disabled { opacity: .45; }
+  .dlg .set-pane .bvw { margin-left: 0 !important; }
+  .dlg .set-pane .frm .stepper { margin-left: 0 !important; }
+  .dlg .set-pane .set-off { color: var(--muted); font-size: 12px; }
+  /* «Агенты» (t407): весь каталог — своим окошком; прокручивается тело окошка, у списка своей прокрутки нет. В «Настройках» — найденные агенты строками .arow (t1150). */
+  .dlg .agt .row, .dlg .cxh .row, .dlg .agt .arow { display: flex; align-items: center; gap: 10px; }
+  .dlg .agt .alist { margin-bottom: 14px; }
+  /* Выключатель строки — k-switch: в темах Kermach и Termius он того же вида, что в окошке «Агенты» (ui-kermach.css), в остальных — галочка 16 px, как .fixed. */
+  .dlg .agt .arow > input { margin: 0; flex-shrink: 0; }
+  html:not(:is([data-ui="kermach"], [data-ui="termius"])) .dlg .agt .arow > input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .dlg .agt .arow > .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .dlg .agt .arow .mng { height: 26px; padding: 0 10px; font-size: 12px; }
+  .dlg .agt .chk.cur { outline: 1px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
   /* Хук Codex (t797): итог проверки у самого Codex и кнопка «Проверить снова». */
   .dlg .cxh .st { flex: 1; min-width: 0; }
-  .dlg .agt .open, .dlg .cxh .re, .dlg .agt .how button { height: 30px; padding: 0 14px; border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 4px; background: none; color: var(--text);
+  .dlg .agt .open, .dlg .agt .mng, .dlg .cxh .re, .dlg .agt .how button { height: 30px; padding: 0 14px; border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 4px; background: none; color: var(--text);
     font: 13px 'Segoe UI', system-ui, sans-serif; outline-offset: 2px; flex-shrink: 0; }
-  .dlg .agt .open:hover, .dlg .cxh .re:hover, .dlg .agt .how button:hover { background: var(--hover); }
-  .dlg .agt .open:focus-visible, .dlg .cxh .re:focus-visible, .dlg .agt .how button:focus-visible { outline: 1px solid var(--text); }
+  .dlg .agt .open:hover, .dlg .agt .mng:hover, .dlg .cxh .re:hover, .dlg .agt .how button:hover { background: var(--hover); }
+  .dlg .agt .open:focus-visible, .dlg .agt .mng:focus-visible, .dlg .cxh .re:focus-visible, .dlg .agt .how button:focus-visible { outline: 1px solid var(--text); }
   .dlg .agt .list { display: flex; flex-direction: column; gap: 12px; }
   .dlg .agt .chk { align-items: flex-start; }
   .dlg .agt .chk > input { margin-top: 1px; flex-shrink: 0; }
@@ -225,8 +256,10 @@
       const up = y + r.height + 4 > innerHeight;
       const left = toLeft ? x - r.width : x;
       const top = up ? y - r.height : y;
-      m.style.left = `${Math.max(4, Math.min(left, innerWidth - r.width - 4))}px`;
-      m.style.top = `${Math.max(4, Math.min(top, innerHeight - r.height - 4))}px`;
+      // Не ближе к краю, чем рамка проекта (d196): отступ body — её толщина, 8 px рамки иначе закрыли бы край меню.
+      const e = Math.max(4, parseFloat(getComputedStyle(document.body).paddingRight) || 0);
+      m.style.left = `${Math.max(e, Math.min(left, innerWidth - r.width - e))}px`;
+      m.style.top = `${Math.max(e, Math.min(top, innerHeight - r.height - e))}px`;
       // Растёт из угла у курсора: так меню и в первом кадре не накрывает точку щелчка.
       m.style.transformOrigin = `${up ? 'bottom' : 'top'} ${toLeft ? 'right' : 'left'}`;
       m.classList.add('pop');
@@ -280,13 +313,15 @@
 
   /**
    * «Цвет и значок» — для терминала и для проекта. Сверху — как это будет выглядеть в списке.
-   * @param {{ name: string, sub: string, subColor?: string, color: string, icon: string }} o
-   * @returns {Promise<{ color: string, icon: string } | null>} null — отмена
+   * rename — ещё и поле имени («Цвет, значок и имя» у только что добавленной папки, t1212); пустое имя «Готово» не принимает.
+   * @param {{ name: string, sub: string, subColor?: string, color: string, icon: string, rename?: boolean }} o
+   * @returns {Promise<{ color: string, icon: string, name?: string } | null>} null — отмена
    */
   function colorIcon(o) {
     let color = colorOf(o.color);
     let icon = GRID.includes(o.icon) ? o.icon : 'folder';
-    const body = `
+    const body = `${o.rename ? `
+      <div class="sec"><div class="cap">${I18n.t('dialogs.imya', 'Имя')}</div><input class="field ci-name" spellcheck="false" maxlength="60" value="${esc(o.name)}"></div>` : ''}
       <div class="sec"><div class="cap">${I18n.t('dialogs.takBudetVyglyadetV', 'Так будет выглядеть в списке')}</div>
         <div class="prev"><div class="strip"></div><span class="pic"></span><div class="text"><div class="n">${esc(o.name)}</div><div class="s" style="color:${colorOf(o.subColor || tc('muted', '#8D91A5'))}">${esc(o.sub)}</div></div></div></div>
       <div class="sec"><div class="cap">${I18n.t('dialogs.cvet', 'Цвет')}</div>
@@ -295,8 +330,10 @@
       <div class="sec"><div class="head"><div class="cap">${I18n.t('dialogs.znachok', 'Значок')}</div><label class="find">${svg('search', tc('muted', '#8D91A5'), 13)}<input placeholder="${I18n.t('dialogs.poiskZnachka', 'Поиск значка')}" spellcheck="false"></label></div>
         <div class="grid"></div></div>
       <div class="btns"><button class="cancel">${I18n.t('common.cancel', 'Отмена')}</button><button class="ok">${I18n.t('common.done', 'Готово')}</button></div>`;
-    return modal(I18n.t('dialogs.cvetIZnachok', 'Цвет и значок'), 520, body, (dlg, done) => {
+    const title = o.rename ? I18n.t('dialogs.cvetZnachokIImya', 'Цвет, значок и имя') : I18n.t('dialogs.cvetIZnachok', 'Цвет и значок');
+    return modal(title, 520, body, (dlg, done) => {
       const q = /** @type {HTMLInputElement} */ (dlg.querySelector('.find input'));
+      const nameIn = /** @type {HTMLInputElement | null} */ (dlg.querySelector('.ci-name'));
       const own = /** @type {HTMLInputElement} */ (dlg.querySelector('.own input'));
       const paint = () => {
         dlg.style.setProperty('--c', color);
@@ -332,9 +369,19 @@
         if (g && g.dataset.n) { icon = g.dataset.n; paint(); }
       });
       q.addEventListener('input', paint);
-      const ok = () => done({ color, icon });
+      // Имя — сразу в образце сверху; пустое — «Готово» неактивна.
+      if (nameIn) nameIn.addEventListener('input', () => {
+        /** @type {HTMLElement} */ (dlg.querySelector('.prev .n')).textContent = nameIn.value.trim() || o.name;
+        /** @type {HTMLButtonElement} */ (dlg.querySelector('.btns .ok')).disabled = !nameIn.value.trim();
+      });
+      const ok = () => {
+        if (!nameIn) return done({ color, icon });
+        const name = nameIn.value.trim();
+        if (name) done({ color, icon, name });
+      };
       /** @type {HTMLElement} */ (dlg.querySelector('.btns .ok')).onclick = ok;
       paint();
+      if (nameIn) { nameIn.focus(); nameIn.select(); }
       return ok;
     }, 'ci');
   }
@@ -445,7 +492,15 @@
     const box = document.createElement('div');
     box.className = 'sec bvws';
     box.style.marginTop = '-10px';
-    plg.after(box);
+    // В окошке с разделами (t669) — в раздел «Браузер».
+    const where = plg.closest('.dlg')?.querySelector('.set-pane[data-p="brw"]');
+    if (where) {
+      const cap = document.createElement('div');
+      cap.className = 'cap';
+      tx(cap, 'dialogs.bviews', 'Размеры видов');
+      box.appendChild(cap);
+      where.appendChild(box);
+    } else plg.after(box);
     /** @type {{ k: 'mobile' | 'tablet', name: string, def: string }[]} */
     const rows = [{ k: 'mobile', key: 'dialogs.mobilnyy', name: 'Мобильный', def: '390 × 844' }, { k: 'tablet', key: 'dialogs.planshet', name: 'Планшет', def: '820 × 1180' }];
     /** @type {Record<string, HTMLInputElement>} */
@@ -455,7 +510,7 @@
       row.className = 'stepper bvw';
       row.dataset.k = r.k;
       row.style.marginLeft = '22px';
-      const num = (/** @type {string} */ d) => `<input type="number" min="240" max="2000" step="1" data-d="${d}" style="width:52px;padding:0 4px">`;
+      const num = (/** @type {string} */ d) => `<input type="number" min="200" max="4000" step="1" data-d="${d}" style="width:52px;padding:0 4px">`;
       row.innerHTML = `<span style="flex:none;width:72px"></span>${num('width')}<span>×</span>${num('height')}`
         + `<span class="hint" style="min-width:0"></span>`;
       tx(/** @type {HTMLElement} */ (row.firstElementChild), r.key, r.name);
@@ -471,10 +526,76 @@
       }
       box.appendChild(row);
     }
+    // Свои размеры (t1146): строки «имя, ширина × высота, удалить» и «Добавить»; всего с «Мобильным» и «Планшетом» — не больше 8.
+    const MAX = 8;
+    const list = document.createElement('div');
+    box.appendChild(list);
+    // Кнопка в обёртке .btns — тот же стиль, что у «Сбросить», во всех темах (t1241); влево, не вправо.
+    const addWrap = document.createElement('div');
+    addWrap.className = 'btns bvaddw';
+    addWrap.style.cssText = 'justify-content:flex-start;padding:0;margin:0 0 0 22px;border:0'; // inline перебивает рамку и поля контейнера в теме Deck
+    const add = document.createElement('button');
+    add.className = 'bvadd';
+    tx(add, 'dialogs.dobavitRazmer', '+ Добавить размер');
+    addWrap.appendChild(add);
+    box.appendChild(addWrap);
+    /** @type {{ id: string, name: string, width: number, height: number }[]} */
+    let custom = [];
+    const okNum = (/** @type {string} */ s) => /^\d+$/.test(s.trim()) && Number(s) >= 200 && Number(s) <= 4000;
+    /** Неверное значение: поле подсвечено 3 с, в нём прежнее. @param {HTMLInputElement} i @param {string} was */
+    const bad = (i, was) => { i.classList.add('bad'); i.value = was; setTimeout(() => i.classList.remove('bad'), 3000); };
+    /** Следующий change считает от отправленного списка, не от последнего ответа: иначе два change подряд теряют первый (t1226). @param {typeof custom} next */
+    const save = (next) => { custom = next; return t.browser.setViews({ custom: next }).then(fill).catch(() => {}); };
+    function drawCustom() {
+      list.innerHTML = '';
+      for (const c of custom) {
+        const row = document.createElement('div');
+        row.className = 'stepper bvwc';
+        row.dataset.id = c.id;
+        row.style.marginLeft = '22px';
+        const num = (/** @type {string} */ d) => `<input type="number" min="200" max="4000" step="1" data-d="${d}" style="width:52px;padding:0 4px">`;
+        row.innerHTML = `<input class="bvn" maxlength="40" style="flex:none;width:72px;padding:0 4px;text-align:left">${num('width')}<span>×</span>${num('height')}`
+          + `<button class="bvdel" style="flex:none">×</button>`;
+        const name = /** @type {HTMLInputElement} */ (row.querySelector('.bvn'));
+        name.value = c.name;
+        tx(name, 'dialogs.imyaRazmera', 'Имя размера', 'title');
+        name.addEventListener('change', () => {
+          const v = name.value.trim();
+          if (!v) { bad(name, c.name); return; }
+          save(custom.map((x) => (x.id === c.id ? { ...x, name: v } : x)));
+        });
+        for (const el of row.querySelectorAll('input[data-d]')) {
+          const i = /** @type {HTMLInputElement} */ (el);
+          const d = /** @type {'width' | 'height'} */ (i.dataset.d);
+          i.value = String(c[d]);
+          if (d === 'width') tx(i, 'dialogs.shirina', 'Ширина', 'title'); else tx(i, 'dialogs.vysota', 'Высота', 'title');
+          i.addEventListener('change', () => {
+            if (!okNum(i.value)) { bad(i, String(c[d])); return; }
+            save(custom.map((x) => (x.id === c.id ? { ...x, [d]: Number(i.value) } : x)));
+          });
+        }
+        const del = /** @type {HTMLElement} */ (row.querySelector('.bvdel'));
+        tx(del, 'dialogs.udalitRazmer', 'Удалить размер', 'title');
+        del.onclick = () => save(custom.filter((x) => x.id !== c.id));
+        list.appendChild(row);
+      }
+      const full = 2 + custom.length >= MAX;
+      add.disabled = full;
+      if (full) tx(add, 'dialogs.razmerovMax', 'Размеров не больше {v}: удалите один, чтобы добавить новый', 'title', { v: String(MAX) });
+      else add.removeAttribute('title');
+    }
+    add.onclick = () => {
+      if (2 + custom.length >= MAX) return;
+      const id = Date.now().toString(36);
+      const n = custom.length + 1;
+      save([...custom, { id, name: `${I18n.t('dialogs.razmer', 'Размер')} ${n}`, width: 1024, height: 768 }]);
+    };
     /** @param {any} v */
     function fill(v) {
       if (!v || !v.mobile || !v.tablet) return;
       for (const [key, i] of Object.entries(inp)) { const [k, d] = key.split('.'); i.value = String(v[k][d]); }
+      custom = Array.isArray(v.custom) ? v.custom : [];
+      drawCustom();
     }
     t.browser.views().then(fill).catch(() => {});
   }
@@ -489,7 +610,15 @@
   function frameRow(t, lab, tx, isOn) {
     const box = document.createElement('div');
     box.className = 'frm';
-    lab.after(box);
+    // В окошке с разделами (t669) — карточкой «Рамка проекта» в «Оформлении»; выключатель плагина остаётся в «Плагинах».
+    const where = lab.closest('.dlg')?.querySelector('.set-pane[data-p="look"]');
+    if (where) {
+      const cap = document.createElement('div');
+      cap.className = 'cap';
+      tx(cap, 'plugin.frame', 'Рамка проекта');
+      box.appendChild(cap);
+      where.appendChild(box);
+    } else lab.after(box);
     const row = document.createElement('div');
     row.className = 'stepper';
     row.style.marginLeft = '22px';
@@ -530,8 +659,10 @@
   function langRow(t, plg, tx, list, on) {
     const box = document.createElement('div');
     box.className = 'sec lng';
+    // В окошке с разделами (t669) — в «Общие».
+    const where = plg.closest('.dlg')?.querySelector('.set-pane[data-p="gen"]');
     const agt = plg.parentElement && plg.parentElement.querySelector('.agt');
-    if (agt) agt.before(box); else plg.after(box);
+    if (where) where.appendChild(box); else if (agt) agt.before(box); else plg.after(box);
     const row = document.createElement('div');
     row.className = 'stepper';
     const cap = document.createElement('span');
@@ -622,7 +753,7 @@
   }
 
   /**
-   * Окошко «Настройки»: изменения действуют сразу, кнопки «Применить» нет. «Сбросить» — 100 %, 17, сдвиг просмотра Markdown 0 (t245), звук включён.
+   * Окошко «Настройки»: изменения действуют сразу, кнопки «Применить» нет. «Сбросить» — 100 %, 17, сдвиг просмотра Markdown 0 (t245), звук включён, копирование выделенного включено (t1097).
    * @param {any} t window.terminalus
    * @returns {Promise<null>}
    */
@@ -630,36 +761,46 @@
     await watch(t);
     // Надписи ставит tx — по таблице STATIC и в коде строк ниже: язык выбирают в этом же окне, и оно перерисовывается без переоткрытия (t184).
     // Тема (t723): один список — themeList; пункты и какие поля настроек они пишут — там же.
-    const body = `
+    // Разделы (t669, Д-19): слева список, справа заголовок и карточки выбранного раздела. При открытии — «Оформление».
+    const SECTIONS = [['look', 'dialogs.secLook', 'Оформление'], ['gen', 'dialogs.secGeneral', 'Общие'], ['plg', 'dialogs.plaginy', 'Плагины'],
+      ['brw', 'dialogs.brauzer', 'Браузер'], ['agt', 'dialogs.agenty', 'Агенты']];
+    const body = `<div class="set-wrap"><div class="set-nav">${SECTIONS.map(([p]) => `<button data-p="${p}"></button>`).join('')}</div><div class="set-main"><div class="set-h"></div>
+      <div class="set-pane" data-p="look">
       <div class="sec thm"><div class="stepper"><span class="cap tmt" style="flex:none;margin:0"></span><select class="tms"></select></div></div>
       <div class="sec"><div class="cap zoom"></div>
         <div class="seg">${ZOOMS.map((z) => `<button data-z="${z}">${z} %</button>`).join('')}</div></div>
       <div class="sec"><div class="cap font"></div>
-        <div class="stepper"><button class="m">−</button><input class="num" type="number" min="${TERM_MIN}" max="${TERM_MAX}" step="1"><button class="p">+</button><span class="hint"></span></div></div>
+        <div class="stepper"><button class="m">−</button><input class="num" type="number" min="${TERM_MIN}" max="${TERM_MAX}" step="1"><button class="p">+</button><span class="hint"></span></div></div></div>
+      <div class="set-pane" data-p="gen" hidden>
       <div class="sec"><label class="chk"><input type="checkbox" class="snd"><span class="sndt"></span></label>
-        <label class="chk ntfr"><input type="checkbox" class="ntf"><span class="ntft"></span></label></div>
-      <div class="sec plg" hidden><div class="cap"></div></div>
-      <div class="sec agt"><div class="cap"></div><div class="row"><button class="open"></button><span class="sub hint"></span></div></div>
-      <div class="sec cxh"><div class="cap"></div><div class="row"><span class="sub hint st"></span><button class="re"></button></div></div>
+        <label class="chk ntfr"><input type="checkbox" class="ntf"><span class="ntft"></span></label>
+        <label class="chk ntfr"><input type="checkbox" class="cps"><span class="cpst"></span></label></div></div>
+      <div class="set-pane" data-p="plg" hidden><div class="sec plg" hidden><div class="cap"></div></div></div>
+      <div class="set-pane" data-p="brw" hidden><div class="set-off" hidden></div></div>
+      <div class="set-pane" data-p="agt" hidden>
+      <div class="sec agt"><div class="cap"></div><div class="list alist"><span class="sub wait"></span></div><div class="row"><button class="open"></button><span class="sub hint"></span></div></div>
+      <div class="sec cxh"><div class="cap"></div><div class="row"><span class="sub hint st"></span><button class="re"></button></div></div></div>
+      </div></div>
       <div class="btns"><button class="reset"></button><button class="cancel ok"></button></div>`;
     /** Селектор, ключ, русский текст, свойство. @type {[string, string, string, string][]} */
     const STATIC = [
       ['.dlg-title .t', 'dialogs.nastroyki', 'Настройки', 'textContent'], ['.dlg-title .x', 'common.close', 'Закрыть', 'title'],
       ['.tmt', 'dialogs.tema', 'Тема', 'textContent'],
       ['.cap.zoom', 'dialogs.razmerShriftaOkon', 'Размер шрифта окон', 'textContent'], ['.cap.font', 'dialogs.razmerShriftaTerminala', 'Размер шрифта терминала', 'textContent'],
+      ['.cpst', 'dialogs.copySelect', 'Копировать выделенный текст сразу, без Ctrl+C', 'textContent'],
       ['.m', 'dialogs.menshe', 'Меньше', 'title'], ['.p', 'dialogs.bolshe', 'Больше', 'title'],
       ['.sndt', 'dialogs.zvukKogdaAgentZakonchil', 'Звук, когда агент закончил или ждёт ответа', 'textContent'],
       ['.ntft', 'dialogs.notifyAgent', 'Всплывающее уведомление, когда агент закончил или ждёт ответа', 'textContent'],
       ['.plg .cap', 'dialogs.plaginy', 'Плагины', 'textContent'], ['.agt .cap', 'dialogs.agenty', 'Агенты', 'textContent'],
-      ['.agt .open', 'dialogs.agentyOtkryt', 'Агенты…', 'textContent'], ['.agt .hint', 'dialogs.agentyPodskazka', 'включить установленных и узнать, как поставить остальных', 'textContent'],
+      ['.agt .open', 'dialogs.agentyPodklyuchit', 'Подключить агента…', 'textContent'], ['.agt .hint', 'dialogs.agentyPodklyuchitHint', 'как поставить агентов, которых ещё нет: команда и страница агента', 'textContent'],
+      ['.agt .wait', 'dialogs.agentyIshchu', 'Ищу агентов…', 'textContent'],
       ['.cxh .cap', 'dialogs.codexHook', 'Codex', 'textContent'], ['.cxh .re', 'dialogs.codexHookRecheck', 'Проверить снова', 'textContent'],
       ['.reset', 'dialogs.sbrosit', 'Сбросить', 'textContent'], ['.cancel', 'common.close', 'Закрыть', 'textContent'],
     ];
     /** @type {() => void} */
     let off = () => {};
-    const r = await modal(I18n.t('dialogs.nastroyki', 'Настройки'), 420, body, (dlg, done) => {
+    const r = await modal(I18n.t('dialogs.nastroyki', 'Настройки'), 780, body, (dlg, done) => {
       const q = (/** @type {string} */ s) => /** @type {HTMLElement} */ (dlg.querySelector(s));
-      q('.dlg-body').classList.add('scroll');
       // Надписи окна: ключ и русский текст запоминаются, смена языка ставит их заново (РЕШЕНИЯ «Разметка, которую строит код, — не через data-i18n»).
       /** @type {{ el: any, key: string, ru: string, prop: string, vars?: Record<string, any> }[]} */
       const texts = [];
@@ -667,22 +808,46 @@
       const tx = (el, key, ru, prop = 'textContent', vars) => { texts.push({ el, key, ru, prop, vars }); /** @type {any} */ (el)[prop] = I18n.t(key, ru, vars); };
       for (const [sel, key, ru, prop] of STATIC) tx(q(sel), key, ru, prop);
       tx(q('.font + .stepper .hint'), 'dialogs.poUmolchaniyu', 'по умолчанию {v}', 'textContent', { v: TERM_DEF });
+      tx(q('.set-off'), 'dialogs.brauzerOff', 'Браузер выключен — включить можно в разделе «Плагины».');
+      const head = q('.set-h');
+      /** Показать раздел p: кнопка слева выделена, заголовок — её надпись. @param {string} p */
+      const show = (p) => {
+        dlg.querySelectorAll('.set-nav button').forEach((b) => b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.p === p));
+        dlg.querySelectorAll('.set-pane').forEach((x) => { /** @type {HTMLElement} */ (x).hidden = /** @type {HTMLElement} */ (x).dataset.p !== p; });
+        const [, key, ru] = SECTIONS.find((x) => x[0] === p) || SECTIONS[0];
+        const old = texts.findIndex((x) => x.el === head);
+        if (old >= 0) texts.splice(old, 1);
+        tx(head, key, ru);
+        q('.set-main').scrollTop = 0;
+      };
+      for (const [p, key, ru] of SECTIONS) {
+        const b = q(`.set-nav button[data-p="${p}"]`);
+        tx(b, key, ru);
+        b.onclick = () => show(p);
+      }
+      show('look');
       const offLang = I18n.onChange(() => { for (const x of texts) x.el[x.prop] = I18n.t(x.key, x.ru, x.vars); });
       const num = /** @type {HTMLInputElement} */ (q('.num'));
       const snd = /** @type {HTMLInputElement} */ (q('.snd'));
       const ntf = /** @type {HTMLInputElement} */ (q('.ntf'));
+      const cps = /** @type {HTMLInputElement} */ (q('.cps'));
       const paint = (/** @type {any} */ s) => {
         dlg.querySelectorAll('.seg button[data-z]').forEach((b) => b.classList.toggle('on', Number(/** @type {HTMLElement} */ (b).dataset.z) === s.uiZoom));
         theme(s);
         if (document.activeElement !== num) num.value = String(s.termFont);
         snd.checked = !!s.sound;
         ntf.checked = s.notify !== false;
+        cps.checked = s.copySelect !== false;
         dlg.querySelectorAll('.plg input').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); const on = s.plugins && s.plugins[i.dataset.id || '']; i.checked = typeof on === 'boolean' ? on : plgDefault.get(i.dataset.id || '') !== false; });
         // Размеры видов браузера (t207) — только пока «Браузер» включён.
         dlg.querySelectorAll('.bvws').forEach((r) => { /** @type {HTMLElement} */ (r).style.display = s.plugins && s.plugins.browser === false ? 'none' : ''; });
+        q('.set-off').hidden = !(s.plugins && s.plugins.browser === false);
         if (frame) frame(s);
         if (langs) langs(s);
+        if (agentRows) agentRows(s);
       };
+      /** Перерисовка строк найденных агентов (t1150); null — список ещё не пришёл. @type {((s: any) => void) | null} */
+      let agentRows = null;
       /** Перерисовка строки «Толщина» плагина «Рамка проекта» (t484); null — плагина в списке нет. @type {((s: any) => void) | null} */
       let frame = null;
       /** Перерисовка строки «Язык программы» (t184); null — плагинов с языками нет. @type {((s: any) => void) | null} */
@@ -742,9 +907,75 @@
         plg.hidden = false;
         if (cur) paint(cur);
       });
-      // Агенты из системы (t183) — своим окошком (t407): агентов в каталоге 21, в «Настройках» список не помещался. Окошко одно за раз,
-      // поэтому «Настройки» закрываются; после «Агентов» они заново не открываются.
-      q('.agt .open').onclick = () => { done(null); agents(t); };
+      // Агенты из системы (t183): найденные — строками прямо в разделе (t1150, Ростислав 20.10: «установленных показывать сразу, а не прятать в окне»),
+      // весь каталог — окошком «Агенты» (t407): подключить нового и управлять найденным. Окошко одно за раз, поэтому «Настройки» закрываются;
+      // после «Агентов» они заново не открываются. focus — id строки, которую окошко выделит, или 'new' — к неустановленным.
+      const openAgents = (/** @type {string} */ focus) => { done(null); agents(t, focus); };
+      q('.agt .open').onclick = () => openAgents('new');
+      const alist = q('.agt .alist');
+      /** Надпись, которую перерисовка ставит заново: прежняя запись из texts уходит, иначе список рос бы с каждой перерисовкой. @type {Tx} */
+      const retx = (el, key, ru, prop = 'textContent', vars) => { const i = texts.findIndex((x) => x.el === el); if (i >= 0) texts.splice(i, 1); tx(el, key, ru, prop, vars); };
+      t.agents.list().then((/** @type {any} */ l) => (Array.isArray(l) ? l : [])).catch(() => []).then((/** @type {{ id: string, title: string, found: boolean, builtin: boolean }[]} */ list) => {
+        const logos = (/** @type {any} */ (window).AgentLogos || {}).by || {};
+        const found = list.filter((a) => a.found);
+        alist.textContent = '';
+        if (!found.length) {
+          const none = document.createElement('span');
+          none.className = 'sub';
+          tx(none, 'dialogs.agentyNetNaydennyh', 'Установленных агентов не нашли — подключите кнопкой ниже.');
+          alist.appendChild(none);
+        }
+        for (const a of found) {
+          const row = document.createElement('div');
+          row.className = 'arow';
+          row.dataset.id = a.id;
+          const logo = document.createElement('i');
+          logo.className = 'logo';
+          if (logos[a.id]) logo.innerHTML = logos[a.id].html;
+          const text = document.createElement('span');
+          text.className = 'txt';
+          const nm = document.createElement('span');
+          nm.className = 'nm';
+          nm.textContent = a.title;
+          const sub = document.createElement('span');
+          sub.className = 'sub';
+          text.append(nm, sub);
+          const mng = document.createElement('button');
+          mng.className = 'mng';
+          tx(mng, 'dialogs.agentyUpravlenie', 'Управление…');
+          mng.onclick = () => openAgents(a.id);
+          if (a.builtin) {
+            const fixed = document.createElement('span');
+            fixed.className = 'fixed';
+            row.append(fixed, logo, text, mng);
+          } else {
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.className = 'k-switch';
+            cb.dataset.id = a.id;
+            cb.title = a.title;
+            cb.addEventListener('change', () => change(t, { agents: { [a.id]: cb.checked } }));
+            row.append(cb, logo, text, mng);
+          }
+          alist.appendChild(row);
+        }
+        // Встроенные Claude и Codex включены всегда; остальные — пока не включили здесь или в окошке, их нет в меню «+».
+        agentRows = (s) => {
+          alist.querySelectorAll('.arow').forEach((r) => {
+            const row = /** @type {HTMLElement} */ (r);
+            const id = row.dataset.id || '';
+            const cb = /** @type {HTMLInputElement | null} */ (row.querySelector('input'));
+            const on = !!(s.agents && s.agents[id] === true);
+            if (cb) cb.checked = on;
+            row.dataset.state = !cb ? 'builtin' : on ? 'on' : 'off';
+            const sub = row.querySelector('.sub');
+            if (!cb) retx(sub, 'dialogs.agentNaydenVstroen', 'найден · встроенный, всегда включён: метки и звук');
+            else if (on) retx(sub, 'dialogs.agentNaydenVkl', 'найден · включён: есть в меню «+»');
+            else retx(sub, 'dialogs.agentNaydenVykl', 'найден · выключен: в меню «+» его нет');
+          });
+        };
+        if (cur) paint(cur);
+      });
       // Хук Codex (t797): по нему вкладка узнаёт номер разговора и новый номер после /clear. Проверяет демон у самого Codex при первой вкладке Codex.
       const cxSt = q('.cxh .st');
       const cxRe = /** @type {HTMLButtonElement} */ (q('.cxh .re'));
@@ -774,9 +1005,10 @@
       num.addEventListener('change', () => font(Number(num.value)));
       snd.addEventListener('change', () => change(t, { sound: snd.checked }));
       ntf.addEventListener('change', () => change(t, { notify: ntf.checked }));
-      q('.reset').onclick = () => change(t, { uiZoom: 100, termFont: TERM_DEF, mdShift: 0, sound: true, notify: true });
+      cps.addEventListener('change', () => change(t, { copySelect: cps.checked }));
+      q('.reset').onclick = () => change(t, { uiZoom: 100, termFont: TERM_DEF, mdShift: 0, sound: true, notify: true, copySelect: true });
       return () => font(Number(num.value));
-    });
+    }, 'set');
     off();
     return r;
   }
@@ -816,10 +1048,12 @@
    * Claude и Codex — встроенные, без выключателя; остальные — с выключателем, пока не включили, работают как обычный терминал.
    * Ниже — неустановленные, серым и без выключателя: команда установки для этой системы и ссылка на страницу агента (в обычном браузере).
    * Значки — window.AgentLogos (agent-logos.js). Выключатель пишет settings.agents, окна проектов меняют меню «+» сразу.
+   * Из раздела «Агенты» «Настроек» (t1150): «Управление…» у строки — окошко выделяет эту строку, «Подключить агента…» — открывается на неустановленных.
    * @param {any} t window.terminalus
+   * @param {string} [focus] id агента или 'new'
    * @returns {Promise<null>}
    */
-  async function agents(t) {
+  async function agents(t, focus = '') {
     await watch(t);
     /** @type {{ id: string, title: string, found: boolean, builtin: boolean }[]} */
     const list = await t.agents.list().then((/** @type {any} */ l) => (Array.isArray(l) ? l : [])).catch(() => []);
@@ -884,6 +1118,13 @@
       }
       off = onSettings((/** @type {any} */ s) => {
         dlg.querySelectorAll('.agt input').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); i.checked = !!(s.agents && s.agents[i.dataset.id || ''] === true); });
+      });
+      // Прокрутка — после раскладки окошка: до неё у строк нет места.
+      if (focus) requestAnimationFrame(() => {
+        const at = focus === 'new' ? dlg.querySelector('.agn') : dlg.querySelector(`.agt .chk[data-id="${CSS.escape(focus)}"]`);
+        if (!at) return;
+        if (focus !== 'new') at.classList.add('cur');
+        at.scrollIntoView({ block: focus === 'new' ? 'start' : 'center' });
       });
       return null;
     });

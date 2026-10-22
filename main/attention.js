@@ -64,8 +64,14 @@ function clear(log) {
   }
   if (MAC && n) app.dock?.setBadge('');
   marked.clear();
+  if (n) require('./tasks-badge').refresh(); // вместо точки вернуть число дел на сегодня (t1186)
   if (n) log(`внимание: снято — окно в фокусе (окон ${n})`);
 }
+
+/** На окне сейчас точка «агент ждёт». @param {BrowserWindow} w */
+const isMarked = (w) => marked.has(w);
+/** Есть ли хоть одна метка (macOS: метка одна на программу). */
+const hasMarks = () => marked.size > 0;
 
 /**
  * Агент ждёт человека. Звать после проверки «окно проекта в фокусе» (sound.js) — там сигнала не нужно.
@@ -88,4 +94,4 @@ function raise(project, what, log) {
   log(`внимание: ${what} — панель задач, окно «${target.getTitle()}»${target.isMinimized() ? ' (свёрнуто)' : ''}`);
 }
 
-module.exports = { raise, clear, badgeImage };
+module.exports = { raise, clear, badgeImage, isMarked, hasMarks };

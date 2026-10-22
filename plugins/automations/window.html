@@ -78,6 +78,45 @@
   .panel { background: var(--input); border: 1px solid var(--line); border-radius: 6px; margin: 0 20px; padding: 10px 16px; user-select: text; line-height: 20px; white-space: pre-wrap; overflow-y: auto; flex: 1; min-height: 80px; font-size: 13px; }
   .files { margin: 0 20px 10px; flex-shrink: 0; max-height: 140px; overflow-y: auto; } .file { display: flex; align-items: center; gap: 8px; height: 26px; font-size: 12px; user-select: text; }
   .empty { padding: 24px 10px; color: var(--muted); text-align: center; }
+  /* Список (Д-21, t671; spikes\t643-design\src-proto\template.html 150–190): заголовок окна 40 px со значком часов, заголовок 20/600 с подписью,
+     главная кнопка акцентом, отбор сегментами, таблица в карточке — колонки 1fr 150 120 60 46, строка 56 px. */
+  #title { height: 40px; padding-left: 16px; } #title .name { font-size: 13px; } #appIcon { color: var(--muted); }
+  /* ui-kermach-projects.css прячет #title .muted; здесь в #sub — название экрана и строка ошибки alertLine, её прятать нельзя. */
+  #title .name #sub { display: inline; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+  #title .btns { height: 34px; align-self: flex-start; } #title .btns div { width: 44px; } #title .btns #close:hover { background: #E81123; }
+  .head.big { padding: 8px 24px 16px; } .head .ht { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .head.big h1 { font-size: 20px; } .head .hs { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .head.big .bbtn.fill { height: 34px; border-radius: 8px; font-weight: 500; padding: 0 14px; gap: 6px; }
+  .filter { align-items: center; padding: 0 24px 12px; flex-wrap: nowrap; gap: 10px; }
+  .segs { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--hover); min-width: 0; overflow-x: auto; }
+  .segs::-webkit-scrollbar { height: 0; }
+  .segs .chip { height: 26px; padding: 0 12px; border: 0; border-radius: 6px; color: var(--text); white-space: nowrap; flex-shrink: 0; transition: background .2s, color .2s; }
+  .segs .chip:hover:not(.on) { background: var(--hover); } .segs .chip.on { background: var(--accent); color: var(--on-accent); border: 0; }
+  .chip.right { height: 28px; gap: 6px; padding: 0 12px; border-radius: 14px; border-color: var(--line); white-space: nowrap; flex-shrink: 0; }
+  .chip.right .dot { width: 6px; height: 6px; } .chip.right.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .thead, .row { display: grid; grid-template-columns: minmax(0,1fr) 150px 120px 60px 46px; gap: 12px; align-items: center; }
+  .count.thead { padding: 0 37px 6px; font-size: 11px; font-weight: 600; } .thead .r { text-align: right; }
+  .list { padding: 0 24px 16px; }
+  .tbl { background: var(--card, var(--hover)); border: 1px solid var(--line); border-radius: 10px; padding: 4px; display: flex; flex-direction: column; gap: 1px; }
+  /* Вес #screen: ui-kermach-projects.css задаёт .row, .group, .text, .tile без привязки к окну «Проекты» и иначе перебивает список. */
+  #screen .tbl .group { margin: 4px 0 0; padding: 0 8px; height: 26px; border-radius: 0; font-weight: 400; } #screen .tbl .group:first-child { margin-top: 0; }
+  #screen .row { height: 56px; padding: 0 8px; border-radius: 7px; transition: background .15s; } #screen .row:hover { padding-left: 8px; background: var(--hover); }
+  .row .who { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  #screen .tile { --tc: var(--muted); width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--tc); background: color-mix(in srgb, var(--tc) 18%, transparent); }
+  #screen .text .n { font-size: 13.5px; line-height: 18px; font-weight: 500; gap: 8px; } .text .n .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #screen .text .p { font-size: 11.5px; }
+  .row .dot.new { width: auto; height: 18px; padding: 0 7px; border-radius: 9px; display: inline-flex; align-items: center; flex-shrink: 0;
+    background: var(--accent); color: var(--on-accent); font-size: 10.5px; font-weight: 600; text-transform: lowercase; }
+  .row .col, .row .col2, .row .col3, .row .col4 { width: auto; }
+  .row .col3 { font-variant-numeric: tabular-nums; color: var(--text); }
+  /* «Включить» у пришедшей с папкой шире переключателя: кнопка занимает колонки цены и переключателя. */
+  .row.foreign .col3 { display: none; } .row.foreign .col4 { grid-column: 4 / 6; }
+  .row.disabled .who { opacity: .55; }
+  .sw { width: 34px; height: 20px; border-radius: 10px; background: var(--off, rgba(var(--muted-rgb),.3)); transition: background .2s; }
+  .sw::after { width: 16px; height: 16px; border-radius: 8px; transition: left .25s cubic-bezier(.3,1.5,.5,1); }
+  .sw.on::after { left: 16px; }
+  @media (prefers-reduced-motion: reduce) { .sw, .sw::after, .row, .segs .chip { transition: none; } }
 </style>
 <link rel="stylesheet" href="../../renderer/ui.css">
 </head>

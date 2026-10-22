@@ -22,11 +22,19 @@ contextBridge.exposeInMainWorld('terminalus', {
   // Окно «Проекты».
   projects: {
     list: () => ipcRenderer.invoke('projects:list'),
-    pickFolder: () => ipcRenderer.invoke('projects:pick'),
+    pickFolder: (kind) => ipcRenderer.invoke('projects:pick', kind),
+    presets: () => ipcRenderer.invoke('projects:presets'),
+    create: (o) => ipcRenderer.invoke('projects:create', o),
     add: (dir) => ipcRenderer.invoke('projects:add', dir),
     open: (id) => ipcRenderer.send('projects:open', id),
     update: (id, look) => ipcRenderer.invoke('projects:update', id, look),
     remove: (id) => ipcRenderer.invoke('projects:remove', id),
+    canCopy: (id) => ipcRenderer.invoke('projects:canCopy', id),
+    copy: (id) => ipcRenderer.invoke('projects:copy', id),
+    isCopy: (id) => ipcRenderer.invoke('projects:isCopy', id),
+    removeCopy: (id, force) => ipcRenderer.invoke('projects:removeCopy', id, !!force),
+    canHistory: (id) => ipcRenderer.invoke('projects:canHistory', id),
+    enableHistory: (id) => ipcRenderer.invoke('projects:enableHistory', id),
     collapse: (keys, shut) => ipcRenderer.invoke('projects:collapse', keys, shut),
     setMode: (mode) => ipcRenderer.invoke('projects:mode', mode),
     groupAdd: (name, projectId) => ipcRenderer.invoke('projects:groupAdd', name, projectId),
@@ -57,10 +65,17 @@ contextBridge.exposeInMainWorld('terminalus', {
     write: (sid, data) => ipcRenderer.send('term:write', { sid, data }),
     // Снимок и описание со страницы — в терминал агента (t38, t39); главный процесс проверяет агента и чистит текст. Ответ — вставлено ли.
     paste: (sid, text, mode) => ipcRenderer.invoke('term:paste', { sid, text, mode }),
+    // Картинка «[Image #N]» разговора Claude этой вкладки (t1148): { url } или { missing: true }.
+    image: (sid, n) => ipcRenderer.invoke('term:image', { sid, n }),
     resize: (sid, cols, rows) => ipcRenderer.send('term:resize', { sid, cols, rows }),
     update: (sid, fields) => ipcRenderer.invoke('term:update', { sid, fields }),
     close: (sid) => ipcRenderer.invoke('term:close', { sid }),
     reorder: (sids) => ipcRenderer.invoke('term:reorder', { sids }),
+    // Скрытую вкладку (t1059) — на полосу: кнопка «в фоне» (t1061).
+    unhide: (sid) => ipcRenderer.invoke('term:unhide', { sid }),
+    // И обратно — «Спрятать в фон» в меню вкладки (d307); onHide — вкладку спрятали (меню или плагин): окно снимает её с полосы.
+    hide: (sid) => ipcRenderer.invoke('term:hide', { sid }),
+    onHide: (cb) => ipcRenderer.on('term:hide', (_e, m) => cb(m.sid)),
     onData: (cb) => ipcRenderer.on('term:data', (_e, m) => cb(m.sid, m.data)),
     onExit: (cb) => ipcRenderer.on('term:exit', (_e, m) => cb(m.sid, m.code, m.state)),
     onChanged: (cb) => ipcRenderer.on('term:changed', () => cb()),
@@ -88,6 +103,12 @@ contextBridge.exposeInMainWorld('terminalus', {
     summary: (project) => ipcRenderer.invoke('auto:summary', project || ''),
     open: (o) => ipcRenderer.invoke('auto:open', o || {}),
     onChanged: (cb) => { const f = () => cb(); ipcRenderer.on('auto:changed', f); return () => ipcRenderer.removeListener('auto:changed', f); },
+  },
+  // Плагин «История» для окна «Проекты» (plugins\history\app.js, t1127): waits — { counts: { номер проекта: N } } разговоров «ждут вас»,
+  // { off: true } — плагин выключен. fresh — перечитать пометки «идёт». onChanged отвечает функцией снятия подписки.
+  history: {
+    waits: (fresh) => ipcRenderer.invoke('history:waits', !!fresh),
+    onChanged: (cb) => { const f = () => cb(); ipcRenderer.on('history:changed', f); return () => ipcRenderer.removeListener('history:changed', f); },
   },
   // Плагин «Markdown» (plugins\markdown\main.js, t220): документы .md проекта. Главный процесс отвечает, только пока плагин включён, и только про файлы,
   // которые окно получило от него же (resolve, pick, list, create, tabs) — читать и писать что угодно по пути нельзя.
@@ -163,6 +184,7 @@ contextBridge.exposeInMainWorld('terminalus', {
   // Ссылка из терминала (t58): адрес http(s) или полный путь к файлу. Ответ {} или { error }.
   // from — кто открыл, только для журнала (t895): 'browser' — кнопка вкладки сайта, 'agents' — окно «Агенты», 'markdown' — просмотр markdown (t902); без него — терминал.
   openLink: (target, from) => ipcRenderer.invoke('link:open', target, from),
+  linkHas: (target) => ipcRenderer.invoke('link:has', target),
   clipRead: () => ipcRenderer.invoke('clip:read'),
   clipWrite: (text) => ipcRenderer.send('clip:write', text),
 });

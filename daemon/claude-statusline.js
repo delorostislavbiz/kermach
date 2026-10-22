@@ -87,10 +87,11 @@ function report(input) {
   });
 }
 
-/** Команда строки состояния пользователя; пусто — её нет или это сама обёртка. */
+/** Команда строки состояния пользователя (settings.json в CLAUDE_CONFIG_DIR, иначе в ~/.claude, t1193); пусто — её нет или это сама обёртка. */
 function userCommand() {
   try {
-    const s = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'));
+    const home = process.env.CLAUDE_CONFIG_DIR ? path.resolve(process.env.CLAUDE_CONFIG_DIR) : path.join(os.homedir(), '.claude');
+    const s = JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8'));
     const cmd = s && s.statusLine && s.statusLine.type !== 'static' && typeof s.statusLine.command === 'string' ? s.statusLine.command : '';
     return /claude-statusline\.js/i.test(cmd) ? '' : cmd;
   } catch {

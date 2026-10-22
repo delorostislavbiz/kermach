@@ -91,11 +91,41 @@ function record(mapFile, q, hits, top, weak = false, root = '') {
   try {
     const file = writeFileOf(mapFile, root);
     ownFile(file);
-    // Одна строка за один вызов записи с O_APPEND: два агента разом не перемешают строки.
-    fs.appendFileSync(file, `${JSON.stringify(row)}\n`);
-    if (fs.statSync(file).size > MAX_BYTES) fold(file);
+    // Дозапись и сворачивание — под одним замком (t948): иначе строка, дописанная другим агентом между чтением
+    // и rename в fold, пропадала вместе со старым файлом.
+    locked(file, () => {
+      // Одна строка за один вызов записи с O_APPEND: два агента разом не перемешают строки.
+      fs.appendFileSync(file, `${JSON.stringify(row)}\n`);
+      if (fs.statSync(file).size > MAX_BYTES) fold(file);
+    });
     return '';
   } catch (e) { return String((e && /** @type {any} */ (e).message) || e); }
+}
+
+/** Замок старше — брошен (процесс упал посреди записи): сворачивание 512 КБ идёт миллисекунды. */
+const LOCK_STALE_MS = 2000;
+/** Дольше замок не ждать (t1068): EPERM без файла замка (папка без права записи) иначе крутил цикл вечно. */
+const LOCK_WAIT_MS = 3000;
+
+/**
+ * Выполнить fn под замком <file>.lock. Замок — файл с wx: ссылку на его имени не открыть, создаётся только новый.
+ * @param {string} file @param {() => void} fn
+ */
+function locked(file, fn) {
+  const lock = `${file}.lock`;
+  const nap = new Int32Array(new SharedArrayBuffer(4));
+  const until = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try { fs.closeSync(fs.openSync(lock, 'wx')); break; } catch (e) {
+      const code = /** @type {any} */ (e).code;
+      if (code !== 'EEXIST' && code !== 'EPERM') throw e;
+      if (Date.now() > until) throw new Error(`журнал не записан: замок ${lock} не взять за ${LOCK_WAIT_MS / 1000} с (${code}) — нет права записи в папку или замок держит другой процесс`);
+      const st = fs.lstatSync(lock, { throwIfNoEntry: false });
+      if (st && Date.now() - st.mtimeMs > LOCK_STALE_MS) { try { fs.unlinkSync(lock); } catch { /* убрал другой */ } continue; }
+      Atomics.wait(nap, 0, 0, 5);
+    }
+  }
+  try { fn(); } finally { try { fs.unlinkSync(lock); } catch { /* уже убран как брошенный */ } }
 }
 
 /** Свернуть старое: первые строки — в carry, последние KEEP — как есть. Через временный файл и rename. @param {string} file */

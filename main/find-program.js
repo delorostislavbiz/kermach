@@ -32,6 +32,36 @@ function findProgram(name, env = process.env, platform = process.platform) {
   return null;
 }
 
+/**
+ * Поиск сразу многих программ без блокировки главного процесса (t204): каждая папка PATH читается один раз (fs.promises.readdir),
+ * имена сверяются по индексу — 50 асинхронных чтений вместо 22 имён × 50 папок × 2 расширения проверок существования.
+ * Результат каждого имени тот же, что у findProgram: .exe по порядку папок, потом .cmd. Вне Windows — синхронный findUnix (папок мало).
+ * @param {string[]} names @param {NodeJS.ProcessEnv} [env] @param {string} [platform]
+ * @returns {Promise<Map<string, { file: string, pre: string[] } | null>>}
+ */
+async function findProgramsAsync(names, env = process.env, platform = process.platform) {
+  /** @type {Map<string, { file: string, pre: string[] } | null>} */
+  const out = new Map();
+  if (platform !== 'win32') { for (const n of names) out.set(n, findUnix(n, env)); return out; }
+  const dirs = (env.PATH || env.Path || '').split(path.delimiter).filter(Boolean);
+  dirs.push(path.join(env.USERPROFILE || os.homedir(), '.local', 'bin'));
+  if (env.APPDATA) dirs.push(path.join(env.APPDATA, 'npm'));
+  // Имена файлов в нижнем регистре: existsSync на Windows не различает регистр.
+  const seen = await Promise.all(dirs.map((d) => fs.promises.readdir(d).then((l) => new Set(l.map((x) => x.toLowerCase())), () => new Set())));
+  for (const name of names) {
+    const low = name.toLowerCase();
+    let found = null;
+    const i = seen.findIndex((set) => set.has(`${low}.exe`));
+    if (i >= 0) found = { file: path.join(dirs[i], `${name}.exe`), pre: [] };
+    else {
+      const j = seen.findIndex((set) => set.has(`${low}.cmd`));
+      if (j >= 0) found = { file: env.ComSpec || process.env.ComSpec || 'cmd.exe', pre: ['/d', '/c', path.join(dirs[j], `${name}.cmd`)] };
+    }
+    out.set(name, found);
+  }
+  return out;
+}
+
 /** Вне Windows: разделитель PATH — двоеточие; папка, а не файл, и файл без права запуска — не программа. @param {string} name @param {NodeJS.ProcessEnv} env */
 function findUnix(name, env) {
   const dirs = (env.PATH || '').split(':').filter(Boolean);
@@ -58,4 +88,4 @@ function notFound(names, platform = process.platform) {
   return i18n.t('find.notUnix', 'нет {list} в PATH, ~/.local/bin, {extra}', { list: names.join(', '), extra: UNIX_EXTRA.join(', ') });
 }
 
-module.exports = { findProgram, notFound };
+module.exports = { findProgram, findProgramsAsync, notFound };

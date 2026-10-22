@@ -21,6 +21,7 @@ const projectWindow = require('./project-window');
 const tabs = require('./tabs');
 const { findProgram, notFound } = require('./find-program');
 const agents = require('./agents');
+const claudeImages = require('./claude-images');
 // Вид вкладки, её имя, цвет и значок — общие с уведомлением (sound.js, t645).
 const { KINDS, agentOf, lookOf, kindOf, shownTitle } = require('./tab-look');
 const i18n = require('./i18n');
@@ -97,6 +98,13 @@ const launching = new Map();
 const reviveBegun = new Set();
 /** Отметить окно в reviveBegun; окно закрыли — номер убирается. @param {Electron.WebContents} wc */
 const beginRevive = (wc) => { if (reviveBegun.has(wc.id)) return; const id = wc.id; reviveBegun.add(id); wc.once('destroyed', () => reviveBegun.delete(id)); };
+/**
+ * Срок первого списка (t592): страница окна упала до term:list — revive не будет, а вкладки из файла иначе «ждут» для плагина, пока окно открыто.
+ * Отсчёт — с первого вопроса плагина без начатого revive; срок вышел — окно считается начавшим, подписчики onState получают пустое событие.
+ */
+const FIRST_LIST_MS = Number(process.env.TERMINALUS_FIRST_LIST_MS) || 30000;
+/** Окна, у которых идёт отсчёт срока первого списка. @type {Set<number>} */
+const firstListTimers = new Set();
 /** Терминалы, запущенные для вкладки, которую закрыли раньше (t192): гасятся, в файл вкладок не попадают. */
 const abandoned = new Set();
 /**
@@ -189,7 +197,7 @@ const codexHint = () => i18n.t('term.codexHookOff', 'Хук Codex не рабо�
 function bypassOff(dir) {
   const managed = process.platform === 'win32' ? path.join(process.env.ProgramFiles || 'C:\\Program Files', 'ClaudeCode', 'managed-settings.json')
     : process.platform === 'darwin' ? '/Library/Application Support/ClaudeCode/managed-settings.json' : '/etc/claude-code/managed-settings.json';
-  const files = [managed, path.join(os.homedir(), '.claude', 'settings.json'), path.join(dir, '.claude', 'settings.json'), path.join(dir, '.claude', 'settings.local.json')];
+  const files = [managed, path.join(claudeHome(), 'settings.json'), path.join(dir, '.claude', 'settings.json'), path.join(dir, '.claude', 'settings.local.json')];
   for (const f of files) {
     try {
       const j = JSON.parse(fs.readFileSync(f, 'utf8'));
@@ -217,16 +225,18 @@ const PS_ARGS = ['-NoLogo', '-NoExit', '-Command', '$OutputEncoding = [Text.UTF8
  * @param {{ name: string, mode: string } | null} [ag] именованный агент Claude (t251): --agent <имя>, режим из файла агента — --permission-mode
  * @param {string[]} [codexHook] флаги -c хука SessionStart Codex от демона (t777). Пусто (старый демон) — codex без хука.
  * @param {boolean} [bypass] Claude без вопросов о разрешениях (t851): --dangerously-skip-permissions, meta.bypass '1'
+ * @param {string} [name] имя вкладки Claude для других сессий (t1211, tabName): --name
  * @returns {{ file: string, args: string[], meta: Record<string, string> } | { error: string }}
  */
-function launch(kind, resume, hooksSettings, ag, codexHook, bypass) {
+function launch(kind, resume, hooksSettings, ag, codexHook, bypass, name) {
   if (kind === 'claude') {
     const found = findProgram('claude');
     if (!found) return { error: i18n.t('term.noClaude', 'Claude Code не найден: {why}.', { why: notFound(['claude']) }) };
     // Подсказка — и при --resume: Claude записывает инструкции на первом запросе разговора и потом берёт записанные (--system-prompt-snapshot).
     const p = withHint(kind, found);
     // --settings дополняет ~/.claude/settings.json, а не заменяет (проба t10): хуки пользователя работают дальше.
-    const pre = hooksSettings ? [...p.pre, '--settings', hooksSettings] : p.pre;
+    // Имя для других сессий (ListAgents, SendMessage, t1211): без флага Claude даёт безликое claude-1c.
+    const pre = [...p.pre, ...hooksSettings ? ['--settings', hooksSettings] : [], ...name ? ['--name', name] : []];
     // Агент — и при --resume: без --agent продолженный разговор теряет модель агента (проба t259, q4-summary.txt).
     // permissionMode файла агента при --agent не действует (t249) — его передаёт флаг; нет поля в файле — нет флага, режим Ростислава.
     // Без вопросов о разрешениях (t851) — флаг ставит только ядро: по пункту меню «+» или настройке проекта, не по аргументам плагина.
@@ -279,11 +289,14 @@ function launch(kind, resume, hooksSettings, ag, codexHook, bypass) {
  * @type {Record<string, string[]>}
  */
 const OWN_FLAGS = {
-  claude: ['--settings', '--session-id', '--resume', '-r', '--continue', '-c', '--fork-session', '--print', '-p', '--agent', '--permission-mode', '--add-dir', '-w', '--worktree',
+  claude: ['--settings', '--name', '-n', '--session-id', '--resume', '-r', '--continue', '-c', '--fork-session', '--print', '-p', '--agent', '--permission-mode', '--add-dir', '-w', '--worktree',
     '--append-system-prompt', '--append-system-prompt-file', '--system-prompt', '--system-prompt-file',
     '--dangerously-skip-permissions', '--allow-dangerously-skip-permissions'],
   codex: ['--no-daemon', '--add-dir', '-C', '--cd', '--worktree'],
 };
+/** Номер разговора — uuid 8-4-4-4-12: у Claude v4, у Codex v7. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Свои флаги плагина (t279): только из этого списка, у каждого вида свой; флаг → проверка его значения. Остальное — отказ:
  * флаги прав (claude --dangerously-skip-permissions, codex -c, -s, -a, -p, --dangerously-bypass-approvals-and-sandbox) запретом по одному не закрыть.
@@ -301,9 +314,9 @@ const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}$/;
 const ALLOW_FLAGS = {
   claude: { '--model': MODEL_RE, '--effort': /^(low|medium|high|xhigh|max)$/ },
   codex: { '--model': MODEL_RE, '-m': MODEL_RE, '-c': /^model_reasoning_effort=(none|low|medium|high|xhigh|max)$/ },
-  'agent:grok': { '--model': MODEL_RE, '-m': MODEL_RE, '--reasoning-effort': /^(low|medium|high|xhigh)$/ },
+  'agent:grok': { '--model': MODEL_RE, '-m': MODEL_RE, '--reasoning-effort': /^(low|medium|high|xhigh)$/, '--resume': UUID_RE },
   'agent:gemini': { '--model': MODEL_RE, '-m': MODEL_RE },
-  'agent:antigravity': { '--model': MODEL_RE, '--effort': /^(low|medium|high)$/ },
+  'agent:antigravity': { '--model': MODEL_RE, '--effort': /^(low|medium|high)$/, '--conversation': UUID_RE },
   'agent:cursor': { '--model': MODEL_RE },
   'agent:omp': { '--model': MODEL_RE },
 };
@@ -330,12 +343,10 @@ function notAllowed(kind, args) {
   return '';
 }
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
-/** node-pty (windowsPtyAgent.js, argsToCommandLine) не берёт в кавычки строку, которая уже в них: с пробелом она распалась бы на две. @param {string} a */
-const brokenByPty = (a) => process.platform === 'win32' && a.length > 1 && a.startsWith('"') && a.endsWith('"') && /\s/.test(a);
 
 /**
  * Grok (t576): флаги -m и --reasoning-effort он запоминает в ~\.grok\config.toml как свои по умолчанию (прогон real1, 13.10) —
- * модель и усилие уходят наложением GROK_CONFIG (~\.grok\docs\user-guide\05-configuration.md: models в списке разрешённых), флагов в команде нет.
+ * модель и усилие уходят наложением GROK_CONFIG (~\.grok\docs\user-guide\05-configuration.md: models в списке разрешённых), флагов в команде нет — кроме --resume <номер> (t1118, «История»).
  * Значения уже прошли ALLOW_FLAGS. GROK_CONFIG уже есть (env плагина или окружение программы) — models сливаются в его JSON; не JSON-объект — отказ.
  * В записи вкладки (extra) остаются флаги, а не готовый JSON (t589): слияние — при каждом запуске, и revive берёт GROK_CONFIG программы на этот момент.
  * @param {{ args?: string[], env?: Record<string, string> }} x
@@ -350,9 +361,15 @@ function grokConfig(x) {
     const eq = a.startsWith('--') ? a.indexOf('=') : -1;
     const f = eq > 0 ? a.slice(0, eq) : a;
     const v = eq > 0 ? a.slice(eq + 1) : args[++i];
+    if (f === '--resume') continue; // t1118: номер разговора идёт в команду, не в GROK_CONFIG
     models[f === '--reasoning-effort' ? 'default_reasoning_effort' : 'default'] = v;
   }
-  const was = (x.env && x.env.GROK_CONFIG) ?? process.env.GROK_CONFIG ?? '';
+  // t1194: моделей нет (вкладка из «Истории» только с --resume) — GROK_CONFIG не пишем: заглушка {"models":{}} могла заменить модели из config.toml Grok
+  if (!Object.keys(models).length) return { env: { ...x.env } };
+  // `??` берёт GROK_CONFIG плагина, даже пустой: env: { GROK_CONFIG: '' } = «пусто = убрать», GROK_CONFIG программы тогда не учитывается (t591).
+  // Имя без учёта регистра (t1211): grok_config от плагина на Windows — та же переменная, демон заменит ею GROK_CONFIG программы.
+  const own = x.env ? Object.keys(x.env).find((k) => k.toUpperCase() === 'GROK_CONFIG') : undefined;
+  const was = (x.env && own !== undefined ? x.env[own] : undefined) ?? process.env.GROK_CONFIG ?? '';
   /** @type {any} */
   let cfg = {};
   if (was.trim()) {
@@ -363,7 +380,9 @@ function grokConfig(x) {
   }
   const json = JSON.stringify({ ...cfg, models: { ...cfg.models, ...models } });
   if (json.length > 4096) return { error: 'GROK_CONFIG вместе с моделью и усилием длиннее 4096 знаков' };
-  return { env: { ...x.env, GROK_CONFIG: json } };
+  const env = { ...x.env };
+  if (own !== undefined) delete env[own];
+  return { env: { ...env, GROK_CONFIG: json } };
 }
 
 /**
@@ -391,8 +410,7 @@ function checkExtra(kind, o, p) {
     if (bad) return { error: `аргумент ${bad} ставит ядро само` };
     const wrong = notAllowed(kind, o.args);
     if (wrong) return { error: wrong };
-    const split = o.args.find(brokenByPty);
-    if (split) return { error: `аргумент ${split} целиком в кавычках и с пробелом node-pty передать не может — уберите внешние кавычки` };
+    // Аргумент вида "a b" (в кавычках, с пробелом) демон передаёт готовой командной строкой Windows (ptyArgs, t1216): доходит одним аргументом.
     if (o.args.length) x.args = o.args.slice();
   }
   if (o.cwd !== undefined && o.cwd !== '') {
@@ -411,6 +429,12 @@ function checkExtra(kind, o, p) {
     if (e.length > 32 || e.some(([k, v]) => !ENV_KEY.test(k) || /^TERMINALUS_/i.test(k) || typeof v !== 'string' || v.length > 4096 || v.includes('\0'))) {
       return { error: 'env: до 32 переменных, имя из букв, цифр и _, не TERMINALUS_*, значение — строка до 4096 знаков' };
     }
+    // t424: CLAUDE*, ANTHROPIC_* от плагина увели бы разговор мимо ~/.claude/projects (CLAUDE_CONFIG_DIR) или перебили подписку (ANTHROPIC_API_KEY).
+    // Демон такие переменные из своего окружения убирает (FOREIGN_ENV), а extra кладёт поверх — поэтому отказ здесь.
+    // Windows не различает регистр имён (t1211): из GROK_CONFIG и grok_config ребёнку досталась бы любая.
+    if (new Set(e.map(([k]) => k.toUpperCase())).size !== e.length) return { error: 'env: две переменные с одним именем в разном регистре' };
+    const own = e.find(([k]) => /^(CLAUDE|ANTHROPIC_)/i.test(k));
+    if (own) return { error: `env: ${own[0]} плагину задавать нельзя — CLAUDE* и ANTHROPIC_* меняют папку разговоров и вход Claude` };
     if (e.length) x.env = Object.fromEntries(e);
   }
   // Grok (t576): модель и усилие — не флагами, а наложением GROK_CONFIG (grokConfig). Отказ на битом GROK_CONFIG — здесь, до демона.
@@ -427,7 +451,6 @@ function checkExtra(kind, o, p) {
     }
     if (typeof o.prompt !== 'string' || o.prompt.length > 16000 || o.prompt.includes('\0')) return { error: 'prompt: строка до 16000 знаков' };
     if (o.prompt.startsWith('-')) return { error: 'первое сообщение не может начинаться с «-»: программа примет его за флаг' };
-    if (brokenByPty(o.prompt)) return { error: 'первое сообщение целиком в кавычках и с пробелом node-pty передать не может — уберите внешние кавычки' };
     prompt = o.prompt;
   }
   let title = '';
@@ -467,11 +490,12 @@ function checkExtra(kind, o, p) {
  * @param {{ name: string, mode: string } | null} [ag] агент Claude (t251)
  * @param {string[]} [codexHook] флаги -c хука SessionStart Codex от демона (t777)
  * @param {boolean} [bypass] без вопросов о разрешениях (t851, launch)
+ * @param {string} [name] имя вкладки Claude (t1211, launch)
  * env — окружение вкладки для демона: env плагина, у Grok с GROK_CONFIG (grokConfig); в meta.extra — x как есть.
  * @returns {{ file: string, args: string[], meta: Record<string, any>, env?: Record<string, string> } | { error: string }}
  */
-function launchWith(kind, resume, hooksSettings, x, prompt, ag, codexHook, bypass) {
-  const how = launch(kind, resume, hooksSettings, ag, codexHook, bypass);
+function launchWith(kind, resume, hooksSettings, x, prompt, ag, codexHook, bypass, name) {
+  const how = launch(kind, resume, hooksSettings, ag, codexHook, bypass, name);
   if ('error' in how || !x && !prompt) return how;
   let args = (x && x.args) || [];
   let env = x ? x.env : undefined;
@@ -479,24 +503,31 @@ function launchWith(kind, resume, hooksSettings, x, prompt, ag, codexHook, bypas
     const g = grokConfig(x);
     if ('error' in g) return g;
     env = g.env;
-    args = [];
+    // t1118: модель и усилие ушли в GROK_CONFIG, в команде остаётся только --resume <номер> («История», «Продолжить»)
+    const i = args.findIndex((a) => a === '--resume' || a.startsWith('--resume='));
+    args = i < 0 ? [] : args[i].includes('=') ? [args[i]] : args.slice(i, i + 2);
   }
   // Агент из системы (t576): первое сообщение своим флагом перед текстом (agents.js, поле prompt). Флаг ставит ядро после проверки
   // аргументов плагина (checkExtra); без первого сообщения (revive) флага нет. Агента без задания при запуске отсёк checkExtra.
   const pf = prompt && kind.startsWith('agent:') ? agents.promptFlag(kind.slice(6)) : '';
-  const w = withExtra(how, [...args, ...pf ? [pf] : []], prompt);
+  // Сообщение одним словом программа приняла бы за подкоманду (t1211): claude update, codex resume. С пробелом в конце это уже не имя
+  // подкоманды, а текст (spikes\t1211-env\subcmd.txt). После флага агента (pf) слово — значение флага, его не трогаем; /init подкомандой не бывает.
+  const msg = prompt && !pf && !prompt.startsWith('/') && !/\s/.test(prompt) ? `${prompt} ` : prompt;
+  const w = withExtra(how, [...args, ...pf ? [pf] : []], msg);
   if ('error' in w) return w;
   return { file: w.file, args: w.args, meta: x ? { ...how.meta, extra: x } : how.meta, env };
 }
 
 /**
- * Папка разговоров Claude Code — ~\.claude\projects. CLAUDE_CONFIG_DIR не учитывается: демон убирает переменные CLAUDE*
- * из окружения терминала (FOREIGN_ENV в daemon.js), и Claude во вкладке всегда пишет в ~\.claude.
+ * Папка настроек Claude Code — CLAUDE_CONFIG_DIR, если её задали, иначе ~\.claude. Демон пропускает эту переменную во вкладку
+ * (FOREIGN_ENV в daemon.js, t1193), поэтому Claude во вкладке пишет туда же, куда смотрит программа.
  */
-const conversationsDir = () => path.join(os.homedir(), '.claude', 'projects');
+function claudeHome() {
+  return process.env.CLAUDE_CONFIG_DIR ? path.resolve(process.env.CLAUDE_CONFIG_DIR) : path.join(os.homedir(), '.claude');
+}
 
-/** Номер разговора — uuid 8-4-4-4-12: у Claude v4, у Codex v7. */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Папка разговоров Claude Code — projects в папке настроек (claudeHome). */
+const conversationsDir = () => path.join(claudeHome(), 'projects');
 
 /**
  * Папка разговоров Codex — CODEX_HOME\sessions, по умолчанию ~\.codex\sessions. CODEX_HOME демон терминалу не убирает (FOREIGN_ENV в daemon.js),
@@ -525,6 +556,20 @@ function hasConversation(id, kind = 'claude', env) {
   return subdirs(conversationsDir()).some((d) => fs.existsSync(path.join(d, `${id}.jsonl`)));
 }
 
+/**
+ * Номер разговора вкладки grok и agy (t1194): ядро его не знает, но «Продолжить» из «Истории» кладёт его в аргументы вкладки
+ * (--resume у grok, --conversation у agy; meta.extra.args). Вкладка без этих аргументов номера не несёт — плагин находит её по pid.
+ * @param {any} meta
+ */
+function resumeIdOf(meta) {
+  if (!meta || (meta.kind !== 'agent:grok' && meta.kind !== 'agent:antigravity')) return '';
+  const args = meta.extra && Array.isArray(meta.extra.args) ? meta.extra.args.map(String) : [];
+  const i = args.findIndex((a) => a === '--resume' || a === '--conversation');
+  if (i >= 0) return args[i + 1] || '';
+  const eq = args.find((a) => /^--(resume|conversation)=/.test(a));
+  return eq ? eq.slice(eq.indexOf('=') + 1) : '';
+}
+
 /** Что окно получает о терминале. state — код из STATE_WORDS или ''; старый демон его не знает — ''.
  * pics — получатель снимка и элемента со страницы: агент понимает картинку по пути (pics в каталоге agents.js, t416). @param {any} s */
 function pick(s) {
@@ -537,8 +582,14 @@ function pick(s) {
     // Номер разговора вкладки (t768): по нему плагин «История» отмечает разговор «идёт во вкладке». У Codex — только у продолженной вкладки:
     // свежий Codex выбирает номер сам, флага вроде --session-id у него нет.
     claudeSessionId: (s.meta && s.meta.claudeSessionId) || undefined, codexSessionId: (s.meta && s.meta.codexSessionId) || undefined,
+    // grok и agy (t1194): номер разговора из аргументов вкладки — «История» по нему ведёт на вкладку
+    resumeId: resumeIdOf(s.meta) || undefined,
     // Без вопросов о разрешениях (t851): окно помечает вкладку значком.
     bypass: s.meta && s.meta.bypass === '1' ? true : undefined,
+    // Скрытая вкладка (t1059): терминал живёт, окно её в полосе не рисует, пока плагин не скажет «показать» (showFromPlugin).
+    hidden: s.meta && s.meta.hidden ? true : undefined,
+    // Последний хук (t1133): «Роадмап» отличает запрос разрешения (PermissionRequest, tool и what — что просит) от вопроса.
+    hook: s.hook && s.hook.event ? { event: String(s.hook.event), tool: String(s.hook.tool || ''), what: String(s.hook.what || '') } : undefined,
   };
 }
 
@@ -561,7 +612,7 @@ function pickLive(s) {
  * @param {import('./tabs').TabEntry} t
  */
 function pickSaved(t) {
-  const s = { ...t, meta: { kind: t.kind, claudeSessionId: t.claudeSessionId, codexSessionId: t.codexSessionId, bypass: t.bypass }, pid: undefined };
+  const s = { ...t, meta: { kind: t.kind, claudeSessionId: t.claudeSessionId, codexSessionId: t.codexSessionId, bypass: t.bypass, hidden: t.hidden }, pid: undefined };
   return { ...pick(s), alive: false, failed: notices.has(t.sid), state: exits.get(t.sid) || 'exited', notice: notices.get(t.sid) || i18n.t('term.notStarted', '{title} не запущен — откройте окно заново', { title: shownTitle(s) }) };
 }
 
@@ -579,7 +630,18 @@ const entryOf = (s) => ({
   ...pick(s), title: s.title || lookOf(kindOf(s)).title, autoTitle: s.autoTitle, titleManual: s.titleManual ? '1' : undefined,
   claudeSessionId: s.meta && s.meta.claudeSessionId, codexSessionId: s.meta && s.meta.codexSessionId, extra: s.meta && s.meta.extra ? JSON.stringify(s.meta.extra) : undefined,
   agent: s.meta && s.meta.agent, agentMode: s.meta && s.meta.agentMode, bypass: s.meta && s.meta.bypass === '1' ? '1' : undefined,
+  hidden: s.meta && s.meta.hidden ? '1' : undefined, logPath: (s.meta && s.meta.logPath) || undefined,
 });
+
+/**
+ * Имя вкладки Claude для других сессий (t1211, claude --name): папка проекта и заголовок вкладки, «МАРКЕТИНГ-Claude-2».
+ * Только буквы, цифры, _ . - — имя проходит и через cmd.exe (SAFE в cmd-shim.js).
+ * @param {string} dir папка проекта @param {string} title заголовок вкладки
+ */
+function tabName(dir, title) {
+  const clean = (/** @type {string} */ s) => s.replace(/\s+/g, '-').replace(/[^\p{L}\p{N}_.-]/gu, '');
+  return [clean(path.basename(dir)), clean(title)].filter(Boolean).join('-').slice(0, 64);
+}
 
 /**
  * Имя новой вкладки: «Claude», «Claude 2»… — наименьшее, которого нет ни у живых терминалов, ни во вкладках из файла.
@@ -655,7 +717,7 @@ async function revive(c, d, p, cols, rows) {
       // Без вопросов о разрешениях (t851) — как вкладку открыли, а не по нынешней настройке проекта. Запрет в настройках Claude — обычный Claude и строка во вкладке.
       const byOff = kind === 'claude' && t.bypass === '1' ? bypassOff(p.path) : '';
       const bypass = kind === 'claude' && t.bypass === '1' && !byOff;
-      const how = launchWith(kind, resumeId, d.hooksSettings, ex.x, '', ag, kind === 'codex' ? await codexHookArgs(d, (ex.x && ex.x.cwd) || p.path) : [], bypass);
+      const how = launchWith(kind, resumeId, d.hooksSettings, ex.x, '', ag, kind === 'codex' ? await codexHookArgs(d, (ex.x && ex.x.cwd) || p.path) : [], bypass, tabName(p.path, name));
       if ('error' in how) { notices.set(t.sid, how.error); continue; }
       // Разговор уже идёт — в соседней вкладке, запущенной этим же revive, или в другом проекте (t778): второй процесс испортил бы журнал.
       // Номер запускает соседнее окно прямо сейчас (t787) — в list демона его ещё нет.
@@ -678,7 +740,9 @@ async function revive(c, d, p, cols, rows) {
         const s = (await d.request('create', {
           file: how.file, args: how.args, cwd: (ex.x && ex.x.cwd) || p.path, env: browserCli.envFor(p, how.env), cols, rows, project: p.path,
           // Тема — от прежнего разговора: новому её не переносить, вкладка снова «Claude 2», пока Claude не напишет свою.
-          title: t.title, color: t.color, icon: t.icon, autoTitle: noConv || cxGone ? '' : t.autoTitle, titleManual: t.titleManual === '1', meta: how.meta,
+          title: t.title, color: t.color, icon: t.icon, autoTitle: noConv || cxGone ? '' : t.autoTitle, titleManual: t.titleManual === '1',
+          // Скрытая вкладка и её журнал (t1059) — как при открытии.
+          meta: { ...how.meta, ...(t.hidden === '1' ? { hidden: '1' } : {}), ...(t.logPath ? { logPath: t.logPath } : {}) },
         })).session;
         // Закрыли, пока шёл create: новый терминал гасим, в файл вкладок не пишем.
         if (!left.has(t.sid)) { abandoned.add(s.sid); try { await d.request('kill', { sid: s.sid }); } catch {} tabs.remove(c.dataDir, p.id, s.sid, c.log); exits.delete(s.sid); c.log(`вкладка ${name} в ${p.path} закрыта до запуска: терминал ${s.sid} остановлен`); continue; }
@@ -715,9 +779,10 @@ async function revive(c, d, p, cols, rows) {
  * @param {import('electron').WebContents | null} wc
  * @param {{ bypass: boolean } | null} [human] вкладку открыл человек из окна (term:create, не плагин); bypass — пункт «Claude без вопросов о разрешениях» (t851)
  * @param {boolean} [follow] плагин при программе просит следовать настройке проекта (t852, followBypass)
+ * @param {Record<string, string>} [more] поля meta от плагина: hidden и logPath (t1059, openFromPlugin)
  * @returns {Promise<{ session: any } | { error: string }>}
  */
-async function openTab(p, kind, o, cols, rows, wc, human, follow) {
+async function openTab(p, kind, o, cols, rows, wc, human, follow, more) {
   const c = /** @type {Ctx} */ (ctx);
   if (!Object.prototype.hasOwnProperty.call(KINDS, kind) && !agentOf(kind)) return { error: `неизвестный вид терминала: ${kind}` };
   const ex0 = checkExtra(kind, o, p);
@@ -733,7 +798,7 @@ async function openTab(p, kind, o, cols, rows, wc, human, follow) {
     if (byOff && human && human.bypass) return { error: bypassOffText(byOff) };
     bypass = !byOff;
   }
-  const ex = { ...ex0, bypass, byOff };
+  const ex = { ...ex0, bypass, byOff, more: more || {} };
   const r = await daemon();
   if (!r.c) return { error: r.error || 'нет связи с демоном' };
   const d = r.c;
@@ -766,15 +831,20 @@ async function openTab(p, kind, o, cols, rows, wc, human, follow) {
  * @param {any} ex итог checkExtra и режим без вопросов о разрешениях (bypass, byOff — t851) @param {any} k lookOf(kind) @param {number} cols @param {number} rows @param {import('electron').WebContents | null} wc
  */
 async function openTabRun(c, d, p, kind, o, ex, k, cols, rows, wc) {
-  const how = launchWith(kind, ex.resume || undefined, d.hooksSettings, ex.x, ex.prompt, ex.ag, kind === 'codex' ? await codexHookArgs(d, (ex.x && ex.x.cwd) || p.path) : [], ex.bypass);
+  // Заголовок — до запуска: из него и папки проекта имя вкладки Claude для других сессий (tabName, t1211).
+  let title;
+  try {
+    const live = await projectSessions(d, p.id);
+    title = freeTitle(ex.title || (ex.ag && ex.ag.name) || (kind === 'shell' ? i18n.t('term.shell', 'Терминал') : k.title), live, tabs.titles(c.dataDir, p.id, c.log));
+  } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; }
+  const how = launchWith(kind, ex.resume || undefined, d.hooksSettings, ex.x, ex.prompt, ex.ag, kind === 'codex' ? await codexHookArgs(d, (ex.x && ex.x.cwd) || p.path) : [], ex.bypass, tabName(p.path, title));
   if ('error' in how) return how;
   let s;
   try {
-    const live = await projectSessions(d, p.id);
     // Папка — в написании из списка проектов: по ней окно потом находит свои терминалы.
     s = (await d.request('create', {
       file: how.file, args: how.args, cwd: (ex.x && ex.x.cwd) || p.path, env: browserCli.envFor(p, how.env), cols, rows,
-      project: p.path, title: freeTitle(ex.title || (ex.ag && ex.ag.name) || (kind === 'shell' ? i18n.t('term.shell', 'Терминал') : k.title), live, tabs.titles(c.dataDir, p.id, c.log)), color: k.color, icon: k.icon, meta: how.meta,
+      project: p.path, title, color: k.color, icon: k.icon, meta: { ...how.meta, ...ex.more },
     })).session;
     if (kind === 'codex') codexHintOnce(s.sid);
     if (ex.byOff) fresh.set(s.sid, bypassOffText(ex.byOff));
@@ -785,8 +855,9 @@ async function openTabRun(c, d, p, kind, o, ex, k, cols, rows, wc) {
   const agLog = `${ex.ag ? `, агент ${ex.ag.name}${ex.ag.mode && !ex.bypass ? ` (--permission-mode ${ex.ag.mode})` : ''}` : ''}${ex.bypass ? ', без вопросов о разрешениях (--dangerously-skip-permissions)' : ''}${ex.byOff ? `, без вопросов о разрешениях не включено: запрет в ${ex.byOff}` : ''}`;
   const from = o && (ex.x || ex.prompt || ex.title || ex.resume) ? `, от плагина${ex.x ? ` ${JSON.stringify({ args: ex.x.args, cwd: ex.x.cwd, env: ex.x.env && Object.keys(ex.x.env) })}` : ''}${ex.prompt ? `, первое сообщение ${ex.prompt.length} знаков` : ''}` : '';
   const conv = !ex.resume ? (how.meta.claudeSessionId ? `, разговор ${how.meta.claudeSessionId}` : '') : kind === 'claude' ? `, claude --resume ${ex.resume}` : `, codex resume ${ex.resume}`;
+  const hid = ex.more.hidden ? `, скрытая${ex.more.logPath ? `, журнал ${ex.more.logPath}` : ''}` : '';
   const skipped = ex.agentSkipped ? `, агента ${ex.agentSkipped} нет ни в ~/.claude/agents, ни в папке проекта — продолжен без --agent` : '';
-  c.log(`открыл новый ${k.title} в ${p.path}: терминал ${s.sid}, pid ${s.pid}${conv}${agLog}${skipped}${from}${since}`);
+  c.log(`открыл новый ${k.title} в ${p.path}: терминал ${s.sid}, pid ${s.pid}${conv}${agLog}${skipped}${hid}${from}${since}`);
   return { session: pick(s) };
 }
 
@@ -794,21 +865,90 @@ async function openTabRun(c, d, p, kind, o, ex, k, cols, rows, wc) {
  * Вкладка от главной части плагина (t256, ctx.openTab): окно проекта подхватит её по term:changed и покажет по term:show.
  * focus: false — term:show не шлётся, выбранная вкладка окна остаётся (t706: волна «Роадмапа» не уводит человека с его вкладки).
  * followBypass: true — вкладка Claude следует настройке проекта «без вопросов о разрешениях» (t852, агенты карт «Роадмапа»); только плагину при программе.
- * @param {{ id: string, path: string, bypass?: boolean }} p @param {any} o { kind, args, cwd, env, title, prompt, focus, agent, resume, followBypass }
+ * hidden: true — скрытая вкладка (t1059): терминал работает как обычный, окно её не рисует и на неё не переходит, пока не позовут showFromPlugin.
+ * logPath — файл внутри папки проекта: демон пишет туда экран вкладки, когда терминал вышел или его закрыли.
+ * @param {{ id: string, path: string, bypass?: boolean }} p @param {any} o { kind, args, cwd, env, title, prompt, focus, agent, resume, followBypass, hidden, logPath }
  * @param {{ core: boolean }} [from] core — плагин из src\plugins (plugin-bridge.js builtIn)
  */
 async function openFromPlugin(p, o, from) {
   if (!ctx) return { error: 'терминалы ещё не готовы' };
   if (!o || typeof o !== 'object') return { error: 'параметры вкладки: ждал объект' };
-  const { kind, focus, followBypass, ...rest } = o;
+  const { kind, focus, followBypass, hidden, logPath, ...rest } = o;
   if (followBypass !== undefined && !(from && from.core)) return { error: i18n.t('term.followCore', 'Следовать настройке «без вопросов о разрешениях» могут только плагины при программе') };
   if (followBypass !== undefined && typeof followBypass !== 'boolean') return { error: 'followBypass: только true или false' };
-  const r = await openTab(p, kind, rest, 120, 30, null, null, followBypass === true);
-  if ('session' in r && focus !== false) {
+  if (hidden !== undefined && typeof hidden !== 'boolean') return { error: 'hidden: только true или false' };
+  /** @type {Record<string, string>} */
+  const more = {};
+  if (hidden) more.hidden = '1';
+  if (logPath !== undefined && logPath !== '') {
+    if (typeof logPath !== 'string' || logPath.includes('\0')) return { error: 'logPath: ждал строку' };
+    const file = path.resolve(p.path, logPath);
+    const rel = path.relative(p.path, file);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return { error: `logPath: файл ${logPath} вне папки проекта` };
+    more.logPath = file;
+  }
+  const r = await openTab(p, kind, rest, 120, 30, null, null, followBypass === true, more);
+  if ('session' in r && focus !== false && !hidden) {
     const w = projectWindow.windowFor(p.id);
     if (w && !w.isDestroyed()) w.webContents.send('term:show', { sid: r.session.sid });
   }
   return r;
+}
+
+/**
+ * Показать скрытую вкладку проекта (t1059, ctx.showTab): демон снимает meta.hidden, окно по updated → term:changed рисует её
+ * с полной историей экрана (снимок при attach). focus: false — окно на неё не переходит.
+ * @param {{ id: string, path: string }} p @param {string} sid @param {{ focus?: boolean }} [o]
+ * @returns {Promise<{ ok: true } | { error: string }>}
+ */
+async function showFromPlugin(p, sid, o) {
+  const r = await daemon();
+  if (!r.c) return { error: r.error || 'нет связи с демоном' };
+  try {
+    const s = (await projectSessions(r.c, p.id)).find((/** @type {any} */ x) => x.sid === sid);
+    if (!s) return { error: `у проекта нет терминала ${sid}` };
+    if (s.meta && s.meta.hidden) await r.c.request('update', { sid, meta: { hidden: null } });
+  } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; }
+  // Файл вкладок: без пометки, иначе revive после перезагрузки снова спрятал бы её.
+  const c = /** @type {Ctx} */ (ctx);
+  const t = tabs.load(c.dataDir, p.id, c.log).tabs.find((x) => x.sid === sid);
+  if (t && t.hidden) tabs.replace(c.dataDir, p.id, sid, { ...t, hidden: undefined }, c.log);
+  c.log(`показал скрытую вкладку ${sid} в ${p.path}`);
+  if (!o || o.focus !== false) {
+    const w = projectWindow.windowFor(p.id);
+    if (w && !w.isDestroyed()) w.webContents.send('term:show', { sid });
+  }
+  return { ok: true };
+}
+
+/**
+ * Спрятать показанную вкладку проекта обратно (d307, ctx.hideTab, пункт «Спрятать в фон» меню вкладки): демон ставит meta.hidden,
+ * файл вкладок — hidden, окно снимает её с полосы по term:hide и отписывается от вывода. Терминал работает дальше, «в фоне: N» его показывает.
+ * @param {{ id: string, path: string }} p @param {string} sid
+ * @returns {Promise<{ ok: true } | { error: string }>}
+ */
+async function hideFromPlugin(p, sid) {
+  const r = await daemon();
+  if (!r.c) return { error: r.error || 'нет связи с демоном' };
+  try {
+    const s = (await projectSessions(r.c, p.id)).find((/** @type {any} */ x) => x.sid === sid);
+    if (!s) return { error: `у проекта нет терминала ${sid}` };
+    if (!(s.meta && s.meta.hidden)) await r.c.request('update', { sid, meta: { hidden: true } });
+  } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; }
+  const c = /** @type {Ctx} */ (ctx);
+  const t = tabs.load(c.dataDir, p.id, c.log).tabs.find((x) => x.sid === sid);
+  if (t && !t.hidden) tabs.replace(c.dataDir, p.id, sid, { ...t, hidden: '1' }, c.log);
+  // Вывод скрытой вкладке окно не пишет — подписку снимаем, иначе он копился бы в окне без вкладки. Показать — новый attach со снимком.
+  const w = projectWindow.windowFor(p.id);
+  if (w && !w.isDestroyed()) {
+    const m = subs.get(w.webContents.id);
+    const off = m && m.get(sid);
+    if (m) m.delete(sid);
+    try { off && off(); } catch {}
+    w.webContents.send('term:hide', { sid });
+  }
+  c.log(`спрятал вкладку ${sid} в ${p.path}`);
+  return { ok: true };
 }
 
 /** Отключить окно от всех его терминалов. @param {number} wcId */
@@ -844,12 +984,22 @@ async function attachTo(c, wc, sid, cols, rows) {
     wc.once('destroyed', () => detachAll(wcId));
   }
   // То же окно подключается к тому же терминалу снова (страницу перезагрузили) — сначала старое отключение.
+  // Демон держит одну подписку на связь: detach после нового attach снял бы и новую, поэтому порядок прежний.
+  // Пока демон отвечает, на месте подписки заглушка (t471): вставка и нажатия прежнего attach доходят, а не «не подключено».
   const old = m.get(sid);
-  if (old) { try { old(); } catch {} m.delete(sid); }
+  if (old) { try { old(); } catch {} }
+  const wait = () => {};
+  m.set(sid, wait);
   // Строка «начат новый разговор» (t165) — до снимка экрана, поэтому она выше вывода Claude. Цвет — как у сообщений окна (terminal.js, notice).
   const line = fresh.get(sid);
   if (line) wc.send('term:data', { sid, data: `\x1b[38;2;141;145;165m[${line}]\x1b[0m\r\n` });
-  const sub = await c.attach(sid, { cols, rows }, (data) => { if (!wc.isDestroyed()) wc.send('term:data', { sid, data }); });
+  let sub;
+  try {
+    sub = await c.attach(sid, { cols, rows }, (data) => { if (!wc.isDestroyed()) wc.send('term:data', { sid, data }); });
+  } catch (err) {
+    if (m.get(sid) === wait) m.delete(sid);
+    throw err;
+  }
   if (wc.isDestroyed()) { sub.detach(); throw new Error('окно закрыто'); }
   m.set(sid, sub.detach);
 }
@@ -920,6 +1070,7 @@ async function projectTabs(projectId) {
       const c = /** @type {Ctx} */ (ctx);
       const sids = new Set(live.map((/** @type {any} */ s) => s.sid));
       waiting = tabs.load(c.dataDir, projectId, c.log).tabs.filter((t) => !sids.has(t.sid)).map((t) => t.sid);
+      if (waiting.length) armFirstList(w.webContents, projectId);
     }
     return { tabs: live.map(pick), waiting };
   } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; }
@@ -927,6 +1078,26 @@ async function projectTabs(projectId) {
 
 /** Подписки на смену состояния (t276, ctx.onState): номер проекта и обработчик. @type {Set<{ projectId: string, cb: (m: any) => void }>} */
 const stateSubs = new Set();
+
+/** Отсчёт срока первого списка окна (t592), один на окно. @param {Electron.WebContents} wc @param {string} projectId */
+function armFirstList(wc, projectId) {
+  const id = wc.id;
+  if (firstListTimers.has(id)) return;
+  firstListTimers.add(id);
+  const t = setTimeout(() => {
+    firstListTimers.delete(id);
+    if (wc.isDestroyed() || reviveBegun.has(id)) return;
+    beginRevive(wc);
+    if (ctx) ctx.log(`окно проекта ${projectId} не попросило список вкладок за ${FIRST_LIST_MS} мс — вкладки без терминала для плагинов закрыты`);
+    // Плагин сверяет статусы по onState: без события карта так и висела бы «в работе» до следующей смены состояния.
+    const ev = { sid: '', state: '', by: 'first-list', at: Date.now() };
+    for (const sub of [...stateSubs]) {
+      if (sub.projectId !== projectId) continue;
+      try { sub.cb(ev); } catch (e) { if (ctx) ctx.log(`срок первого списка: ошибка у подписчика: ${e instanceof Error ? e.stack : e}`); }
+    }
+  }, FIRST_LIST_MS);
+  wc.once('destroyed', () => { clearTimeout(t); firstListTimers.delete(id); });
+}
 /** Подписаться на смену состояния вкладок проекта; ответ — отписка. @param {string} projectId @param {(m: { sid: string, state: string, by: string, at: number }) => void} cb */
 function onState(projectId, cb) {
   const sub = { projectId, cb };
@@ -950,6 +1121,14 @@ function register(c) {
     const changed = (/** @type {any} */ m) => { const w = windowOfSession(m.session); if (w) w.webContents.send('term:changed'); };
     d.on('created', changed);
     d.on('updated', changed);
+    // Скрытые вкладки (t1059) по номеру — из created/updated и одного list при связи: событию state без смотрящего окна
+    // не нужен запрос list на каждый раз (t1085).
+    /** @type {Map<string, any>} */
+    const hiddenS = new Map();
+    const noteHidden = (/** @type {any} */ s) => { if (!s || !s.sid) return; if (s.meta && s.meta.hidden) hiddenS.set(s.sid, s); else hiddenS.delete(s.sid); };
+    d.on('created', (/** @type {any} */ m) => noteHidden(m.session));
+    d.on('updated', (/** @type {any} */ m) => noteHidden(m.session));
+    d.request('list').then((/** @type {any} */ r) => { for (const s of r.sessions || []) if (!hiddenS.has(s.sid)) noteHidden(s); }, () => {});
     // Агент сменил разговор (/clear) или Codex прислал первый номер (SessionStart, t777) — демон прислал новый meta.claudeSessionId
     // или meta.codexSessionId. В файл вкладок — сразу, даже без окна: иначе после перезагрузки машины вкладка запустилась бы
     // со старым разговором, а Codex, чьё окно закрыли до SessionStart, — с новым (t793).
@@ -968,7 +1147,12 @@ function register(c) {
     });
     // Состояние агента сменилось — окно перечитывает список, как при смене имени. Окно «Проекты» это событие пока не слушает (t31).
     d.on('state', (/** @type {any} */ m) => {
-      for (const { wc } of [...watchersOf(m.sid)]) wc.send('term:changed');
+      const ws = [...watchersOf(m.sid)];
+      for (const { wc } of ws) wc.send('term:changed');
+      // Скрытую вкладку (t1059) окно не смотрит — а список «в фоне» показывает её состояние (t1061): окну проекта тоже.
+      const hs = ws.length ? null : hiddenS.get(m.sid);
+      const w = hs ? windowOfSession(hs) : null;
+      if (w) w.webContents.send('term:changed');
       // Подписчики-плагины (t276): проект терминала — из списка демона, в событии только номер. Один запрос на событие, не на подписчика.
       if (!stateSubs.size) return;
       d.request('list').then((/** @type {any} */ r) => {
@@ -985,6 +1169,7 @@ function register(c) {
     d.on('exit', (/** @type {any} */ m) => {
       // Старый демон state в exit не присылает — тогда вкладка просто завершена.
       if (m.state === 'error') exits.set(m.sid, 'error'); else exits.delete(m.sid);
+      hiddenS.delete(m.sid);
       for (const { wc, m: table } of [...watchersOf(m.sid)]) {
         const off = table.get(m.sid);
         table.delete(m.sid);
@@ -1201,6 +1386,21 @@ function register(c) {
     return { ok: true, fields: f.fields };
   });
 
+  // «Показать» в списке «в фоне» (t1061): скрытая вкладка окна — тем же путём, что ctx.showTab плагина.
+  ipcMain.handle('term:unhide', async (e, { sid }) => {
+    if (!sender.allowed(e, 'term:unhide')) return sender.refused();
+    const p = projectWindow.projectOf(e.sender);
+    if (!p) return { error: 'окно без проекта' };
+    return showFromPlugin(p, String(sid || ''));
+  });
+  // «Спрятать в фон» в меню вкладки (d307): обратно в список «в фоне».
+  ipcMain.handle('term:hide', async (e, { sid }) => {
+    if (!sender.allowed(e, 'term:hide')) return sender.refused();
+    const p = projectWindow.projectOf(e.sender);
+    if (!p) return { error: 'окно без проекта' };
+    return hideFromPlugin(p, String(sid || ''));
+  });
+
   // Порядок вкладок мышкой (t211): окно присылает номера терминалов в новом порядке, файл вкладок их переставляет.
   // Строка «Хук Codex» в «Настройках» (t797): окно «Проекты» тоже, проекта у окна может не быть.
   ipcMain.handle('codexHook:status', (e) => (sender.allowed(e, 'codexHook:status') ? codexCheck : sender.refused()));
@@ -1281,6 +1481,16 @@ function register(c) {
     if (!client || !subs.get(e.sender.id)?.has(sid)) return false;
     return pasteIn(e.sender, sid, text, mode);
   });
+  // Картинка «[Image #N]» из разговора вкладки Claude (t1148): номер разговора — у демона, окно знает только sid.
+  // Не Claude, демона нет, номера нет — { missing: true }, окно пишет «картинка не найдена».
+  ipcMain.handle('term:image', async (e, { sid, n }) => {
+    if (!sender.allowed(e, 'term:image')) return sender.refused();
+    const p = projectWindow.projectOf(e.sender);
+    if (!p || typeof sid !== 'string') return { missing: true };
+    const s = await liveOf(await daemon(), p.id, sid);
+    const id = s && s.meta && s.meta.claudeSessionId;
+    return id ? claudeImages.imageOf(id, Number(n)) : { missing: true };
+  });
   // Размер во время подключения (t446): копится только последний, уходит после очереди ввода.
   ipcMain.on('term:resize', (e, { sid, cols, rows }) => {
     if (!sender.allowed(e, 'term:resize')) return;
@@ -1295,4 +1505,4 @@ const exitsSize = () => exits.size;
 /** Служебное, для проверки t117: сколько записей в notices. */
 const noticesSize = () => notices.size;
 
-module.exports = { register, readTab, writeTab, projectTabs, onState, openFromPlugin, KINDS, STATE_WORDS, exitsSize, noticesSize };
+module.exports = { register, resumeIdOf, readTab, writeTab, projectTabs, onState, openFromPlugin, showFromPlugin, hideFromPlugin, KINDS, STATE_WORDS, exitsSize, noticesSize };

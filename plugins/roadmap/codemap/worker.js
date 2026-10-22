@@ -171,7 +171,17 @@ function mapDir(file, root) {
   const gi = path.join(dir, '.gitignore');
   const st = fs.lstatSync(gi, { throwIfNoEntry: false });
   if (!st || !st.isFile()) {
-    if (st) { try { fs.unlinkSync(gi); } catch (e) { if (/** @type {any} */ (e).code !== 'ENOENT') throw e; } }
+    // Папка на месте имени (t911): unlinkSync на ней бросает EPERM/EISDIR. Пустую убираем, непустую отодвигаем в сторону — чужое не удаляем.
+    if (st) {
+      try {
+        if (st.isDirectory()) {
+          try { fs.rmdirSync(gi); } catch (e) {
+            if (!['ENOTEMPTY', 'EEXIST'].includes(/** @type {any} */ (e).code)) throw e;
+            fs.renameSync(gi, `${gi}.dir-${Date.now()}`);
+          }
+        } else fs.unlinkSync(gi);
+      } catch (e) { if (/** @type {any} */ (e).code !== 'ENOENT') throw e; }
+    }
     try { fs.writeFileSync(gi, '*\n', { flag: 'wx' }); } catch (e) { if (/** @type {any} */ (e).code !== 'EEXIST') throw e; }
   }
   return dir;
@@ -268,14 +278,15 @@ async function start(root) {
     return;
   }
   r.outside = false;
-  const old = cm.readMap(r.file);
+  // Карту читать без остановки потока (t1200, d267): завис диск одной папки — другие папки обновляются дальше.
+  const old = await cm.readMapAsync(r.file);
   if (fits(old, root)) {
     r.map = old;
     // Пока программы не было, файлы могли поменяться: полный круг со списком.
     const ch = await refresh(root, r, true);
     send({ type: 'map', root, how: 'read', files: r.map.files.length, symbols: r.map.head.symbols, changed: ch, ms: Math.round(performance.now() - t0), ...cost() });
   } else {
-    const had = fs.existsSync(r.file);
+    const had = await within(fs.promises.access(r.file).then(() => true, () => false)) === true;
     // Папки проекта нет (t876): сказать один раз и смотреть снова через PERIOD_MS — вернётся, карта построится без переоткрытия окна.
     // Без этого build бросал «нет папки», start обрывался до plan(), и папку больше не смотрели. Другие отказы — как раньше, ошибкой без повтора.
     if (!fs.statSync(root, { throwIfNoEntry: false })?.isDirectory()) {
@@ -291,7 +302,7 @@ async function start(root) {
     let map;
     try {
       // Другая копия могла дописать карту и снять замок, пока мы читали, — взять её, а не строить вторую.
-      if (lk === 'mine' && fits(cm.readMap(r.file), root)) { dropLock(r); begin(root); return; }
+      if (lk === 'mine' && fits(await cm.readMapAsync(r.file), root)) { dropLock(r); begin(root); return; }
       map = await cm.build(root, { cancelled: () => r.gone, gramFail: (lang, e) => gramFail(root, lang, e) });
       if (r.gone) return;
       r.map = map;

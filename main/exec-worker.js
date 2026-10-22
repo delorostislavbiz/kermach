@@ -269,6 +269,26 @@ function diskRead(root, fn, ms) {
   readQ = turn.catch(() => {});
   return turn;
 }
+/**
+ * Обход папки потоком (список файлов «Файлов», t481 в, е) — в той же очереди, что diskRead: пока он идёт, другой обход и раскрытие папки ждут.
+ * Без очереди окна, начавшие обход в первые секунды зависания (до срока папки), висли каждое на своём чтении, а раскрытие папки — рядом с обходом.
+ * Цена: пока идёт обход (обычно около 1 с с git, большая папка без git — до LIMITS.walkMs), раскрытие папки, «Открыть» и «Показать в Проводнике»
+ * ждут его во всех окнах.
+ * Застрявшее чтение есть — fn не зовётся, ответ { stuck }; выход программы начат — { closing }.
+ * @template T @param {() => Promise<T>} fn держит очередь, пока не решится
+ * @returns {Promise<{ value: T } | { closing: true } | { stuck: { root: string, gone: Promise<void> } }>}
+ */
+function diskTurn(fn) {
+  const turn = readQ.then(async () => {
+    if (closing) return /** @type {{ closing: true }} */ ({ closing: true });
+    const s = await diskStuck();
+    if (s) return { stuck: s };
+    if (closing) return /** @type {{ closing: true }} */ ({ closing: true });
+    return { value: await fn() };
+  });
+  readQ = turn.catch(() => {});
+  return turn;
+}
 
 /**
  * Гашение из главного процесса, когда потока уже нет (t463). Номер берётся только свой: процесс с этим номером запущен внутри нашего execFile
@@ -444,4 +464,4 @@ function execWorker(log = () => {}) {
   };
 }
 
-module.exports = { execWorker, execTree, killKids, watchKids, hold, settle, diskThread, diskEnding, diskStuck, diskSettle, diskThreads, diskRead, IDLE_MS, STOP_MS, EXIT_QUIET_MS, END_MS };
+module.exports = { execWorker, execTree, killKids, watchKids, hold, settle, diskThread, diskEnding, diskStuck, diskSettle, diskThreads, diskRead, diskTurn, IDLE_MS, STOP_MS, EXIT_QUIET_MS, END_MS };

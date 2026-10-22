@@ -22,7 +22,11 @@
   // Скрытая панель (t678, display: none) — 0, её отступы тоже не в счёт.
   const sideW = () => { if (!side.offsetWidth) return 0; const cs = getComputedStyle(side); return side.offsetWidth + (parseFloat(cs.marginLeft) || 0) + (parseFloat(cs.marginRight) || 0); };
   const most = () => Math.max(PANEL_MIN, main.clientWidth - sideW() - TAB_MIN);
-  const apply = () => { right.style.width = `${Math.round(Math.min(want, most()))}px`; };
+  /** Ширина по содержимому (t1234): плагин в панели одна — Гит — просит ширину под самую длинную строку; null — снять. Перетаскивание края снимает её. */
+  let fit = null;
+  /** Человек потянул край сам: ширина по содержимому не возвращается, пока плагин не снимет её (fit(null): панель закрыта или рядом открылась другая). */
+  let manual = false;
+  const apply = () => { right.style.width = `${Math.round(Math.min(fit == null ? want : fit, most()))}px`; };
 
   apply();
   new ResizeObserver(apply).observe(main);
@@ -30,8 +34,11 @@
   new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-ui'] });
 
   grip.addEventListener('pointerdown', (ev) => {
-    if (ev.button !== 0) return;
+    // Второй палец на крае второго перетаскивания не начинает (t430).
+    if (ev.button !== 0 || grip.classList.contains('drag')) return;
     ev.preventDefault();
+    manual = true;
+    if (fit != null) { want = Math.round(right.getBoundingClientRect().width); fit = null; }
     const x0 = ev.clientX;
     const w0 = right.getBoundingClientRect().width;
     grip.setPointerCapture(ev.pointerId);
@@ -39,25 +46,34 @@
     document.body.classList.add('rdrag');
     /** @param {PointerEvent} e */
     const move = (e) => {
+      if (e.pointerId !== ev.pointerId) return;
       want = Math.max(PANEL_MIN, Math.min(most(), w0 + x0 - e.clientX));
       apply();
     };
-    const up = () => {
+    // Конец: отпустили, потеряли захват или окно потеряло фокус (Alt+Tab с зажатой кнопкой, t430) — ширина записывается.
+    const end = () => {
       grip.removeEventListener('pointermove', move);
       grip.removeEventListener('pointerup', up);
       grip.removeEventListener('lostpointercapture', up);
+      window.removeEventListener('blur', end);
       grip.classList.remove('drag');
-      document.body.classList.remove('rdrag');
+      try { grip.releasePointerCapture(ev.pointerId); } catch {}
+      // Класс снимает последнее перетаскивание: второй палец ещё тянет разделитель частей (layout.js).
+      if (!document.querySelector('.lgrip.v.drag')) document.body.classList.remove('rdrag');
       want = Math.round(want);
       localStorage.setItem(KEY, String(want));
     };
+    /** @param {PointerEvent} e */
+    const up = (e) => { if (e.pointerId === ev.pointerId) end(); };
     grip.addEventListener('pointermove', move);
     grip.addEventListener('pointerup', up);
     grip.addEventListener('lostpointercapture', up);
+    window.addEventListener('blur', end);
   });
 
   // Пресет раскладки (t397, project-page.js) ставит ширину «Файлов»: та же запись, что после перетаскивания.
   /** @type {any} */ (window).RightResize = {
+    fit: (/** @type {number | null} */ px) => { if (px == null) manual = false; else if (manual) return; fit = px == null ? null : Math.max(PANEL_MIN, Math.round(px)); apply(); },
     get: () => Math.round(want),
     set: (/** @type {number} */ px) => { want = Math.max(PANEL_MIN, Math.round(px)); apply(); localStorage.setItem(KEY, String(want)); },
   };
