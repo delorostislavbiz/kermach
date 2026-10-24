@@ -127,6 +127,12 @@
   .tile.need { background: var(--tile-need); outline: 1px solid rgba(var(--need-rgb),.7); }
   .tile.need:hover { background: var(--tile-need-hover); }
   #empty { padding: 24px 10px; color: var(--muted); text-align: center; }
+  /* Первый запуск (t1266): объяснение и кнопки по центру, текст не шире 460 px. */
+  #empty.first { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 40px 16px; }
+  #empty.first .ask { font-size: 16px; font-weight: 600; color: var(--text); }
+  #empty.first p { max-width: 460px; margin: 0; line-height: 1.5; }
+  #empty.first .btns { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  #empty.first .guide { font-size: 12px; }
   /* Группы (t774): в пустой группе — подсказка; блок, над которым несут проект, подсвечен (.drop). В старых темах обёртки .gcard
      на экране нет (display: contents) — подсвечивается заголовок. */
   .gempty { padding: 8px 10px 10px 30px; font-size: 12px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

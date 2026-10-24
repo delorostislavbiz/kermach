@@ -8,6 +8,39 @@ const path = require('path');
 const { UNIX_EXTRA } = require('./os-rules');
 
 /**
+ * cmd.exe: ComSpec, а без него — полным путём из SystemRoot (t1276). Короткое имя Windows ищет и в текущей папке:
+ * cmd.exe, подложенный в папку проекта, запустился бы вместо настоящего.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function cmdExe(env = process.env) {
+  return env.ComSpec || process.env.ComSpec || path.join(env.SystemRoot || process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
+}
+
+/** @type {{ file: string, pre: string[] } | null} */
+let gitFound = null;
+
+/**
+ * git полным путём, один раз на процесс (t1280): execFile('git') с cwd проекта на Windows запустил бы git.exe или git.cmd из папки проекта.
+ * Не нашёлся — не короткое имя (t1281): у человека без Git оно тоже нашло бы подделку в папке проекта. Путь внутри файла
+ * программы существовать не может — запуск падает с ENOENT, как прежде без Git. Ненайденный не запоминается: поставят Git — найдётся.
+ * @returns {{ file: string, pre: string[] }}
+ */
+function gitExe() {
+  if (!gitFound) gitFound = findProgram('git');
+  return gitFound || { file: path.join(process.execPath, 'git'), pre: [] };
+}
+
+/**
+ * Для execFile: короткое 'git' — полным путём (gitExe), остальное как есть.
+ * @param {string} file @param {string[]} args @returns {[string, string[]]}
+ */
+function fullGit(file, args) {
+  if (file !== 'git') return [file, args];
+  const g = gitExe();
+  return [g.file, [...g.pre, ...args]];
+}
+
+/**
  * Сначала <имя>.exe, потом <имя>.cmd (установка через npm — её запускает cmd.exe).
  * Ищется в PATH, потом в ~\.local\bin (родная сборка Claude Code) и %APPDATA%\npm.
  * Окружение — параметром: проверка лимитов подменяет PATH, USERPROFILE и APPDATA, чтобы убрать настоящий Codex из поиска.
@@ -27,7 +60,7 @@ function findProgram(name, env = process.env, platform = process.platform) {
   }
   for (const d of dirs) {
     const cmd = path.join(d, `${name}.cmd`);
-    if (fs.existsSync(cmd)) return { file: env.ComSpec || process.env.ComSpec || 'cmd.exe', pre: ['/d', '/c', cmd] };
+    if (fs.existsSync(cmd)) return { file: cmdExe(env), pre: ['/d', '/c', cmd] };
   }
   return null;
 }
@@ -55,7 +88,7 @@ async function findProgramsAsync(names, env = process.env, platform = process.pl
     if (i >= 0) found = { file: path.join(dirs[i], `${name}.exe`), pre: [] };
     else {
       const j = seen.findIndex((set) => set.has(`${low}.cmd`));
-      if (j >= 0) found = { file: env.ComSpec || process.env.ComSpec || 'cmd.exe', pre: ['/d', '/c', path.join(dirs[j], `${name}.cmd`)] };
+      if (j >= 0) found = { file: cmdExe(env), pre: ['/d', '/c', path.join(dirs[j], `${name}.cmd`)] };
     }
     out.set(name, found);
   }
@@ -88,4 +121,4 @@ function notFound(names, platform = process.platform) {
   return i18n.t('find.notUnix', 'нет {list} в PATH, ~/.local/bin, {extra}', { list: names.join(', '), extra: UNIX_EXTRA.join(', ') });
 }
 
-module.exports = { findProgram, findProgramsAsync, notFound };
+module.exports = { cmdExe, gitExe, fullGit, findProgram, findProgramsAsync, notFound };

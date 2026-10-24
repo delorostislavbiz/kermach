@@ -7,6 +7,7 @@
 // В проект со своим гитом без слова Ростислава точки не пишем (ответ 1а, 20.10).
 // git — из потока запуска (main\exec-worker.js): главный процесс не замирает.
 const fs = require('fs');
+const alive = require('../../main/dir-alive');
 const path = require('path');
 const points = require('./points');
 
@@ -35,7 +36,7 @@ function labelOf(s, now, look) {
  * @param {string} dir @param {import('./points').Run} run
  */
 async function enabled(dir, run) {
-  if (!dir || !fs.existsSync(path.join(dir, '.git'))) return false;
+  if (!dir || (await alive.state(dir)) !== 'dir' || !fs.existsSync(path.join(dir, '.git'))) return false;
   const r = await run('git', ['--no-optional-locks', '-C', dir, 'for-each-ref', '--count=1', '--format=%(refname)', points.PREFIX],
     { timeout: 30000, windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' } });
   return !r.err && String(r.stdout).trim() !== '';

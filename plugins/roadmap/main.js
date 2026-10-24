@@ -30,6 +30,8 @@
 // «Стоп» (команда waveStop) — новых запусков нет, вкладки волны закрывает окно по событию waveClose: команды закрыть вкладку у ctx нет, у окна есть (term.close).
 // Предел (t689) — maxRuns в мешке: сколько запусков карт проекта живут одновременно, ручные «Запустить» тоже. Ручной запуск пределом не задерживается, но место занимает.
 const fs = require('fs');
+// Жива ли папка без заморозки окон на мёртвом сетевом пути (t1300); вне программы — existsSync.
+const alive = (() => { try { return require('../../main/dir-alive'); } catch { return { ok: (/** @type {string} */ p) => fs.existsSync(p) }; } })();
 const path = require('path');
 const board = require('./board');
 const prompt = require('./prompt');
@@ -79,6 +81,9 @@ const typedOf = (screen) => {
 const MAP_WAIT_MS = Number(process.env.T876_MAP_WAIT_MS) || 5000;
 /** Через сколько после запуска плагина читается доска, чтобы первое открытие панели было из памяти (t1197). */
 const WARM_MS = 400;
+/** Снимок доски (t1297): сколько ждать свежую доску, прежде чем показать снимок, и пауза перед записью снимка на диск. */
+const SHOT_WAIT_MS = 50;
+const SHOT_SAVE_MS = 2000;
 /** Как часто смотреть журнал запросов «по смыслу», пока панель открыта (t947): один stat, файл тот же — без чтения. */
 const ASK_POLL_MS = 1000;
 
@@ -284,9 +289,10 @@ module.exports = (ctx) => {
   const startMap = () => {
     mapWait = null;
     if (stopped) return;
-    const mapFile = codemap.mapFile(project, { where: 'project' });
+    // Сначала жива ли папка (t1300): mapFile синхронно смотрит .kermach, на мёртвом сетевом пути это 21 с.
+    const gone = !alive.ok(project);
+    const mapFile = gone ? '' : codemap.mapFile(project, { where: 'project' });
     if (!mapFile) {
-      const gone = !fs.existsSync(project);
       if (gone && !saidGone) ctx.log(`карта кода: нет папки ${project} — начну, когда папка вернётся`);
       saidGone = gone;
       mapWait = setTimeout(startMap, MAP_WAIT_MS);
@@ -535,6 +541,38 @@ module.exports = (ctx) => {
   let panelOn = false;
   /** Подпись волн и предела, которую окно видело последней: изменилась — окну новая доска. */
   let waveSig = '';
+  // Снимок доски на диске (t1297): последняя прочитанная доска проекта, чтобы первое открытие панели не ждало чтения сотен файлов.
+  // Пишется с паузой SHOT_SAVE_MS после чтения, атомарно; поля этого запуска (run, untold, next) при чтении отбрасываются — snapshot() посчитает их заново.
+  let primedOnce = false;
+  const shotFile = path.join(ctx.dataDir, 'board-shot', `${require('crypto').createHash('sha1').update(key).digest('hex').slice(0, 16)}.json`);
+  /** @type {NodeJS.Timeout | null} */
+  let shotTimer = null;
+  /** @type {any} */
+  let shotNext = null;
+  const keepShot = (/** @type {any} */ b) => {
+    if (!b || b.error || !b.exists) return;
+    shotNext = b;
+    if (shotTimer) return;
+    shotTimer = setTimeout(() => {
+      shotTimer = null;
+      const text = JSON.stringify({ v: 1, key, board: shotNext });
+      shotNext = null;
+      const tmp = `${shotFile}.${process.pid}.${Date.now()}.tmp`;
+      fs.promises.mkdir(path.dirname(shotFile), { recursive: true })
+        .then(() => fs.promises.writeFile(tmp, text))
+        .then(() => fs.promises.rename(tmp, shotFile))
+        .catch((e) => { ctx.log(`доска: снимок не записан: ${why(e)}`); fs.promises.unlink(tmp).catch(() => {}); });
+    }, SHOT_SAVE_MS);
+  };
+  /** @returns {import('./board').Board | null} */
+  const loadShot = () => {
+    try {
+      const s = JSON.parse(fs.readFileSync(shotFile, 'utf8'));
+      if (!s || s.v !== 1 || s.key !== key || !s.board || !Array.isArray(s.board.cards)) return null;
+      for (const c of s.board.cards) { delete c.run; delete c.untold; delete c.next; }
+      return s.board;
+    } catch { return null; }
+  };
   const maxOf = () => { const v = Number(ctx.settings.get().maxRuns); return Number.isInteger(v) && v >= 1 && v <= MAX_RUNS_TOP ? v : MAX_RUNS; };
   /** Занятые места: живые записи запусков (без gone) и запуски, которые ещё ждут вкладку. */
   // Пачка (t703) — одна вкладка на несколько карт: место — вкладка, поэтому считаем разные sid; запускающаяся пачка — одно место (oneOf).
@@ -673,6 +711,7 @@ module.exports = (ctx) => {
   const pump = async () => {
     const act = active();
     if (act.length) {
+      await board.prime(project);
       let b = board.read(project);
       if (b.errors.some((e) => e.file === board.DIR)) return;
       for (const w of act) {
@@ -809,6 +848,8 @@ module.exports = (ctx) => {
    * @param {string} ref @param {{ quiet?: boolean, bg?: boolean, from?: string }} [opt]
    */
   const run = async (ref, opt) => {
+    // t1295: холодную доску — в память асинхронно. Защита t554 держится тем, что starting.has и starting.add ниже идут одним синхронным отрезком после этого await.
+    await board.prime(project);
     const b = board.read(project);
     const c = b.cards.find((x) => x.id === ref);
     if (!c) return { error: `карты ${ref} нет на доске или файл с ошибкой` };
@@ -1160,9 +1201,11 @@ module.exports = (ctx) => {
     const c = b.cards.find((t) => t.status !== 'готово' && (t.title === head || t.title.startsWith(`${head},`)));
     return c ? c.id : '';
   };
-  const snapshot = (/** @type {import('./board').Board | undefined} */ read) => {
+  const snapshot = (/** @type {import('./board').Board | undefined} */ read, stale = false) => {
     const b = read || board.read(project);
     for (const c of b.cards) {
+      // Доска из снимка (t1297): время файла взято из снимка — stat свежих для антивируса файлов не делаем.
+      if (stale && /** @type {any} */ (c).at) continue;
       let at = 0;
       try { at = fs.statSync(path.join(b.root, c.file)).mtimeMs; } catch { /* файл удалили между чтением и stat */ }
       /** @type {any} */ (c).at = at;
@@ -1234,7 +1277,22 @@ module.exports = (ctx) => {
     if (watcher || stopped) return;
     // Смена файла — и окну доска, и sync: «готово» в файле карты волны запускает её зависимые (t687), даже когда панель закрыта.
     // Отчёты фаз (t701) — до snapshot: окно получает ссылку «Отчёт» в той же доске. Слежение выключено (панель закрыта, волн нет) — отчёт соберёт открытие панели.
-    watcher = board.watch(project, () => { if (!stopped) { ctx.send('board', snapshot(reports())); sync(); usedTally(); } }, { log: ctx.log, pin: () => (focusName ? [...pins, focusName] : pins) });
+    // t1295: после git pull или checkout меняются сотни файлов — их тексты сначала в память асинхронно (board.prime), иначе reports/snapshot/pump/usedTally читают их синхронно и главный процесс стоит секунды.
+    // Один обработчик за раз: пока идёт прогрев, новые выстрелы слежения (раз в 800 мс при долгой записи) не копятся, а дают один повтор.
+    let changing = false, changeAgain = false;
+    watcher = board.watch(project, async () => {
+      if (stopped) return;
+      if (changing) { changeAgain = true; return; }
+      changing = true;
+      try {
+        do {
+          changeAgain = false;
+          await board.prime(project);
+          if (stopped) return;
+          const r = snapshot(reports()); ctx.send('board', r); keepShot(r); sync(); usedTally();
+        } while (changeAgain && !stopped);
+      } catch (e) { ctx.log(`ошибка в обработчике изменений доски: ${why(e)}`); } finally { changing = false; }
+    }, { log: ctx.log, pin: () => (focusName ? [...pins, focusName] : pins) });
     askTimer = setInterval(askPoll, ASK_POLL_MS);
     ctx.log(`слежение за ${board.DIR} включено`);
   };
@@ -1406,27 +1464,45 @@ module.exports = (ctx) => {
   // и первое открытие панели не ждёт чтения сотен файлов. Нет папки доски (проект без роадмапа) — не читаем.
   // Сначала файлы читаются асинхронно, пачкой: первое чтение новых для антивируса файлов стоит ~5 мс каждый (копия проекта, git pull) —
   // секунды уходят в потоки, а не в главный процесс (замер gui-async.js: 960 файлов за 1,6 с, пауза главного потока до 25 мс).
-  // Потом board.read из тёплой системы — 0,2 с — кладёт тексты в память board.js.
+  // t1293: тексты кладёт в память board.js сам прогрев (board.prime), board.read после него файлов не открывает.
   const warm = setTimeout(async () => {
     if (stopped) return;
     try {
-      const dir = path.join(project, board.DIR);
-      if (!fs.existsSync(dir)) return;
-      const names = (await fs.promises.readdir(dir)).filter((n) => n.endsWith('.md') || n === 'counter.json');
-      let i = 0;
-      const worker = async () => { while (i < names.length && !stopped) await fs.promises.readFile(path.join(dir, names[i++])).catch(() => {}); };
-      await Promise.all(Array.from({ length: 16 }, worker));
-      if (!stopped) board.read(project);
+      if (!alive.ok(project) || !fs.existsSync(path.join(project, board.DIR))) return;
+      await board.prime(project);
+      primedOnce = true;
     } catch { /* панель откроют — прочитает и покажет ошибку сама */ }
   }, WARM_MS);
   return {
     handle(cmd, ...args) {
       if (cmd === 'board') {
-        panelOn = true; startWatch(); sync();
-        // t1197: доска уходит окном ответом на эту команду; подпись запоминаем сразу — иначе первый шаг sync пришлёт её второй раз (второе чтение 950 файлов и второй snapshot).
-        const r = snapshot(reports());
-        waveSig = sigNow();
-        return r;
+        // t1293: окно с открытой панелью шлёт board сразу, раньше прогрева, — и синхронное чтение свежей доски держало главный процесс 5 с,
+        // терминал окна ждал. Сначала тексты в память потоками (тот же прогрев, если уже идёт), потом всё как раньше — из памяти.
+        // panelOn — после прогрева: иначе sync успеет прислать snapshot() и прочитает доску синхронно сам.
+        const primed = (() => { try { return board.prime(project); } catch { return Promise.resolve(); } })();
+        const t = Date.now();
+        const fresh = primed.then(() => {
+          panelOn = true; startWatch(); sync();
+          // t1197: доска уходит окном ответом на эту команду; подпись запоминаем сразу — иначе первый шаг sync пришлёт её второй раз (второе чтение 950 файлов и второй snapshot).
+          const r = snapshot(reports());
+          waveSig = sigNow();
+          primedOnce = true;
+          keepShot(r);
+          return r;
+        });
+        // t1297: первое открытие панели в этом окне — сразу доска из снимка прошлого чтения, свежая придёт событием board, когда прочитаются файлы.
+        // На холодной доске (1000 файлов, свежие для антивируса) чтение — секунды. Дальше снимок не отдаём: доска в памяти, ответ быстрый и всегда свежий.
+        const old = primedOnce ? null : loadShot();
+        if (!old) return fresh;
+        const tl = Date.now() - t;
+        return Promise.race([fresh, new Promise((r) => setTimeout(() => r(null), SHOT_WAIT_MS))]).then((x) => {
+          if (x) return x;
+          const t2 = Date.now();
+          const r0 = snapshot(old, true);
+          const ts = Date.now() - t2;
+          fresh.then((r) => { if (stopped) return; ctx.send('board', r); ctx.log(`доска: показан снимок, свежая через ${Date.now() - t} мс (снимок прочитан ${tl}, собран ${ts})`); }, (e) => ctx.log(`доска: свежая не собрана: ${why(e)}`));
+          return r0;
+        });
       }
       if (cmd === 'focus') {
         const id = String(args[0] || '');
@@ -1653,7 +1729,7 @@ module.exports = (ctx) => {
       }
       return { error: `нет команды ${cmd}` };
     },
-    stop() { stopped = true; clearTimeout(warm); live.delete(sync); if (tellTimer) clearTimeout(tellTimer); unwatch(); for (const t of closers.values()) clearTimeout(t); closers.clear(); if (mapWait) clearTimeout(mapWait); offMap(); },
+    stop() { stopped = true; clearTimeout(warm); if (shotTimer) clearTimeout(shotTimer); live.delete(sync); if (tellTimer) clearTimeout(tellTimer); unwatch(); for (const t of closers.values()) clearTimeout(t); closers.clear(); if (mapWait) clearTimeout(mapWait); offMap(); },
   };
 };
 module.exports.prune = prune;

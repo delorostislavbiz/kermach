@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('terminalus', {
     presets: () => ipcRenderer.invoke('projects:presets'),
     create: (o) => ipcRenderer.invoke('projects:create', o),
     add: (dir) => ipcRenderer.invoke('projects:add', dir),
+    orcaHas: () => ipcRenderer.invoke('projects:orcaHas'),
+    orcaImport: () => ipcRenderer.invoke('projects:orcaImport'),
     open: (id) => ipcRenderer.send('projects:open', id),
     update: (id, look) => ipcRenderer.invoke('projects:update', id, look),
     remove: (id) => ipcRenderer.invoke('projects:remove', id),
@@ -155,12 +157,17 @@ contextBridge.exposeInMainWorld('terminalus', {
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     set: (patch) => ipcRenderer.invoke('settings:set', patch),
+    // Папка новых проектов и «Входящих» (t1286): pickDir — системный выбор, '' — отмена; dir — записать, ответ — настройки или { error }.
+    pickDir: (key) => ipcRenderer.invoke('settings:pickDir', key),
+    dir: (key, value) => ipcRenderer.invoke('settings:dir', key, value),
     // Тема окна (t257): { id, kind, window, terminal } или null — схема не выбрана, плагина «Темы» нет. Синхронно: renderer\theme.js ставит цвета до отрисовки.
     look: () => ipcRenderer.sendSync('settings:look'),
     // Схемы плагина «Темы» для списка «Тема» в «Настройках» (t723): [{ id, name, kind }], синхронно.
     schemes: () => ipcRenderer.sendSync('settings:schemes'),
     // Словарь языка для окна (t258): { lang, dict } или null — синхронно, до отрисовки. Читает renderer\i18n.js.
     dict: () => ipcRenderer.sendSync('settings:dict'),
+    // Номер версии из package.json (t1264), синхронно: «Настройки» пишут его внизу.
+    version: () => ipcRenderer.sendSync('settings:version'),
     // Отвечает функцией снятия подписки (t218): «Браузер» подписывается при каждом включении и снимает подписку при выключении.
     onChanged: (cb) => { const f = (_e, s) => cb(s); ipcRenderer.on('settings:changed', f); return () => ipcRenderer.removeListener('settings:changed', f); },
   },

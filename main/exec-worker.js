@@ -12,6 +12,8 @@
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { execFile, execFileSync } = require('child_process');
 const path = require('path');
+// git полным путём (t1280): короткое имя Windows ищет сначала в текущей папке — подложенный в проект git.exe запустился бы.
+const { fullGit } = require('./find-program');
 
 /** Сколько поток живёт без запросов. */
 const IDLE_MS = 60000;
@@ -86,6 +88,7 @@ async function killOrphans(pid, from, to) {
  * @param {(err: any, stdout: string, stderr: string, swept: number[]) => void} cb swept — номера погашенных потомков вышедшей программы
  */
 function execTree(file, args, opts, cb) {
+  [file, args] = fullGit(file, args);
   const { timeout, maxBuffer = 1024 * 1024, ...rest } = opts || {};
   let timedOut = false;
   let over = false;

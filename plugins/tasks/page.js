@@ -22,6 +22,7 @@
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
     calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
     flag: '<path d="M5 21V4h11l-2 4 2 4H5"/>', x: '<path d="M6 6l12 12M18 6L6 18"/>', clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', check: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
+    layers: '<path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5"/>',
     more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>', star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
     link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>', sort: '<path d="M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4"/>', gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>', trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
   };
@@ -36,7 +37,7 @@
 
   /** @type {any} */
   let data = { projects: [], pick: '', task: '', view: '', today: '', inbox: '', missed: [] };
-  /** Вид: project (path) | today | upcoming | label (name) | search. */
+  /** Вид: project (path) | today | upcoming | all | label (name) | search. */
   let view = { name: 'project', path: '', label: '' };
   let query = '';
   let first = true;
@@ -52,7 +53,7 @@
   let skipDate = false;
   /** Ключ вида для настроек и избранного; совпадает с VIEWKEY в app.js. */
   const viewKey = () => (view.name === 'project' ? `project:${view.path}` : view.name === 'label' || view.name === 'filter' ? `${view.name}:${view.label}` : view.name);
-  const SORT_NAMES = () => ({ manual: t('sManual', 'Вручную'), due: t('sDue', 'По сроку'), priority: t('sPriority', 'По приоритету'), name: t('sName', 'По названию'), project: t('sProject', 'По проекту') });
+  const SORT_NAMES = () => ({ manual: t('sManual', 'Вручную'), due: t('sDue', 'По сроку'), priority: t('sPriority', 'По приоритету'), name: t('sName', 'По названию'), project: t('sProject', 'По проекту'), created: t('sCreated', 'По дате создания') });
   const GROUP_NAMES = () => ({ none: t('gNone', 'Без групп'), day: t('gDay', 'По дням'), priority: t('gPriority', 'По приоритету'), project: t('gProject', 'По проекту') });
   /** Сортировка вида: своя (own) или общая по умолчанию. */
   function sortOf(key = viewKey()) {
@@ -67,6 +68,8 @@
     const nm = (/** @type {any} */ a, /** @type {any} */ b) => String(row(a).head.title || row(a).id).localeCompare(String(row(b).head.title || row(b).id), lang);
     if (sort === 'priority') return (/** @type {any} */ a, /** @type {any} */ b) => pr(a, b) || due(a, b);
     if (sort === 'name') return nm;
+    // t1294: created «ГГГГ-ММ-ДД ЧЧ:ММ» — новые сверху, без даты в конце.
+    if (sort === 'created') return (/** @type {any} */ a, /** @type {any} */ b) => String(row(b).head.created || '').localeCompare(String(row(a).head.created || '')) || due(a, b);
     if (sort === 'project' && proj) return (/** @type {any} */ a, /** @type {any} */ b) => String(proj(a).name).localeCompare(String(proj(b).name), lang) || due(a, b) || pr(a, b);
     return (/** @type {any} */ a, /** @type {any} */ b) => due(a, b) || pr(a, b);
   }
@@ -204,6 +207,8 @@
     ? ['late', `${esc(t('overdue', 'Просрочено'))}<span class="fbtn" data-act="resched">${esc(t('resched', 'Перенести на сегодня'))}</span>`]
     : ['today', dayTitle(data.today)]));
   const upcomingOk = (/** @type {any} */ r) => open(r) && !!dayOf(r) && dayOf(r) > data.today;
+  /** «Все дела» (t1294): открытые дела всех проектов одним списком. */
+  const allOk = (/** @type {any} */ r) => open(r);
   /** Сколько дел всех проектов подходит. @param {(r: any, p: any) => boolean} f */
   const cntP = (f) => data.projects.reduce((/** @type {number} */ s, /** @type {any} */ p) => s + p.rows.filter((/** @type {any} */ r) => f(r, p)).length, 0);
 
@@ -278,6 +283,7 @@
       + (inbox && shown('inbox') ? nav(`project:${inbox.path}`, ico('inbox'), t('inbox', 'Входящие'), inbox.rows.filter((/** @type {any} */ r) => open(r) && !r.level).length, view.name === 'project' && view.path === inbox.path) : '')
       + (shown('today') ? nav('today', ico('sun'), t('todayView', 'Сегодня'), cnt(isToday), view.name === 'today') : '')
       + (shown('upcoming') ? nav('upcoming', ico('calendar'), t('upcoming', 'Предстоящее'), cnt(upcomingOk), view.name === 'upcoming') : '')
+      + (shown('all') ? nav('all', ico('layers'), t('allView', 'Все дела'), cnt(allOk), view.name === 'all') : '')
       + (shown('filters') ? nav('filters', ico('filter'), t('filters', 'Фильтры и метки'), 0, view.name === 'filters') : '')
       + (shown('done') ? nav('done', ico('check'), t('doneView', 'Выполненные'), 0, view.name === 'done') : '');
     // t1184: избранное — над проектами; удалённый проект или фильтр показываем приглушённым, а не прячем.
@@ -329,6 +335,7 @@
     } else if (view.name === 'done') { head = `${ico('check', 20)}<span>${esc(t('doneView', 'Выполненные'))}</span>`; sub = t('doneSub', 'Журнал за месяц, все проекты. Сделанное больше 30 дней назад хранится только здесь'); body = doneHtml(); }
     else if (view.name === 'today') { head = `${ico('sun', 20)}<span>${esc(t('todayView', 'Сегодня'))}</span>`; body = missedHtml() + todayHtml(); }
     else if (view.name === 'upcoming') { head = `${ico('calendar', 20)}<span>${esc(t('upcoming', 'Предстоящее'))}</span>`; body = flatHtml(upcomingOk, (r) => [dayOf(r), dayTitle(dayOf(r))]); }
+    else if (view.name === 'all') { head = `${ico('layers', 20)}<span>${esc(t('allView', 'Все дела'))}</span>`; body = flatHtml(allOk); }
     else if (view.name === 'filters') { head = `${ico('filter', 20)}<span>${esc(t('filters', 'Фильтры и метки'))}</span>`; sub = t('filterSub', 'Запрос в строке выше: today & #Сайт, p1 | @звонки, overdue | (week & !@звонки)'); body = filtersHtml(); }
     else if (view.name === 'filter') {
       const f = (data.filters || []).find((/** @type {any} */ x) => x.name === view.label);
@@ -776,7 +783,7 @@
       const key = viewKey(), so = sortOf(key), flat = view.name !== 'project', names = /** @type {any} */ (SORT_NAMES());
       const cur0 = flat && (!so.sort || so.sort === 'manual') ? 'due' : so.sort || 'manual';
       h += `<div class="mh">${esc(t('sortBtn', 'Сортировка'))}</div>`
-        + ['manual', 'due', 'priority', 'name', 'project'].filter((s) => (flat ? s !== 'manual' : s !== 'project')).map((s) => mi(`sort:${s}`, 'sort', names[s], cur0 === s ? ' on' : '')).join('');
+        + ['manual', 'due', 'priority', 'name', 'project', 'created'].filter((s) => (flat ? s !== 'manual' : s !== 'project')).map((s) => mi(`sort:${s}`, 'sort', names[s], cur0 === s ? ' on' : '')).join('');
       if (flat) {
         const gn = /** @type {any} */ (GROUP_NAMES());
         h += `<hr><div class="mh">${esc(t('groupBtn', 'Группировка'))}</div>` + mi('group:', 'sort', t('gDefault', 'Как в виде'), !so.group ? ' on' : '')
@@ -784,7 +791,7 @@
       }
       h += '<hr>' + mi('sortall', 'check', t('sortAll', 'Этот порядок — для всех видов')) + (so.own ? mi('sortreset', 'x', t('sortReset', 'Вернуть общий порядок')) : '');
     } else if (menuOpen === 'cfg') {
-      const names = /** @type {Record<string, string>} */ ({ search: t('search', 'Поиск'), inbox: t('inbox', 'Входящие'), today: t('todayView', 'Сегодня'), upcoming: t('upcoming', 'Предстоящее'),
+      const names = /** @type {Record<string, string>} */ ({ search: t('search', 'Поиск'), inbox: t('inbox', 'Входящие'), today: t('todayView', 'Сегодня'), upcoming: t('upcoming', 'Предстоящее'), all: t('allView', 'Все дела'),
         filters: t('filters', 'Фильтры и метки'), done: t('doneView', 'Выполненные'), projects: t('projects', 'Проекты Kermach'), labels: t('labels', 'Метки'),
         filtersList: t('filtersH', 'Фильтры'), counts: t('cfgCounts', 'Числа у пунктов') });
       h += `<div class="mh">${esc(t('cfgTitle', 'Что показывать в панели'))}</div>` + Object.keys(names).map((k) => `<div class="mi" data-m="hide:${k}"><span>${esc(names[k])}</span><span class="tog${P().hide.includes(k) ? '' : ' on'}" style="margin-left:auto"></span></div>`).join('')
@@ -961,7 +968,7 @@
     const out = [];
     const add = (/** @type {string} */ icon, /** @type {string} */ label, /** @type {string} */ hint, /** @type {() => any} */ go) => { if (hit(label)) out.push({ icon, label, hint, go }); };
     const views = [['search', 'search', t('search', 'Поиск')], ['inbox', 'inbox', t('inbox', 'Входящие')], ['today', 'sun', t('todayView', 'Сегодня')], ['upcoming', 'calendar', t('upcoming', 'Предстоящее')],
-      ['filters', 'filter', t('filters', 'Фильтры и метки')], ['done', 'check', t('doneView', 'Выполненные')]];
+      ['all', 'layers', t('allView', 'Все дела')], ['filters', 'filter', t('filters', 'Фильтры и метки')], ['done', 'check', t('doneView', 'Выполненные')]];
     for (const [k, ic, lb] of views) add(ico(ic, 16), lb, t('ckView', 'вид'), () => goView(k));
     for (const p of data.projects) if (p.ok) add(art(p.icon, p.color, 16), p.name, t('ckProject', 'проект'), () => goKey(`project:${p.path}`));
     /** @type {Set<string>} */
@@ -1074,7 +1081,7 @@
 
   // ---- Горячие клавиши (t1164), как у Todoist; по коду клавиши — работают и в русской раскладке. ----
   const KEYS = () => [['Q, A', t('kAdd', 'новое дело')], ['/', t('kSearch', 'поиск')], ['G I', t('kInbox', 'Входящие')], ['G T', t('kToday', 'Сегодня')],
-    ['G U', t('kUpcoming', 'Предстоящее')], ['G V', t('kFilters', 'Фильтры и метки')], ['G C', t('kDone', 'Выполненные')], ['Z', t('kUndo', 'отменить последнее')], ['Ctrl+K', t('kCmdk', 'быстрый переход')], ['.', t('kMenu', 'меню дела под мышью')], ['Ctrl/Shift + клик', t('kMulti', 'выбрать несколько дел')],
+    ['G U', t('kUpcoming', 'Предстоящее')], ['G A', t('kAll', 'Все дела')], ['G V', t('kFilters', 'Фильтры и метки')], ['G C', t('kDone', 'Выполненные')], ['Z', t('kUndo', 'отменить последнее')], ['Ctrl+K', t('kCmdk', 'быстрый переход')], ['.', t('kMenu', 'меню дела под мышью')], ['Ctrl/Shift + клик', t('kMulti', 'выбрать несколько дел')],
     ['Enter', t('kEnter', 'добавить или сохранить поле')], ['Esc', t('kEsc', 'закрыть окно, отменить правку')], ['?', t('kHelp', 'эта справка')]];
   function helpOpen() {
     $('help').innerHTML = `<h2>${esc(t('keysTitle', 'Горячие клавиши'))}</h2>${KEYS().map(([k, v]) => `<div class="k"><kbd>${esc(k)}</kbd><span>${esc(v)}</span></div>`).join('')}`;
@@ -1373,7 +1380,7 @@
       if (gPrefix && Date.now() - gPrefix < 1500) {
         gPrefix = 0;
         /** @type {Record<string, string>} */
-        const to = { KeyI: 'inbox', KeyT: 'today', KeyU: 'upcoming', KeyV: 'filters', KeyC: 'done' };
+        const to = { KeyI: 'inbox', KeyT: 'today', KeyU: 'upcoming', KeyA: 'all', KeyV: 'filters', KeyC: 'done' };
         if (to[c]) { e.preventDefault(); goView(to[c]); return; }
       }
       if (c === 'KeyG' && !e.shiftKey) { gPrefix = Date.now(); return; }

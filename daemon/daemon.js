@@ -290,13 +290,15 @@ function spawnError(msg) {
     : msg;
 }
 
+/** Сколько ждать ответа о рабочей папке новой вкладки (t1301). */
+const CWD_WAIT_MS = 3000;
+
 class Session {
   /** @param {any} o поля запроса create */
   constructor(o) {
     const cols = Number(o.cols) || 120;
     const rows = Number(o.rows) || 30;
     const cwd = o.cwd || platform.defaultCwd({ platform: process.platform, env: process.env, home: os.homedir() });
-    if (!fs.existsSync(cwd)) throw new Error(`нет папки ${cwd}`);
     if (!o.file) throw new Error('не указана программа (file)');
 
     this.sid = crypto.randomUUID();
@@ -993,50 +995,13 @@ function handle(c, msg) {
       // Без номера корня терминала в списке нет (t909): клиент ещё не получил ответ на create и не записал вкладку — окно добавило бы её второй раз.
       return c.reply(id, { sessions: [...sessions.values()].filter((x) => x.ready).map((x) => x.info()) });
     case 'create': {
-      let ns;
-      try { ns = new Session(msg); } catch (e) { return c.fail(id, spawnError(String(/** @type {any} */ (e).message || e))); }
-      sessions.set(ns.sid, ns);
-      saveSessions();
-      checkIdle();
-      // Журнал, рассылка и ответ — когда номер корня виден (t909): иначе клиент получит pid 0.
-      return void ns.pidReady.then(() => {
-        // Демон останавливается: дерево гасит shutdown, он ждёт тот же pidReady (t1013). Терминал не открываем — ни ready, ни created.
-        if (shuttingDown) {
-          log(`терминал ${ns.sid}: номер ${ns.pty.pid || 'не появился'} уже при остановке демона — не открываю`);
-          return c.fail(id, 'демон останавливается: терминал не открыт');
-        }
-        // Без номера: node-pty 1.2 не дождался потока вывода (5 с под нагрузкой) и уже вышел с кодом -1, или номер не появился за PID_WAIT_MS.
-        if (!ns.pty.pid) {
-          log(`терминал ${ns.sid} не запустился: ${ns.desc.file} в ${ns.desc.cwd} — консоль не подключилась`);
-          // Запись снимаем сами, как onExit: без выхода от node-pty она осталась бы в sessions.json и поднялась бы после перезапуска (t1013).
-          if (sessions.get(ns.sid) === ns) {
-            sessions.delete(ns.sid);
-            saveSessions();
-            ns.terminate();
-            checkIdle();
-          }
-          return c.fail(id, 'терминал не запустился: консоль не подключилась, попробуйте открыть вкладку ещё раз');
-        }
-        // Номер есть, но терминал уже вышел (onExit снял запись): открывать нечего, окну — отказ, а не вкладка без терминала.
-        if (sessions.get(ns.sid) !== ns) {
-          log(`терминал ${ns.sid} вышел раньше, чем ушёл ответ на create: ${ns.desc.file} в ${ns.desc.cwd}, pid ${ns.pty.pid}`);
-          return c.fail(id, 'терминал вышел сразу после запуска');
-        }
-        ns.ready = true;
-        log(`открыл терминал ${ns.sid}: ${ns.desc.file} в ${ns.desc.cwd}, pid ${ns.pty.pid}`);
-        broadcast({ ev: 'created', session: ns.info() });
-        c.reply(id, { session: ns.info() });
-      }).catch((e) => {
-        // Сбой в ожидании номера или в колбэке выше: без catch запрос остался бы без ответа, а терминал — в sessions (t1027).
-        log(`терминал ${ns.sid}: create не закончен — ${/** @type {any} */ (e) && /** @type {any} */ (e).stack || e}`);
-        ns.ready = false;
-        if (sessions.get(ns.sid) === ns && !shuttingDown) {
-          sessions.delete(ns.sid);
-          saveSessions();
-          ns.terminate();
-          checkIdle();
-        }
-        c.fail(id, 'терминал не запустился: внутренняя ошибка демона, попробуйте открыть вкладку ещё раз');
+      // Папку проверяем без синхронного вызова (t1301): existsSync на выключенном сетевом хосте держал весь демон 21 с.
+      const cwd = msg.cwd || platform.defaultCwd({ platform: process.platform, env: process.env, home: os.homedir() });
+      return void dirState(cwd).then((st) => {
+        if (shuttingDown) return c.fail(id, 'демон останавливается');
+        if (st === 'slow') return c.fail(id, `папка ${cwd} не отвечает ${CWD_WAIT_MS / 1000} с — сетевой диск недоступен?`);
+        if (st !== 'ok') return c.fail(id, `нет папки ${cwd}`);
+        createSession(c, id, { ...msg, cwd });
       });
     }
     case 'attach':
@@ -1084,6 +1049,77 @@ function handle(c, msg) {
     default:
       return c.fail(id, `неизвестная команда ${cmd}`);
   }
+}
+
+/**
+ * Есть ли папка, без остановки демона (t1301). stat — в коротком дочернем процессе, ответа ждём не дольше CWD_WAIT_MS.
+ * Не fs.promises.stat: зависший на сетевом пути stat держит поток пула libuv ~20 с, process.exit ждёт его при выходе,
+ * а четыре таких вкладки занимают весь пул — асинхронный fs демона стоит в очереди.
+ * @param {string} dir
+ * @returns {Promise<'ok'|'none'|'slow'>}
+ */
+function dirState(dir) {
+  // Дочерний процесс стоит 40–50 мс на каждую вкладку — только для сетевого пути (\\хост, //хост, \\?\UNC\). Подключённая буква сетевого диска идёт быстрым путём.
+  if (!/^[\\/]{2}/.test(dir)) return fs.promises.stat(dir).then((st) => (st.isDirectory() ? 'ok' : 'none'), () => 'none');
+  return new Promise((resolve) => {
+    const code = 'process.exit(require("fs").statSync(process.argv[1]).isDirectory() ? 0 : 2)';
+    execFile(process.execPath, ['-e', code, dir], { timeout: CWD_WAIT_MS, killSignal: 'SIGKILL', windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+      (err) => resolve(!err ? 'ok' : /** @type {any} */ (err).killed ? 'slow' : 'none'));
+  });
+}
+
+/**
+ * Запуск терминала по create, когда папка уже проверена.
+ * @param {any} c клиент
+ * @param {any} id номер запроса
+ * @param {any} msg поля запроса create
+ */
+function createSession(c, id, msg) {
+  let ns;
+  try { ns = new Session(msg); } catch (e) { return c.fail(id, spawnError(String(/** @type {any} */ (e).message || e))); }
+  sessions.set(ns.sid, ns);
+  saveSessions();
+  checkIdle();
+  // Журнал, рассылка и ответ — когда номер корня виден (t909): иначе клиент получит pid 0.
+  return void ns.pidReady.then(() => {
+    // Демон останавливается: дерево гасит shutdown, он ждёт тот же pidReady (t1013). Терминал не открываем — ни ready, ни created.
+    if (shuttingDown) {
+      log(`терминал ${ns.sid}: номер ${ns.pty.pid || 'не появился'} уже при остановке демона — не открываю`);
+      return c.fail(id, 'демон останавливается: терминал не открыт');
+    }
+    // Без номера: node-pty 1.2 не дождался потока вывода (5 с под нагрузкой) и уже вышел с кодом -1, или номер не появился за PID_WAIT_MS.
+    if (!ns.pty.pid) {
+      log(`терминал ${ns.sid} не запустился: ${ns.desc.file} в ${ns.desc.cwd} — консоль не подключилась`);
+      // Запись снимаем сами, как onExit: без выхода от node-pty она осталась бы в sessions.json и поднялась бы после перезапуска (t1013).
+      if (sessions.get(ns.sid) === ns) {
+        sessions.delete(ns.sid);
+        saveSessions();
+        ns.terminate();
+        checkIdle();
+      }
+      return c.fail(id, 'терминал не запустился: консоль не подключилась, попробуйте открыть вкладку ещё раз');
+    }
+    // Номер есть, но терминал уже вышел (onExit снял запись): открывать нечего, окну — отказ, а не вкладка без терминала.
+    if (sessions.get(ns.sid) !== ns) {
+      log(`терминал ${ns.sid} вышел раньше, чем ушёл ответ на create: ${ns.desc.file} в ${ns.desc.cwd}, pid ${ns.pty.pid}`);
+      return c.fail(id, 'терминал вышел сразу после запуска');
+    }
+    ns.ready = true;
+    log(`открыл терминал ${ns.sid}: ${ns.desc.file} в ${ns.desc.cwd}, pid ${ns.pty.pid}`);
+    broadcast({ ev: 'created', session: ns.info() });
+    c.reply(id, { session: ns.info() });
+  }).catch((e) => {
+    // Сбой в ожидании номера или в колбэке выше: без catch запрос остался бы без ответа, а терминал — в sessions (t1027).
+    log(`терминал ${ns.sid}: create не закончен — ${/** @type {any} */ (e) && /** @type {any} */ (e).stack || e}`);
+    ns.ready = false;
+    if (sessions.get(ns.sid) === ns && !shuttingDown) {
+      sessions.delete(ns.sid);
+      saveSessions();
+      ns.terminate();
+      checkIdle();
+    }
+    c.fail(id, 'терминал не запустился: внутренняя ошибка демона, попробуйте открыть вкладку ещё раз');
+  });
 }
 
 /** @type {NodeJS.Timeout | null} */
@@ -1387,6 +1423,20 @@ function nodeCommand() {
   return platform.nodeCommand({ platform: process.platform, pathEnv: process.env.PATH || '', execPath: process.execPath, electron: !!process.versions.electron });
 }
 
+/**
+ * crossSessionInbound из settings.json человека (t1273): папка CLAUDE_CONFIG_DIR или ~/.claude. Файл только читается.
+ * @returns {unknown} undefined — ключа нет, файла нет или он не читается
+ */
+function userCrossSessionInbound() {
+  const file = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'settings.json');
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8')).crossSessionInbound;
+  } catch (e) {
+    if (/** @type {any} */ (e).code !== 'ENOENT') log(`не прочитал ${file}: ${e} — crossSessionInbound: accept`);
+    return undefined;
+  }
+}
+
 /** Файл настроек для claude --settings. @param {number} port @returns {string} путь или пусто, если записать не вышло */
 function writeHooksSettings(port) {
   const hook = {
@@ -1404,8 +1454,12 @@ function writeHooksSettings(port) {
   try {
     const tmp = HOOKS_SETTINGS + '.tmp';
     // Сообщения других сессий (SendMessage) вкладка принимает сразу (t1211): в bypass Claude держит их на подтверждении и через 5 минут
-    // выбрасывает молча (spikes\peers-research\ВЫВОДЫ-сессии-видят-друг-друга.md, «Риски» п. 2). Значение --settings главнее settings.json человека.
-    fs.writeFileSync(tmp, JSON.stringify({ hooks, statusLine, crossSessionInbound: 'accept' }, null, 2));
+    // выбрасывает молча (spikes\peers-research\ВЫВОДЫ-сессии-видят-друг-друга.md, «Риски» п. 2). Значение --settings главнее settings.json человека,
+    // поэтому своё значение человека (ask, deny) не перебиваем (t1273); читается при старте демона.
+    const own = userCrossSessionInbound();
+    if (own !== undefined && own !== 'accept') log(`crossSessionInbound: ${JSON.stringify(own)} из settings.json человека — accept во вкладки не кладу`);
+    const inbound = own === undefined || own === 'accept' ? { crossSessionInbound: 'accept' } : {};
+    fs.writeFileSync(tmp, JSON.stringify({ hooks, statusLine, ...inbound }, null, 2));
     fs.renameSync(tmp, HOOKS_SETTINGS);
     return HOOKS_SETTINGS;
   } catch (e) {
@@ -1439,7 +1493,7 @@ function codexHookNode() {
   if (!/\s/.test(full)) return full.replace(/\\/g, '/');
   let short = '';
   try {
-    short = execFileSync(process.env.ComSpec || 'cmd.exe', [`/d /s /c "for %I in ("${full}") do @echo %~sI"`],
+    short = execFileSync(process.env.ComSpec || path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe'), [`/d /s /c "for %I in ("${full}") do @echo %~sI"`],
       { windowsVerbatimArguments: true, windowsHide: true, encoding: 'utf8', timeout: 5000 }).trim();
   } catch (e) { log(`короткое имя ${full} не узнал: ${e}`); }
   if (short && !/\s/.test(short) && fs.existsSync(short)) return short.replace(/\\/g, '/');

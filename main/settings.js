@@ -15,7 +15,7 @@ const TERM_MIN = 10;
 const TERM_MAX = 28;
 /** Сдвиг шрифта просмотра Markdown от «Шрифта терминала», px: кнопки A−/A+ (t242). Видимый размер окно держит в TERM_MIN…TERM_MAX. */
 const MD_SHIFT = TERM_MAX - TERM_MIN;
-const DEFAULTS = { uiZoom: 100, termFont: 17, mdShift: 0, sound: true, notify: true, copySelect: true, theme: '', ui: uiThemes.DEFAULT_UI, appearance: 'system', lang: '', plugins: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
+const DEFAULTS = { uiZoom: 100, termFont: 17, mdShift: 0, sound: true, notify: true, copySelect: true, theme: '', ui: uiThemes.DEFAULT_UI, appearance: 'system', lang: '', projectsBase: '', inboxDir: '', plugins: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
 /** Предел мешка настроек одного плагина в JSON, знаков (t256): больше — запись отклоняется, остаётся прежняя. */
 const BAG_MAX = 64 * 1024;
 /** Пресеты раскладок окна проекта (t397): не больше PRESETS_MAX, имя до 60 знаков. */
@@ -120,6 +120,9 @@ function clean(raw, base) {
     ui: r.ui === 'rostyslav' ? 'termius' : uiThemes.uisFor(process.platform).includes(r.ui) ? r.ui : base.ui,
     appearance: uiThemes.APPEARANCES.includes(r.appearance) ? r.appearance : base.appearance,
     lang: typeof r.lang === 'string' && r.lang.length <= 16 ? r.lang : base.lang,
+    // Папка новых проектов и папка «Входящих» «Дел» (t1265): пусто — домашняя папка; только полный путь.
+    projectsBase: typeof r.projectsBase === 'string' && r.projectsBase.length <= 500 && (r.projectsBase === '' || path.isAbsolute(r.projectsBase)) ? r.projectsBase : base.projectsBase,
+    inboxDir: typeof r.inboxDir === 'string' && r.inboxDir.length <= 500 && (r.inboxDir === '' || path.isAbsolute(r.inboxDir)) ? r.inboxDir : base.inboxDir,
     plugins: cleanFlags(r.plugins, base.plugins),
     agents: cleanFlags(r.agents, base.agents),
     pluginSettings: cleanBags(r.pluginSettings, base.pluginSettings),
@@ -137,6 +140,21 @@ function load(dataDir) {
     const raw = JSON.parse(text);
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('не объект');
     cur = clean(raw, DEFAULTS);
+    // Переезд без потерь (t1265): ключей папок нет вовсе (файл до этой версии) — берём прежнее из projects.json: проект «_дела» и его папка-родитель.
+    if (raw.inboxDir === undefined && raw.projectsBase === undefined) {
+      try {
+        const ps = JSON.parse(fs.readFileSync(path.join(dataDir, 'projects.json'), 'utf8')).projects;
+        const all = (Array.isArray(ps) ? ps : []).map((p) => (p && typeof p.path === 'string' ? p.path : '')).filter((p) => path.isAbsolute(p));
+        const inbox = all.find((p) => path.basename(p) === '_дела') || '';
+        // Папка новых проектов — родитель, в котором лежит больше всего проектов (без «Входящих»).
+        /** @type {Record<string, number>} */
+        const cnt = {};
+        for (const p of all) if (p !== inbox) cnt[path.dirname(p)] = (cnt[path.dirname(p)] || 0) + 1;
+        const base = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0] || (inbox ? path.dirname(inbox) : '');
+        cur = { ...cur, inboxDir: inbox, projectsBase: base };
+      } catch { cur = { ...cur, inboxDir: '', projectsBase: '' }; }
+      save();
+    }
   } catch (e) {
     cur = { ...DEFAULTS, plugins: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
     log(`настройки: settings.json не прочитан (${e instanceof Error ? e.message : e}), взяты умолчания`);
@@ -264,7 +282,7 @@ function set(patch) {
   const bags = { ...cur.pluginSettings, ...part(pt.pluginSettings) };
   const merged = { ...cur, ...pt, plugins: { ...cur.plugins, ...part(pt.plugins) }, agents: { ...cur.agents, ...part(pt.agents) }, pluginSettings: bags };
   const next = clean(merged, cur);
-  if (next.uiZoom === cur.uiZoom && next.termFont === cur.termFont && next.mdShift === cur.mdShift && next.sound === cur.sound && next.notify === cur.notify && next.copySelect === cur.copySelect && next.theme === cur.theme && next.lang === cur.lang
+  if (next.uiZoom === cur.uiZoom && next.termFont === cur.termFont && next.mdShift === cur.mdShift && next.sound === cur.sound && next.notify === cur.notify && next.copySelect === cur.copySelect && next.theme === cur.theme && next.lang === cur.lang && next.projectsBase === cur.projectsBase && next.inboxDir === cur.inboxDir
     && next.ui === cur.ui && next.appearance === cur.appearance
     && JSON.stringify(next.plugins) === JSON.stringify(cur.plugins) && JSON.stringify(next.agents) === JSON.stringify(cur.agents)
     && JSON.stringify(next.pluginSettings) === JSON.stringify(cur.pluginSettings) && JSON.stringify(next.layoutPresets) === JSON.stringify(cur.layoutPresets)) return get();
@@ -279,6 +297,34 @@ function set(patch) {
   for (const fn of listeners) { try { fn(get()); } catch (e) { log(`настройки: ошибка подписчика: ${e instanceof Error ? e.stack : e}`); } }
   return get();
 }
+
+/**
+ * Папка новых проектов или «Входящих» из поля «Настроек» (t1286). Ответ — настройки или { error } понятным текстом; при ошибке ничего не пишется.
+ * Неверный ключ или вид пути — ответ сразу; проверка папки на диске — обещание (t1287): сетевой путь \\сервер\папка
+ * при недоступном компьютере ждёт сеть до ~20 с, statSync держал бы все окна. Не ответила за DIR_WAIT — «Папка не отвечает».
+ * @param {any} key 'projectsBase' | 'inboxDir' @param {any} value
+ */
+function setDir(key, value) {
+  const i18n = require('./i18n');
+  if (key !== 'projectsBase' && key !== 'inboxDir') return { error: `нет такой настройки: ${key}` };
+  const v = typeof value === 'string' ? value.trim() : '';
+  if (v && !path.isAbsolute(v)) return { error: i18n.t('dialogs.dirNotAbs', 'Нужен полный путь, например D:\\Проекты: «{p}» не подходит', { p: v }) };
+  if (v.length > 500) return { error: i18n.t('dialogs.dirLong', 'Путь длиннее 500 знаков') };
+  if (!v) return set({ [key]: '' });
+  /** @type {NodeJS.Timeout | undefined} */
+  let timer;
+  const slow = new Promise((res) => { timer = setTimeout(() => res('slow'), DIR_WAIT); });
+  const stat = fs.promises.stat(v).catch(() => null);
+  return Promise.race([stat, slow]).then((st) => {
+    clearTimeout(timer);
+    if (st === 'slow') return { error: i18n.t('dialogs.dirSlow', 'Папка не отвечает: {p}', { p: v }) };
+    if (!st) return { error: i18n.t('dialogs.dirMissing', 'Нет такой папки: {p}', { p: v }) };
+    if (!st.isDirectory()) return { error: i18n.t('dialogs.dirFile', 'Это файл, а не папка: {p}', { p: v }) };
+    return set({ [key]: path.normalize(v) });
+  });
+}
+/** Сколько ждать ответа папки в setDir, мс (t1287). */
+const DIR_WAIT = 3000;
 
 /** Подписка главного процесса на смену настроек (t256). @param {(s: Settings) => void} fn */
 const onChange = (fn) => { listeners.push(fn); };
@@ -305,12 +351,27 @@ function register(c) {
     return get();
   });
   ipcMain.handle('settings:set', (e, patch) => (sender.allowed(e, 'settings:set') ? set(patch) : sender.refused()));
+  // Поля «Папка новых проектов» и «Папка Входящих» (t1286): системный выбор папки, отмена — ''.
+  ipcMain.handle('settings:pickDir', async (e, key) => {
+    if (!sender.allowed(e, 'settings:pickDir')) return sender.refused();
+    const { dialog } = require('electron');
+    const i18n = require('./i18n');
+    const opt = { title: key === 'inboxDir' ? i18n.t('dialogs.inboxDir', 'Папка Входящих') : i18n.t('dialogs.projectsBase', 'Папка новых проектов'),
+      defaultPath: (key === 'inboxDir' ? cur.inboxDir : cur.projectsBase) || undefined, properties: /** @type {const} */ (['openDirectory', 'createDirectory']) };
+    const parent = BrowserWindow.fromWebContents(e.sender);
+    const r = parent ? await dialog.showOpenDialog(parent, opt) : await dialog.showOpenDialog(opt);
+    return r.canceled || !r.filePaths[0] ? '' : r.filePaths[0];
+  });
+  // Записать папку (t1286): пусто — умолчание; относительный путь, нет папки или это файл — { error }, settings.json не меняется.
+  ipcMain.handle('settings:dir', async (e, key, value) => (sender.allowed(e, 'settings:dir') ? setDir(key, value) : sender.refused()));
   // Система сменила светлый/тёмный вид (на macOS и акцент) — новые темы в режиме «как в системе» перекрашиваются сразу (t506).
   syncNative();
   const sysChanged = () => { if (cur.ui !== 'rostyslav' && cur.ui !== 'termius') { for (const w of pages()) apply(w); dressAll(); } };
   nativeTheme.on('updated', sysChanged);
   if (process.platform === 'darwin') { try { systemPreferences.on('accent-color-changed', sysChanged); } catch {} }
   // Тема до первой отрисовки (t257): preload спрашивает синхронно, renderer\theme.js ставит цвета в <head> — без тёмной вспышки.
+  // Номер версии для «Настроек» (t1264): version из src\package.json, читается напрямую — app.getVersion() в пробах отдаёт номер Electron.
+  ipcMain.on('settings:version', (e) => { e.returnValue = sender.allowed(e, 'settings:version') ? require('../package.json').version : null; });
   ipcMain.on('settings:look', (e) => { e.returnValue = sender.allowed(e, 'settings:look') ? look() : null; });
   // Схемы для списка «Тема» (t723): синхронно, «Настройки» строят список при открытии.
   ipcMain.on('settings:schemes', (e) => { e.returnValue = sender.allowed(e, 'settings:schemes') ? schemes() : []; });
@@ -318,4 +379,4 @@ function register(c) {
   ipcMain.on('settings:dict', (e) => { e.returnValue = sender.allowed(e, 'settings:dict') ? require('./i18n').dict() : null; });
 }
 
-module.exports = { register, load, get, set, look, schemes, background, dress, onChange, pluginOn, agentOn, ZOOMS, TERM_MIN, TERM_MAX, DEFAULTS };
+module.exports = { register, load, get, set, setDir, look, schemes, background, dress, onChange, pluginOn, agentOn, ZOOMS, TERM_MIN, TERM_MAX, DEFAULTS };

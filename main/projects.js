@@ -173,6 +173,22 @@ function load(dataDir, opt = {}) {
   return data;
 }
 
+/** Есть ли на машине Орка — по её файлу проектов; по нему окно «Проекты» показывает кнопку переноса (t1266). @param {string} [file] */
+const hasOrca = (file = ORCA_FILE) => fs.existsSync(file);
+
+/**
+ * «Перенести проекты из Орки» (t1266): перенос по просьбе — и после того, как чистая папка данных его пропустила.
+ * @param {string} dataDir @param {ProjectsData} data @param {{ orcaFile?: string, log?: (m: string) => void }} [opt]
+ * @returns {{ count: number } | { error: string }}
+ */
+function importFromOrca(dataDir, data, opt = {}) {
+  const file = opt.orcaFile || ORCA_FILE;
+  if (!hasOrca(file)) return { error: i18n.t('projects.orcaNone', 'Орка на этом компьютере не найдена') };
+  if (!importOrca(data, file, opt.log || (() => {}))) return { error: i18n.t('projects.orcaBad', 'Файл проектов Орки не прочитан') };
+  save(dataDir, data);
+  return { count: /** @type {OrcaImport} */ (data.importedFromOrca).count };
+}
+
 /** @param {ProjectsData} data @param {string} dir */
 const findByPath = (data, dir) => data.projects.find((p) => p.id === projectId(dir));
 
@@ -183,7 +199,7 @@ const findByPath = (data, dir) => data.projects.find((p) => p.id === projectId(d
  */
 function remember(dataDir, data, dir) {
   let p = findByPath(data, dir);
-  if (!p) { p = newProject(dir); data.projects.push(p); }
+  if (!p) { p = newProject(dir); data.projects.push(p); require('./dir-alive').warm([p.path]); }
   data.last = p.path;
   p.openedAt = new Date().toISOString();
   save(dataDir, data);
@@ -202,6 +218,7 @@ function add(dataDir, data, dir) {
   const p = newProject(dir);
   data.projects.push(p);
   save(dataDir, data);
+  require('./dir-alive').warm([p.path]); // сетевой проект — ответ папки готов к первому списку дел (t1300)
   return { project: p, added: true };
 }
 
@@ -354,5 +371,5 @@ function setGroup(dataDir, data, id, groupId) {
   return { project: p };
 }
 
-module.exports = { ORCA_FILE, DEFAULT_COLOR, normPath, projectId, load, save, findByPath, remember, add, checkLook, setLook, remove,
+module.exports = { ORCA_FILE, DEFAULT_COLOR, normPath, projectId, load, save, hasOrca, importFromOrca, findByPath, remember, add, checkLook, setLook, remove,
   checkGroupName, addGroup, renameGroup, moveGroup, removeGroup, setGroup };

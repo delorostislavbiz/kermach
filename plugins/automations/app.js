@@ -297,6 +297,8 @@ function register(c) {
   if (ctx) return;
   ctx = c;
   ex = execWorker(log);
+  // Сетевая папка проекта ответила иначе (t1300): store.list пропускал её автоматизации — окнам «изменилось».
+  require('../../main/dir-alive').onChange(() => changed());
   watch();
   toastsSoon(); // запросы, оставшиеся с прошлого запуска, — без показа
   ipcMain.handle('auto:summary', (e, project) => {

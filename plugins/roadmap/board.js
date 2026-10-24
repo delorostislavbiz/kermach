@@ -6,6 +6,8 @@
 //   Файл с ошибкой не правится; ошибка одного файла не мешает читать остальные.
 const fs = require('fs');
 const path = require('path');
+// Жива ли папка без заморозки окон на мёртвом сетевом пути (t1300); вне программы — existsSync.
+const alive = (() => { try { return require('../../main/dir-alive'); } catch { return { ok: (/** @type {string} */ p) => fs.existsSync(p) }; } })();
 
 const DIR = path.join('.kermach', 'roadmap');
 /** Больше — файл не читаем: «слишком большой». */
@@ -170,7 +172,7 @@ function ownRoot(project, dir) {
  */
 function ensureRoot(project) {
   const dir = root(project);
-  if (!fs.statSync(path.resolve(project)).isDirectory()) throw new Error(`нет папки проекта ${project}`);
+  if (!alive.ok(path.resolve(project)) || !fs.statSync(path.resolve(project)).isDirectory()) throw new Error(`нет папки проекта ${project}`);
   for (const d of [path.dirname(dir), dir]) {
     if (!fs.existsSync(d)) fs.mkdirSync(d);
     ownRoot(project, d);
@@ -554,6 +556,45 @@ function readCached(file) {
 /** Служебные файлы редакторов и наши временные — пропускаем молча. @param {string} name */
 const ignored = (name) => name.startsWith('.') || name.endsWith('~');
 
+/** Идущий прогрев по папке доски: второй вызов ждёт тот же, а не читает второй раз. @type {Map<string, Promise<void>>} */
+const PRIMING = new Map();
+
+/**
+ * Тексты файлов доски в память readCached асинхронно, 16 потоками (t1293): после него read() не открывает ни одного файла.
+ * Синхронное чтение новых для антивируса файлов стоит ~5 мс на файл, и на доске в 1000 файлов главный процесс стоял 5 с —
+ * окно проекта не получало терминал. Здесь те же секунды уходят в потоки. Ссылки, не файлы и слишком большие пропускаем — их ошибку скажет read().
+ * Сбой чтения не бросает: read() прочитает файл сам. @param {string} project @returns {Promise<void>}
+ */
+function prime(project) {
+  const dir = root(project);
+  const was = PRIMING.get(dir);
+  if (was) return was;
+  const p = (async () => {
+    /** @type {string[]} */
+    let names = [];
+    try { names = (await fs.promises.readdir(dir, { withFileTypes: true })).filter((e) => e.isFile() && !ignored(e.name) && e.name.endsWith('.md')).map((e) => e.name); } catch { return; }
+    let i = 0;
+    const worker = async () => {
+      while (i < names.length) {
+        const file = path.join(dir, names[i++]);
+        try {
+          const st = await fs.promises.lstat(file);
+          if (!st.isFile() || st.size > MAX_SIZE) continue;
+          const key = `${st.mtimeMs}:${st.ctimeMs}:${st.size}`;
+          const hit = TEXTS.get(file);
+          if (hit && hit.key === key) continue;
+          const text = await fs.promises.readFile(file, 'utf8');
+          if (TEXTS.size >= TEXTS_MAX) TEXTS.clear();
+          TEXTS.set(file, { key, text });
+        } catch { /* файл пропал или не читается — read() скажет */ }
+      }
+    };
+    await Promise.all(Array.from({ length: 16 }, worker));
+  })().finally(() => PRIMING.delete(dir));
+  PRIMING.set(dir, p);
+  return p;
+}
+
 /** Файлы доски по видам: номер → имена; заодно неверные имена. @param {string} dir */
 function scan(dir) {
   /** @type {Map<string, string[]>} */
@@ -595,7 +636,7 @@ function read(project) {
   const dir = root(project);
   /** @type {Board} */
   const b = { root: dir, exists: false, passport: null, phases: [], cards: [], inbox: [], decisions: [], counter: { t: 0, d: 0 }, alike: {}, lost: {}, errors: [], warnings: [] };
-  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return b;
+  if (!alive.ok(path.resolve(project)) || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return b;
   try { ownRoot(project, dir); } catch (e) { b.errors.push({ file: DIR, reason: e instanceof Error ? e.message : String(e) }); return b; }
   b.exists = true;
   const { byId, wrong } = scan(dir);
@@ -1271,4 +1312,4 @@ async function ownRootAsync(project, dir) {
   if (up(rel) || path.isAbsolute(rel)) throw new Error(`папка доски ведёт за пределы проекта: ${real}`);
 }
 
-module.exports = { DIR, MAX_SIZE, ERROR_LINE, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, HOW, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, update, addServed, merge, reviewed, differ, section, nextId, create, watch, codeMask, edges, sameField, alike };
+module.exports = { DIR, MAX_SIZE, ERROR_LINE, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, HOW, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, prime, update, addServed, merge, reviewed, differ, section, nextId, create, watch, codeMask, edges, sameField, alike };

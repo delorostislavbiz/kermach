@@ -12,6 +12,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const sender = require('./sender');
+const alive = require('./dir-alive');
 const settings = require('./settings');
 const { findProgram, findProgramsAsync, notFound } = require('./find-program');
 const i18n = require('./i18n');
@@ -181,7 +182,8 @@ function named(projectPath) {
   const by = new Map();
   const home = process.env.CLAUDE_CONFIG_DIR ? path.resolve(process.env.CLAUDE_CONFIG_DIR) : path.join(os.homedir(), '.claude');
   for (const a of readAgents(path.join(home, 'agents'), 'user')) by.set(a.name, a);
-  for (const a of readAgents(path.join(projectPath, '.claude', 'agents'), 'project')) by.set(a.name, a);
+  // Мёртвый сетевой проект: readdirSync держал бы все окна 21 с (t1300).
+  if (projectPath && alive.ok(projectPath)) for (const a of readAgents(path.join(projectPath, '.claude', 'agents'), 'project')) by.set(a.name, a);
   return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -597,4 +599,36 @@ function register(c) {
   });
 }
 
-module.exports = { register, list, listAsync, promptFlag, takesPics, launchOf, extra, named, LOOK, CATALOG, NAME_RE, watchShells, pokeShell, pokeShells, runningIn, onRunning, agentNow, isShell, agentOfProcess };
+/** Агент для плагина: найден и включён, prompt — берёт ли первое сообщение. @param {ReturnType<typeof list>} all */
+const forPlugin = (all) => all.filter((a) => a.found && a.enabled).map((a) => ({ id: a.id, title: a.title, prompt: promptFlag(a.id) !== false }));
+
+/**
+ * ctx.agents() плагина (t1190, t1275): обещание списка. then, catch, finally и await идут асинхронно, без list().
+ * Прежний синхронный вызов — ctx.agents().map(...), .length, [0] — получает массив старым синхронным поиском
+ * (130–180 мс главного процесса, как до t1190) и одну строку в журнал плагина с подсказкой про await, а не TypeError.
+ * @param {(text: string) => void} log
+ */
+function pluginAgents(log) {
+  const p = listAsync().then(forPlugin);
+  /** @type {ReturnType<typeof forPlugin> | null} */
+  let arr = null;
+  const legacy = () => {
+    if (!arr) {
+      arr = forPlugin(list());
+      log('ctx.agents() вызван без await: список собран синхронно, главный процесс стоял. Пишите const list = await ctx.agents() (docs/для-агентов/плагин.md)');
+    }
+    return arr;
+  };
+  return new Proxy(p, {
+    get(t, k) {
+      if (k === 'then' || k === 'catch' || k === 'finally') return t[k].bind(t);
+      if (k === Symbol.toStringTag) return 'Promise';
+      const a = legacy();
+      const v = Reflect.get(a, k);
+      return typeof v === 'function' ? v.bind(a) : v;
+    },
+    has: (t, k) => k === 'then' || k === 'catch' || k === 'finally' || Reflect.has(legacy(), k),
+  });
+}
+
+module.exports = { register, list, listAsync, pluginAgents, promptFlag, takesPics, launchOf, extra, named, LOOK, CATALOG, NAME_RE, watchShells, pokeShell, pokeShells, runningIn, onRunning, agentNow, isShell, agentOfProcess };

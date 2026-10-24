@@ -5,6 +5,8 @@
 // Прошлое дерево и счёт файлов пишутся в текст точки (Kermach-Prev, Kermach-Stat): список — один for-each-ref, «что поменялось» — diff двух деревьев.
 // Хранение: 200 последних и все за 14 дней (Ростислав 20.10, ответ 4а).
 const { execFile } = require('child_process');
+// git полным путём (t1280): короткое имя Windows ищет сначала в текущей папке.
+const { fullGit } = require('../../main/find-program');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -18,7 +20,7 @@ const TIMEOUT_MS = 60000;
 
 /** Запуск в этом же потоке — когда поток запуска не передан (голый node, проверки). @type {Run} */
 const here = (file, args, opts) => new Promise((resolve) => {
-  execFile(file, args, { ...opts, encoding: 'utf8' }, (err, stdout, stderr) => resolve({ err, stdout: String(stdout || ''), stderr: String(stderr || '') }));
+  execFile(...fullGit(file, args), { ...opts, encoding: 'utf8' }, (err, stdout, stderr) => resolve({ err, stdout: String(stdout || ''), stderr: String(stderr || '') }));
 });
 
 /** Снимки одной папки идут по очереди: два done подряд не должны взять один номер. @type {Map<string, Promise<any>>} */

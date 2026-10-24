@@ -577,7 +577,7 @@
     revealActive(list.length);
     $('termCount').textContent = String(list.length);
     // «4 терминала · 1 ждёт тебя» справа в нижней строке (d235); класс waiting у body — рамка проекта мигает (d234, плагин frame).
-    const terms = list.filter((x) => !x.page).length;
+    const terms = list.filter((x) => !x.page && x.alive).length; // завершённые вкладки (d407, t1274) не считаются
     const need = list.filter((x) => !x.page && stateOf(x) === 'waiting').length;
     let cnt = $('tabCount');
     if (!cnt) { cnt = document.createElement('div'); cnt.id = 'tabCount'; cnt.style.marginLeft = 'auto'; $('bottom').append(cnt); }

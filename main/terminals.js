@@ -14,6 +14,7 @@ const { ipcMain, webContents } = require('electron');
 const sender = require('./sender');
 const os = require('os');
 const fs = require('fs');
+const alive = require('./dir-alive');
 const path = require('path');
 const crypto = require('crypto');
 const projects = require('./projects');
@@ -116,7 +117,7 @@ const abandoned = new Set();
 const exits = new Map();
 
 /**
- * Программа с подсказкой о команде kermach browser (t389) — флаги сразу после программы, до номера разговора: хвост args прежний.
+ * Программа с подсказкой о Kermach и его командах (t389, t1277) — флаги сразу после программы, до номера разговора: хвост args прежний.
  * .cmd от npm — мимо cmd.exe (cmd-shim.unwrap): текст с пробелами через два слоя cmd не дойдёт целым. Не обёртка npm — без подсказки.
  * @param {string} kind @param {{ file: string, pre: string[] }} p
  */
@@ -419,6 +420,8 @@ function checkExtra(kind, o, p) {
     const rel = path.relative(p.path, dir);
     if (rel.startsWith('..') || path.isAbsolute(rel)) return { error: `папка ${o.cwd} вне папки проекта` };
     let isDir = false;
+    // Папка проекта на мёртвом сетевом пути: statSync держал бы окна 21 с (t1300).
+    if (!alive.ok(p.path)) return { error: `папка проекта не отвечает: ${p.path}` };
     try { isDir = fs.statSync(dir).isDirectory(); } catch {}
     if (!isDir) return { error: `нет папки ${dir}` };
     if (rel) x.cwd = dir;
@@ -706,6 +709,7 @@ async function revive(c, d, p, cols, rows) {
       // Запуск от плагина (t253) — те же аргументы, папка и окружение; первое сообщение не повторяется.
       let saved = null;
       if (t.extra) { try { saved = JSON.parse(t.extra); } catch {} }
+      if (saved && saved.cwd && alive.isNet(p.path)) await alive.state(p.path); // как в openTab (t1300)
       const ex = checkExtra(kind, saved ? { args: saved.args, cwd: saved.cwd, env: saved.env } : undefined, p);
       if ('error' in ex) { notices.set(t.sid, `Не запустить заново: ${ex.error}`); continue; }
       // Codex, продолженный плагином (t768), — тот же разговор через codex resume; журнал удалили — новый разговор, как у Claude.
@@ -785,6 +789,8 @@ async function revive(c, d, p, cols, rows) {
 async function openTab(p, kind, o, cols, rows, wc, human, follow, more) {
   const c = /** @type {Ctx} */ (ctx);
   if (!Object.prototype.hasOwnProperty.call(KINDS, kind) && !agentOf(kind)) return { error: `неизвестный вид терминала: ${kind}` };
+  // Сетевой проект с cwd, ответа папки ещё нет: checkExtra отказал бы «не отвечает» живой папке (t1300).
+  if (o && o.cwd && alive.isNet(p.path)) await alive.state(p.path);
   const ex0 = checkExtra(kind, o, p);
   if ('error' in ex0) return ex0;
   // Без вопросов о разрешениях (t851): пункт меню или настройка проекта — только у вкладки Claude, открытой человеком. Вкладки плагинов — без режима,

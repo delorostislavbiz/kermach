@@ -87,10 +87,10 @@ function list(file = presetFile()) {
   return { presets: FALLBACK.map(([name, desc]) => ({ name, desc, ...LOOK[/** @type {keyof typeof LOOK} */ (name)], files: [] })), fromFile: false };
 }
 
-/** Папка, где по умолчанию лежат новые проекты: D:\AI-PROJECTS, если она есть (правило Ростислава), иначе домашняя. */
+/** Папка, где по умолчанию лежат новые проекты: настройка «projectsBase», если папка есть, иначе домашняя (t1265). */
 function defaultBase() {
-  const ai = 'D:\\AI-PROJECTS';
-  if (process.platform === 'win32') { try { if (fs.statSync(ai).isDirectory()) return ai; } catch {} }
+  const b = require('./settings').get().projectsBase;
+  if (b) { try { if (fs.statSync(b).isDirectory()) return b; } catch {} }
   return os.homedir();
 }
 

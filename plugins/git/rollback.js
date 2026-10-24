@@ -6,6 +6,8 @@
 //    но которые есть в последнем снимке. Файлы вне истории (.gitignore: .env, node_modules) ни в одно дерево не попадают и не трогаются.
 // Настоящий индекс .git\index, ветка и коммиты не меняются: `git checkout <точка> -- .` не берём, он пишет в настоящий индекс.
 const { execFile } = require('child_process');
+// git полным путём (t1280): короткое имя Windows ищет сначала в текущей папке.
+const { fullGit } = require('../../main/find-program');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -15,7 +17,7 @@ const TIMEOUT_MS = 60000;
 
 /** @type {import('./points').Run} */
 const here = (file, args, opts) => new Promise((resolve) => {
-  execFile(file, args, { ...opts, encoding: 'utf8' }, (err, stdout, stderr) => resolve({ err, stdout: String(stdout || ''), stderr: String(stderr || '') }));
+  execFile(...fullGit(file, args), { ...opts, encoding: 'utf8' }, (err, stdout, stderr) => resolve({ err, stdout: String(stdout || ''), stderr: String(stderr || '') }));
 });
 
 /** @param {string} dir @param {import('./points').Run} run @param {object} [env] */

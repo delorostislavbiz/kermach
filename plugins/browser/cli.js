@@ -117,27 +117,45 @@ function envFor(p, extra) {
     TERMINALUS_BROWSER_PIPE: SOCK,
     TERMINALUS_BROWSER_AUTH: `${p.id}.${sign(p.id)}`,
     TERMINALUS_NODE: process.execPath,
+    // Подсказка Codex (t1277): её печатает хук SessionStart (codex-hook.js). Вне Kermach переменной нет — нет и подсказки.
+    TERMINALUS_AGENT_HINT: hintText(),
     [pathKey]: [BIN, base ? base[1] : process.env[pathKey] || ''].filter(Boolean).join(path.delimiter),
   };
 }
 
 /**
- * Подсказка агенту о команде (t389): Claude и Codex во вкладке узнают о ней при запуске, Ростиславу не надо объяснять.
- * Действия (t382) — только во вкладках с «Агенту»: подсказка говорит, что отметку ставит человек, — агент попросит, а не будет искать обход.
+ * Подсказка агенту (t389, t1277): агент во вкладке знает, что он в Kermach, и какие команды у программы есть — только включённых плагинов.
+ * Действия браузера (t382) — только во вкладках с «Агенту»: подсказка говорит, что отметку ставит человек, — агент попросит, а не будет искать обход.
+ * Идёт в каждый разговор — коротко, до 150 слов; подробности агент берёт из --help.
  * Только знаки из cmd-shim SAFE, без кавычек: у установки через npm без обёртки текст пошёл бы через cmd.exe.
  */
-const HINT = 'This Kermach terminal has the command kermach browser for built-in browser tabs of this project, not Chrome: it reads any tab but only-for-me ones - text, console, screenshot - '
-  + 'and acts - click, fill, goto, eval - only in tabs the user marked Agent, on that site unless Any site is on, otherwise ask the user to mark it. '
-  + 'Use it when asked about the open site or tab. Details: kermach browser --help.';
+const HINT = 'kermach browser - built-in browser tabs, not Chrome: reads text, console, screenshot of any tab but only-for-me ones, '
+  + 'click, fill, goto, eval only in tabs the user marked Agent - otherwise ask the user to mark it.';
+/** Команды по плагинам: плагин выключен — строки нет. null — команда ядра, есть всегда. @type {[string | null, string][]} */
+const COMMANDS = [
+  ['browser', HINT],
+  ['roadmap', 'kermach roadmap - project board: cards, notes, search notes by error text.'],
+  ['roadmap', 'kermach code - code map: declarations, callers, search by words.'],
+  ['tasks', 'kermach tasks - project to-do list.'],
+  [null, 'kermach tab - tabs of this window.'],
+  [null, 'kermach sessions - tabs of all projects.'],
+  [null, 'kermach copy - git copy of the project with own branch for risky edits.'],
+];
+
+/** Текст подсказки по включённым плагинам. @returns {string} */
+function hintText() {
+  const lines = COMMANDS.filter(([id]) => !id || settings.pluginOn(id)).map(([, t]) => t);
+  return ['You run in a terminal tab of Kermach, a desktop app for Claude Code and Codex, the project is the current folder.',
+    'Kermach commands:', ...lines, 'Details: kermach COMMAND --help.'].join(' ');
+}
 
 /**
- * Флаги подсказки для запуска агента (terminals.js, launch). «Браузер» выключен — пусто: подсказка обещает только то, что команда сделает.
- * Claude — --append-system-prompt (дополняет, а не заменяет). Codex пока без подсказки: способ (-c developer_instructions) не проверен настоящим codex (ОТЧЁТ-t389-hint.md).
+ * Флаги подсказки для запуска агента (terminals.js, launch). Claude — --append-system-prompt (дополняет, а не заменяет).
+ * Codex — через хук SessionStart: текст в окружении вкладки (envFor), codex-hook.js печатает его в stdout, Codex отдаёт его модели.
  * @param {string} kind @returns {string[]}
  */
 function hintArgs(kind) {
-  if (!settings.pluginOn('browser')) return [];
-  if (kind === 'claude') return ['--append-system-prompt', HINT];
+  if (kind === 'claude') return ['--append-system-prompt', hintText()];
   return [];
 }
 
@@ -915,4 +933,4 @@ function start(c, of) {
   });
 }
 
-module.exports = { start, watch, markHuman, envFor, hintArgs, HINT, SOCK, BIN };
+module.exports = { start, watch, markHuman, envFor, hintArgs, hintText, HINT, SOCK, BIN };

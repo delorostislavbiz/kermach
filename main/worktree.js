@@ -6,6 +6,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
+// git полным путём (t1280): короткое имя Windows ищет сначала в папке проекта.
+const { gitExe } = require('./find-program');
 
 /** Тексты: в программе — i18n окна; kermach copy без Electron подставляет свой (useText), иначе i18n потянул бы settings.js и electron. */
 let tr = (/** @type {string} */ k, /** @type {string} */ ru, /** @type {any} */ v) => require('./i18n').t(k, ru, v);
@@ -41,7 +43,8 @@ const mb = (n) => `${(n / 1024 / 1024).toFixed(1)} МБ`;
 /** @param {string[]} args @param {string} cwd @param {object} [env] @returns {Promise<{ code: number, out: string, err: string }>} */
 function git(args, cwd, env) {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, timeout: GIT_MS, windowsHide: true, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8', env: env && { ...process.env, ...env } }, (e, out, err) => {
+    const g = gitExe();
+    execFile(g.file, [...g.pre, ...args], { cwd, timeout: GIT_MS, windowsHide: true, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8', env: env && { ...process.env, ...env } }, (e, out, err) => {
       const code = e ? (typeof (/** @type {any} */ (e)).code === 'number' ? /** @type {any} */ (e).code : 1) : 0;
       resolve({ code, out: String(out || ''), err: String(err || (e && e.message) || '') });
     });

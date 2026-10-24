@@ -126,6 +126,13 @@
   .dlg .set-pane .bvw { margin-left: 0 !important; }
   .dlg .set-pane .frm .stepper { margin-left: 0 !important; }
   .dlg .set-pane .set-off { color: var(--muted); font-size: 12px; }
+  /* Папки новых проектов и «Входящих» (t1286): поле пути, кнопка «Выбрать…», подсказка и строка ошибки. */
+  .dlg .dirs .stepper { margin-top: 6px; }
+  .dlg .dirs .stepper input.dir { flex: 1; min-width: 0; width: auto; text-align: left; }
+  .dlg .dirs .stepper button.pick { width: auto; padding: 0 12px; flex: none; }
+  .dlg .dirs .dirh { margin-top: 4px; color: var(--muted); font-size: 12px; }
+  .dlg .dirs .dire { margin-top: 4px; color: var(--danger, #e5484d); font-size: 12px; overflow-wrap: anywhere; }
+  .dlg .dirs .dirs-gap { height: 12px; }
   /* «Агенты» (t407): весь каталог — своим окошком; прокручивается тело окошка, у списка своей прокрутки нет. В «Настройках» — найденные агенты строками .arow (t1150). */
   .dlg .agt .row, .dlg .cxh .row, .dlg .agt .arow { display: flex; align-items: center; gap: 10px; }
   .dlg .agt .alist { margin-bottom: 14px; }
@@ -774,14 +781,17 @@
       <div class="set-pane" data-p="gen" hidden>
       <div class="sec"><label class="chk"><input type="checkbox" class="snd"><span class="sndt"></span></label>
         <label class="chk ntfr"><input type="checkbox" class="ntf"><span class="ntft"></span></label>
-        <label class="chk ntfr"><input type="checkbox" class="cps"><span class="cpst"></span></label></div></div>
+        <label class="chk ntfr"><input type="checkbox" class="cps"><span class="cpst"></span></label></div>
+      <div class="sec dirs">${['projectsBase', 'inboxDir'].map((k, i) => `${i ? '<div class="dirs-gap"></div>' : ''}<div class="cap" data-k="${k}"></div>
+        <div class="stepper"><input class="dir" type="text" data-k="${k}" spellcheck="false"><button class="pick" data-k="${k}"></button></div>
+        <div class="dirh" data-k="${k}"></div><div class="dire" data-k="${k}" hidden></div>`).join('')}</div></div>
       <div class="set-pane" data-p="plg" hidden><div class="sec plg" hidden><div class="cap"></div></div></div>
       <div class="set-pane" data-p="brw" hidden><div class="set-off" hidden></div></div>
       <div class="set-pane" data-p="agt" hidden>
       <div class="sec agt"><div class="cap"></div><div class="list alist"><span class="sub wait"></span></div><div class="row"><button class="open"></button><span class="sub hint"></span></div></div>
       <div class="sec cxh"><div class="cap"></div><div class="row"><span class="sub hint st"></span><button class="re"></button></div></div></div>
       </div></div>
-      <div class="btns"><button class="reset"></button><button class="cancel ok"></button></div>`;
+      <div class="btns"><span class="ver set-off" style="margin-right:auto;align-self:center"></span><button class="reset"></button><button class="cancel ok"></button></div>`;
     /** Селектор, ключ, русский текст, свойство. @type {[string, string, string, string][]} */
     const STATIC = [
       ['.dlg-title .t', 'dialogs.nastroyki', 'Настройки', 'textContent'], ['.dlg-title .x', 'common.close', 'Закрыть', 'title'],
@@ -791,6 +801,10 @@
       ['.m', 'dialogs.menshe', 'Меньше', 'title'], ['.p', 'dialogs.bolshe', 'Больше', 'title'],
       ['.sndt', 'dialogs.zvukKogdaAgentZakonchil', 'Звук, когда агент закончил или ждёт ответа', 'textContent'],
       ['.ntft', 'dialogs.notifyAgent', 'Всплывающее уведомление, когда агент закончил или ждёт ответа', 'textContent'],
+      ['.dirs .cap[data-k="projectsBase"]', 'dialogs.projectsBase', 'Папка новых проектов', 'textContent'],
+      ['.dirs .cap[data-k="inboxDir"]', 'dialogs.inboxDir', 'Папка Входящих', 'textContent'],
+      ['.dirs .pick[data-k="projectsBase"]', 'dialogs.dirPick', 'Выбрать…', 'textContent'], ['.dirs .pick[data-k="inboxDir"]', 'dialogs.dirPick', 'Выбрать…', 'textContent'],
+      ['.dirh[data-k="projectsBase"]', 'dialogs.projectsBaseHint', 'Пусто — домашняя папка. Здесь «Новый проект» предлагает создать папку.', 'textContent'],
       ['.plg .cap', 'dialogs.plaginy', 'Плагины', 'textContent'], ['.agt .cap', 'dialogs.agenty', 'Агенты', 'textContent'],
       ['.agt .open', 'dialogs.agentyPodklyuchit', 'Подключить агента…', 'textContent'], ['.agt .hint', 'dialogs.agentyPodklyuchitHint', 'как поставить агентов, которых ещё нет: команда и страница агента', 'textContent'],
       ['.agt .wait', 'dialogs.agentyIshchu', 'Ищу агентов…', 'textContent'],
@@ -808,6 +822,8 @@
       const tx = (el, key, ru, prop = 'textContent', vars) => { texts.push({ el, key, ru, prop, vars }); /** @type {any} */ (el)[prop] = I18n.t(key, ru, vars); };
       for (const [sel, key, ru, prop] of STATIC) tx(q(sel), key, ru, prop);
       tx(q('.font + .stepper .hint'), 'dialogs.poUmolchaniyu', 'по умолчанию {v}', 'textContent', { v: TERM_DEF });
+      // Имя папки _дела — настоящее имя на диске (tasks/app.js inboxDir), не переводится: подстановкой, а не в тексте перевода.
+      tx(q('.dirh[data-k="inboxDir"]'), 'dialogs.inboxDirHint', 'Пусто — папка {d} в папке новых проектов (или в домашней). Сюда «Дела» кладут дела без проекта.', 'textContent', { d: '_дела' });
       tx(q('.set-off'), 'dialogs.brauzerOff', 'Браузер выключен — включить можно в разделе «Плагины».');
       const head = q('.set-h');
       /** Показать раздел p: кнопка слева выделена, заголовок — её надпись. @param {string} p */
@@ -838,6 +854,8 @@
         snd.checked = !!s.sound;
         ntf.checked = s.notify !== false;
         cps.checked = s.copySelect !== false;
+        // Поле с ошибкой или в фокусе не перетираем: человек правит путь.
+        dlg.querySelectorAll('.dirs input.dir').forEach((x) => { const i = /** @type {HTMLInputElement} */ (x); if (document.activeElement !== i && i.dataset.bad !== '1') i.value = s[i.dataset.k || ''] || ''; });
         dlg.querySelectorAll('.plg input').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); const on = s.plugins && s.plugins[i.dataset.id || '']; i.checked = typeof on === 'boolean' ? on : plgDefault.get(i.dataset.id || '') !== false; });
         // Размеры видов браузера (t207) — только пока «Браузер» включён.
         dlg.querySelectorAll('.bvws').forEach((r) => { /** @type {HTMLElement} */ (r).style.display = s.plugins && s.plugins.browser === false ? 'none' : ''; });
@@ -1006,6 +1024,23 @@
       snd.addEventListener('change', () => change(t, { sound: snd.checked }));
       ntf.addEventListener('change', () => change(t, { notify: ntf.checked }));
       cps.addEventListener('change', () => change(t, { copySelect: cps.checked }));
+      // Папки (t1286): путь проверяет главный процесс; ошибка — строкой под полем, settings.json не меняется, поле остаётся с введённым.
+      const saveDir = async (/** @type {string} */ k, /** @type {string} */ v) => {
+        const inp = /** @type {HTMLInputElement} */ (q(`.dirs input.dir[data-k="${k}"]`));
+        const err = q(`.dirs .dire[data-k="${k}"]`);
+        const r = await t.settings.dir(k, v);
+        if (r && r.error) { inp.dataset.bad = '1'; err.textContent = String(r.error); err.hidden = false; return; }
+        inp.dataset.bad = ''; err.hidden = true; err.textContent = '';
+        if (r && typeof r === 'object') { cur = r; inp.value = r[k] || ''; paint(r); }
+      };
+      for (const k of ['projectsBase', 'inboxDir']) {
+        const inp = /** @type {HTMLInputElement} */ (q(`.dirs input.dir[data-k="${k}"]`));
+        inp.addEventListener('change', () => saveDir(k, inp.value));
+        inp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); inp.blur(); } });
+        q(`.dirs .pick[data-k="${k}"]`).onclick = async () => { const p = await t.settings.pickDir(k); if (typeof p === 'string' && p) { inp.value = p; saveDir(k, p); } };
+      }
+      // Номер версии (t1264): из src\package.json через main, второго места с номером нет.
+      { const v = window.terminalus.settings.version && window.terminalus.settings.version(); q('.ver').textContent = v ? `Kermach ${v}` : ''; }
       q('.reset').onclick = () => change(t, { uiZoom: 100, termFont: TERM_DEF, mdShift: 0, sound: true, notify: true, copySelect: true });
       return () => font(Number(num.value));
     }, 'set');

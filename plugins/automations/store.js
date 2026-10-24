@@ -10,6 +10,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+// Жива ли папка без заморозки окон на мёртвом сетевом пути (t1300); вне программы — existsSync.
+const dirAlive = (() => { try { return require('../../main/dir-alive'); } catch { return { ok: (/** @type {string} */ p) => fs.existsSync(p) }; } })();
 
 /** Имя папки прогонов: в папке данных у общих, в .terminalus проекта у проектных. */
 const RUNS = 'automation-runs';
@@ -212,7 +214,8 @@ function idDirs(root) {
 function list(dataDir, projects) {
   const reg = registry(dataDir);
   const out = idDirs(commonRoot(dataDir)).map((d) => ({ ...readItem(d, '', reg), foreign: false, on: !!(reg[path.basename(d)] || { on: true }).on }));
-  for (const p of projects) for (const d of idDirs(projectRoot(p))) out.push(readItem(d, p, reg));
+  // Мёртвый сетевой проект: readdirSync держал бы все окна 21 с (t1300).
+  for (const p of projects) if (dirAlive.ok(p)) for (const d of idDirs(projectRoot(p))) out.push(readItem(d, p, reg));
   return out;
 }
 

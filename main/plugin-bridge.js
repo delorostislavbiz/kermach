@@ -143,12 +143,10 @@ function instOf(pl, p) {
      * Агенты, которых можно открыть вкладкой (t576): найдены в системе и включены (claude и codex — всегда, если найдены).
      * Вид вкладки — claude, codex или agent:<id>; prompt — берёт ли первое сообщение при запуске.
      * Асинхронно (t1190): поиск программ на PATH идёт listAsync, главный процесс не стоит на нём 130–180 мс.
+     * Прежний вызов без await получает список и подсказку в журнале (t1275, agents.pluginAgents).
      * @returns {Promise<{ id: string, title: string, prompt: boolean }[]>}
      */
-    agents: async () => {
-      const ag = require('./agents');
-      return (await ag.listAsync()).filter((a) => a.found && a.enabled).map((a) => ({ id: a.id, title: a.title, prompt: ag.promptFlag(a.id) !== false }));
-    },
+    agents: () => require('./agents').pluginAgents(log),
     /** Живые вкладки проекта со state (t276): { tabs } или { error }. */
     terminals: async () => {
       if (insts.get(key) !== inst) return { error: 'плагин остановлен' };

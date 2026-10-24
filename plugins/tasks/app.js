@@ -16,12 +16,13 @@ const openRules = require('./open');
 const when = require('./when');
 const filter = require('./filter');
 const notify = require('../../main/notify');
+const alive = require('../../main/dir-alive');
 
 const PAGE = path.join(__dirname, 'window.html');
 const PRELOAD = path.join(__dirname, 'preload.cjs');
 const KEY = Symbol.for('kermach.tasks');
 /** Папка «Входящих»: проект Kermach с этой папкой (решение Ростислава 20.10). */
-const INBOX = path.join('D:\\', 'AI-PROJECTS', '_дела');
+const inboxDir = () => settings.get().inboxDir || path.join(settings.get().projectsBase || require('os').homedir(), '_дела');
 const POLL_MS = 2000;
 
 /** @typedef {{ dataDir: string, log: (m: string) => void }} Ctx */
@@ -50,7 +51,7 @@ function projectsOf() {
 }
 
 /** Проект «Входящих»: папка _дела, если она в списке, иначе ''. @param {{ path: string }[]} ps */
-const inboxOf = (ps) => (ps.find((p) => same(p.path, INBOX)) || { path: '' }).path;
+const inboxOf = (ps) => (ps.find((p) => same(p.path, inboxDir())) || { path: '' }).path;
 
 /** folded.json: папка проекта → номера свёрнутых дел. */
 function foldedRead() {
@@ -97,10 +98,10 @@ function filterSet(name, query) {
  * prefs.json (t1184): вид этого компьютера, как folded.json и filters.json — сортировка и группировка (по умолчанию и по видам), избранное, скрытые пункты панели.
  * { sort, group, views: { <ключ вида>: { sort, group } }, fav: [ключи вида], hide: [ключи пунктов] }. Окно шлёт части; всё проверяется здесь.
  */
-const SORTS = ['manual', 'due', 'priority', 'name', 'project'];
+const SORTS = ['manual', 'due', 'priority', 'name', 'project', 'created'];
 const GROUPS = ['', 'none', 'day', 'priority', 'project'];
-const HIDEABLE = ['search', 'inbox', 'today', 'upcoming', 'filters', 'done', 'projects', 'labels', 'filtersList', 'counts'];
-const VIEWKEY = /^(?:(?:project|label|filter):.{1,300}|search|today|upcoming|filters|done)$/;
+const HIDEABLE = ['search', 'inbox', 'today', 'upcoming', 'all', 'filters', 'done', 'projects', 'labels', 'filtersList', 'counts'];
+const VIEWKEY = /^(?:(?:project|label|filter):.{1,300}|search|today|upcoming|all|filters|done)$/;
 function prefsRead() {
   /** @type {{ sort: string, group: string, views: Record<string, { sort: string, group: string }>, fav: string[], hide: string[], nodate: boolean, badge: boolean }} */
   const out = { sort: '', group: '', views: {}, fav: [], hide: [], nodate: false, badge: false };
@@ -166,7 +167,8 @@ function listAll() {
   const folded = foldedRead();
   cardFiles.clear();
   const out = ps.map((p) => {
-    const ok = fs.existsSync(p.path);
+    // Мёртвый сетевой путь не держит окна (t1300): ответ из кэша, проверка в фоне.
+    const ok = alive.ok(p.path);
     // t1163: карту закрыли мимо board.update (правка файла руками, другой процесс) — дело сделано при следующем чтении.
     if (ok) try { const n = store.syncCards(p.path); if (n.length) log(`${p.name}: по закрытым картам сделано ${n.join(', ')}`); } catch (e) { log(`${p.name}: сверка с картами — ${e instanceof Error ? e.message : e}`); }
     // t1164: сделанное больше 30 дней назад — в журнал done\ГГГГ-ММ.md; проверяем не чаще раза в 10 минут на проект.
@@ -183,7 +185,7 @@ function listAll() {
       return { id: t.id, level, loop: !!loop, orphan: !!orphan, error: t.error || '', head: t.head, body: t.body.slice(0, 2000), done: c.done, total: c.total, cardStatus };
     });
     const fk = Object.keys(folded).find((k) => same(k, p.path));
-    return { ...p, ok, inbox: same(p.path, INBOX), sections: ok ? sectionsOf(p.path) : [], folded: fk ? folded[fk] : [], rows };
+    return { ...p, ok, inbox: same(p.path, inboxDir()), sections: ok ? sectionsOf(p.path) : [], folded: fk ? folded[fk] : [], rows };
   });
   const task = pickTask, view = pickView;
   pickTask = pickView = '';
@@ -196,6 +198,7 @@ function summary(project) {
   let n = 0;
   for (const p of projectsOf()) {
     if (project && !same(project, p.path)) continue;
+    if (!alive.ok(p.path)) continue;
     try { for (const t of store.read(p.path)) if (t.head.status !== 'сделано' && t.head.due && t.head.due.slice(0, 10) <= today) n++; } catch {}
   }
   return { n };
@@ -383,7 +386,7 @@ function remindersAll() {
   const out = [];
   for (const p of projectsOf()) {
     let all = /** @type {any[]} */ ([]);
-    try { all = fs.existsSync(p.path) ? store.read(p.path) : []; } catch { continue; }
+    try { all = alive.ok(p.path) ? store.read(p.path) : []; } catch { continue; }
     for (const t of all) {
       if (t.error || t.head.status === 'сделано') continue;
       const ats = String(t.head.reminders || '').replace(/^\[|\]$/g, '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -448,6 +451,8 @@ function register(c) {
   ctx = c;
   /** @type {any} */ (globalThis)[KEY] = { open, summary, badgeOn: () => prefsRead().badge, window: () => win };
   remCheck();
+  // Сетевая папка проекта ответила иначе (t1300): дела проекта появились или скрылись — окну «изменилось».
+  alive.onChange(() => { if (win && !win.isDestroyed()) win.webContents.send('tasks:changed'); });
   ipcMain.on('tasks:look', (e) => { e.returnValue = fromWindow(e, 'tasks:look') ? settings.look() : null; });
   ipcMain.on('tasks:dict', (e) => { e.returnValue = fromWindow(e, 'tasks:dict') ? i18n.dict() : null; });
   ipcMain.on('tasks:win', (e, what) => {
@@ -557,4 +562,4 @@ function register(c) {
   handle('tasks:import', (p, text, parent) => ({ ids: store.importCsv(known(p), String(text || ''), { parent: parent ? String(parent) : undefined }) }));
 }
 
-module.exports = { register, open, summary, quick, quickMany, INBOX };
+module.exports = { register, open, summary, quick, quickMany, INBOX: inboxDir };

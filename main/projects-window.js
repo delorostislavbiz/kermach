@@ -7,6 +7,7 @@
 const { BrowserWindow, ipcMain, dialog } = require('electron');
 const sender = require('./sender');
 const fs = require('fs');
+const alive = require('./dir-alive');
 const path = require('path');
 const projects = require('./projects');
 const windowState = require('./window-state');
@@ -111,6 +112,8 @@ function register(c) {
   if (ctx) return;
   ctx = c;
   data = c.data || projects.load(c.dataDir, { log: c.log });
+  // Сетевая папка ответила иначе (t1300): список перерисуется с новым «есть / нет папки».
+  alive.onChange(() => changed());
   windowState.init(c.dataDir, c.log);
   settings.register(c);
   require('../plugins/browser/main').registerSwitch(c);
@@ -168,14 +171,28 @@ function register(c) {
     const r = parent ? await dialog.showOpenDialog(parent, opt) : await dialog.showOpenDialog(opt);
     return r.canceled || !r.filePaths[0] ? '' : r.filePaths[0];
   });
-  ipcMain.handle('projects:add', (e, dir) => {
+  ipcMain.handle('projects:add', async (e, dir) => {
     if (!sender.allowed(e, 'projects:add')) return sender.refused();
     if (typeof dir !== 'string' || !dir) return { error: 'не указана папка' };
     const p = projects.normPath(dir);
-    if (!fs.existsSync(p) || !fs.statSync(p).isDirectory()) return { error: i18n.t('projects.noDir', 'нет такой папки: {p}', { p }) };
+    // Сетевой путь на выключенном компьютере statSync держал бы все окна 21 с (t1300).
+    const st = await alive.state(p);
+    if (st === 'slow') return { error: i18n.t('dialogs.dirSlow', 'Папка не отвечает: {p}', { p }) };
+    if (st !== 'dir') return { error: i18n.t('projects.noDir', 'нет такой папки: {p}', { p }) };
     const r = projects.add(c.dataDir, /** @type {any} */ (data), p);
     c.log(r.added ? `добавлен проект ${r.project.path}` : `проект уже в списке: ${r.project.path}`);
     if (r.added) changed();
+    return r;
+  });
+  // Чистая папка данных Орку сама не читает (t1206); пустое окно «Проекты» предлагает перенос кнопкой, если Орка есть (t1266).
+  ipcMain.handle('projects:orcaHas', (e) => {
+    if (!sender.allowed(e, 'projects:orcaHas')) return sender.refused();
+    return projects.hasOrca();
+  });
+  ipcMain.handle('projects:orcaImport', (e) => {
+    if (!sender.allowed(e, 'projects:orcaImport')) return sender.refused();
+    const r = projects.importFromOrca(c.dataDir, /** @type {any} */ (data), { log: c.log });
+    if (!('error' in r)) changed();
     return r;
   });
   // «Цвет и значок» и «Закрепить» / «Открепить» (pinned, t164). Открытое окно проекта перекрашивает заголовок и значок на панели задач.
@@ -287,7 +304,7 @@ function register(c) {
   ipcMain.handle('projects:canHistory', async (e, id) => {
     if (!sender.allowed(e, 'projects:canHistory')) return sender.refused();
     const p = data?.projects.find((x) => x.id === String(id));
-    if (!p || !fs.existsSync(p.path)) return false;
+    if (!p || (await alive.state(p.path)) !== 'dir') return false;
     const s = await require('../plugins/git/enable').state(p.path, hrun()).catch(() => null);
     return s && !s.enabled ? { git: s.git } : false;
   });
@@ -303,7 +320,7 @@ function register(c) {
     c.log(`история ${p.path}: не включена — ${r.error}`);
     return { error: r.error };
   });
-  // «Новый проект» (t1174, ГИТ-устройство.md (г)): варианты из project-setup.md, папка по умолчанию — D:\AI-PROJECTS\<название>.
+  // «Новый проект» (t1174, ГИТ-устройство.md (г)): варианты из project-setup.md, папка по умолчанию — настройка projectsBase или домашняя, плюс <название>.
   ipcMain.handle('projects:presets', (e) => {
     if (!sender.allowed(e, 'projects:presets')) return sender.refused();
     const l = newProject.list();
@@ -425,6 +442,8 @@ async function syncCopies() {
   try {
     let any = false;
     for (const main of d.projects.slice()) {
+      // Сетевая папка без ответа: statSync .git\worktrees держал бы все окна 21 с на каждом круге (t1300).
+      if (!alive.ok(main.path)) continue;
       const t = wtTime(main.path);
       const was = wtSeen.get(main.path);
       wtSeen.set(main.path, t);
@@ -448,7 +467,8 @@ async function syncCopies() {
         any = true;
       }
       for (const p of d.projects.slice()) {
-        if (!inRoot(p.path) || fs.existsSync(p.path)) continue;
+        // Сетевая папка без ответа — не «удалена»: ok() не знает и не ждёт, такую копию не трогаем (t1300).
+        if (!inRoot(p.path) || alive.ok(p.path) || alive.isNet(p.path)) continue;
         projects.remove(c.dataDir, d, p.id);
         c.log(`копия проекта ${main.path} удалена без окна: ${p.path} — убрана из списка`);
         any = true;

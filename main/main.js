@@ -33,6 +33,7 @@ const tabs = require('./tabs');
 const stop = require('./stop-all');
 const osRules = require('./os-rules');
 const i18n = require('./i18n');
+const singleInstance = require('./single-instance');
 
 /** Сколько раз ещё ждать демона после «не ответил за 10 с» до ошибки «не запустился» (t1220). */
 const DAEMON_RETRIES = 2;
@@ -66,12 +67,11 @@ function argProject(argv) {
 // Папка из --project уходит первому запуску полной: у второго запуска своя рабочая папка.
 // Отдельным полем, а не в его командной строке: в ней Chromium может переставить ключи и значения.
 const asked = argProject(process.argv);
-if (!app.requestSingleInstanceLock({ project: asked ? path.resolve(asked) : '' })) {
-  // Программа уже открыта — окно откроет она (second-instance), этот запуск выходит.
-  app.quit();
-} else {
-  start(asked);
-}
+// Свой канал, а не app.requestSingleInstanceLock: Chromium гасит первую программу, если её главный поток стоит дольше ~20 с (t1261, d427, d428).
+singleInstance.acquire({ dataDir: DATA_DIR, project: asked ? path.resolve(asked) : '', log }).then((first) => {
+  // Программа уже открыта — окно откроет она (onSecond), этот запуск выходит.
+  if (first) start(asked); else app.quit();
+});
 
 /** @param {string} asked папка из --project; пусто — окно «Проекты» */
 function start(asked) {
@@ -90,6 +90,8 @@ function start(asked) {
   /** @type {import('./projects').ProjectsData | null} */
   let data = null;
   try { data = projects.load(DATA_DIR, { log }); } catch (e) { log(`список проектов не прочитан: ${e}`); }
+  // Сетевые проекты — проверка в фоне сразу (t1300): иначе дела, автоматизации и агенты живого сетевого проекта скрыты до первого ответа.
+  if (data) require('./dir-alive').warm(data.projects.map((p) => p.path));
 
   // Настройки (шрифты, звук; t181): до окон и звука, чтобы первое окно сразу взяло масштаб.
   settings.register({ dataDir: DATA_DIR, log });
@@ -205,8 +207,7 @@ function start(asked) {
     return projectWindow.open(ctx, p);
   }
 
-  app.on('second-instance', (_e, argv, _cwd, extra) => {
-    const want = extra && typeof (/** @type {any} */ (extra).project) === 'string' ? /** @type {any} */ (extra).project : argProject(argv);
+  singleInstance.onSecond(({ project: want }) => {
     log(`второй запуск${want ? `: проект ${want}` : ''}`);
     // Идёт «Остановить всё» (t216): окно сейчас открылось бы и закрылось вместе с программой. Запуск — после выхода, app.relaunch в quit.
     if (stop.stopping()) {

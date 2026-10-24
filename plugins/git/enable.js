@@ -6,7 +6,10 @@
 // Проект со своим гитом (ответ 1а, 20.10): только точка. Ни init, ни .gitignore — иначе в его git status появилась бы правка;
 // ветка, коммиты и настоящий индекс не меняются (снимок идёт через временный индекс).
 const { execFile } = require('child_process');
+// git полным путём (t1280): короткое имя Windows ищет сначала в текущей папке.
+const { fullGit } = require('../../main/find-program');
 const fs = require('fs');
+const alive = require('../../main/dir-alive');
 const path = require('path');
 const points = require('./points');
 const sizeScan = require('./size-scan');
@@ -24,7 +27,7 @@ const IGNORE = [
 
 /** @type {import('./points').Run} */
 const here = (file, args, opts) => new Promise((resolve) => {
-  execFile(file, args, { ...opts, encoding: 'utf8' }, (err, stdout, stderr) => resolve({ err, stdout: String(stdout || ''), stderr: String(stderr || '') }));
+  execFile(...fullGit(file, args), { ...opts, encoding: 'utf8' }, (err, stdout, stderr) => resolve({ err, stdout: String(stdout || ''), stderr: String(stderr || '') }));
 });
 
 /**
@@ -45,6 +48,8 @@ function ignoreText(old) {
  * @returns {Promise<{ git: boolean, enabled: boolean }>}
  */
 async function state(dir, run = here) {
+  // Мёртвый сетевой путь — сначала обещание с таймаутом, existsSync держал бы окна 21 с (t1300).
+  if ((await alive.state(dir)) !== 'dir') return { git: false, enabled: false };
   const git = fs.existsSync(path.join(dir, '.git'));
   return { git, enabled: git && (await require('./auto-points').enabled(dir, run)) };
 }
@@ -62,7 +67,7 @@ const busy = new Set();
 async function enable(dir, o = {}) {
   const run = o.run || here;
   const log = o.log || (() => {});
-  if (!dir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return { error: 'нет такой папки', code: 'nodir' };
+  if (!dir || (await alive.state(dir)) !== 'dir') return { error: 'нет такой папки', code: 'nodir' };
   const key = path.resolve(dir).toLowerCase();
   if (busy.has(key)) return { error: 'история уже включается', code: 'busy' };
   busy.add(key);

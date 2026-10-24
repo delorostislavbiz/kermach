@@ -741,6 +741,8 @@ async function sessionsCmd(o) {
 
 async function main() {
   // t841: kermach code — поиск по карте кода, без окна; разбор и справка — в plugins\roadmap\codemap\cli.js.
+  // t1264: kermach --version — номер из src\package.json, тот же, что в «Настройках».
+  if (process.argv[2] === '--version' || process.argv[2] === '-v') { process.stdout.write(`${require(require('path').join(__dirname, '..', '..', 'package.json')).version}\n`); return; }
   if (process.argv[2] === 'code') return require(require('path').join(__dirname, '..', '..', 'plugins', 'roadmap', 'codemap', 'cli.js')).main(process.argv.slice(3));
   // t1157: kermach tasks — дела проекта в файлах .kermach\tasks, без окна; разбор и справка — в plugins\tasks\cli.js.
   if (process.argv[2] === 'tasks') return require(require('path').join(__dirname, '..', '..', 'plugins', 'tasks', 'cli.js')).main(process.argv.slice(3));

@@ -63,6 +63,8 @@ function roadmapSetup(host) {
   /** Ярлык записи d<N> (t833): класс и подпись по type. @param {any} d */
   const dLabel = (d) => (d.type === 'тупик' ? ['dead', T('dDead', 'ТУПИК')] : d.type === 'договорённость' ? ['pact', T('dPact', 'ДОГОВОРЁННОСТЬ')]
     : d.type === 'паттерн' ? ['patt', T('dPatt', 'ПАТТЕРН')] : d.type === 'заметка' ? ['note', T('dNote', 'ЗАМЕТКА')] : ['', T('dDec', 'РЕШЕНИЕ')]);
+  /** Текст записи для экрана (t1291): незаполненная «Текст ошибки:» (пусто, «—» или «-») не показывается, файл записи не меняется. @param {any} d */
+  const shownText = (d) => String(d.text || '').replace(/^[ \t]*Текст ошибки:[ \t]*[—-]?[ \t]*(?:\r?\n|$)/gm, '').trim();
   /**
    * Пометки записи (t833): догадка, отменена, срок вышел — агенту карты отменённая и просроченная не подаются; повторы — карты, где причина встретилась снова (t835).
    * fmt — вид даты: форма карты даёт короткий «15.10» (t859), иначе ГГГГ-ММ-ДД. full — отзывы словами, для подсказки (t1009).
@@ -1191,7 +1193,7 @@ function roadmapSetup(host) {
       ? decs.map((/** @type {any} */ d) => {
         const dm = [d.id, ...dMarks(d, day), day(d.date), d.agent].filter(Boolean).join(' · ');
         const dmFull = [d.id, ...dMarks(d, day, true), day(d.date), d.agent].filter(Boolean).join(' · ');
-        return `<div class="dec" data-dec="${esc(d.id)}" title="${esc([d.title || d.id, dmFull, d.text || '', d.stack && d.stack.length ? `stack: ${d.stack.join(', ')}` : '', d.portable ? `${T('dc.portable', 'Переносимый вывод')}:\n${d.portable}` : ''].filter(Boolean).join('\n'))}"><span class="dt ${dLabel(d)[0]}">${esc(dLabel(d)[1])}</span>`
+        return `<div class="dec" data-dec="${esc(d.id)}" title="${esc([d.title || d.id, dmFull, shownText(d), d.stack && d.stack.length ? `stack: ${d.stack.join(', ')}` : '', d.portable ? `${T('dc.portable', 'Переносимый вывод')}:\n${d.portable}` : ''].filter(Boolean).join('\n'))}"><span class="dt ${dLabel(d)[0]}">${esc(dLabel(d)[1])}</span>`
           + `<span class="dx">${esc(d.title || d.id)}</span><span class="dm">${esc(dm)}</span></div>`;
       }).join('')
       : `<div class="none">${esc(T('noDecs', 'пока нет'))}</div>`;
@@ -1981,7 +1983,8 @@ function roadmapSetup(host) {
    * @param {any} x @returns {[string, boolean]}
    */
   const cause = (x) => {
-    const lines = String(x.text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+    // t1292: пустая «Текст ошибки: —» — не причина и не первая строка (shownText, t1291); прочерк в «Симптом:» — тоже.
+    const lines = shownText(x).split('\n').map((l) => l.trim()).filter((l) => l && !/^Симптом:\s*[—-]?$/.test(l));
     const why = lines.find((l) => /^Причина:\s*\S/.test(l));
     if (why) return [why.replace(/^Причина:\s*/, ''), false];
     const s = lines.find((l) => /^(?:Симптом|Текст ошибки):\s*\S/.test(l)) || lines[0] || '';
@@ -2205,7 +2208,7 @@ function roadmapSetup(host) {
       const dmFull = [...dMarks(d, day, true), day(d.date), d.agent].filter(Boolean).join(' · ');
       html += `<div class="box drec" data-id="${esc(d.id)}"><div class="dh" title="${esc(`${d.title || d.id}\n${dmFull}`)}"><span class="dt ${cls}">${esc(label)}</span>`
         + `<span class="tt">${esc(d.title || d.id)}</span><span class="dm">${esc(dm)}</span></div>`
-        + (d.text ? `<div class="dtx">${esc(d.text)}</div>` : '') + portRow(d) + globRow(d) + knownRow(d)
+        + (shownText(d) ? `<div class="dtx">${esc(shownText(d))}</div>` : '') + portRow(d) + globRow(d) + knownRow(d)
         + (ref ? `<div class="dref">${ref}</div>` : '') + wrongRow(d) + pactRow(d) + pattRow(d) + likeRow(d) + '</div>';
     }
     html = knownWarn() + html;

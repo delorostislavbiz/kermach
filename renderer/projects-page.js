@@ -201,7 +201,10 @@
       return open + head + (tiles ? `<div class="tiles">${items.map(tile).join('')}</div>` : items.map(row).join('')) + '</div>';
     }).join('');
     turned = '';
-    $('list').innerHTML = html || `<div id="empty">${total ? I18n.t('projects.nichegoNeNaydeno', 'Ничего не найдено') : I18n.t('projects.proektovNetDobavtePapku', 'Проектов нет. Добавьте папку.')}</div>`;
+    $('list').innerHTML = html || (total ? `<div id="empty">${I18n.t('projects.nichegoNeNaydeno', 'Ничего не найдено')}</div>` : firstRun());
+    const ea = $('emptyAdd'), eo = $('emptyOrca');
+    if (ea) ea.onclick = () => $('add').click();
+    if (eo) eo.onclick = fromOrca;
     // Кнопка — по незакреплённым блокам, где есть проекты: свёрнуты все — «Развернуть все», иначе «Свернуть незакреплённые».
     const keys = parts.filter((g) => g.key).map((g) => g.key);
     const allShut = keys.length > 0 && keys.every((k) => shutKeys.has(k));
@@ -251,6 +254,23 @@
   let asked = 0, applied = 0;
   // Сменили схему (t185): значки и список — заново в её цветах; до первого списка рисовать нечего.
   if (/** @type {any} */ (window).Theme) /** @type {any} */ (window).Theme.onChange(() => { topIcons(); if (applied) render(); });
+  // Пустой список — первый запуск (t1266): что такое проект, «Добавить папку», где руководство; есть Орка — перенос её проектов кнопкой.
+  // Чистая папка данных Орку сама не читает (t1206), поэтому перенос только по просьбе.
+  let orcaHas = false;
+  t.projects.orcaHas().then((/** @type {boolean} */ v) => { orcaHas = v === true; if (!state.projects.length) render(); }, () => {});
+  const firstRun = () => `<div id="empty" class="first">`
+    + `<div class="ask">${I18n.t('projects.firstTitle', 'Проектов пока нет')}</div>`
+    + `<p>${I18n.t('projects.firstWhat', 'Проект — это папка на диске. В его окне терминалы и агенты (Claude Code, Codex) работают в этой папке, а вкладки сохраняются до следующего раза.')}</p>`
+    + `<div class="btns"><button id="emptyAdd" class="bbtn">${I18n.t('projects.dobavitPapku', 'Добавить папку')}</button>`
+    + (orcaHas ? `<button id="emptyOrca" class="bbtn">${I18n.t('projects.orcaImport', 'Перенести проекты из Орки')}</button>` : '') + `</div>`
+    + `<p class="guide">${I18n.t('projects.firstGuide', 'Подробнее — в руководстве, глава «Проекты». Руководство лежит рядом с установщиком Kermach.')}</p></div>`;
+  async function fromOrca() {
+    showError('');
+    const r = await t.projects.orcaImport();
+    if (r.error) return showError(r.error);
+    await refresh();
+  }
+
   async function refresh() {
     const my = ++asked;
     const s = await t.projects.list();
@@ -404,7 +424,7 @@
     await refresh();
   };
   // «Новый проект» (t1174, ГИТ-устройство.md (г), макет spikes\t1165-git-design new-*.png): кнопка перед «Добавить папку».
-  // Вариант плиткой, название, папка (по умолчанию <D:\AI-PROJECTS>\<название>, пока её не правили руками), галочка истории.
+  // Вариант плиткой, название, папка (по умолчанию <папка новых проектов>\<название>, пока её не правили руками), галочка истории.
   // Окно — своя разметка на классах dlg-back / dlg / .field / .btns: темы оформляют её, как окна dialogs.js.
   const newBtn = document.createElement('button');
   newBtn.id = 'newProj';
