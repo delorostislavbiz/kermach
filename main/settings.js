@@ -130,16 +130,35 @@ function clean(raw, base) {
   };
 }
 
+/**
+ * Язык надписей по языку системы (t1303): первый пуск, поля lang в файле ещё нет. uk, de — свои словари; ru — ''; остальное — en.
+ * Источник — app.getLocale() (язык надписей Windows, слушает ключ --lang), запасной — getPreferredSystemLanguages()[0].
+ * getLocale() до app ready пустой — зовётся только после ready (register).
+ * @param {string} [loc] — например 'uk' или 'en-US'
+ */
+function sysLang(loc) {
+  let first = loc || '';
+  try { if (!first) first = app.getLocale() || String(app.getPreferredSystemLanguages()[0] || ''); } catch {}
+  const code = first.toLowerCase().split(/[-_]/)[0];
+  if (code === 'ru') return '';
+  return ['uk', 'de'].includes(code) ? code : 'en';
+}
+
+/** Поля lang в файле нет (t1303): язык ставит register после app ready. */
+let langUnset = false;
+
 /** Читает файл. Нет — молча умолчания; испорчен — умолчания и строка в журнал. @param {string} dataDir */
 function load(dataDir) {
   file = path.join(dataDir, 'settings.json');
   cur = { ...DEFAULTS, plugins: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
+  langUnset = false;
   let text;
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return cur; }
+  try { text = fs.readFileSync(file, 'utf8'); } catch { langUnset = true; return cur; }
   try {
     const raw = JSON.parse(text);
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('не объект');
     cur = clean(raw, DEFAULTS);
+    if (raw.lang === undefined) langUnset = true;
     // Переезд без потерь (t1265): ключей папок нет вовсе (файл до этой версии) — берём прежнее из projects.json: проект «_дела» и его папка-родитель.
     if (raw.inboxDir === undefined && raw.projectsBase === undefined) {
       try {
@@ -337,6 +356,13 @@ function register(c) {
   registered = true;
   log = c.log;
   load(c.dataDir);
+  // Язык по системе (t1303) — до первого окна: этот whenReady зарегистрирован раньше обработчиков main.js.
+  app.whenReady().then(() => {
+    if (!langUnset) return;
+    langUnset = false;
+    cur = { ...cur, lang: sysLang() };
+    log(`язык надписей по системе: ${cur.lang || 'ru'} (getLocale ${app.getLocale()})`);
+  });
   require('./i18n').init(c);
   // Раскладка окна проекта (t397): tabs\<id>.layout.json.
   require('./layout').register(c);
@@ -379,4 +405,4 @@ function register(c) {
   ipcMain.on('settings:dict', (e) => { e.returnValue = sender.allowed(e, 'settings:dict') ? require('./i18n').dict() : null; });
 }
 
-module.exports = { register, load, get, set, setDir, look, schemes, background, dress, onChange, pluginOn, agentOn, ZOOMS, TERM_MIN, TERM_MAX, DEFAULTS };
+module.exports = { register, load, get, set, setDir, look, schemes, background, dress, onChange, pluginOn, agentOn, sysLang, ZOOMS, TERM_MIN, TERM_MAX, DEFAULTS };
