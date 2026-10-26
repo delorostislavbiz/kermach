@@ -30,7 +30,7 @@ const HELP = `kermach code — поиск по карте кода проект�
 const CMDS = ['find', 'callers', 'calls', 'words', 'meaning'];
 /** Сколько строк ответа показать: дальше — «ещё N», чтобы агент сузил запрос, а не читал простыню. */
 const MAX_LINES = 15;
-/** Управляющие знаки и знаки направления текста — не в терминал агента (как clean в bin\lib\terminalus.js). */
+/** Управляющие знаки и знаки направления текста — не в терминал агента (как clean в bin\lib\kermach.js). */
 // eslint-disable-next-line no-control-regex
 const UNSAFE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g;
 

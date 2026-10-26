@@ -1,10 +1,10 @@
 // @ts-check
-// Автоматизации (t252): один прогон. Планировщик зовёт программу: TERMINALUS.exe --automation <номер> (main\main.js, ветка до окон) → cli().
+// Автоматизации (t252): один прогон. Планировщик зовёт программу: Kermach.exe --automation <номер> (main\main.js, ветка до окон) → cli().
 // «Запустить сейчас» зовёт ту же команду отдельным процессом. Устройство — spikes\t252-auto\DESIGN.md п. 2, 4, 5, 7, 8.
 // Флаги claude — строгий режим по пробам spikes\t252-auto\РАЗБОР.md (j4, h2): режим default, запись только Edit(<своя папка>/**), команды поимённо.
 // --setting-sources "": настройки, хуки и CLAUDE.md проекта и человека не грузятся — права только из флагов (design\p5-V4, p5-V5).
 // CLAUDE.md проекта проектная автоматизация получает в начале задания (spikes\t252-auto\code\md-result.txt: с "" claude его не читает).
-// TERMINALUS_CLAUDE — путь к своему claude (.js — запускается этим же exe как Node); TERMINALUS_NOTIFY=0 — без уведомления, путь .js — своя замена тоста.
+// KERMACH_CLAUDE — путь к своему claude (.js — запускается этим же exe как Node); KERMACH_NOTIFY=0 — без уведомления, путь .js — своя замена тоста.
 // Уведомление о конце прогона показывает открытая программа (t1233, файл в notifyDir); закрыта или стоит — PowerShell.
 const fs = require('fs');
 const os = require('os');
@@ -12,6 +12,8 @@ const path = require('path');
 const { spawn, execFile } = require('child_process');
 const store = require('./store');
 const { findProgram } = require('../../main/find-program');
+/** Переменная программы: KERMACH_<имя>, нет — TERMINALUS_<имя> до t1307 (platform.envOf). @param {string} n */
+const ENV = (n) => require('../../daemon/platform').envOf(process.env, n);
 
 const TIMEOUT_MS = 30 * 60 * 1000;
 /** Сколько CLAUDE.md проекта класть в задание. */
@@ -54,7 +56,7 @@ function stampOf(/** @type {Date} */ d) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-/** Файлы, изменённые после since. Без .git, node_modules, .terminalus; не больше max. @param {string} root @param {number} since @param {number} max */
+/** Файлы, изменённые после since. Без .git, node_modules, папки автоматизаций (.kermach\automations, до t1305 .terminalus); не больше max. @param {string} root @param {number} since @param {number} max */
 function changed(root, since, max = 200) {
   /** @type {string[]} */
   const out = [];
@@ -66,7 +68,10 @@ function changed(root, since, max = 200) {
     for (const it of items) {
       if (++seen > 20000 || out.length >= max) return;
       const f = path.join(dir, it.name);
-      if (it.isDirectory()) { if (!['.git', 'node_modules', '.terminalus'].includes(it.name)) walk(f, depth + 1); continue; }
+      if (it.isDirectory()) {
+        if (!['.git', 'node_modules', store.OLD_HOME].includes(it.name) && !(it.name === 'automations' && path.basename(dir) === '.kermach')) walk(f, depth + 1);
+        continue;
+      }
       try { if (fs.statSync(f).mtimeMs >= since) out.push(f); } catch {}
     }
   };
@@ -140,20 +145,20 @@ function handoff(o, title, text, log) {
  * Скрипт — через -EncodedCommand (UTF-16 base64): кириллица не портится. Процесс без окна; ответ — когда он вышел или прошло NOTIFY_MS.
  * Без detached: с ним у powershell нет консоли, и тост теряется молча, код 0 (t377). Ждать обязательно: потомок без detached
  * сидит в задании (job) процесса прогона и умирает вместе с ним после app.exit.
- * Подмена TERMINALUS_NOTIFY=<путь .js> идёт мимо программы: проверки ждут свою подмену сразу, без HANDOFF_MS.
+ * Подмена KERMACH_NOTIFY=<путь .js> идёт мимо программы: проверки ждут свою подмену сразу, без HANDOFF_MS.
  * @param {string} title @param {string} text @param {(m: string) => void} log
  * @param {{ dataDir: string, id: string, stamp: string, project: string }} [o] без o — сразу PowerShell
  * @returns {Promise<void>}
  */
 async function notify(title, text, log, o) {
-  const alt = process.env.TERMINALUS_NOTIFY;
+  const alt = ENV('NOTIFY');
   if (alt === '0') return;
   const fake = !!alt && alt.endsWith('.js');
   if (!fake && o && await handoff(o, title, text, log)) { log(`уведомление: показывает программа — «${title}»`); return; }
   // Текст пользователя (название автоматизации) в код скрипта не попадает: идёт данными через переменные окружения в base64.
   // XML тоста строит CreateTextNode — он сам экранирует <, & и кавычки.
   const b64 = (/** @type {string} */ s) => Buffer.from(s, 'utf8').toString('base64');
-  const env = { ...process.env, TERMINALUS_TOAST_TITLE: b64(title), TERMINALUS_TOAST_TEXT: b64(text) };
+  const env = { ...process.env, KERMACH_TOAST_TITLE: b64(title), KERMACH_TOAST_TEXT: b64(text) };
   let file = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'); // полный путь (t1191)
   /** @type {string[]} */
   let args;
@@ -173,15 +178,15 @@ async function notify(title, text, log, o) {
   });
 }
 
-/** Скрипт тоста для powershell: заголовок и текст — из TERMINALUS_TOAST_TITLE и TERMINALUS_TOAST_TEXT. */
+/** Скрипт тоста для powershell: заголовок и текст — из KERMACH_TOAST_TITLE и KERMACH_TOAST_TEXT. */
 function psToast() {
   const dec = (/** @type {string} */ v) => `[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:${v}))`;
   return [
     "$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]",
     '$x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)',
     "$t = $x.GetElementsByTagName('text')",
-    `$null = $t.Item(0).AppendChild($x.CreateTextNode(${dec('TERMINALUS_TOAST_TITLE')}))`,
-    `$null = $t.Item(1).AppendChild($x.CreateTextNode(${dec('TERMINALUS_TOAST_TEXT')}))`,
+    `$null = $t.Item(0).AppendChild($x.CreateTextNode(${dec('KERMACH_TOAST_TITLE')}))`,
+    `$null = $t.Item(1).AppendChild($x.CreateTextNode(${dec('KERMACH_TOAST_TEXT')}))`,
     "$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'",
     '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($x))',
   ].join('\n');
@@ -255,7 +260,7 @@ function runAutomation({ dataDir, id, log }) {
     let file = '';
     /** @type {string[]} */
     let pre = [];
-    const alt = process.env.TERMINALUS_CLAUDE;
+    const alt = ENV('CLAUDE');
     if (alt && alt.endsWith('.js')) { file = process.execPath; pre = [alt]; env.ELECTRON_RUN_AS_NODE = '1'; }
     else if (alt) file = alt;
     else { const found = findProgram('claude'); if (found) { file = found.file; pre = found.pre; } }

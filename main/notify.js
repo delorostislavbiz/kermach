@@ -5,8 +5,8 @@
 // Отличия от Орки: в тексте нет последней реплики агента — демон её не присылает; нет паузы 5 с между уведомлениями проекта —
 // новое уведомление той же вкладки заменяет прежнее, у разных вкладок — свои: видно, какая именно закончила.
 // Звука у уведомления нет (silent): звук играет sound.js по своей настройке.
-// TERMINALUS_TOAST=0 — выключатель для проверок: строка с заголовком и текстом пишется в журнал, уведомление не показывается.
-// Своя папка данных (TERMINALUS_DATA) — тоже молчит, если не TERMINALUS_TOAST=1 (t681): её ставят только проверки и пробы (daemon\protocol.js),
+// KERMACH_TOAST=0 — выключатель для проверок: строка с заголовком и текстом пишется в журнал, уведомление не показывается.
+// Своя папка данных (KERMACH_DATA) — тоже молчит, если не KERMACH_TOAST=1 (t681): её ставят только проверки и пробы (daemon\protocol.js),
 // а проба, запущенная руками без гейта, иначе вывела бы уведомление на экран.
 // Настройка «уведомления» (settings.js) читается на каждое событие: выключили — не показывает, мигание и звук живут своими.
 // Windows показывает уведомление, только если ID программы зарегистрирован (t712): register() при запуске, toast-reg.js.
@@ -16,6 +16,8 @@
 const path = require('path');
 const i18n = require('./i18n');
 const toastReg = require('./toast-reg');
+/** Переменная программы: KERMACH_<имя>, нет — TERMINALUS_<имя> до t1307 (platform.envOf). @param {string} n */
+const ENV = (n) => require('../daemon/platform').envOf(process.env, n);
 
 /**
  * Постоянный CLSID «активатора» — COM-объекта, через который Windows передаёт программе щелчок из центра уведомлений.
@@ -145,8 +147,8 @@ function remind(o, log) {
   } catch (e) { log(`${line} — не показано: ${e instanceof Error ? e.message : e}`); return 'no'; }
 }
 
-/** Проверка или проба: TERMINALUS_TOAST=0 или своя папка данных без TERMINALUS_TOAST=1. */
-const testing = () => process.env.TERMINALUS_TOAST === '0' || (!!process.env.TERMINALUS_DATA && process.env.TERMINALUS_TOAST !== '1');
+/** Проверка или проба: KERMACH_TOAST=0 или своя папка данных без KERMACH_TOAST=1. */
+const testing = () => ENV('TOAST') === '0' || (!!ENV('DATA') && ENV('TOAST') !== '1');
 
 /** Вкладка вышла: ссылку на её уведомление больше не держим. @param {string} sid */
 function forget(sid) {

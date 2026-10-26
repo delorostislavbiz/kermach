@@ -16,12 +16,12 @@ const ACK_MS = 3000;
 const CONNECT_MS = 10000;
 const MAX_BYTES = 64 * 1024;
 
-/** @param {string} dataDir @param {string} [platform] */
-function channelPath(dataDir, platform = process.platform) {
+/** @param {string} dataDir @param {string} [platform] @param {string} [name] приставка; 'terminalus' — канал до t1307 */
+function channelPath(dataDir, platform = process.platform, name = 'kermach') {
   const id = crypto.createHash('sha1').update(path.resolve(dataDir).toLowerCase()).digest('hex').slice(0, 12);
-  if (platform === 'win32') return `\\\\.\\pipe\\terminalus-main-${id}`;
+  if (platform === 'win32') return `\\\\.\\pipe\\${name}-main-${id}`;
   const p = path.posix.join(dataDir, 'main.sock');
-  return Buffer.byteLength(p) <= 103 ? p : path.posix.join(os.tmpdir(), `terminalus-main-${id}.sock`);
+  return Buffer.byteLength(p) <= 103 ? p : path.posix.join(os.tmpdir(), `${name}-main-${id}.sock`);
 }
 
 /** Пробует передать запрос первой программе. @param {string} chan @param {object} msg @returns {Promise<'sent' | 'none'>} */
@@ -46,6 +46,9 @@ function send(chan, msg) {
  */
 async function acquire({ dataDir, project, log }) {
   const chan = channelPath(dataDir);
+  // Программа до t1307 слушает канал со старой приставкой: открыта она — запрос ей, второй экземпляр не нужен. Нет канала — ответ сразу.
+  const old = channelPath(dataDir, process.platform, 'terminalus');
+  if (old !== chan && await send(old, { project }) === 'sent') return false;
   for (let i = 0; i < 5; i++) {
     if (await send(chan, { project }) === 'sent') return false;
     // Никто не слушает. Файл сокета от упавшей программы мешает слушать — убираем (на Windows канал исчезает сам).

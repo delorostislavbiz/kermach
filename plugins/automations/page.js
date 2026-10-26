@@ -198,7 +198,7 @@
       <div class="form">
       <div class="fld"><label for="fName">${t('fName', 'Название')}</label><input type="text" id="fName" value="${esc(c.name || '')}" maxlength="200" spellcheck="false">${mark('name')}</div>
       <div class="fld"><label for="fWhere">${t('fWhere', 'Где работает')}</label><select id="fWhere"${a ? ' disabled' : ''}>${opt('', t('commonLong', 'Общая (не для проекта)'), project)}${data.projects.map((p) => opt(p.path, p.name, project)).join('')}</select>
-        <span class="hint">${a ? t('whereFixed', 'Место нельзя поменять: создайте новую автоматизацию') : t('whereHint', 'Проектная работает в папке проекта и лежит в нём, в .terminalus\\automations')}</span></div>
+        <span class="hint">${a ? t('whereFixed', 'Место нельзя поменять: создайте новую автоматизацию') : t('whereHint', 'Проектная работает в папке проекта и лежит в нём, в .kermach\\automations')}</span></div>
       <div class="fld wide"><label for="fTask">${t('fTask', 'Задание для агента')}</label><textarea id="fTask" spellcheck="false">${esc(a ? a.task : '')}</textarea></div>
       <div class="fld"><label for="fKind">${t('fRepeat', 'Повтор')}</label><select id="fKind">${none(!r.kind)}${opt('once', t('k.once', 'Один раз'), r.kind)}${opt('daily', t('k.daily', 'Каждый день'), r.kind)}${opt('weekdays', t('k.weekdays', 'По будням'), r.kind)}${opt('weekly', t('k.weekly', 'Раз в неделю'), r.kind)}${opt('hours', t('k.hours', 'Каждые N часов'), r.kind)}</select>${mark('kind')}</div>
       <div class="fld"><label>${t('fTime', 'Время')}</label><div class="rowf"><input type="time" id="fTime" value="${esc(r.time || '')}" style="width:110px">

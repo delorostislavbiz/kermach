@@ -8,7 +8,7 @@
 // у неё нет xterm, вместо него — page (что делать при выборе и закрытии). В список терминалов слева она не попадает.
 (async function () {
   const w = /** @type {any} */ (window);
-  const t = w.terminalus;
+  const t = w.kermach;
   const { svg, tilePNG, DEFAULT_COLOR } = w.Icons;
   const $ = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.getElementById(id));
   // Имена — от демона и из файла пользователя, в разметку только через замену опасных знаков.
@@ -130,7 +130,7 @@
   for (const b of /** @type {HTMLElement[]} */ ([...$('sideAdds').children])) b.onclick = () => $(b.dataset.for || '').click();
   // Скрыть и показать левую панель (t678). Видно только в теме Kermach и Termius Dark (класс side-off — ui-kermach-project.css);
   // запоминается для проекта в localStorage окна, как ширина правой панели.
-  const SIDE_KEY = `terminalus.sideOff:${p.path}`;
+  const SIDE_KEY = `kermach.sideOff:${p.path}`;
   const sideOff = (/** @type {boolean} */ off) => {
     document.documentElement.classList.toggle('side-off', off);
     if (off) localStorage.setItem(SIDE_KEY, '1'); else localStorage.removeItem(SIDE_KEY);
@@ -797,11 +797,11 @@
   /** Агент по виду — у скрытой вкладки (t1099) есть только вид из списка демона. @param {string} k */
   const agentKind = (k) => k === 'claude' || k === 'codex' || k.startsWith('agent:');
   // Скрытые вкладки (t1059) окно не рисует, но CLI их видит и закрывает (t1099): иначе фоновую карту не перезапустить без кнопки «показать».
-  w.TerminalusTermTabs = () => [...ordered().filter((x) => !x.sid.startsWith('-'))
+  w.KermachTermTabs = () => [...ordered().filter((x) => !x.sid.startsWith('-'))
     .map((x) => ({ sid: x.sid, kind: x.page ? x.kind : x.kind === 'shell' ? 'terminal' : x.kind, title: x.title, alive: !!x.alive, page: !!x.page, agent: !x.page && liveAgent(x), hidden: false })),
   ...bg.map((x) => ({ sid: x.sid, kind: x.kind === 'shell' ? 'terminal' : x.kind, title: x.title, alive: true, page: false, agent: agentKind(x.kind), hidden: true }))];
   /** Закрыть как кнопка «Закрыть терминал», но без вопроса: живой агент — отказ, с force — закрыть. @param {unknown} sid @param {unknown} force */
-  w.TerminalusTermClose = async (sid, force) => {
+  w.KermachTermClose = async (sid, force) => {
     const x = typeof sid === 'string' ? tabs.get(sid) : undefined;
     const h = !x && typeof sid === 'string' ? bg.find((y) => y.sid === sid) : undefined;
     if (h) {
@@ -826,7 +826,7 @@
    * Перед чтением write('') дочитывает очередь xterm, как read у демона. Клетка с шириной 0 — вторая половина широкого знака, пропуск.
    * @param {unknown} sid
    */
-  w.TerminalusTermBuffer = (sid) => new Promise((resolve) => {
+  w.KermachTermBuffer = (sid) => new Promise((resolve) => {
     const x = typeof sid === 'string' ? tabs.get(sid) : undefined;
     if (!x && typeof sid === 'string' && bg.some((y) => y.sid === sid)) return resolve({ error: 'вкладка скрыта: окно её не рисует, буфера в окне нет — сначала «Показать»', code: 4 });
     if (!x || x.sid.startsWith('-')) return resolve({ error: `нет вкладки ${String(sid).slice(0, 40)} в окне проекта — номера печатает kermach tab list`, code: 4 });
@@ -1626,13 +1626,13 @@
 
   // Плагины (main\plugins.js) — тегами <script>, параллельно с терминалами. Первый запрос терминалов ждёт загрузки их кода
   // не дольше PLUGINS_WAIT_MS (t277): «Лимиты» сразу показывают нижнюю строку, и замер места для демона должен её учесть.
-  // Код плагина вызывает terminalusPlugin((host) => …) и получает свои места в окне и список терминалов:
+  // Код плагина вызывает kermachPlugin((host) => …) и получает свои места в окне и список терминалов:
   //   host.bottom — нижняя строка, host.right — правая панель, host.side — низ левой панели (t252); все скрыты, плагин сам снимает hidden;
   //   host.terminals() — терминалы окна: { sid, kind, title, color, icon, alive, state, claudeSessionId, codexSessionId }, state — код из STATES или '';
   //   номер разговора Codex — только у продолженной вкладки (t768);
   //   host.onTerminals(cb) — список изменился;
   //   host.project — { id, name, path, color, icon }; host.log(текст) — строка в main.log;
-  //   host.bridge — window.terminalus, term.close в нём убирает и вкладку из полосы (t705); host.pages — addTab, removeTab, setTab, show, isActive, addButton, removeButton (вкладка-страница в общей полосе и пункт меню «+», t220).
+  //   host.bridge — window.kermach, term.close в нём убирает и вкладку из полосы (t705); host.pages — addTab, removeTab, setTab, show, isActive, addButton, removeButton (вкладка-страница в общей полосе и пункт меню «+», t220).
   //   host.call(cmd, ...args) — своя главная часть (поле main в plugin.json, t256), ответ или { error };
   //   host.on(event, cb) — её события ctx.send; подписки снимаются, когда плагин выключили.
   /** Адрес кода плагина → его имя: по нему ошибка в коде плагина попадает в журнал с именем. @type {Map<string, string>} */
@@ -1665,15 +1665,17 @@
     document.body.appendChild(s);
     return /** @type {Promise<null>} */ (r);
   };
-  w.terminalusPlugin = (/** @type {(host: any) => void} */ setup) => {
+  w.kermachPlugin = (/** @type {(host: any) => void} */ setup) => {
     const s = /** @type {HTMLScriptElement | null} */ (document.currentScript);
     const id = s && s.dataset.plugin;
-    if (!id) { t.log('terminalusPlugin вызван не из кода плагина при загрузке — пропущен'); return; }
+    if (!id) { t.log('kermachPlugin вызван не из кода плагина при загрузке — пропущен'); return; }
     const entry = plugins.get(id) || { setup: null, stop: null, on: false };
     plugins.set(id, entry);
     entry.setup = setup;
     if (want.get(id) !== false) startPlugin(id);
   };
+  // Старое имя до t1307: плагины человека зовут terminalusPlugin(setup). До 1.0.
+  w.terminalusPlugin = w.kermachPlugin;
   /** Места плагина в окне: каждому включению — свой host. @param {string} id */
   const makeHost = (id) => {
     const host = {
@@ -1686,7 +1688,7 @@
         .map((x) => ({ sid: x.sid, kind: x.kind, title: x.title, color: x.color, icon: x.icon, alive: x.alive, state: stateOf(x), claudeSessionId: x.claudeSessionId, codexSessionId: x.codexSessionId })),
       onTerminals: (/** @type {() => void} */ cb) => { if (typeof cb === 'function') watchers.push({ id, cb }); },
       log: (/** @type {string} */ m) => t.log(`плагин ${id}: ${m}`),
-      /** Мост окна (window.terminalus) и места для вкладок-страниц (t220): вкладка в полосе, пункт меню «+». term.close убирает и вкладку (t705). */
+      /** Мост окна (window.kermach) и места для вкладок-страниц (t220): вкладка в полосе, пункт меню «+». term.close убирает и вкладку (t705). */
       bridge: { ...t, term: { ...t.term, close: closeFromPlugin } },
       pages: pageApi,
       call: (/** @type {string} */ cmd, /** @type {any[]} */ ...args) => t.plugin.call(id, cmd, ...args),
@@ -1771,10 +1773,10 @@
 
   // Встроенный браузер (plugins\browser\window.js): вкладки сайта в общей полосе, кнопка «+ Браузер» под кнопками терминалов.
   // Параллельно с терминалами: вкладки сайта встают в полосе на свои места (t133), первым всё равно открывается терминал.
-  if (typeof w.TerminalusBrowser === 'function') {
+  if (typeof w.KermachBrowser === 'function') {
     // Выключатель (t188): «Браузер» подключён так же, как плагины, — запоминается setup, запуск и остановка по настройке «Браузер».
     // Первый запуск — когда пришли настройки: выключенный «Браузер» не открывает вкладки сайта даже на миг.
-    plugins.set('browser', { stop: null, on: false, setup: () => w.TerminalusBrowser({
+    plugins.set('browser', { stop: null, on: false, setup: () => w.KermachBrowser({
         bridge: t,
         icons: w.Icons,
         ...pageApi,
@@ -1806,7 +1808,7 @@
 
   // При открытии окна: вкладки из файла без живого терминала запускаются заново (Claude — с прежним разговором),
   // живые терминалы проекта — вкладками; нет ни тех, ни других — кнопки «Что запустить?» (t360): лишний Claude не тратит лимит,
-  // когда проект открыли посмотреть файлы. TERMINALUS_AUTOSTART (claude, codex, shell) — пустое окно само открывает его, как до t360.
+  // когда проект открыли посмотреть файлы. KERMACH_AUTOSTART (claude, codex, shell) — пустое окно само открывает его, как до t360.
   // Размер для демона (size()) — после кода плагинов: их строки и панели уже заняли место (t277). Плагин завис — не дольше PLUGINS_WAIT_MS.
   await SD.watch(t);
   await Promise.race([pluginsLoaded, new Promise((r) => setTimeout(r, PLUGINS_WAIT_MS))]);

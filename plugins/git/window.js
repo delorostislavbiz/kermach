@@ -590,4 +590,4 @@ function gitSetup(host) {
 }
 
 if (typeof module === 'object' && module.exports) module.exports = { gitWord, gitLetter, gitTree };
-if (typeof terminalusPlugin === 'function') terminalusPlugin(gitSetup);
+if (typeof kermachPlugin === 'function') kermachPlugin(gitSetup);

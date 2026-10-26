@@ -9,7 +9,7 @@
 // Подписки на мост ставятся один раз при загрузке: у ipcRenderer.on в preload нет снятия, а плагин включают и выключают много раз.
 (function () {
   const w = /** @type {any} */ (window);
-  const t = w.terminalus;
+  const t = w.kermach;
   const WIDTHS = [4, 6, 8];
   const WIDTH = 6;
   /** Бледность рамки окна без фокуса. */
@@ -63,7 +63,7 @@
     paint();
   });
 
-  if (typeof w.terminalusPlugin === 'function') w.terminalusPlugin((/** @type {any} */ host) => {
+  if (typeof w.kermachPlugin === 'function') w.kermachPlugin((/** @type {any} */ host) => {
     if (!color) color = colorOf(host.project.color);
     el = document.createElement('div');
     el.id = 'project-frame';

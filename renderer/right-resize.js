@@ -3,7 +3,7 @@
 // В узком окне панель сужается сама: вкладке остаётся не меньше TAB_MIN px. Как в Орке: 350 px по умолчанию (rightSidebarWidth).
 // Терминалы пересчитывает наблюдатель за #panes в project-page.js: ширина панели меняет место вкладок, fit отдаёт новый размер демону.
 (() => {
-  const KEY = 'terminalus.rightWidth';
+  const KEY = 'kermach.rightWidth';
   const DEFAULT_W = 350;
   // 150, а не 160: левая панель Kermach с отступом — 252 (t655), и в окне 1024 при 125 % вкладке иначе остаётся 397.
   const PANEL_MIN = 150;

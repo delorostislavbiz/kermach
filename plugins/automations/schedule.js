@@ -1,11 +1,14 @@
 // @ts-check
 // Автоматизации (t252): задачи Планировщика Windows. Задача только из XML — у schtasks /Create нет ключа пропущенного запуска
-// (spikes\t252-auto\DESIGN.md п. 3, пробы spikes\t252-auto\design\). Имя задачи — TERMINALUS\<номер>, команда — программа с --automation <номер>.
-// TERMINALUS_SCHTASKS — путь к своей замене schtasks (.js — запускается этим же exe как Node): её ставит проверка t252-auto, может поставить и человек.
+// (spikes\t252-auto\DESIGN.md п. 3, пробы spikes\t252-auto\design\). Имя задачи — Kermach\<номер>, команда — программа с --automation <номер>.
+// До t1305 задачи жили в папке TERMINALUS — app.js переносит их при запуске (copyOld, затем drop старой).
+// KERMACH_SCHTASKS — путь к своей замене schtasks (.js — запускается этим же exe как Node): её ставит проверка t252-auto, может поставить и человек.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
+/** Переменная программы: KERMACH_<имя>, нет — TERMINALUS_<имя> до t1307 (platform.envOf). @param {string} n */
+const ENV = (n) => require('../../daemon/platform').envOf(process.env, n);
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const esc = (/** @type {string} */ s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -29,7 +32,7 @@ function taskXml(o) {
   const args = argLine(o);
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>TERMINALUS: автоматизация ${esc(o.id)}</Description></RegistrationInfo>
+  <RegistrationInfo><Description>${description(o.id)}</Description></RegistrationInfo>
   <Triggers>${trigger(o.repeat, o.today)}</Triggers>
   <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings>
@@ -50,7 +53,11 @@ function taskXml(o) {
 `;
 }
 
-const taskName = (/** @type {string} */ id) => `TERMINALUS\\${id}`;
+/** Папка задач в Планировщике и прежняя, до t1305. */
+const FOLDER = 'Kermach';
+const OLD_FOLDER = 'TERMINALUS';
+const description = (/** @type {string} */ id) => `Kermach: автоматизация ${esc(id)}`;
+const taskName = (/** @type {string} */ id, folder = FOLDER) => `${folder}\\${id}`;
 
 /**
  * @typedef {(file: string, args: string[], opts: object) => Promise<{ err: any, stdout: string, stderr: string }>} Run
@@ -69,7 +76,7 @@ const here = (file, args, opts) => new Promise((resolve) => {
  * @returns {Promise<Answer>}
  */
 async function schtasks(args, run = here) {
-  const alt = process.env.TERMINALUS_SCHTASKS;
+  const alt = ENV('SCHTASKS');
   const [file, argv, env] = !alt ? [path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'schtasks.exe'), args, process.env] // полный путь (t1191)
     : alt.endsWith('.js') ? [process.execPath, [alt, ...args], { ...process.env, ELECTRON_RUN_AS_NODE: '1' }] : [alt, args, process.env];
   const r = await run(file, argv, { windowsHide: true, timeout: 20000, env });
@@ -86,12 +93,12 @@ function argLine(o) {
 }
 
 /**
- * Задачи папки TERMINALUS одним /Query: номер → «Выполняемая задача» (exe и аргументы строкой). null — Планировщик не ответил.
+ * Задачи папки folder (по умолчанию Kermach) одним /Query: номер → «Выполняемая задача» (exe и аргументы строкой). null — Планировщик не ответил.
  * Код 1 — папки ещё нет. Колонки по номерам: подписи у Windows на языке системы.
- * @param {Run} [run] @returns {Promise<Record<string, string> | null>}
+ * @param {Run} [run] @param {string} [folder] @returns {Promise<Record<string, string> | null>}
  */
-async function tasks(run) {
-  const r = await schtasks(['/Query', '/TN', '\\TERMINALUS\\', '/FO', 'CSV', '/V', '/NH'], run);
+async function tasks(run, folder = FOLDER) {
+  const r = await schtasks(['/Query', '/TN', `\\${folder}\\`, '/FO', 'CSV', '/V', '/NH'], run);
   if (r.code === 1) return {};
   if (r.code !== 0) return null;
   /** @type {Record<string, string>} */
@@ -99,8 +106,8 @@ async function tasks(run) {
   for (const line of r.out.split(/\r?\n/)) {
     // Кавычки внутри поля schtasks не удваивает ("…exe "D:\a b" --automation …"), поэтому делим по "," — в команде его нет: argLine склеивает пробелом.
     const f = line.trim().replace(/^"|"$/g, '').split('","');
-    const m = f.length > 8 ? /^\\TERMINALUS\\(a-[0-9a-f]{8})$/.exec(f[1]) : null;
-    if (m) out[m[1]] = f[8];
+    const m = f.length > 8 ? /^\\([^\\]+)\\(a-[0-9a-f]{8})$/.exec(f[1]) : null;
+    if (m && m[1].toLowerCase() === folder.toLowerCase()) out[m[2]] = f[8];
   }
   return out;
 }
@@ -123,12 +130,33 @@ function sameCommand(have, o) {
 async function put(o, run) {
   const d = new Date();
   const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const file = path.join(os.tmpdir(), `terminalus-${o.id}-${process.pid}.xml`);
-  fs.writeFileSync(file, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(taskXml({ ...o, today }), 'utf16le')]));
-  try { return await schtasks(['/Create', '/TN', taskName(o.id), '/XML', file, '/F'], run); } finally { try { fs.unlinkSync(file); } catch {} }
+  return create(o.id, taskXml({ ...o, today }), run);
 }
 
-const drop = (/** @type {string} */ id, /** @type {Run} */ run) => schtasks(['/Delete', '/TN', taskName(id), '/F'], run);
+/** Записать задачу из текста XML. @param {string} id @param {string} xml @param {Run} [run] @returns {Promise<Answer>} */
+async function create(id, xml, run) {
+  const file = path.join(os.tmpdir(), `kermach-${id}-${process.pid}.xml`);
+  fs.writeFileSync(file, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, 'utf16le')]));
+  try { return await schtasks(['/Create', '/TN', taskName(id), '/XML', file, '/F'], run); } finally { try { fs.unlinkSync(file); } catch {} }
+}
+
+/**
+ * Старую задачу TERMINALUS\<номер> — в Kermach\<номер> как есть: тот же триггер, включена ли, команда; меняется только описание.
+ * Для автоматизаций, описания которых программа сейчас не видит (проект не в списке, сетевой путь молчит). Старая не удаляется — это делает вызывающий.
+ * schtasks печатает XML в кодировке консоли: не ASCII в команде пришли бы испорченными — такую задачу не копируем.
+ * @param {string} id @param {Run} [run] @returns {Promise<Answer>}
+ */
+async function copyOld(id, run) {
+  const r = await schtasks(['/Query', '/TN', taskName(id, OLD_FOLDER), '/XML'], run);
+  if (r.code !== 0) return r;
+  const act = /<Actions[\s\S]*<\/Actions>/.exec(r.out);
+  if (!act || !r.out.includes('<Task') || /[^\x00-\x7e\s]|\?/.test(act[0])) return { code: -1, out: 'команда старой задачи не ASCII или не прочитана — не копирую' };
+  // URI — старое имя, Author — имя пользователя в кодировке консоли: Планировщик проставит их сам.
+  const xml = r.out.replace(/<Description>[\s\S]*?<\/Description>/, `<Description>${description(id)}</Description>`).replace(/<(URI|Author)>[\s\S]*?<\/\1>/g, '');
+  return create(id, xml, run);
+}
+
+const drop = (/** @type {string} */ id, /** @type {Run} */ run, folder = FOLDER) => schtasks(['/Delete', '/TN', taskName(id, folder), '/F'], run);
 const exists = async (/** @type {string} */ id, /** @type {Run} */ run) => (await schtasks(['/Query', '/TN', taskName(id)], run)).code === 0;
 
-module.exports = { taskXml, trigger, taskName, schtasks, put, drop, exists, tasks, sameCommand, argLine };
+module.exports = { FOLDER, OLD_FOLDER, taskXml, trigger, taskName, schtasks, put, copyOld, drop, exists, tasks, sameCommand, argLine };

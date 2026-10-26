@@ -1,7 +1,7 @@
 // @ts-check
-// Демон терминалов TERMINALUS: держит все терминалы пользователя, пока окна закрываются и открываются заново.
+// Демон терминалов Kermach: держит все терминалы пользователя, пока окна закрываются и открываются заново.
 // Один на пользователя: именованный канал занимает только первый демон, остальные сразу выходят.
-// Запуск — главный процесс, без окна: ELECTRON_RUN_AS_NODE=1 TERMINALUS.exe daemon\daemon.js
+// Запуск — главный процесс, без окна: ELECTRON_RUN_AS_NODE=1 Kermach.exe daemon\daemon.js
 // Выходит сам, когда нет ни терминалов, ни подключённых клиентов (через IDLE_MS).
 // Любой клиент видит все терминалы, читает вывод любого и пишет в любой — на этом стоят плагины.
 // Ещё демон принимает события хуков (Claude закончил, просит разрешения, ошибка) на свободном порту 127.0.0.1 — см. hookServer.
@@ -17,13 +17,13 @@ const pty = require('node-pty');
 const { Terminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
 const { Unicode11Addon } = require('@xterm/addon-unicode11');
-const { PROTOCOL_VERSION, PIPE, DATA_DIR, KEY_FILE, lineReader, frame } = require('./protocol');
+const { PROTOCOL_VERSION, PIPE, LEGACY_PIPE, DATA_DIR, KEY_FILE, lineReader, frame } = require('./protocol');
 const ownRoot = require('./own-root');
 const platform = require('./platform');
 const { hideSecrets } = require('./secrets');
 
 const SCROLLBACK = 5000;
-const IDLE_MS = Number(process.env.TERMINALUS_IDLE_MS) || 10000;
+const IDLE_MS = Number(platform.envOf(process.env, 'IDLE_MS')) || 10000;
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const LOG_FILE = path.join(DATA_DIR, 'logs', 'daemon.log');
 // Файл настроек для claude --settings: хуки на приёмник демона и строка состояния через обёртку. Пишется при каждом запуске:
@@ -157,7 +157,7 @@ const TREE_KILL_MS = 5000;
 const GROUP_KILL_MS = 2000;
 
 /**
- * Окружение терминала. TERMINALUS_TAB_KEY — ключ вкладки (номер терминала у демона): хук шлёт его заголовком,
+ * Окружение терминала. KERMACH_TAB_KEY — ключ вкладки (номер терминала у демона): хук шлёт его заголовком,
  * и событие находит вкладку, даже когда Claude сменил session_id (/clear). Как ORCA_PANE_KEY у Орки.
  * @param {Record<string, string> | undefined} extra @param {string} tabKey
  */
@@ -179,7 +179,9 @@ function terminalEnv(extra, tabKey) {
     const over = new Set(Object.keys(extra).map((k) => k.toUpperCase()));
     for (const k of Object.keys(env)) if (over.has(k.toUpperCase())) delete env[k];
   }
-  return { ...env, ...(extra || {}), TERMINALUS_HOOK_TOKEN: HOOK_TOKEN, TERMINALUS_TAB_KEY: tabKey, TERMINALUS_HOOK_PORT: port };
+  // Старые TERMINALUS_* из окружения окна (проверки, вкладка внутри вкладки) не нужны: хук и kermach читают KERMACH_* первым.
+  for (const k of Object.keys(env)) if (/^TERMINALUS_(HOOK_TOKEN|TAB_KEY|HOOK_PORT)$/i.test(k)) delete env[k];
+  return { ...env, ...(extra || {}), KERMACH_HOOK_TOKEN: HOOK_TOKEN, KERMACH_TAB_KEY: tabKey, KERMACH_HOOK_PORT: port };
 }
 
 /**
@@ -1198,13 +1200,14 @@ function retryStaleSocket() {
 }
 
 /**
- * Приёмник событий хуков. Общий для всех программ: путь /hook/<откуда> (claude; codex — SessionStart, t777), ключ — заголовок X-Terminalus-Token.
- * Вкладка находится по ключу вкладки — заголовок X-Terminalus-Tab (см. onHook); без него — по session_id в теле.
+ * Приёмник событий хуков. Общий для всех программ: путь /hook/<откуда> (claude; codex — SessionStart, t777), ключ — заголовок X-Kermach-Token.
+ * Вкладка находится по ключу вкладки — заголовок X-Kermach-Tab (см. onHook); без него — по session_id в теле.
+ * X-Terminalus-* — те же заголовки до t1307: их шлют claude, запущенные до перезапуска демона (файл --settings читается при старте).
  * Ответ — 200 с пустым телом, всегда и сразу: решений за человека приёмник не принимает (PermissionRequest показывает обычный вопрос).
  * Как в Орке (MIT): только POST, чужой ключ — 403, тело не дольше 5 с.
  */
 const hookServer = http.createServer((req, res) => {
-  const token = Buffer.from(String(req.headers['x-terminalus-token'] || ''));
+  const token = Buffer.from(String(req.headers['x-kermach-token'] || req.headers['x-terminalus-token'] || ''));
   const want = Buffer.from(HOOK_TOKEN);
   const m = /^\/hook\/([a-z]+)$/.exec(req.url || '');
   if (req.method !== 'POST' || !m) { res.writeHead(404); res.end(); return; }
@@ -1223,7 +1226,7 @@ const hookServer = http.createServer((req, res) => {
     res.end();
     let e;
     try { e = JSON.parse(body); } catch { return log(`приёмник: тело не JSON (${body.length} байт)`); }
-    onHook(m[1], e, String(req.headers['x-terminalus-tab'] || ''));
+    onHook(m[1], e, String(req.headers['x-kermach-tab'] || req.headers['x-terminalus-tab'] || ''));
   });
   req.on('error', () => {});
 });
@@ -1267,14 +1270,14 @@ function hideCmdSecrets(s) {
  * Ключ есть, а вкладки нет — событие отбрасывается: процесс закрытой вкладки не должен зажигать чужую.
  * Ключа нет (Claude не подставил переменную) — вкладка по session_id, как до ключей.
  * У вкладки Claude новый session_id запоминается в meta.claudeSessionId: по нему окно делает claude --resume после перезапуска.
- * @param {string} source @param {any} e тело события @param {string} tabKey заголовок X-Terminalus-Tab
+ * @param {string} source @param {any} e тело события @param {string} tabKey заголовок X-Kermach-Tab
  */
 function onHook(source, e, tabKey) {
   const event = String(e.hook_event_name || '');
   const sessionId = String(e.session_id || '');
   const bySession = sessionId ? [...sessions.values()].find((x) => x.desc.meta && x.desc.meta.claudeSessionId === sessionId) : undefined;
   let s = bySession;
-  // Не номер терминала (например, «$TERMINALUS_TAB_KEY», если Claude переменную не подставил) — как без ключа.
+  // Не номер терминала (например, «$KERMACH_TAB_KEY», если Claude переменную не подставил) — как без ключа.
   if (UUID.test(tabKey)) {
     s = sessions.get(tabKey);
     if (!s) return log(`приёмник: ${source} ${event} от вкладки ${tabKey}, которой нет, — отброшено; session_id ${sessionId || 'нет'}`);
@@ -1442,8 +1445,8 @@ function writeHooksSettings(port) {
   const hook = {
     type: 'http', url: `http://127.0.0.1:${port}/hook/claude`, timeout: HOOK_TIMEOUT,
     // Две переменные в заголовках Claude 2.1.289 подставляет обе (проба t67, spikes\t67-tabkey\probe-result.txt).
-    headers: { 'X-Terminalus-Token': '$TERMINALUS_HOOK_TOKEN', 'X-Terminalus-Tab': '$TERMINALUS_TAB_KEY' },
-    allowedEnvVars: ['TERMINALUS_HOOK_TOKEN', 'TERMINALUS_TAB_KEY'],
+    headers: { 'X-Kermach-Token': '$KERMACH_HOOK_TOKEN', 'X-Kermach-Tab': '$KERMACH_TAB_KEY' },
+    allowedEnvVars: ['KERMACH_HOOK_TOKEN', 'KERMACH_TAB_KEY'],
   };
   /** @type {Record<string, any[]>} */
   const hooks = {};
@@ -1674,7 +1677,19 @@ function startPipe(port) {
     log(port ? `приёмник хуков: 127.0.0.1:${port}, файл настроек ${hooksSettings || 'не записан'}` : 'приёмника хуков нет — Claude без хуков');
     checkIdle();
   };
-  server.listen(PIPE, onListen);
+  if (!LEGACY_PIPE) return void server.listen(PIPE, onListen);
+  // Живой демон до t1307 слушает старый канал, и EADDRINUSE на новом его не заметит (t1316): там ответили — этот лишний.
+  // Старого канала нет — ENOENT сразу; занятый канал (EBUSY) — тоже живой демон; молчит дольше 1 с — слушаем свой.
+  const probe = net.connect(LEGACY_PIPE);
+  const go = () => { clearTimeout(timer); probe.destroy(); server.listen(PIPE, onListen); };
+  const timer = setTimeout(go, 1000);
+  probe.once('connect', () => { clearTimeout(timer); probe.destroy(); log(`на старом канале ${LEGACY_PIPE} слушает живой демон, выхожу`); process.exit(0); });
+  probe.once('error', (e) => {
+    if (/** @type {any} */ (e).code !== 'EBUSY') return go();
+    clearTimeout(timer);
+    log(`старый канал ${LEGACY_PIPE} занят живым демоном, выхожу`);
+    process.exit(0);
+  });
 }
 hookServer.listen(0, '127.0.0.1', () => startPipe(/** @type {import('net').AddressInfo} */ (hookServer.address()).port));
 

@@ -66,7 +66,7 @@ contextBridge.exposeInMainWorld('tasks', {
   onPick: (cb) => on('tasks:pick', cb),
 });
 
-contextBridge.exposeInMainWorld('terminalus', {
+contextBridge.exposeInMainWorld('kermach', {
   settings: {
     look: () => ipcRenderer.sendSync('tasks:look'),
     dict: () => ipcRenderer.sendSync('tasks:dict'),

@@ -1,10 +1,20 @@
 // @ts-check
 // Тема окна (t257, крючки тем для плагина «Темы» t185). Подключается в <head> до отрисовки: цвета темы — CSS-переменными на <html>.
-// Тему отдаёт главный процесс: terminalus.settings.look() — синхронный вызов, main\settings.js читает themes.json плагина с диска.
+// Тему отдаёт главный процесс: kermach.settings.look() — синхронный вызов, main\settings.js читает themes.json плагина с диска.
 // Спрашиваем при открытии (без тёмной вспышки на светлой теме) и после каждого settings:changed: включили плагин, сменили тему.
 // look = null — плагин выключен или его нет: переменные снимаются, окно берёт значения theme.css, то есть Termius dark как до плагина.
 // Терминалы подписываются через Theme.onChange (terminal.js).
 // look = null — это и Termius Dark без схемы (t651): data-ui="termius", переменные макета сверх theme.css — renderer\ui-kermach.css.
+// Ключи localStorage до t1307 — terminalus.*: один раз копируются в kermach.*, старые остаются (откат на прошлую версию их найдёт).
+// Один раз — по метке kermach.moved (t1315): ключ, который программа сняла removeItem, иначе вернулся бы из старого при следующем открытии окна.
+try {
+  if (localStorage.getItem('kermach.moved') === null) for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i) || '';
+    const to = k.startsWith('terminalus.') ? `kermach.${k.slice(11)}` : '';
+    if (to && localStorage.getItem(to) === null) localStorage.setItem(to, /** @type {string} */ (localStorage.getItem(k)));
+  }
+  localStorage.setItem('kermach.moved', '1');
+} catch {}
 (function () {
   const w = /** @type {any} */ (window);
   /** Поле цветов окна темы → CSS-переменная. */
@@ -74,7 +84,7 @@
   hidden();
   document.addEventListener('visibilitychange', hidden);
 
-  const t = w.terminalus;
+  const t = w.kermach;
   // Нет моста или старый preload без look — окно в цветах theme.css, как до плагина.
   const ask = () => { try { return t.settings.look(); } catch { return null; } };
   if (t && t.settings && typeof t.settings.look === 'function') {

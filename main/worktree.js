@@ -1,7 +1,7 @@
 // @ts-check
 // Копия проекта (git worktree, t916): рядом с проектом, в папке «<Проект>-копии», своя ветка kermach/<имя>.
 // Только проекты под git. Файлы вне git (.env и подобные) копируются; node_modules — не копируется и не связывается; удаление копии — remove (t918).
-// Команда агента kermach copy (t1172, merge — t1173) — new, list, diff, merge, remove: src\bin\lib\terminalus.js.
+// Команда агента kermach copy (t1172, merge — t1173) — new, list, diff, merge, remove: src\bin\lib\kermach.js.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');

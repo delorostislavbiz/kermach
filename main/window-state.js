@@ -1,5 +1,5 @@
 // @ts-check
-// Место и размер окон между запусками — %APPDATA%\TERMINALUS\windows.json.
+// Место и размер окон между запусками — %APPDATA%\Kermach\windows.json.
 // Ключ — номер проекта (projects.projectId) или 'projects' для окна «Проекты».
 const { screen } = require('electron');
 const fs = require('fs');

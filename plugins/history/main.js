@@ -1,10 +1,10 @@
 // @ts-check
 // Плагин «История» (t769), главная часть: разговоры Claude, Codex, Antigravity (agy, t1122) и Grok (t1118) из журналов на диске — список, поиск по тексту, подробности, Корзина.
 // Как AI Vault у Орки (разбор и решения — spikes\t767-vault\ПЛАН-история.md). Контракт с окном — раздел 3 плана: запись разговора и команды.
-// Журналы читает и индексирует поток scan.js; база — <ctx.dataDir>\index.sqlite (%APPDATA%\TERMINALUS\plugins-data\history), только на этом компьютере.
+// Журналы читает и индексирует поток scan.js; база — <ctx.dataDir>\index.sqlite (%APPDATA%\Kermach\plugins-data\history), только на этом компьютере.
 // Поток один на программу: окна всех проектов смотрят одни и те же журналы. Экземпляры (по окну проекта, plugin-bridge.js) делят его;
 // последний stop() гасит поток. Модуль забывается мостом только без экземпляров — поток к этому времени уже остановлен.
-// Где журналы: ~\.claude (CLAUDE_CONFIG_DIR) и ~\.codex (CODEX_HOME). TERMINALUS_HISTORY_ROOTS=claude=<папка>;codex=<папка> — другие папки,
+// Где журналы: ~\.claude (CLAUDE_CONFIG_DIR) и ~\.codex (CODEX_HOME). KERMACH_HISTORY_ROOTS=claude=<папка>;codex=<папка> — другие папки,
 // выключатель для проверки на поддельных журналах: настоящие — гигабайты и секреты. Его может поставить и человек.
 // Команды (окно → plugin.call('history', cmd, args)):
 //   list({ scope: 'project' | 'all', agent: 'all' | 'claude' | 'codex' | 'agy' | 'grok', offset }) и search({ q, … }) → { items, total, offset, more, agents }, по 200;
@@ -25,6 +25,8 @@ const os = require('os');
 const path = require('path');
 const { Worker } = require('worker_threads');
 const live = require('./live');
+/** Переменная программы: KERMACH_<имя>, нет — TERMINALUS_<имя> до t1307 (platform.envOf). @param {string} n */
+const ENV = (n) => require('../../daemon/platform').envOf(process.env, n);
 
 /** Номер разговора — uuid. */
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -96,10 +98,10 @@ function cardStatus(root, card) {
   return status;
 }
 
-/** Папки журналов; agy — ~/.gemini/antigravity-cli (t1122), grok — ~/.grok (t1118); в TERMINALUS_HISTORY_ROOTS ключи agy и grok.
+/** Папки журналов; agy — ~/.gemini/antigravity-cli (t1122), grok — ~/.grok (t1118); в KERMACH_HISTORY_ROOTS ключи agy и grok.
  *  @returns {{ claude: string, codex: string, agy: string, grok: string }} */
 function rootsOf() {
-  const env = process.env.TERMINALUS_HISTORY_ROOTS;
+  const env = ENV('HISTORY_ROOTS');
   /** @type {Record<string, string>} */
   const set = {};
   if (env) for (const part of env.split(';')) { const i = part.indexOf('='); if (i > 0) set[part.slice(0, i).trim()] = part.slice(i + 1).trim(); }

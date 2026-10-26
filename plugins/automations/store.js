@@ -1,11 +1,12 @@
 // @ts-check
 // Автоматизации (t252): что где лежит. Без Electron — работает и в окне программы, и в прогоне из Планировщика (run.js), и в проверке под node.
 // Устройство — spikes\t252-auto\DESIGN.md, п. 4, 6, 7.
-//   Описание: общая — <данные>\automations\<id>\, проектная — <проект>\.terminalus\automations\<id>\; в папке automation.json и задание.md.
+//   Описание: общая — <данные>\automations\<id>\, проектная — <проект>\.kermach\automations\automations\<id>\; в папке automation.json и задание.md.
 //   Реестр компьютера: <данные>\automations.json — { "<id>": { dir, project, on, seen } }. Включена на этом компьютере = запись с тем же dir.
-//   Прогоны: общей — <данные>\automation-runs\<id>\, проектной — <проект>\.terminalus\automation-runs\<id>\ (решение Ростислава 07.10:
+//   Прогоны: общей — <данные>\automation-runs\<id>\, проектной — <проект>\.kermach\automations\automation-runs\<id>\ (решение Ростислава 07.10:
 //   «Глобальные в папке программы, проектные в папке проекта»; прогоны проектной идут в git вместе с проектом — так он выбрал).
 //   Внутри — работа\ (постоянная рабочая папка агента), <время>\ (один прогон), running.json (идёт сейчас).
+//   До t1305 проектная папка звалась <проект>\.terminalus — переезжает в .kermach\automations при первом обращении (home).
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -13,7 +14,7 @@ const crypto = require('crypto');
 // Жива ли папка без заморозки окон на мёртвом сетевом пути (t1300); вне программы — existsSync.
 const dirAlive = (() => { try { return require('../../main/dir-alive'); } catch { return { ok: (/** @type {string} */ p) => fs.existsSync(p) }; } })();
 
-/** Имя папки прогонов: в папке данных у общих, в .terminalus проекта у проектных. */
+/** Имя папки прогонов: в папке данных у общих, в .kermach\automations проекта у проектных. */
 const RUNS = 'automation-runs';
 /** Сколько прогонов хранить у одной автоматизации. */
 const KEEP = 50;
@@ -93,10 +94,74 @@ function nextRun(r, from) {
 
 const newId = () => `a-${crypto.randomBytes(4).toString('hex')}`;
 const commonRoot = (/** @type {string} */ dataDir) => path.join(dataDir, 'automations');
-const projectRoot = (/** @type {string} */ project) => path.join(project, '.terminalus', 'automations');
+
+/** Папка автоматизаций в проекте (t1305): своя подпапка .kermach, рядом с роадмапом и отчётами, не вперемешку. */
+const HOME = ['.kermach', 'automations'];
+/** Старое место — до t1305. */
+const OLD_HOME = '.terminalus';
+/** Проекты, где переезд в этом процессе уже сделан или не нужен. */
+const moved = new Set();
 
 /**
- * Куда на деле ведёт путь в проекте, если за пределы проекта (ссылка или junction на .terminalus и ниже, t523); '' — внутри.
+ * Папка автоматизаций проекта; старая .terminalus переезжает в неё одним переименованием. Прогон из старой папки держит в ней
+ * открытые файлы — переименование на Windows не пройдёт, папка останется до следующего обращения; жив процесс из running.json — не пробуем вовсе.
+ * Новая папка уже есть — переносим по одной то, чего в ней нет; опустевшая старая удаляется.
+ * Переезд отложен или не вышел — ответ старая папка: описания и прогоны до переезда читаются и пишутся там, где лежат.
+ * @param {string} project
+ */
+function home(project) {
+  const dir = path.join(project, ...HOME);
+  const key = path.resolve(project).toLowerCase();
+  if (moved.has(key)) return dir;
+  const old = path.join(project, OLD_HOME);
+  if (!fs.existsSync(old)) { moved.add(key); return dir; }
+  if (busy(old)) return old;
+  try {
+    if (!fs.existsSync(dir)) { fs.mkdirSync(path.dirname(dir), { recursive: true }); fs.renameSync(old, dir); }
+    else {
+      for (const sub of ['automations', RUNS]) {
+        const from = path.join(old, sub);
+        for (const n of fs.existsSync(from) ? fs.readdirSync(from) : []) {
+          const to = path.join(dir, sub, n);
+          if (!fs.existsSync(to)) { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.renameSync(path.join(from, n), to); }
+        }
+        try { fs.rmdirSync(from); } catch {}
+      }
+      fs.rmdirSync(old);
+    }
+    moved.add(key);
+  } catch {}
+  return fs.existsSync(old) ? old : dir;
+}
+
+/** Идёт ли прогон из папки: running.json с живым процессом у какой-нибудь автоматизации. @param {string} base */
+function busy(base) {
+  /** @type {string[]} */
+  let ids = [];
+  try { ids = fs.readdirSync(path.join(base, RUNS)); } catch { return false; }
+  return ids.some((id) => {
+    let r = null;
+    try { r = readJson(path.join(base, RUNS, id, 'running.json')); } catch {}
+    return !!(r && Number.isInteger(r.pid) && !(r.host && r.host !== os.hostname()) && alive(r.pid));
+  });
+}
+
+/**
+ * Путь из реестра со старым местом — в новое, если описание уже переехало (старого пути нет, новый есть); сам файл реестра поправится при следующей записи.
+ * @param {RegEntry} r
+ */
+function fixDir(r) {
+  if (!r || !r.project || typeof r.dir !== 'string') return r;
+  const old = path.join(r.project, OLD_HOME) + path.sep;
+  if (!r.dir.toLowerCase().startsWith(old.toLowerCase())) return r;
+  const dir = path.join(r.project, ...HOME, r.dir.slice(old.length));
+  return !fs.existsSync(r.dir) && fs.existsSync(dir) ? { ...r, dir } : r;
+}
+
+const projectRoot = (/** @type {string} */ project) => path.join(home(project), 'automations');
+
+/**
+ * Куда на деле ведёт путь в проекте, если за пределы проекта (ссылка или junction на .kermach и ниже, t523); '' — внутри.
  * Смотрит ближайшую существующую папку пути: её realpath раскрывает все ссылки выше, а новые папки mkdir создаст уже внутри неё.
  * Не прочитать путь — тоже «за пределами»: писать туда нельзя. @param {string} project @param {string} file
  */
@@ -115,7 +180,7 @@ function outside(project, file) {
 function ownPath(project, file) {
   if (!fs.existsSync(project)) throw new Error(`нет папки проекта ${project}`);
   const real = outside(project, file);
-  if (real) throw new Error(`папка .terminalus ведёт за пределы проекта: ${real}`);
+  if (real) throw new Error(`папка .kermach ведёт за пределы проекта: ${real}`);
 }
 
 /**
@@ -125,7 +190,7 @@ function ownPath(project, file) {
  */
 function runsOf(dataDir, id) {
   const p = (registry(dataDir)[id] || {}).project;
-  const own = p && fs.existsSync(p) ? path.join(p, '.terminalus', RUNS, id) : '';
+  const own = p && fs.existsSync(p) ? path.join(home(p), RUNS, id) : '';
   return own && !outside(p, own) ? own : path.join(dataDir, RUNS, id);
 }
 const workOf = (/** @type {string} */ dataDir, /** @type {string} */ id) => path.join(runsOf(dataDir, id), 'работа');
@@ -173,7 +238,9 @@ function checkSave(cfg, task) {
 function registry(dataDir) {
   let r = null;
   try { r = readJson(regFile(dataDir)); } catch {}
-  return r && typeof r === 'object' && !Array.isArray(r) ? r : {};
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return {};
+  for (const id of Object.keys(r)) r[id] = fixDir(r[id]);
+  return r;
 }
 
 /** Отказ, если реестр больше MAX_SIZE (t527): он прочитан пустым, и запись затёрла бы все его записи. Зовётся до первых изменений на диске. @param {string} dataDir */
@@ -192,8 +259,8 @@ function readItem(dir, project, reg) {
   let cfg = null;
   let error = '';
   let task = '';
-  const away = project ? outside(project, dir) || outside(project, path.join(project, '.terminalus', RUNS, id)) : '';
-  if (away) error = `папка .terminalus ведёт за пределы проекта: ${away}`;
+  const away = project ? outside(project, dir) || outside(project, path.join(home(project), RUNS, id)) : '';
+  if (away) error = `папка .kermach ведёт за пределы проекта: ${away}`;
   else {
     try { cfg = JSON.parse(readSmall(path.join(dir, 'automation.json'))); error = check(cfg); } catch (e) { error = `automation.json не прочитан: ${e instanceof Error ? e.message : e}`; }
     try { task = readSmall(path.join(dir, 'задание.md')); } catch (e) {
@@ -212,10 +279,12 @@ function idDirs(root) {
 
 /** Все автоматизации: общие и из папок проектов. Общие своего компьютера не бывают чужими. @param {string} dataDir @param {string[]} projects @returns {Item[]} */
 function list(dataDir, projects) {
+  const live = projects.filter((p) => dirAlive.ok(p));
+  for (const p of live) home(p); // переезд до чтения реестра: иначе запись со старым путём покажется чужой
   const reg = registry(dataDir);
   const out = idDirs(commonRoot(dataDir)).map((d) => ({ ...readItem(d, '', reg), foreign: false, on: !!(reg[path.basename(d)] || { on: true }).on }));
   // Мёртвый сетевой проект: readdirSync держал бы все окна 21 с (t1300).
-  for (const p of projects) if (dirAlive.ok(p)) for (const d of idDirs(projectRoot(p))) out.push(readItem(d, p, reg));
+  for (const p of live) for (const d of idDirs(projectRoot(p))) out.push(readItem(d, p, reg));
   return out;
 }
 
@@ -224,7 +293,9 @@ function find(dataDir, id) {
   if (!ID_RE.test(id)) return null;
   // Общая без записи (реестр потерян) — своя по определению: лежит в папке данных этого компьютера.
   const common = path.join(commonRoot(dataDir), id);
-  const r = registry(dataDir)[id] || (fs.existsSync(common) ? { dir: common, project: '', on: true } : null);
+  const was = registry(dataDir)[id];
+  if (was && was.project && fs.existsSync(was.project)) home(was.project); // переезд до чтения пути: путь из реестра переводится, только когда описание уже в новом месте
+  const r = (was ? registry(dataDir)[id] : null) || (fs.existsSync(common) ? { dir: common, project: '', on: true } : null);
   if (!r || !fs.existsSync(r.dir)) return null;
   return readItem(r.dir, r.project || '', { [id]: r });
 }
@@ -237,7 +308,7 @@ function create(dataDir, o) {
   const id = newId();
   const dir = path.join(o.project ? projectRoot(o.project) : commonRoot(dataDir), id);
   // Папки проекта ещё нет — mkdir создаст её целиком, ссылок внутри неё быть не может.
-  if (o.project && fs.existsSync(o.project)) { ownPath(o.project, dir); ownPath(o.project, path.join(o.project, '.terminalus', RUNS, id)); }
+  if (o.project && fs.existsSync(o.project)) { ownPath(o.project, dir); ownPath(o.project, path.join(home(o.project), RUNS, id)); }
   fs.mkdirSync(dir, { recursive: true });
   writeAtomic(path.join(dir, 'automation.json'), JSON.stringify(o.cfg, null, 2));
   writeAtomic(path.join(dir, 'задание.md'), o.task);
@@ -395,6 +466,6 @@ function prune(dataDir, id, keep = KEEP) {
 }
 
 module.exports = {
-  RUNS, KEEP, MAX_SIZE, ID_RE, MODELS, KINDS, check, checkRepeat, nextRun, newId, commonRoot, projectRoot, runsOf, workOf, writeAtomic,
+  RUNS, KEEP, MAX_SIZE, ID_RE, MODELS, KINDS, check, checkRepeat, nextRun, newId, commonRoot, projectRoot, home, OLD_HOME, runsOf, workOf, writeAtomic,
   registry, saveRegistry, list, find, create, update, setOn, remove, runDirs, runs, readResult, readRun, regWarn, running, state, markSeen, prune,
 };

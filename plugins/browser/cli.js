@@ -4,10 +4,10 @@
 // Действия (t382: snapshot, click, fill, keypress, goto, back, reload, scroll, wait, eval) — только во вкладке, которую человек отдал агенту
 // переключателем «Агенту» (window.js); иначе отказ с кодом 5. Нажатия и ввод — событиями DOM из изолированного мира, не мышью и клавиатурой системы:
 // вкладка обычно не на виду, а фокус окна у человека в терминале.
-// Как у Орки (ref\orca-out\cli\runtime\transport.js): команда — отдельный процесс (src\bin\terminalus.js), один запрос строкой JSON
+// Как у Орки (ref\orca-out\cli\runtime\transport.js): команда — отдельный процесс (src\bin\lib\kermach.js), один запрос строкой JSON
 // по локальному каналу, один ответ. Иначе, чем у Орки:
-// - канал не пишется в файл в папке данных — его имя приходит в окружении терминала (TERMINALUS_BROWSER_PIPE);
-// - доступ не по общему ключу программы, а по подписи проекта (TERMINALUS_BROWSER_AUTH = <номер проекта>.<HMAC>): команда из терминала
+// - канал не пишется в файл в папке данных — его имя приходит в окружении терминала (KERMACH_BROWSER_PIPE);
+// - доступ не по общему ключу программы, а по подписи проекта (KERMACH_BROWSER_AUTH = <номер проекта>.<HMAC>): команда из терминала
 //   проекта А по умолчанию видит только окно проекта А. Это не стена между проектами: ключ подписи — browser-cli.key в папке данных,
 //   агент может его прочитать и подписать чужой номер (как и daemon.key, который даёт больше; решение 09.10 — ключ оставлен).
 //   Ключ в файле, как daemon.key у демона: терминалы живут в демоне дольше окна, после перезапуска программы их подпись должна остаться верной;
@@ -20,20 +20,20 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
-const { PIPE, DATA_DIR } = require('../../daemon/protocol');
+const { PIPE, LEGACY_PIPE, DATA_DIR } = require('../../daemon/protocol');
 const { SOCK_MAX } = require('../../daemon/platform');
 const pasteFiles = require('../../main/paste-files');
 const settings = require('../../main/settings');
 const { CONTROL } = require('./grab');
 const marks = require('./marks');
 
-/** Папка команды: terminalus.cmd (Windows) и terminalus (sh: Git Bash у Claude, Mac); сам скрипт — в lib\ под ней, вне PATH (t388). */
+/** Папка команды: kermach.cmd (Windows) и kermach (sh: Git Bash у Claude, Mac); сам скрипт — в lib\ под ней, вне PATH (t388). */
 const BIN = path.join(__dirname, '..', '..', 'bin');
 const KEY = path.join(DATA_DIR, 'browser-cli.key');
-/** Канал команды: рядом с каналом демона — у проверок он свой (TERMINALUS_PIPE), две копии программы не спорят за имя. */
+/** Канал команды: рядом с каналом демона — у проверок он свой (KERMACH_PIPE), две копии программы не спорят за имя. */
 const SOCK = process.platform === 'win32' ? `${PIPE}-browser` : (() => {
   const p = path.join(DATA_DIR, 'browser.sock');
-  return Buffer.byteLength(p) <= SOCK_MAX ? p : `/tmp/terminalus-browser-${os.userInfo().username}.sock`;
+  return Buffer.byteLength(p) <= SOCK_MAX ? p : `/tmp/kermach-browser-${os.userInfo().username}.sock`;
 })();
 /**
  * Пределы: запрос, текст страницы (по умолчанию и наибольший), сообщения консоли на страницу и длина одного, ожидание окна;
@@ -82,7 +82,7 @@ function keyOf() {
     if (!readKey()) { try { fs.writeFileSync(KEY, k.toString('hex'), { mode: 0o600 }); } catch {} }
   }
   key = readKey();
-  if (!key && ctx) ctx.log(`браузер: ключ подписи команды terminalus ${KEY} не записан — команда будет отказывать`);
+  if (!key && ctx) ctx.log(`браузер: ключ подписи команды kermach ${KEY} не записан — команда будет отказывать`);
   return key;
 }
 
@@ -114,11 +114,11 @@ function envFor(p, extra) {
   const rest = Object.fromEntries(Object.entries(extra || {}).filter(([k]) => k.toUpperCase() !== 'PATH'));
   return {
     ...rest,
-    TERMINALUS_BROWSER_PIPE: SOCK,
-    TERMINALUS_BROWSER_AUTH: `${p.id}.${sign(p.id)}`,
-    TERMINALUS_NODE: process.execPath,
+    KERMACH_BROWSER_PIPE: SOCK,
+    KERMACH_BROWSER_AUTH: `${p.id}.${sign(p.id)}`,
+    KERMACH_NODE: process.execPath,
     // Подсказка Codex (t1277): её печатает хук SessionStart (codex-hook.js). Вне Kermach переменной нет — нет и подсказки.
-    TERMINALUS_AGENT_HINT: hintText(),
+    KERMACH_AGENT_HINT: hintText(),
     [pathKey]: [BIN, base ? base[1] : process.env[pathKey] || ''].filter(Boolean).join(path.delimiter),
   };
 }
@@ -213,10 +213,10 @@ function hostOf(/** @type {string} */ id) {
   return null;
 }
 
-/** Вкладки сайта окна по порядку в полосе — их знает страница окна (window.js, TerminalusBrowserTabs). @param {import('electron').WebContents} host @returns {Promise<Tab[] | null>} */
+/** Вкладки сайта окна по порядку в полосе — их знает страница окна (window.js, KermachBrowserTabs). @param {import('electron').WebContents} host @returns {Promise<Tab[] | null>} */
 async function tabsOf(host) {
   const raw = await Promise.race([
-    host.executeJavaScript('typeof window.TerminalusBrowserTabs === "function" ? window.TerminalusBrowserTabs() : null', false),
+    host.executeJavaScript('typeof window.KermachBrowserTabs === "function" ? window.KermachBrowserTabs() : null', false),
     new Promise((r) => setTimeout(() => r(null), LIMIT.wait)),
   ]);
   if (!Array.isArray(raw)) return null;
@@ -723,7 +723,7 @@ async function roadmapRun(q, id) {
 }
 
 /**
- * kermach tab list / tab close sid [--force] (t1052): терминалы окна знает его страница (project-page.js, TerminalusTermTabs и TerminalusTermClose).
+ * kermach tab list / tab close sid [--force] (t1052): терминалы окна знает его страница (project-page.js, KermachTermTabs и KermachTermClose).
  * Закрытие — как кнопка «Закрыть терминал» без вопроса; живой Claude или Codex — отказ код 4, с force — закрыть.
  * @param {any} q @param {string} id номер проекта
  */
@@ -733,14 +733,14 @@ async function termTab(q, id) {
   if (!host || !p) return fail(3, 'окно проекта закрыто — откройте проект в Kermach и повторите');
   const project = clean(p.name).slice(0, 200);
   if (q.cmd === 'tab-list') {
-    const raw = await within(host.executeJavaScript('typeof window.TerminalusTermTabs === "function" ? window.TerminalusTermTabs() : null', false), LIMIT.wait, 'окно не ответило').catch(() => null);
+    const raw = await within(host.executeJavaScript('typeof window.KermachTermTabs === "function" ? window.KermachTermTabs() : null', false), LIMIT.wait, 'окно не ответило').catch(() => null);
     if (!Array.isArray(raw)) return fail(3, 'окно проекта ещё не готово или не отвечает — повторите через несколько секунд');
     const str = (/** @type {unknown} */ v, n = 300) => clean(v).replace(/\s+/g, ' ').slice(0, n);
     return { ok: true, project, tabs: raw.slice(0, 200).map((t) => ({ sid: str(t && t.sid, 80), kind: str(t && t.kind, 80), title: str(t && t.title), alive: !!(t && t.alive), page: !!(t && t.page), agent: !!(t && t.agent), hidden: !!(t && t.hidden) })) };
   }
   const sid = typeof q.sid === 'string' && /^[\w.:-]{1,80}$/.test(q.sid) ? q.sid : '';
   if (!sid) return fail(1, 'нужен номер вкладки из kermach tab list');
-  const r = await within(host.executeJavaScript(`typeof window.TerminalusTermClose === "function" ? window.TerminalusTermClose(${JSON.stringify(sid)}, ${q.force === true}) : null`, true), ACT.load, 'окно не закрыло вкладку за 15 с').catch((e) => ({ error: String(e && e.message || e), code: 3 }));
+  const r = await within(host.executeJavaScript(`typeof window.KermachTermClose === "function" ? window.KermachTermClose(${JSON.stringify(sid)}, ${q.force === true}) : null`, true), ACT.load, 'окно не закрыло вкладку за 15 с').catch((e) => ({ error: String(e && e.message || e), code: 3 }));
   if (!r || typeof r !== 'object') return fail(3, 'окно проекта ещё не готово или не отвечает — повторите через несколько секунд');
   if (!r.ok) return fail([3, 4].includes(r.code) ? r.code : 4, clean(r.error).slice(0, 500));
   /** @type {Ctx} */ (ctx).log(`tab close ${sid}${q.force === true ? ' --force' : ''}: закрыта`);
@@ -748,7 +748,7 @@ async function termTab(q, id) {
 }
 
 /**
- * kermach tab buffer [sid] (t1231): видимые ряды xterm вкладки в окне (TerminalusTermBuffer в project-page.js) и read text демона сразу следом.
+ * kermach tab buffer [sid] (t1231): видимые ряды xterm вкладки в окне (KermachTermBuffer в project-page.js) и read text демона сразу следом.
  * Номера рядов у окна и демона разные: окно при attach берёт снимок, история короче, а демон срезает пустые строки в конце.
  * Поэтому ряды окна прикладываются к хвосту текста демона со сдвигом, при котором совпало больше всего рядов; пробелы в конце не считаются.
  * Отдаются только расходящиеся ряды, с клетками окна (знак, код, ширина) — у демона только текст.
@@ -760,7 +760,7 @@ async function termBuffer(q, id) {
   const sid = typeof q.sid === 'string' && /^[\w.:-]{1,80}$/.test(q.sid) ? q.sid : '';
   if (!sid) return fail(1, 'нужен номер вкладки из kermach tab list');
   /** @type {any} */
-  const win = await within(host.executeJavaScript(`typeof window.TerminalusTermBuffer === "function" ? window.TerminalusTermBuffer(${JSON.stringify(sid)}) : null`, false), LIMIT.wait, 'окно не ответило').catch(() => null);
+  const win = await within(host.executeJavaScript(`typeof window.KermachTermBuffer === "function" ? window.KermachTermBuffer(${JSON.stringify(sid)}) : null`, false), LIMIT.wait, 'окно не ответило').catch(() => null);
   if (!win || typeof win !== 'object') return fail(3, 'окно проекта ещё не готово или не отвечает — повторите через несколько секунд');
   if (!win.ok) return fail([3, 4].includes(win.code) ? win.code : 4, clean(win.error).slice(0, 500));
   const d = await require('../../main/terminals').readTab(id, sid, 'text');
@@ -837,8 +837,8 @@ async function work(q, id) {
     const r = await act(q, g, still, tab).catch((/** @type {any} */ err) => ({ error: `${clean(err.message || err)}`.slice(0, 500), code: Number.isInteger(err.code) ? err.code : 4 }));
     if ('error' in r) return fail(r.code || 4, r.error);
     // Строка рядом с адресом вкладки: Ростислав видит, что делает агент.
-    host.executeJavaScript(`typeof window.TerminalusBrowserAct === "function" && window.TerminalusBrowserAct(${g.id}, ${JSON.stringify(r.say)})`, false).catch(() => {});
-    c.log(`браузер: команда terminalus — ${q.cmd} во вкладке ${tab.n}`);
+    host.executeJavaScript(`typeof window.KermachBrowserAct === "function" && window.KermachBrowserAct(${g.id}, ${JSON.stringify(r.say)})`, false).catch(() => {});
+    c.log(`браузер: команда kermach — ${q.cmd} во вкладке ${tab.n}`);
     return { ...head, tab: { ...head.tab, url: clean(g.getURL()).slice(0, 4096), title: clean(g.getTitle()).replace(/\s+/g, ' ').slice(0, 300) }, ...r };
   }
   if (q.cmd === 'info') return { ...head, loading: g.isLoading() };
@@ -862,10 +862,10 @@ async function work(q, id) {
   }
   if (q.cmd === 'shot') {
     // Вкладка сайта обычно не на виду (агент в своём терминале), а скрытую Chromium не рисует: окно на время снимка
-    // делает её видимой для Chromium, но прозрачной (window.js, TerminalusBrowserReveal).
+    // делает её видимой для Chromium, но прозрачной (window.js, KermachBrowserReveal).
     // Окно считает показы (t387): два снимка одной вкладки — вкладку прячет последний. Каждому reveal(true) — свой reveal(false),
     // даже если окно не ответило в срок: вызовы окно выполняет по порядку, и когда оживёт, счёт сойдётся.
-    const reveal = (/** @type {boolean} */ on) => host.executeJavaScript(`typeof window.TerminalusBrowserReveal === "function" && window.TerminalusBrowserReveal(${g.id}, ${on})`, false);
+    const reveal = (/** @type {boolean} */ on) => host.executeJavaScript(`typeof window.KermachBrowserReveal === "function" && window.KermachBrowserReveal(${g.id}, ${on})`, false);
     /** @type {Electron.NativeImage} */
     let img;
     try {
@@ -882,7 +882,7 @@ async function work(q, id) {
       const file = pasteFiles.newFile();
       await fs.promises.writeFile(file, img.toPNG());
       const size = img.getSize();
-      c.log(`браузер: команда terminalus — снимок вкладки ${tab.n} ${size.width}×${size.height} → ${file}`);
+      c.log(`браузер: команда kermach — снимок вкладки ${tab.n} ${size.width}×${size.height} → ${file}`);
       pasteFiles.sweep({ log: c.log });
       return { ...head, path: file, width: size.width, height: size.height };
     } catch (err) {
@@ -898,7 +898,30 @@ function start(c, of) {
   ctx = c;
   projectOf = of;
   if (process.platform !== 'win32') { try { fs.unlinkSync(SOCK); } catch {} }
-  const server = net.createServer((sock) => {
+  listen(SOCK, onConn);
+  // Канал до t1307 (Windows): вкладки, открытые до переименования, помнят его в TERMINALUS_BROWSER_PIPE. Подпись та же — ключ в папке данных.
+  if (LEGACY_SOCK) listen(LEGACY_SOCK, onConn);
+}
+
+/** Канал до t1307 рядом со старым каналом демона; пусто — его нет (не Windows, свой канал проверки, портативная копия). */
+const LEGACY_SOCK = process.platform === 'win32' && LEGACY_PIPE ? `${LEGACY_PIPE}-browser` : '';
+
+/** @param {string} sock @param {(s: net.Socket) => void} onConn */
+function listen(sock, onConn) {
+  const c = /** @type {Ctx} */ (ctx);
+  const server = net.createServer(onConn);
+  // Соединений сразу не больше LIMIT.conns: лишние сервер закрывает, команда ответит «нет связи».
+  server.maxConnections = LIMIT.conns;
+  server.on('error', (err) => c.log(`браузер: канал команды kermach ${sock} не открыт: ${err}`));
+  server.listen(sock, () => {
+    if (process.platform !== 'win32') { try { fs.chmodSync(sock, 0o600); } catch {} }
+    c.log(`браузер: команда kermach слушает ${sock}`);
+  });
+}
+
+/** Одно соединение команды. @param {net.Socket} sock */
+function onConn(sock) {
+    const c = /** @type {Ctx} */ (ctx);
     let buf = '';
     let done = false;
     sock.setEncoding('utf8');
@@ -919,18 +942,10 @@ function start(c, of) {
       let q = null;
       try { q = JSON.parse(buf.slice(0, nl)); } catch {}
       handle(q).catch((err) => fail(4, `ошибка программы: ${err}`)).then((r) => {
-        if (!r.ok && r.code === 2 && !r.signed) c.log(`браузер: команда terminalus — отказ (${q && typeof q.auth === 'string' ? 'подпись не та' : 'без подписи'})`);
+        if (!r.ok && r.code === 2 && !r.signed) c.log(`браузер: команда kermach — отказ (${q && typeof q.auth === 'string' ? 'подпись не та' : 'без подписи'})`);
         if (!sock.destroyed) sock.end(`${JSON.stringify(r)}\n`);
       });
     });
-  });
-  // Соединений сразу не больше LIMIT.conns: лишние сервер закрывает, команда ответит «нет связи».
-  server.maxConnections = LIMIT.conns;
-  server.on('error', (err) => c.log(`браузер: канал команды terminalus ${SOCK} не открыт: ${err}`));
-  server.listen(SOCK, () => {
-    if (process.platform !== 'win32') { try { fs.chmodSync(SOCK, 0o600); } catch {} }
-    c.log(`браузер: команда terminalus слушает ${SOCK}`);
-  });
 }
 
 module.exports = { start, watch, markHuman, envFor, hintArgs, hintText, HINT, SOCK, BIN };

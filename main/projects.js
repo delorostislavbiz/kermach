@@ -21,7 +21,7 @@ const FROM_LUCIDE = { Rocket: 'rocket', Bot: 'bot', Palette: 'palette', Package:
 const DEFAULT_COLOR = '#737373';
 
 /**
- * openedAt — когда проект открывали последний раз (ISO); нет — ни разу не открывали в TERMINALUS. По нему окно «Проекты» ставит недавние выше.
+ * openedAt — когда проект открывали последний раз (ISO); нет — ни разу не открывали в Kermach. По нему окно «Проекты» ставит недавние выше.
  * @typedef {{ id: string, name: string, path: string, color: string, icon: string, group: string | null, pinned?: boolean, bypass?: boolean, openedAt?: string }} Project
  * @typedef {{ at: string, count: number, note?: string }} OrcaImport
  * @typedef {{ v: 2, last: string, importedFromOrca?: OrcaImport, groups: { id: string, name: string }[], projects: Project[] }} ProjectsData

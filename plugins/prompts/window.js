@@ -23,7 +23,7 @@
 .prpane .muted{opacity:.6}
 .prpane .prempty{padding:20px;opacity:.7}`;
 
-  w.terminalusPlugin((/** @type {any} */ host) => {
+  w.kermachPlugin((/** @type {any} */ host) => {
     const pages = host.pages;
     if (!pages) return () => {};
     if (!document.getElementById('pr-style')) {
@@ -115,7 +115,7 @@
 
     // Открытая вкладка переживает перезапуск окна (t1103): место в полосе — в localStorage окна для проекта, как у левой панели.
     // Закрыли руками — запись снимается; выключили плагин — остаётся, включат — вкладка вернётся.
-    const SAVE_KEY = `terminalus.promptsTab:${host.project && host.project.path}`;
+    const SAVE_KEY = `kermach.promptsTab:${host.project && host.project.path}`;
     /** @type {any} */
     let tabObj = null;
     let savedPos = -1;

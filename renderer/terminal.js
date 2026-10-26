@@ -26,7 +26,7 @@ const THEME = {
   brightWhite: '#C9D0DC',
 };
 
-const FONT = '100 17px "TERMINALUS Mono"';
+const FONT = '100 17px "Kermach Mono"';
 
 /**
  * Шрифт — один раз, до первого терминала: xterm меряет ширину буквы при открытии.
@@ -156,7 +156,7 @@ function docExists(name) {
   const now = Date.now();
   const had = docSeen.get(name);
   if (had && now - had.at < DOC_TTL) return had.ok;
-  const has = /** @type {any} */ (window).TerminalusMarkdownHas;
+  const has = /** @type {any} */ (window).KermachMarkdownHas;
   const ok = typeof has === 'function' ? Promise.resolve(has(name)).catch(() => false) : Promise.resolve(false);
   if (docSeen.size > 200) docSeen.clear();
   docSeen.set(name, { at: now, ok });
@@ -170,7 +170,7 @@ function pathExists(target) {
   const now = Date.now();
   const had = pathSeen.get(target);
   if (had && now - had.at < DOC_TTL) return had.ok;
-  const has = window.terminalus && window.terminalus.linkHas;
+  const has = window.kermach && window.kermach.linkHas;
   const ok = typeof has === 'function' ? Promise.resolve(has(target)).then((r) => !!(r && r.has), () => false) : Promise.resolve(false);
   if (pathSeen.size > 200) pathSeen.clear();
   pathSeen.set(target, { at: now, ok });
@@ -179,7 +179,7 @@ function pathExists(target) {
 
 /** Настройки xterm окна — одни для вкладки и для замера места (t277). @param {number} fontSize */
 const termOptions = (fontSize) => ({
-  fontFamily: '"TERMINALUS Mono"',
+  fontFamily: '"Kermach Mono"',
   fontSize,
   fontWeight: 100,
   fontWeightBold: 900,
@@ -603,7 +603,7 @@ function createTerminal(pane, io, fontSize = 17) {
     if (!hasFiles(ev)) return;
     ev.preventDefault();
     ev.stopPropagation();
-    let paths = [...ev.dataTransfer.files].map((f) => window.terminalus.filePath(f));
+    let paths = [...ev.dataTransfer.files].map((f) => window.kermach.filePath(f));
     if (!paths.length) try { paths = JSON.parse(ev.dataTransfer.getData(DRAG_PATHS) || '[]'); } catch { paths = []; }
     paths = paths.filter((p) => typeof p === 'string' && p).map((p) => cleanPasteText(p).replace(/\n/g, ' '));
     if (paths.length) io.write(dropText(paths));
@@ -616,12 +616,12 @@ function createTerminal(pane, io, fontSize = 17) {
   const say = (r) => { if (r && r.error) notice(r.error); };
   const openLink = async (target, shift, x, y) => {
     // Договор с плагином — spikes\t58-links\browser-api.md. Его отказ — «адрес не тот», в обычный браузер такой адрес не идёт.
-    const toTab = window.TerminalusBrowserOpen;
-    // Документ .md и .txt (t220, t326): плагин «Markdown» включён — вкладка документа; выключен — его окошко с выбором (TerminalusMarkdownOff, t348);
+    const toTab = window.KermachBrowserOpen;
+    // Документ .md и .txt (t220, t326): плагин «Markdown» включён — вкладка документа; выключен — его окошко с выбором (KermachMarkdownOff, t348);
     // отказал или выбрали программу — как раньше, программой по умолчанию.
-    const toDoc = /** @type {any} */ (window).TerminalusMarkdownOpen || /** @type {any} */ (window).TerminalusMarkdownOff;
+    const toDoc = /** @type {any} */ (window).KermachMarkdownOpen || /** @type {any} */ (window).KermachMarkdownOff;
     if (!shift && !/^https?:\/\//i.test(target) && /\.(?:md|markdown|txt)(?::\d+){0,2}$/i.test(target) && typeof toDoc === 'function') {
-      const plain = () => window.terminalus.openLink(target).then(say);
+      const plain = () => window.kermach.openLink(target).then(say);
       toDoc(target).then((r) => { if (!r || !r.ok) plain(); }, plain);
     } else if (/^https?:\/\//i.test(target) && !shift && typeof toTab === 'function') {
       const where = await window.Dialogs.menu(x, y, [
@@ -630,9 +630,9 @@ function createTerminal(pane, io, fontSize = 17) {
       ]);
       term.focus();
       // Пока меню было открыто, плагин могли выключить: тогда и «встроенный» — браузер системы.
-      if (where === 'tab' && typeof window.TerminalusBrowserOpen === 'function') say(window.TerminalusBrowserOpen(target));
-      else if (where) window.terminalus.openLink(target).then(say);
-    } else window.terminalus.openLink(target).then(say);
+      if (where === 'tab' && typeof window.KermachBrowserOpen === 'function') say(window.KermachBrowserOpen(target));
+      else if (where) window.kermach.openLink(target).then(say);
+    } else window.kermach.openLink(target).then(say);
   };
   // Ссылки OSC 8 (ESC ] 8 ;; адрес ST): программа размечает их сама, xterm по умолчанию спрашивал confirm() и открывал новое окно,
   // а окно проекта новые окна запрещает (t61) — не открывалось ничего. Теперь тот же путь, что у обычных ссылок: меню «где открыть»
@@ -658,7 +658,7 @@ function createTerminal(pane, io, fontSize = 17) {
   let hovered = '';
   term.registerLinkProvider({
     provideLinks: (y, cb) => {
-      const found = findLinks(term, y, typeof (/** @type {any} */ (window).TerminalusMarkdownHas) === 'function', true);
+      const found = findLinks(term, y, typeof (/** @type {any} */ (window).KermachMarkdownHas) === 'function', true);
       const finish = (/** @type {typeof found} */ list) => {
         const links = list.map((l) => ({
           ...l,
@@ -751,7 +751,7 @@ function createTerminal(pane, io, fontSize = 17) {
     pane.appendChild(el);
     place();
     const missing = () => say(I18n.t('term.imageMissing', 'картинка не найдена'));
-    Promise.resolve(window.terminalus.term.image(pane.dataset.sid, img.n)).then((r) => {
+    Promise.resolve(window.kermach.term.image(pane.dataset.sid, img.n)).then((r) => {
       if (card !== me) return;
       if (!r || !r.url) { missing(); return; }
       const pic = new Image();

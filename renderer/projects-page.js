@@ -1,8 +1,8 @@
 // @ts-check
 // Страница окна «Проекты»: рисует проекты по группам списком или плиткой, фильтрует поиском, добавляет папку.
-// Данные — от главного процесса через window.terminalus.projects (preload.cjs). Значки — window.Icons (icons.js), агентов — window.AgentLogos (agent-logos.js).
+// Данные — от главного процесса через window.kermach.projects (preload.cjs). Значки — window.Icons (icons.js), агентов — window.AgentLogos (agent-logos.js).
 (function () {
-  const t = /** @type {any} */ (window).terminalus;
+  const t = /** @type {any} */ (window).kermach;
   const { svg, DEFAULT_COLOR } = /** @type {any} */ (window).Icons;
   const $ = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.getElementById(id));
 

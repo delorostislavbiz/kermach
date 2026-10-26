@@ -1,7 +1,7 @@
 // @ts-check
 // Встроенный плагин «Браузер», часть главного процесса. Вкладка сайта — тег webview в окне проекта (страница — window.js рядом).
 // Защита гостя (страницы сайта внутри webview) — как в Орке (ref\orca-out\main\index.js, will-attach-webview): всё, что прислала
-// страница окна, перезаписывается здесь; preload гостя — свой (guest-preload.cjs), моста window.terminalus у сайта нет.
+// страница окна, перезаписывается здесь; preload гостя — свой (guest-preload.cjs), моста window.kermach у сайта нет.
 // Хранилище входов (cookie, localStorage) — своё у каждого проекта: постоянный partition persist:browser-<номер проекта>.
 // Ссылка в новом окне (target=_blank, window.open) — новая вкладка сайта в том же окне, как в Орке (openLinkInOrcaTab).
 // Вкладки сайта и их адреса — tabs\<номер проекта>.browser.json, рядом с вкладками терминалов (main\tabs.js).
@@ -20,7 +20,7 @@ const i18n = require('../../main/i18n');
 const sender = require('../../main/sender');
 const grab = require('./grab');
 const { tabKeyOf } = require('./keys');
-// Команда terminalus browser (t381): канал для агента в терминале и консоль страниц с их загрузки.
+// Команда kermach browser (t381): канал для агента в терминале и консоль страниц с их загрузки.
 const cli = require('./cli');
 const marks = require('./marks');
 
@@ -638,7 +638,7 @@ function attach(win, p) {
   host.on('did-attach-webview', (_e, guest) => {
     const gid = guest.id;
     guest.once('destroyed', () => opened.delete(gid));
-    // Консоль страницы для terminalus browser console (t381) — с подключения тега, до первой загрузки.
+    // Консоль страницы для kermach browser console (t381) — с подключения тега, до первой загрузки.
     // Гость «только для меня» (t885): консоль не собирается, команды агента в нём получают отказ (cli.js, humanGuests).
     if (guest.session === session.fromPartition(humanPart)) cli.markHuman(guest);
     else cli.watch(guest);

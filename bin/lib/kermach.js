@@ -1,16 +1,18 @@
 // @ts-check
 // Команда kermach (t381, имя с t396). Запуск — обёртки в папке выше: kermach.cmd (Windows) и kermach (sh: Git Bash, где команды запускает Claude, и Mac).
-// Старые обёртки terminalus и terminalus.cmd зовут этот же скрипт: их помнят агенты в разговорах, начатых до переименования.
-// Сам скрипт не в той папке (t388): она в PATH, а .JS в PATHEXT — «terminalus.js» в cmd открыл бы Windows Script Host.
-// Они берут программу из TERMINALUS_NODE (сам TERMINALUS.exe в режиме Node, ELECTRON_RUN_AS_NODE=1): у Ростислава Node может не быть.
+// Старые обёртки terminalus и terminalus.cmd — прослойки до 1.0 (t1307): зовут kermach, их помнят агенты в разговорах до переименования.
+// Сам скрипт не в той папке (t388): она в PATH, а .JS в PATHEXT — «kermach.js» в cmd открыл бы Windows Script Host.
+// Они берут программу из KERMACH_NODE (сам Kermach.exe в режиме Node, ELECTRON_RUN_AS_NODE=1): у Ростислава Node может не быть.
 // Канал и подпись проекта — в окружении терминала программы (plugins\browser\cli.js, envFor). Здесь только разбор аргументов, один запрос
 // и печать ответа; доступ проверяет главный процесс. Читать — любые вкладки сайта своего проекта; действовать (t382) — только в отданных агенту.
 'use strict';
 const net = require('net');
+/** Переменная программы: KERMACH_<имя>, нет — TERMINALUS_<имя> до t1307 (platform.envOf). @param {string} n */
+const ENV = (n) => require('../../daemon/platform').envOf(process.env, n);
 
 /** Коды выхода: 1 — не те аргументы, 2 — нет доступа, 3 — программа, окно или вкладка недоступны, 4 — страница не ответила, 5 — вкладка не отдана агенту. */
 const HELP = `kermach browser — встроенный браузер Kermach: агент читает вкладки сайта своего проекта и действует в них.
-Работает только в терминале Kermach и только с вкладками окна этого проекта. Старое имя команды terminalus работает так же.
+Работает только в терминале Kermach и только с вкладками окна этого проекта.
 Читать можно любую вкладку. Действовать — только во вкладке, которую человек отдал агенту: переключатель «Агенту» на вкладке.
 Не отдана — попросите человека включить «Агенту» на нужной вкладке.
 
@@ -75,7 +77,7 @@ function tabArgs(rest) {
     const pos = rest.slice(1).filter((a) => a !== '--json');
     const bad = pos.find((a) => a.startsWith('--'));
     if (bad) die(`не понял аргумент ${bad}. Справка — kermach tab --help`, 1);
-    const sid = pos.length ? pos[0] : String(process.env.TERMINALUS_TAB_KEY || '');
+    const sid = pos.length ? pos[0] : String(ENV('TAB_KEY') || '');
     if (pos.length > 1 || !/^[\w.:-]{1,80}$/.test(sid)) die('tab buffer: нужен один номер вкладки из kermach tab list; без номера — только в терминале Kermach', 1);
     return { cmd: 'tab-buffer', sid, json };
   }
@@ -93,11 +95,11 @@ function tabArgs(rest) {
  * @param {{ cmd: string, sid?: string, force?: boolean }} t
  */
 async function tabCmd(t) {
-  if (!process.env.TERMINALUS_BROWSER_PIPE || !process.env.TERMINALUS_BROWSER_AUTH) {
+  if (!ENV('BROWSER_PIPE') || !ENV('BROWSER_AUTH')) {
     die('нет доступа: kermach tab работает только в терминале Kermach. Терминал открыт до обновления программы — откройте новую вкладку.', 2);
   }
   const { json, ...q } = /** @type {any} */ (t);
-  const r = await ask({ v: 1, auth: process.env.TERMINALUS_BROWSER_AUTH, ...q });
+  const r = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), ...q });
   if (!r || !r.ok) die(r && r.error ? r.error : 'ответ не той формы', r && Number.isInteger(r.code) ? r.code : 3);
   if (t.cmd === 'tab-buffer') {
     if (json) { process.stdout.write(`${JSON.stringify(r, null, 2).replace(CONTROL, '').replace(BIDI, '')}\n`); return; }
@@ -409,7 +411,7 @@ function roadmap(o) {
 // Срок ответа 70 с: дольше простоя, после которого главный процесс сам рвёт соединение (60 с), а тот — дольше худшего действия
 // (~55 с: click или keypress на загружающейся странице). Так агент не получит ошибку по сроку за уже сделанное действие.
 function ask(q, ms = 70000) {
-  const pipe = process.env.TERMINALUS_BROWSER_PIPE;
+  const pipe = ENV('BROWSER_PIPE');
   return new Promise((resolve) => {
     const sock = net.createConnection(String(pipe));
     let buf = '';
@@ -494,15 +496,15 @@ function print(o, r) {
  * @param {string} ref
  */
 async function roadmapRun(ref, bg, one) {
-  if (!process.env.TERMINALUS_BROWSER_PIPE || !process.env.TERMINALUS_BROWSER_AUTH) {
+  if (!ENV('BROWSER_PIPE') || !ENV('BROWSER_AUTH')) {
     die('нет доступа: roadmap run работает только в терминале Kermach. Терминал открыт до обновления программы — откройте новую вкладку.', 2);
   }
   const board = boardProject();
   if (!board) die(`нет доступа: ни в ${process.cwd()}, ни выше нет доски .kermach\\roadmap — roadmap run запускают из папки проекта`, 2);
   // t703: пачка — тот же запрос с refs или phase и one: true; ответ — карты пачки и пропущенные.
-  // from (t1126) — вкладка, из которой позвали (TERMINALUS_TAB_KEY демона): ей программа напишет «ждёт ответа» и «готово».
-  const from = process.env.TERMINALUS_TAB_KEY || '';
-  const r = await ask({ v: 1, auth: process.env.TERMINALUS_BROWSER_AUTH, cmd: 'roadmap-run', ref, board, ...(bg ? { bg: true } : {}), ...(from ? { from } : {}), ...(one ? { one: true, refs: one.refs, phase: one.phase } : {}) });
+  // from (t1126) — вкладка, из которой позвали (KERMACH_TAB_KEY демона): ей программа напишет «ждёт ответа» и «готово».
+  const from = ENV('TAB_KEY') || '';
+  const r = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), cmd: 'roadmap-run', ref, board, ...(bg ? { bg: true } : {}), ...(from ? { from } : {}), ...(one ? { one: true, refs: one.refs, phase: one.phase } : {}) });
   if (!r || !r.ok) die(r && r.error ? `${ref}: ${r.error}` : 'ответ не той формы', r && Number.isInteger(r.code) ? r.code : 3);
   const out = [one ? `карты: ${r.ref}` : `карта: ${r.ref}`, `вкладка: ${r.sid}`, `агент: ${r.agent}`, `модель: ${r.model || '(по умолчанию агента)'}${r.effort ? `, усилие ${r.effort}` : ''}`];
   if (r.hidden) out.push(`в фоне: вкладка скрыта, журнал ${r.log || '—'}`);
@@ -772,11 +774,11 @@ async function main() {
   }
   // Общая справка — все команды (t931, kermach tab — t1052, kermach sessions — t809); справка kermach code — из её cli.js, он при загрузке берёт только fs и path.
   if ('help' in o) { process.stdout.write(`${'all' in o ? `${HELP}\n\n${ROADMAP_HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'tasks', 'cli.js')).HELP}\n\n${TAB_HELP}\n\n${SESSIONS_HELP}\n\n${COPY_HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'roadmap', 'codemap', 'cli.js')).HELP}` : HELP}\n`); return; }
-  if (!process.env.TERMINALUS_BROWSER_PIPE || !process.env.TERMINALUS_BROWSER_AUTH) {
+  if (!ENV('BROWSER_PIPE') || !ENV('BROWSER_AUTH')) {
     die('нет доступа: команда работает только в терминале Kermach. Терминал открыт до обновления программы — откройте новую вкладку.', 2);
   }
   const { json: _j, level: _l, ...q } = o;
-  const r = await ask({ v: 1, auth: process.env.TERMINALUS_BROWSER_AUTH, ...q });
+  const r = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), ...q });
   if (!r || !r.ok) die(r && r.error ? r.error : 'ответ не той формы', r && Number.isInteger(r.code) ? r.code : 3);
   if (o.json) {
     // --level и в --json (t388): список — как в обычном выводе; счётчики dropped и прочие поля ответа — как пришли.

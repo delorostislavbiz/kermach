@@ -1,5 +1,5 @@
 // @ts-check
-// kermach tasks (t1157): дела проекта прямо в файлах, без окна Kermach — как kermach roadmap. Зовёт bin\lib\terminalus.js.
+// kermach tasks (t1157): дела проекта прямо в файлах, без окна Kermach — как kermach roadmap. Зовёт bin\lib\kermach.js.
 // Папка — .kermach\tasks в первой папке от текущей вверх, где есть .kermach: агент видит только дела своего проекта.
 'use strict';
 const fs = require('fs');

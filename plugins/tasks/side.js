@@ -30,5 +30,5 @@ function tasksSetup(host) {
   const offLang = I18n.onChange(draw);
   return () => { stopped = true; clearInterval(timer); if (offLang) offLang(); row.remove(); };
 }
-// @ts-ignore — terminalusPlugin ставит окно проекта (renderer\project-page.js)
-if (typeof terminalusPlugin === 'function') terminalusPlugin(tasksSetup);
+// @ts-ignore — kermachPlugin ставит окно проекта (renderer\project-page.js)
+if (typeof kermachPlugin === 'function') kermachPlugin(tasksSetup);

@@ -29,6 +29,8 @@ const i18n = require('./i18n');
 const { withExtra, unwrap } = require('./cmd-shim');
 // Окружение команды kermach browser (старое имя terminalus, t381): канал, подпись проекта, папка команды в PATH — в каждый новый терминал проекта.
 const browserCli = require('../plugins/browser/cli');
+/** Переменная программы: KERMACH_<имя>, нет — TERMINALUS_<имя> до t1307 (platform.envOf). @param {string} n */
+const ENV = (n) => require('../daemon/platform').envOf(process.env, n);
 
 /**
  * dataDir — папка данных (там tabs\); t0 — время запуска программы, для строк журнала «от запуска N мс».
@@ -103,7 +105,7 @@ const beginRevive = (wc) => { if (reviveBegun.has(wc.id)) return; const id = wc.
  * Срок первого списка (t592): страница окна упала до term:list — revive не будет, а вкладки из файла иначе «ждут» для плагина, пока окно открыто.
  * Отсчёт — с первого вопроса плагина без начатого revive; срок вышел — окно считается начавшим, подписчики onState получают пустое событие.
  */
-const FIRST_LIST_MS = Number(process.env.TERMINALUS_FIRST_LIST_MS) || 30000;
+const FIRST_LIST_MS = Number(ENV('FIRST_LIST_MS')) || 30000;
 /** Окна, у которых идёт отсчёт срока первого списка. @type {Set<number>} */
 const firstListTimers = new Set();
 /** Терминалы, запущенные для вкладки, которую закрыли раньше (t192): гасятся, в файл вкладок не попадают. */
@@ -344,6 +346,9 @@ function notAllowed(kind, args) {
   return '';
 }
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+// Свои переменные плагинов, имена KERMACH_* ещё до t1307: «Роадмап» передаёт агенту карты KERMACH_CARD и KERMACH_BOARD (t1043).
+// Остальные KERMACH_* и TERMINALUS_* — переменные программы, плагину их не подменить.
+const PLUGIN_ENV = /^KERMACH_(CARD|BOARD|CODEMAP)$/;
 
 /**
  * Grok (t576): флаги -m и --reasoning-effort он запоминает в ~\.grok\config.toml как свои по умолчанию (прогон real1, 13.10) —
@@ -429,8 +434,8 @@ function checkExtra(kind, o, p) {
   if (o.env !== undefined) {
     if (!o.env || typeof o.env !== 'object' || Array.isArray(o.env)) return { error: 'env: ждал объект' };
     const e = Object.entries(o.env);
-    if (e.length > 32 || e.some(([k, v]) => !ENV_KEY.test(k) || /^TERMINALUS_/i.test(k) || typeof v !== 'string' || v.length > 4096 || v.includes('\0'))) {
-      return { error: 'env: до 32 переменных, имя из букв, цифр и _, не TERMINALUS_*, значение — строка до 4096 знаков' };
+    if (e.length > 32 || e.some(([k, v]) => !ENV_KEY.test(k) || (/^(KERMACH|TERMINALUS)_/i.test(k) && !PLUGIN_ENV.test(k)) || typeof v !== 'string' || v.length > 4096 || v.includes('\0'))) {
+      return { error: 'env: до 32 переменных, имя из букв, цифр и _, не KERMACH_* (кроме CARD, BOARD, CODEMAP) и TERMINALUS_*, значение — строка до 4096 знаков' };
     }
     // t424: CLAUDE*, ANTHROPIC_* от плагина увели бы разговор мимо ~/.claude/projects (CLAUDE_CONFIG_DIR) или перебили подписку (ANTHROPIC_API_KEY).
     // Демон такие переменные из своего окружения убирает (FOREIGN_ENV), а extra кладёт поверх — поэтому отказ здесь.

@@ -760,12 +760,12 @@ function roadmapSetup(host) {
     const r = last && last.reports && last.reports[ph];
     if (!r) return;
     const w = /** @type {any} */ (window);
-    const toDoc = typeof w.TerminalusMarkdownOpen === 'function' ? w.TerminalusMarkdownOpen : w.TerminalusMarkdownOff;
+    const toDoc = typeof w.KermachMarkdownOpen === 'function' ? w.KermachMarkdownOpen : w.KermachMarkdownOff;
     if (typeof toDoc === 'function') {
       const d = await Promise.resolve(toDoc(r.full)).catch(() => null);
       if (d && d.ok) return;
     }
-    const o = w.terminalus && typeof w.terminalus.openLink === 'function' ? await w.terminalus.openLink(r.full).catch((/** @type {any} */ e) => ({ error: String(e && e.message || e) })) : { error: '?' };
+    const o = w.kermach && typeof w.kermach.openLink === 'function' ? await w.kermach.openLink(r.full).catch((/** @type {any} */ e) => ({ error: String(e && e.message || e) })) : { error: '?' };
     if (o && o.error) { waveNote = { phase: ph, text: T('report.openFail', 'Отчёт не открылся: {why}', { why: o.error }) }; host.log(`отчёт ${ph}: не открылся: ${o.error}`); draw(); }
   };
   /** Строка под фазой по состоянию вкладки итога (t1182). @param {string} st */
@@ -2744,7 +2744,7 @@ function roadmapSetup(host) {
   /** «Во всё окно» (t526): панель — во вкладку «Роадмап · проект»; вкладка уже есть — показать её, второй не будет. */
   // Открытая вкладка переживает перезапуск окна (t1106, как «Промпты» в t1103): место в полосе и «активна» — в localStorage окна для проекта.
   // sid постоянный: в раскладке из нескольких частей окно находит вкладку по нему (findKey). Закрыли руками — запись снимается; остановка плагина её не трогает.
-  const SAVE_KEY = `terminalus.roadmapTab:${host.project && host.project.path}`;
+  const SAVE_KEY = `kermach.roadmapTab:${host.project && host.project.path}`;
   /** @type {any} */
   let tabObj = null;
   let savedSig = '';
@@ -3103,4 +3103,4 @@ function roadmapSetup(host) {
   };
 }
 
-if (typeof terminalusPlugin === 'function') terminalusPlugin(roadmapSetup);
+if (typeof kermachPlugin === 'function') kermachPlugin(roadmapSetup);

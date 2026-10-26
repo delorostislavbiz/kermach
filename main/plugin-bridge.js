@@ -1,7 +1,7 @@
 // @ts-check
 // Общий мост плагинов (t256): своя часть плагина в главном процессе по полю "main" в plugin.json (main\plugins.js).
 // Окно зовёт её одним каналом plugin:call (preload.cjs: plugin.call(id, cmd, ...args)), события идут обратно каналом plugin:event (plugin.on).
-// Новый плагин с главной частью не трогает preload.cjs и src\main: папка в %APPDATA%\TERMINALUS\plugins и переоткрытие окна проекта.
+// Новый плагин с главной частью не трогает preload.cjs и src\main: папка в %APPDATA%\Kermach\plugins и переоткрытие окна проекта.
 //
 // Договор main.js: module.exports = (ctx) => ({ handle(cmd, ...args), stop() }).
 //   Фабрика зовётся при первом вызове из окна проекта — у каждого открытого проекта свой экземпляр, ctx.project у него постоянный.
@@ -9,7 +9,7 @@
 //   stop() — остановить таймеры и наблюдатели. Его зовут, когда окно проекта закрылось или плагин выключили в «Настройках».
 //   Тогда при следующем открытии окна main.js читается с диска заново. Нет stop() — экземпляр живёт до выхода программы
 //   и новым кодом не заменяется: иначе его таймеры остались бы вдвоём.
-// ctx: id, project { id, name, path }, dataDir — %APPDATA%\TERMINALUS\plugins-data\<id> (создана), log(текст) — строка в main.log,
+// ctx: id, project { id, name, path }, dataDir — %APPDATA%\Kermach\plugins-data\<id> (создана), log(текст) — строка в main.log,
 //   settings.get() / settings.set(obj) — свой мешок pluginSettings[id] (main\settings.js). set заменяет весь мешок, не сливает:
 //   дописать поле — set({ ...settings.get(), поле }), null — мешок удалить (t502). send(event, payload) — событие окну проекта,
 //   readTab(sid, format) — вывод вкладки проекта (команда read демона),

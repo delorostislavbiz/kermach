@@ -9,7 +9,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
-const { PROTOCOL_VERSION, PIPE, KEY_FILE, lineReader, frame } = require('./protocol');
+const { PROTOCOL_VERSION, PIPE, LEGACY_PIPE, KEY_FILE, lineReader, frame } = require('./protocol');
 
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -117,9 +117,16 @@ class DaemonClient extends EventEmitter {
  * @param {{ role?: string, name?: string, version?: number }} [o]
  * @returns {Promise<DaemonClient | null>}
  */
-function connect({ role = 'client', name = '', version = PROTOCOL_VERSION } = {}) {
+async function connect(o = {}) {
+  const c = await connectTo(PIPE, o);
+  // Канал до t1307: живой старый демон переходит на новое имя только со своего перезапуска.
+  return c || !LEGACY_PIPE ? c : connectTo(LEGACY_PIPE, o);
+}
+
+/** connect к одному каналу. @param {string} pipe @param {{ role?: string, name?: string, version?: number }} o @returns {Promise<DaemonClient | null>} */
+function connectTo(pipe, { role = 'client', name = '', version = PROTOCOL_VERSION }) {
   return new Promise((resolve, reject) => {
-    const sock = net.connect(PIPE);
+    const sock = net.connect(pipe);
     const noDaemon = () => resolve(null);
     sock.once('error', noDaemon);
     sock.once('connect', async () => {

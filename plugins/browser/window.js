@@ -1,14 +1,14 @@
 // @ts-check
 // Встроенный плагин «Браузер», часть окна проекта. Вкладка сайта — в общей полосе вкладок рядом с Claude и терминалом, как в Орке:
 // адресная строка, назад, вперёд, обновить и тег webview во всё место вкладки. Вкладок сайта может быть несколько.
-// Подключается тегом <script> в index.html до project-page.js; та вызывает TerminalusBrowser(host) и даёт место в полосе.
+// Подключается тегом <script> в index.html до project-page.js; та вызывает KermachBrowser(host) и даёт место в полосе.
 // Защиту гостя ставит главный процесс (main.js рядом): здесь только адрес и хранилище проекта (partition), остальное он перезапишет.
 // Ссылка в новом окне (target=_blank, window.open) приходит от главного процесса через onOpen и становится новой вкладкой сайта.
-// Адрес, по которому щёлкнули в терминале (t58), — тоже новая вкладка сайта: terminal.js зовёт window.TerminalusBrowserOpen.
+// Адрес, по которому щёлкнули в терминале (t58), — тоже новая вкладка сайта: terminal.js зовёт window.KermachBrowserOpen.
 // Вкладки и адреса сохраняются на проект: страница шлёт весь список после каждой перемены (browser:save).
 // «Скриншот» (t38) — снимок видимой части страницы, путь к картинке — в терминал агента (host.agentTarget()), Enter не нажимается.
 // «Выбрать элемент» (t39) — подсветка под мышью на странице, щелчок — описание элемента в терминал агента, тоже без Enter.
-// Выключатель (t188): TerminalusBrowser возвращает функцию остановки, project-page.js зовёт её по настройке «Браузер» в «Плагинах».
+// Выключатель (t188): KermachBrowser возвращает функцию остановки, project-page.js зовёт её по настройке «Браузер» в «Плагинах».
 // «Агенту» (t382) — переключатель на панели вкладки: агент может действовать только в отмеченных вкладках (cli.js); отметка хранится с вкладкой.
 // Клавиши вкладок (t131): фокус внутри страницы — Ctrl+Tab, Ctrl+PgUp / PgDn ловит главный процесс и присылает сюда, вкладки переключает host.tabKey.
 // Виды (t207): «Компьютер / Мобильный / Планшет». В узком виде тег шириной и высотой из настроек стоит по середине вкладки, не влез — прокрутка;
@@ -85,7 +85,7 @@
   let picLoad = null;
   const PICS_EARLY_MS = 2000;
   // Не прочитался (сбой, отказ, пустой список) — не запоминаем: следующее наведение спросит снова (t443).
-  const loadPics = () => picLoad || (picLoad = Promise.resolve().then(() => w.terminalus.agents.list())
+  const loadPics = () => picLoad || (picLoad = Promise.resolve().then(() => w.kermach.agents.list())
     .then((/** @type {any} */ all) => {
       const t = Array.isArray(all) ? all.filter((a) => a && a.pics).map((a) => String(a.title)) : [];
       if (t.length) picTitles = t; else picLoad = null;
@@ -126,7 +126,7 @@
    */
 
   /** @param {any} host место в окне от project-page.js */
-  w.TerminalusBrowser = (host) => {
+  w.KermachBrowser = (host) => {
     const b = host.bridge.browser;
     let partition = '';
     /** Вкладки сайта по порядку открытия. @type {BTab[]} */
@@ -147,9 +147,9 @@
       return c || null;
     };
     let zoom = 1;
-    /** Последняя показанная вкладка сайта (t381): агент зовёт terminalus browser из своего терминала, и на виду тогда терминал, а не сайт. */
+    /** Последняя показанная вкладка сайта (t381): агент зовёт kermach browser из своего терминала, и на виду тогда терминал, а не сайт. */
     let shown = '';
-    /** Снимки команды terminalus browser, которые сейчас показывают вкладку (t387): номер гостя → сколько. @type {Map<number, number>} */
+    /** Снимки команды kermach browser, которые сейчас показывают вкладку (t387): номер гостя → сколько. @type {Map<number, number>} */
     const reveals = new Map();
     /** Закладки проекта (t881) по порядку — от главного процесса (marks.js); пишет весь список setMarks. @type {Mark[]} */
     let marks = [];
@@ -240,7 +240,7 @@
       s.btn.dev.classList.toggle('off', !v);
       s.btn.dev.classList.toggle('on', dev);
       s.btn.dev.title = dev ? I18n.t('browser.zakrytPanelRazrabotchika', 'Закрыть панель разработчика') : I18n.t('browser.panelRazrabotchikaStranicy', 'Панель разработчика страницы');
-      // «Агенту» (t382): вкладка отдана агенту — подсвечена; действовать (terminalus browser click, fill…) агент может только в такой.
+      // «Агенту» (t382): вкладка отдана агенту — подсвечена; действовать (kermach browser click, fill…) агент может только в такой.
       // «Только для меня» (t885): своё хранилище, агент в вкладке ничего не читает и не делает; «Агенту» тогда скрыта.
       s.btn.human.classList.toggle('on', s.human);
       s.btn.human.title = s.human ? I18n.t('browser.humanOn', 'Вкладка только для вас: отдельное хранилище, агент её не видит. Щёлкните, чтобы вернуть в общее (страница откроется заново).')
@@ -852,7 +852,7 @@
       // Адрес из терминала (t58, договор spikes\t58-links\browser-api.md) — новой вкладкой сайта в конце полосы, как в Орке.
       // Только http и https целиком: текст без схемы не дописывается, как в адресной строке, — из вывода адрес приходит целиком.
       // Функции нет, пока список вкладок не пришёл: terminal.js тогда открывает адрес обычным браузером.
-      w.TerminalusBrowserOpen = (/** @type {unknown} */ url, /** @type {{ select?: boolean }} */ o) => {
+      w.KermachBrowserOpen = (/** @type {unknown} */ url, /** @type {{ select?: boolean }} */ o) => {
         let href = '';
         if (typeof url === 'string' && url.length <= 4096) {
           try { const u = new URL(url); if (u.protocol === 'http:' || u.protocol === 'https:') href = u.href; } catch {}
@@ -861,10 +861,10 @@
         const s = open({ url: href, select: !o || o.select !== false });
         return { ok: true, sid: s.sid };
       };
-      // Вкладки сайта для команды terminalus browser (t381): главный процесс берёт их отсюда (plugins\browser\cli.js, tabsOf) —
+      // Вкладки сайта для команды kermach browser (t381): главный процесс берёт их отсюда (plugins\browser\cli.js, tabsOf) —
       // порядок в полосе и какая на виду знает только окно. guest — номер гостя тега; 0 — пустая вкладка без адреса.
       // Активная — показанная сейчас, иначе показанная последней; закрыли её — первая вкладка с адресом станет ей у команды.
-      w.TerminalusBrowserTabs = () => {
+      w.KermachBrowserTabs = () => {
         const live = list.some((x) => x.sid === shown) ? shown : '';
         return [...list].sort((x, y) => (Number(x.tab.pos) || 0) - (Number(y.tab.pos) || 0)).map((x) => {
           let guest = 0;
@@ -873,7 +873,7 @@
         });
       };
       // Агент действует во вкладке (t382): строка рядом с адресом — Ростислав видит, что сделал агент, если вкладка на виду.
-      w.TerminalusBrowserAct = (/** @type {number} */ guest, /** @type {unknown} */ what) => {
+      w.KermachBrowserAct = (/** @type {number} */ guest, /** @type {unknown} */ what) => {
         const x = list.find((s) => { try { return !!s.view && s.view.getWebContentsId() === guest; } catch { return false; } });
         if (!x) return false;
         if (!x.acts) x.acts = [];
@@ -885,7 +885,7 @@
       };
       // Снимок для команды (t381): вкладка на время снимка видима для Chromium, но не человеку (reveal выше).
       // Показы считаются по гостю (t387): два снимка одной вкладки сразу — стили снимает последний, а не первый.
-      w.TerminalusBrowserReveal = (/** @type {number} */ guest, /** @type {boolean} */ on) => {
+      w.KermachBrowserReveal = (/** @type {number} */ guest, /** @type {boolean} */ on) => {
         const x = list.find((s) => { try { return !!s.view && s.view.getWebContentsId() === guest; } catch { return false; } });
         if (!x || !x.view) return false;
         const n = Math.max(0, (reveals.get(guest) || 0) + (on ? 1 : -1));
@@ -900,10 +900,10 @@
       dead = true;
       for (const off of offs.splice(0)) off();
       if (timer) { clearTimeout(timer); timer = 0; }
-      if (w.TerminalusBrowserOpen) delete w.TerminalusBrowserOpen;
-      if (w.TerminalusBrowserTabs) delete w.TerminalusBrowserTabs;
-      if (w.TerminalusBrowserReveal) delete w.TerminalusBrowserReveal;
-      if (w.TerminalusBrowserAct) delete w.TerminalusBrowserAct;
+      if (w.KermachBrowserOpen) delete w.KermachBrowserOpen;
+      if (w.KermachBrowserTabs) delete w.KermachBrowserTabs;
+      if (w.KermachBrowserReveal) delete w.KermachBrowserReveal;
+      if (w.KermachBrowserAct) delete w.KermachBrowserAct;
       host.removeButton('addBrowser');
       for (const s of [...list]) host.removeTab(s.sid);
       list.length = 0;

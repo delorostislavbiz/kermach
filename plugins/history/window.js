@@ -151,7 +151,7 @@ function historySetup(host) {
   let nextOff = 0;
   // Фильтр агентов (t1149): выпадающий список из агентов, у которых в охвате есть разговоры (поле agents ответа главной части).
   // Выбор — в localStorage окна для проекта, переживает перезапуск окна; агента нет в охвате — сброс на «Все агенты».
-  const AGENT_KEY = `terminalus.historyAgent:${host.project && host.project.path}`;
+  const AGENT_KEY = `kermach.historyAgent:${host.project && host.project.path}`;
   let agent = 'all';
   try { agent = String(localStorage.getItem(AGENT_KEY) || 'all'); } catch {}
   /** Число разговоров по агентам в охвате, из последнего ответа списка. @type {Record<string, number>} */
@@ -682,7 +682,7 @@ function historySetup(host) {
   /** «Во всё окно»: панель — во вкладку «История · проект»; вкладка уже есть — показать её. */
   // Открытая вкладка переживает перезапуск окна (t1106, как «Промпты» в t1103): место в полосе и «активна» — в localStorage окна для проекта.
   // sid постоянный: в раскладке из нескольких частей окно находит вкладку по нему (findKey). Закрыли руками — запись снимается; остановка плагина её не трогает.
-  const SAVE_KEY = `terminalus.historyTab:${host.project && host.project.path}`;
+  const SAVE_KEY = `kermach.historyTab:${host.project && host.project.path}`;
   /** @type {any} */
   let tabObj = null;
   let savedSig = '';
@@ -909,4 +909,4 @@ function historySetup(host) {
   };
 }
 
-if (typeof terminalusPlugin === 'function') terminalusPlugin(historySetup);
+if (typeof kermachPlugin === 'function') kermachPlugin(historySetup);

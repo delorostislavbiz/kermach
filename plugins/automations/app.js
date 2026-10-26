@@ -38,7 +38,7 @@ function projectsOf(dataDir) {
 }
 
 /**
- * Чем запускать прогон: собранная программа — TERMINALUS.exe --automation id; разработка — electron.exe <главный файл> --automation id.
+ * Чем запускать прогон: собранная программа — Kermach.exe --automation id; разработка — electron.exe <главный файл> --automation id.
  * Тот же набор пишется в задачу Планировщика.
  */
 function command() {
@@ -115,11 +115,11 @@ function changed() {
 /** Живые слежения по папкам; упавшее убирается и включается снова при открытии окна. @type {Map<string, { close: () => void }>} */
 const watchers = new Map();
 
-/** Как часто опрашивается .terminalus проекта. */
+/** Как часто опрашивается папка автоматизаций проекта (.kermach\automations). */
 const POLL_MS = 2000;
 
 /**
- * Слежение за .terminalus проекта опросом, а не fs.watch (t535): на Windows fs.watch держит папку и все папки выше,
+ * Слежение за папкой автоматизаций проекта опросом, а не fs.watch (t535): на Windows fs.watch держит папку и все папки выше,
  * и проект нельзя переименовать, пока окно открыто (EPERM). Смотрим <dir>/<id>/* и <dir>/automation-runs/<id>/<время прогона>/*:
  * подпись «имя mtime размер»; изменилась — событие. Круги не накладываются: следующий ставится после конца предыдущего.
  * @param {string} dir @param {() => void} onChange
@@ -159,13 +159,13 @@ function pollDir(dir, onChange) {
 
 /**
  * Прогоны и описания меняет и процесс прогона, без программы: следим за папками данных. Папки нет — создаём, иначе watch бросит.
- * Проектные включённые на этом компьютере пишут прогоны в <проект>\.terminalus — следим за ней у каждого проекта из реестра;
+ * Проектные включённые на этом компьютере пишут прогоны в <проект>\.kermach\automations — следим за ней у каждого проекта из реестра;
  * её не создаём (в ней уже лежит описание). Новый проект в реестре — слежение с вызова watch() при сохранении и открытии окна.
  */
 function watch() {
   const c = /** @type {Ctx} */ (ctx);
   const own = [path.join(c.dataDir, store.RUNS), store.commonRoot(c.dataDir)];
-  const projects = Object.values(store.registry(c.dataDir)).map((r) => r.project).filter(Boolean).map((p) => path.join(p, '.terminalus'));
+  const projects = Object.values(store.registry(c.dataDir)).map((r) => r.project).filter(Boolean).map((p) => store.home(p)); // home переносит старую .terminalus (t1305)
   for (const dir of [...own, ...new Set(projects)]) {
     if (watchers.has(dir)) continue;
     try {
@@ -271,6 +271,31 @@ async function syncTasks() {
   if (n) changed();
 }
 
+/**
+ * Задачи прежней папки Планировщика TERMINALUS — в Kermach (t1305). Сначала новая задача, старая удаляется только после неё:
+ * сбой посередине оставит две задачи (вторая не запустится — IgnoreNew и замок прогона), но не ни одной.
+ * Описание видно — задача пишется по нему, как при сохранении; не видно — копия старой (тот же триггер). Не вышло — старая остаётся до следующего запуска.
+ */
+async function moveTasks() {
+  const c = /** @type {Ctx} */ (ctx);
+  const old = await schedule.tasks(run, schedule.OLD_FOLDER);
+  if (!old || !Object.keys(old).length) return;
+  const have = (await schedule.tasks(run)) || {};
+  const items = new Map(store.list(c.dataDir, projectsOf(c.dataDir).map((p) => p.path))
+    .filter((i) => !i.foreign && !i.error && i.cfg && i.cfg.repeat).map((i) => [i.id, i]));
+  for (const id of Object.keys(old)) {
+    const i = items.get(id);
+    let bad = '';
+    if (have[id] === undefined) {
+      if (i) bad = await schedulePut(i);
+      else { const r = await schedule.copyOld(id, run); bad = r.code === 0 ? '' : r.out || `schtasks: код ${r.code}`; }
+    }
+    if (bad) { log(`задача ${id} не перенесена в папку ${schedule.FOLDER}: ${bad}`); continue; }
+    const r = await schedule.drop(id, run, schedule.OLD_FOLDER);
+    log(`задача ${id} перенесена в папку ${schedule.FOLDER}${r.code === 0 ? '' : `, старая не удалена: ${r.out}`}`);
+  }
+}
+
 /** Запустить прогон отдельным процессом, без окна; программа его не ждёт. @param {string} id */
 function runNow(id) {
   const { exe, args } = command();
@@ -301,6 +326,7 @@ function register(c) {
   require('../../main/dir-alive').onChange(() => changed());
   watch();
   toastsSoon(); // запросы, оставшиеся с прошлого запуска, — без показа
+  inQueue(moveTasks).catch((e) => log(`перенос задач Планировщика: ${e instanceof Error ? e.message : e}`));
   ipcMain.handle('auto:summary', (e, project) => {
     if (!sender.allowed(e, 'auto:summary')) return sender.refused();
     // Плагин выключен в «Настройках» — кнопки «Проектов» нет; задачи Планировщика при этом остаются.
@@ -380,7 +406,8 @@ function register(c) {
     const i = itemOf(dir);
     if (!i) return { error: 'описание не найдено' };
     if (!i.foreign) {
-      const r = await inQueue(() => schedule.drop(i.id, run));
+      let r = await inQueue(() => schedule.drop(i.id, run));
+      if (r.code !== 0) { const o = await inQueue(() => schedule.drop(i.id, run, schedule.OLD_FOLDER)); if (o.code === 0) r = o; } // не перенесённая ещё задача (t1305)
       if (r.code !== 0) log(`задача ${i.id} не удалена из Планировщика: код ${r.code}, ${r.out}`);
     }
     store.remove(c.dataDir, i);

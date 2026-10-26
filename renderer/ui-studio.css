@@ -14,7 +14,7 @@ html[data-ui="studio"] {
   --st-ring: 0 0 0 3px rgba(var(--accent-rgb), .16); /* фокус поля */
   --st-seg: 0 1px 2px rgba(16,24,40,.10), 0 0 0 1px rgba(16,24,40,.05); /* нажатая часть переключателя */
   --st-well: var(--chrome);                     /* «колодец» под переключатели и код на листе */
-  --st-mono: 'Kermach JBMono', 'TERMINALUS Mono', ui-monospace, Menlo, monospace;
+  --st-mono: 'Kermach JBMono', 'Kermach Mono', ui-monospace, Menlo, monospace;
   --st-btn-hover: color-mix(in srgb, var(--button) 86%, var(--surface));
   --st-tile: var(--surface);                    /* плитка проекта на листе */
   --st-field: var(--surface);                   /* поле ввода на листе */

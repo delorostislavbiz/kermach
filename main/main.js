@@ -1,11 +1,11 @@
 // @ts-check
-// Главный процесс TERMINALUS: окно «Проекты» и окна проектов — все в одном процессе; в окне проекта вкладки Claude, Codex, «Терминал».
+// Главный процесс Kermach: окно «Проекты» и окна проектов — все в одном процессе; в окне проекта вкладки Claude, Codex, «Терминал».
 // Терминалы держит демон (daemon\daemon.js): окно закрылось — claude работает дальше; окно открылось — подключается к нему же.
 // Связь окон с терминалами — main\terminals.js.
 // Проект: --project <папка> — окно проекта (main\project-window.js); без него — окно «Проекты» (main\projects-window.js).
 // Второй запуск программы окон не создаёт: передаёт папку первому и выходит.
 // Закрыто последнее окно — программа выходит (t176); демон и вкладки в нём живут, следующий запуск подключится к ним же.
-// Данные пользователя — только в %APPDATA%\TERMINALUS, в папке программы ничего не пишется.
+// Данные пользователя — в %APPDATA%\Kermach (старая TERMINALUS переезжает сама, t1304) или в папке data рядом с exe (портативный режим).
 // Плагины окна проекта — main\plugins.js. Звук, когда агент закончил или ждёт, — main\sound.js.
 // Связь с демоном и переподключение после обрыва — main\daemon-link.js.
 
@@ -13,7 +13,7 @@ const { app, ipcMain, dialog, clipboard, session, shell, Menu } = require('elect
 const sender = require('./sender');
 const fs = require('fs');
 const path = require('path');
-const { DATA_DIR } = require('../daemon/protocol');
+const { DATA_DIR, MOVE_NOTE } = require('../daemon/protocol');
 // Автоматизация (t252): Планировщик запускает программу с --automation <номер> — один прогон claude без окон.
 // Ветка до app.setPath и requestSingleInstanceLock: прогон не мешает открытой программе, остальное ядро не грузится.
 if (process.argv.includes('--automation')) { require('../plugins/automations/run').cli(process.argv, DATA_DIR); return; }
@@ -34,6 +34,8 @@ const stop = require('./stop-all');
 const osRules = require('./os-rules');
 const i18n = require('./i18n');
 const singleInstance = require('./single-instance');
+/** Переменная программы: KERMACH_<имя>, нет — TERMINALUS_<имя> до t1307 (platform.envOf). @param {string} n */
+const ENV = (n) => require('../daemon/platform').envOf(process.env, n);
 
 /** Сколько раз ещё ждать демона после «не ответил за 10 с» до ошибки «не запустился» (t1220). */
 const DAEMON_RETRIES = 2;
@@ -41,7 +43,7 @@ const DAEMON_RETRIES = 2;
 // macOS (t222-Б): PATH из оболочки входа, меню программы, ссылки на пути /…. Ветка Windows этим не задета.
 const MAC = process.platform === 'darwin';
 
-// Иначе Chromium сложит кэш и настройки прямо в %APPDATA%\TERMINALUS, рядом с sessions.json.
+// Иначе Chromium сложит кэш и настройки прямо в папку данных, рядом с sessions.json.
 app.setPath('userData', path.join(DATA_DIR, 'chromium'));
 
 const LOG_FILE = path.join(DATA_DIR, 'logs', 'main.log');
@@ -54,6 +56,7 @@ try {
 const log = (msg) => {
   try { fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} [${process.pid}] ${msg}\n`); } catch {}
 };
+if (MOVE_NOTE) log(MOVE_NOTE);
 
 /** @param {string[]} argv */
 function argProject(argv) {
@@ -141,9 +144,9 @@ function start(asked) {
   require('./tasks-badge').start(log);
   // Лимиты Codex — в codex-rate-limits.json раз в 5 минут. Первое чтение через 5 с: app-server (node и codex.exe)
   // не отнимает время у окна, демона и терминалов, пока они поднимаются. Чтение идёт ~2,5 с.
-  // Выключатель — только TERMINALUS_CODEX_LIMITS=0 (t92): его ставят проверки (spikes\gate\run.js — всем), иначе они запускали бы
-  // свой подставной codex или настоящий (t72). Свой канал (TERMINALUS_PIPE) опрос не выключает: вторая копия программы тоже видит лимиты.
-  const codexOn = process.env.TERMINALUS_CODEX_LIMITS !== '0';
+  // Выключатель — только KERMACH_CODEX_LIMITS=0 (t92): его ставят проверки (spikes\gate\run.js — всем), иначе они запускали бы
+  // свой подставной codex или настоящий (t72). Свой канал (KERMACH_PIPE) опрос не выключает: вторая копия программы тоже видит лимиты.
+  const codexOn = ENV('CODEX_LIMITS') !== '0';
   /** @type {ReturnType<typeof codexLimits.start> | null} */
   let codexPoll = null;
   const codexStart = codexOn ? setTimeout(() => { codexPoll = codexLimits.start({ dataDir: DATA_DIR, log }); }, 5000) : null;
@@ -231,7 +234,7 @@ function start(asked) {
   });
 
   // Окна программы не уходят со своей страницы: ссылка, location.href, брошенный на окно файл и window.open отклоняются.
-  // Иначе чужая страница в окне получает весь мост window.terminalus — проект узнаётся по номеру webContents,
+  // Иначе чужая страница в окне получает весь мост window.kermach — проект узнаётся по номеру webContents,
   // а он после перехода тот же (t35, spikes\t35-browser\diag-nav.txt). Как в Орке: пускается только тот же файл.
   // Гости webview (браузер в окне проекта) ходят по сайтам — их не трогаем.
   /** Тот же файл, что открыт сейчас (hash и параметры не важны). @param {string} from @param {string} to */
@@ -251,7 +254,7 @@ function start(asked) {
     };
     wc.on('will-navigate', (ev) => guard(ev, ev.url));
     wc.on('will-redirect', (ev) => guard(ev, ev.url));
-    // Подкадры страницам программы не нужны (t112): iframe с file:// достаёт мост родителя (parent.terminalus),
+    // Подкадры страницам программы не нужны (t112): iframe с file:// достаёт мост родителя (parent.kermach),
     // а такие вызовы идут из главного кадра — проверка отправителя (sender.js) их не отличит. Гости webview — отдельные webContents.
     wc.on('will-frame-navigate', (ev) => {
       if (ev.isMainFrame) return;
@@ -418,10 +421,10 @@ function start(asked) {
     log('полная остановка из окна');
     return stopAll();
   });
-  // Пустое окно проекта (t360): само ничего не запускает, а предлагает выбрать. TERMINALUS_AUTOSTART=claude (codex, shell) —
+  // Пустое окно проекта (t360): само ничего не запускает, а предлагает выбрать. KERMACH_AUTOSTART=claude (codex, shell) —
   // выключатель для проверок и для того, кто хочет как раньше: пустое окно само открывает этот терминал. Гейт ставит его всем проверкам.
-  const autostart = /^(claude|codex|shell)$/.test(process.env.TERMINALUS_AUTOSTART || '') ? String(process.env.TERMINALUS_AUTOSTART) : '';
-  if (autostart) log(`TERMINALUS_AUTOSTART=${autostart}: пустые окна проектов сами открывают ${autostart}`);
+  const autostart = /^(claude|codex|shell)$/.test(ENV('AUTOSTART') || '') ? String(ENV('AUTOSTART')) : '';
+  if (autostart) log(`KERMACH_AUTOSTART=${autostart}: пустые окна проектов сами открывают ${autostart}`);
   ipcMain.handle('app:autostart', (e) => {
     if (!sender.allowed(e, 'app:autostart')) return sender.refused();
     return autostart;

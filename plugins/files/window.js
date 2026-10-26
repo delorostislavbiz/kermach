@@ -1,7 +1,7 @@
 // @ts-check
 // Плагин «Файлы» (t327), часть окна: строка «Файлы» внизу левой панели (host.side), по щелчку — дерево папки проекта в правой панели.
 // Папки раскрываются щелчком, содержимое читается при раскрытии; обновление — кнопкой и когда окно снова получило фокус.
-// Щелчок по .md, .markdown, .txt — вкладка редактора Markdown (window.TerminalusMarkdownOpen); он выключен — окошко с выбором (TerminalusMarkdownOff, t348):
+// Щелчок по .md, .markdown, .txt — вкладка редактора Markdown (window.KermachMarkdownOpen); он выключен — окошко с выбором (KermachMarkdownOff, t348):
 // включить редактор или открыть программой по умолчанию. Отказал или выбрали программу — программой по умолчанию.
 // Остальные файлы открывает главная часть (main.js рядом): программы и скрипты не запускает, а показывает в Проводнике.
 // Правый щелчок по папке — «Открыть в терминале» (новая вкладка этого окна, рабочая папка — эта) и «Показать в Проводнике».
@@ -193,7 +193,7 @@ function filesSetup(host) {
   // —— действия
   /** @param {string} rel */
   const openFile = async (rel) => {
-    const toDoc = typeof w.TerminalusMarkdownOpen === 'function' ? w.TerminalusMarkdownOpen : w.TerminalusMarkdownOff;
+    const toDoc = typeof w.KermachMarkdownOpen === 'function' ? w.KermachMarkdownOpen : w.KermachMarkdownOff;
     if (FILES_DOC.test(rel) && typeof toDoc === 'function') {
       const r = await Promise.resolve(toDoc(fullOf(rel))).catch(() => null);
       if (r && r.ok) return;
@@ -358,4 +358,4 @@ function filesSetup(host) {
   };
 }
 
-if (typeof terminalusPlugin === 'function') terminalusPlugin(filesSetup);
+if (typeof kermachPlugin === 'function') kermachPlugin(filesSetup);

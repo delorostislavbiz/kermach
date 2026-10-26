@@ -1,7 +1,7 @@
 // Мост окна к терминалу: странице доступны только эти вызовы, Node и файлы ей недоступны.
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
-contextBridge.exposeInMainWorld('terminalus', {
+const bridge = {
   // Кнопки своего заголовка.
   win: {
     minimize: () => ipcRenderer.send('win:min'),
@@ -16,7 +16,7 @@ contextBridge.exposeInMainWorld('terminalus', {
   // Ответ: true — остановка идёт, false — человек отказался.
   app: {
     stopAll: () => ipcRenderer.invoke('app:stop-all'),
-    // Что пустое окно проекта открывает само (t360): '' — ничего, кнопки выбора; иначе claude, codex или shell (TERMINALUS_AUTOSTART).
+    // Что пустое окно проекта открывает само (t360): '' — ничего, кнопки выбора; иначе claude, codex или shell (KERMACH_AUTOSTART).
     autostart: () => ipcRenderer.invoke('app:autostart'),
   },
   // Окно «Проекты».
@@ -194,4 +194,7 @@ contextBridge.exposeInMainWorld('terminalus', {
   linkHas: (target) => ipcRenderer.invoke('link:has', target),
   clipRead: () => ipcRenderer.invoke('clip:read'),
   clipWrite: (text) => ipcRenderer.send('clip:write', text),
-});
+};
+contextBridge.exposeInMainWorld('kermach', bridge);
+// Старое имя моста до t1307: плагины человека (%APPDATA%\Kermach\plugins, t855) могут звать window.terminalus. До 1.0.
+contextBridge.exposeInMainWorld('terminalus', bridge);

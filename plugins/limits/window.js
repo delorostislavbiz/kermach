@@ -183,4 +183,4 @@ function limitsSetup(host) {
 }
 
 if (typeof module === 'object' && module.exports) module.exports = { limitsParts, limitsText, limitsIn, limitsClock, limitsColor, LIMITS_STALE_MS };
-if (typeof terminalusPlugin === 'function') terminalusPlugin(limitsSetup);
+if (typeof kermachPlugin === 'function') kermachPlugin(limitsSetup);

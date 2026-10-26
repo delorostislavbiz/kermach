@@ -448,7 +448,7 @@
   /** @type {Promise<any> | null} */
   let watching = null;
 
-  /** Подписка на настройки: первый вызов читает их и ждёт изменений; ответ — текущие настройки. @param {any} t window.terminalus */
+  /** Подписка на настройки: первый вызов читает их и ждёт изменений; ответ — текущие настройки. @param {any} t window.kermach */
   function watch(t) {
     if (!watching) {
       t.settings.onChanged((/** @type {any} */ s) => { cur = s; subs.forEach((f) => f(s)); });
@@ -470,7 +470,7 @@
    * Ctrl+плюс / минус / 0, как в Орке: в терминале — шрифт терминала (0 — 17), в остальном окне — шрифт окон по шагам (0 — 100 %).
    * Клавиши по физической (ev.code): работают при русской раскладке и с цифровой клавиатуры. Страница их забирает до xterm,
    * в программу вкладки они не доходят.
-   * @param {any} t window.terminalus @param {() => boolean} inTerm фокус в терминале
+   * @param {any} t window.kermach @param {() => boolean} inTerm фокус в терминале
    */
   function zoomKeys(t, inTerm) {
     window.addEventListener('keydown', (ev) => {
@@ -493,7 +493,7 @@
    * Размеры видов «Мобильный» и «Планшет» вкладки сайта (t207, plugins\browser\main.js): ширина и высота в точках экрана.
    * Изменение действует сразу во всех окнах; неверное число главный процесс не примет, в поле вернётся прежнее.
    * Строки — своим блоком сразу под разделом «Плагины», а не внутри него: в разделе только выключатели плагинов.
-   * @param {any} t window.terminalus @param {HTMLElement} plg раздел «Плагины» @param {Tx} tx надпись на текущем языке
+   * @param {any} t window.kermach @param {HTMLElement} plg раздел «Плагины» @param {Tx} tx надпись на текущем языке
    */
   function browserViews(t, plg, tx) {
     const box = document.createElement('div');
@@ -611,7 +611,7 @@
    * Толщина рамки плагина «Рамка проекта» (t484): 4, 6 или 8 px (по умолчанию 6; сохранённые раньше 2 и 3 — тоже 6), пишется в pluginSettings.frame.width — окна проектов перекрашивают рамку сразу.
    * Строка — сразу под выключателем «Рамка проекта», внутри раздела «Плагины»: блоком под разделом, как строка языка, она встала бы
    * под размерами видов и читалась бы как настройка «Браузера». Видна, пока плагин включён.
-   * @param {any} t window.terminalus @param {HTMLElement} lab строка выключателя плагина @param {Tx} tx надпись на текущем языке
+   * @param {any} t window.kermach @param {HTMLElement} lab строка выключателя плагина @param {Tx} tx надпись на текущем языке
    * @param {(s: any) => boolean} isOn включён ли плагин по настройкам
    */
   function frameRow(t, lab, tx, isOn) {
@@ -660,7 +660,7 @@
    * (поле lang plugin.json, main\plugins.js list — код и имя языка на нём самом; словари окно не читает). Новый язык — файл словаря и строка в plugin.json.
    * Своим блоком без отступа после строк плагинов (размеры видов) — иначе выглядит настройкой «Браузера»; видна, пока включён плагин с языками. Выбор пишет поле lang — все окна сразу на нём (renderer\i18n.js).
    * Отвечает функцией, которая перерисовывает строку по настройкам: её зовёт paint.
-   * @param {any} t window.terminalus @param {HTMLElement} plg раздел «Плагины» @param {Tx} tx надпись на текущем языке
+   * @param {any} t window.kermach @param {HTMLElement} plg раздел «Плагины» @param {Tx} tx надпись на текущем языке
    * @param {{ id: string, langs?: Record<string, string> }[]} list плагины с языками @param {(s: any, id: string) => boolean} on включён ли плагин
    */
   function langRow(t, plg, tx, list, on) {
@@ -701,7 +701,7 @@
    * Пункт пишет поля настроек вместе (themePatch), выбранный пункт считается из них обратно. «Скло» (только macOS) в списке нет:
    * сохранённое показывается временным пунктом, пока не выбрали другое, — иначе список показал бы не ту тему.
    * Отвечает функцией, которая перерисовывает список по настройкам: её зовёт paint.
-   * @param {any} t window.terminalus @param {HTMLSelectElement} sel @param {Tx} tx надпись на текущем языке
+   * @param {any} t window.kermach @param {HTMLSelectElement} sel @param {Tx} tx надпись на текущем языке
    * @param {(id: string) => boolean} plgOn включён ли плагин, пока в настройках нет записи
    */
   function themeList(t, sel, tx, plgOn) {
@@ -761,7 +761,7 @@
 
   /**
    * Окошко «Настройки»: изменения действуют сразу, кнопки «Применить» нет. «Сбросить» — 100 %, 17, сдвиг просмотра Markdown 0 (t245), звук включён, копирование выделенного включено (t1097).
-   * @param {any} t window.terminalus
+   * @param {any} t window.kermach
    * @returns {Promise<null>}
    */
   async function settings(t) {
@@ -1040,7 +1040,7 @@
         q(`.dirs .pick[data-k="${k}"]`).onclick = async () => { const p = await t.settings.pickDir(k); if (typeof p === 'string' && p) { inp.value = p; saveDir(k, p); } };
       }
       // Номер версии (t1264): из src\package.json через main, второго места с номером нет.
-      { const v = window.terminalus.settings.version && window.terminalus.settings.version(); q('.ver').textContent = v ? `Kermach ${v}` : ''; }
+      { const v = window.kermach.settings.version && window.kermach.settings.version(); q('.ver').textContent = v ? `Kermach ${v}` : ''; }
       q('.reset').onclick = () => change(t, { uiZoom: 100, termFont: TERM_DEF, mdShift: 0, sound: true, notify: true, copySelect: true });
       return () => font(Number(num.value));
     }, 'set');
@@ -1084,7 +1084,7 @@
    * Ниже — неустановленные, серым и без выключателя: команда установки для этой системы и ссылка на страницу агента (в обычном браузере).
    * Значки — window.AgentLogos (agent-logos.js). Выключатель пишет settings.agents, окна проектов меняют меню «+» сразу.
    * Из раздела «Агенты» «Настроек» (t1150): «Управление…» у строки — окошко выделяет эту строку, «Подключить агента…» — открывается на неустановленных.
-   * @param {any} t window.terminalus
+   * @param {any} t window.kermach
    * @param {string} [focus] id агента или 'new'
    * @returns {Promise<null>}
    */

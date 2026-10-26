@@ -10,7 +10,7 @@ const UNIX_EXTRA = ['/opt/homebrew/bin', '/usr/local/bin'];
 /** Сколько ждать оболочку входа. Дольше — программа стартует с PATH как есть плюс UNIX_EXTRA. */
 const SHELL_PATH_MS = 3000;
 /** Метка вокруг PATH в выводе оболочки: .zshrc может печатать своё (приветствие, предупреждения). */
-const MARK = '__TERMINALUS_PATH__';
+const MARK = '__KERMACH_PATH__';
 
 /**
  * PATH из вывода оболочки: текст между двумя метками. Меток нет или между ними пусто — ''.
@@ -44,7 +44,7 @@ function mergePath(shellPath, envPath, home) {
  */
 function loginPath({ shell, env, home, run }) {
   let out = '';
-  // ${PATH} в скобках: без них оболочка прочла бы имя переменной PATH__TERMINALUS_PATH__ — подчёркивание продолжает имя.
+  // ${PATH} в скобках: без них оболочка прочла бы имя переменной PATH__KERMACH_PATH__ — подчёркивание продолжает имя.
   try { out = run(shell, ['-ilc', `printf '%s' "${MARK}\${PATH}${MARK}"`], SHELL_PATH_MS); } catch {}
   const got = parseShellPath(out);
   return { path: mergePath(got, env.PATH, home), from: got ? 'shell' : 'fallback' };

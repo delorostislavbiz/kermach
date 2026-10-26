@@ -1,6 +1,6 @@
 // @ts-check
 // Мост окна автоматизаций (t252). Свой preload, не общий main\preload.cjs: окну не нужны терминалы и проекты.
-// Отправителя проверяет plugins\automations\app.js (fromWindow). terminalus.settings — ровно то, что берут renderer\theme.js и i18n.js.
+// Отправителя проверяет plugins\automations\app.js (fromWindow). kermach.settings — ровно то, что берут renderer\theme.js и i18n.js.
 const { contextBridge, ipcRenderer } = require('electron');
 
 /** @param {string} ch @param {(...a: any[]) => void} cb */
@@ -30,7 +30,7 @@ contextBridge.exposeInMainWorld('auto', {
   onFilter: (cb) => on('auto:filter', cb),
 });
 
-contextBridge.exposeInMainWorld('terminalus', {
+contextBridge.exposeInMainWorld('kermach', {
   settings: {
     look: () => ipcRenderer.sendSync('auto:look'),
     dict: () => ipcRenderer.sendSync('auto:dict'),

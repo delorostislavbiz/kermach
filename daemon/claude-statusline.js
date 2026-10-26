@@ -13,18 +13,21 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const { spawn, spawnSync } = require('child_process');
+/** @param {string} n */
+const envOf = (n) => require('./platform').envOf(process.env, n);
 
 // Сколько ждать скрипт пользователя, мс. Дольше — его вывод обрезается тем, что успело прийти.
 const USER_MS = 3000;
 // Сколько ждать приёмник демона, мс. Демон не ответил — номер придёт со следующим обновлением строки или с хуком.
 const POST_MS = 1000;
 // Метка в окружении скрипта пользователя: если он сам окажется этой обёрткой, второй раз она ничего не запускает.
-const GUARD = 'TERMINALUS_STATUSLINE';
+const GUARD = 'KERMACH_STATUSLINE';
 // Время запуска: демон отбрасывает строку, запущенную до прошлой смены номера (опоздавшую строку прежнего разговора).
 const STARTED = Date.now();
 
 const limitsFile = process.argv[2] || '';
-const nested = !!process.env[GUARD];
+// TERMINALUS_STATUSLINE — та же метка до t1307: скрипт пользователя мог запустить старую обёртку.
+const nested = !!process.env[GUARD] || !!process.env.TERMINALUS_STATUSLINE;
 const chunks = /** @type {Buffer[]} */ ([]);
 /** @type {Promise<void>} */
 let posted = Promise.resolve();
@@ -63,12 +66,13 @@ function saveLimits(input) {
 }
 
 /**
- * session_id — приёмнику демона, с ключом и ключом вкладки из окружения терминала (как у хуков). Вне вкладки TERMINALUS
+ * session_id — приёмнику демона, с ключом и ключом вкладки из окружения терминала (как у хуков). Вне вкладки Kermach
  * переменных нет — ничего не шлётся. Ошибки и молчание демона глотаются: строка состояния важнее.
  * @param {Buffer} input @returns {Promise<void>}
  */
 function report(input) {
-  const { TERMINALUS_HOOK_TOKEN: token, TERMINALUS_TAB_KEY: tab, TERMINALUS_HOOK_PORT: port } = process.env;
+  // KERMACH_*, нет — TERMINALUS_* (t1307): вкладка старого демона; заголовки — оба имени, старый демон читает только X-Terminalus-*.
+  const token = envOf('HOOK_TOKEN'), tab = envOf('TAB_KEY'), port = envOf('HOOK_PORT');
   if (!token || !tab || !/^\d+$/.test(port || '')) return Promise.resolve();
   let sessionId = '';
   try { sessionId = String(JSON.parse(input.toString('utf8')).session_id || ''); } catch {}
@@ -77,7 +81,7 @@ function report(input) {
   return new Promise((resolve) => {
     try {
       const req = http.request({ host: '127.0.0.1', port: Number(port), path: '/hook/claude', method: 'POST', timeout: POST_MS,
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'X-Terminalus-Token': token, 'X-Terminalus-Tab': tab } },
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'X-Kermach-Token': token, 'X-Kermach-Tab': tab, 'X-Terminalus-Token': token, 'X-Terminalus-Tab': tab } },
       (res) => { res.resume(); res.on('end', () => resolve()); res.on('error', () => resolve()); });
       req.on('timeout', () => req.destroy());
       req.on('error', () => resolve());

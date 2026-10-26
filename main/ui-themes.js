@@ -26,7 +26,7 @@ function win(w) {
 const FONT_SYS = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', system-ui, sans-serif";
 const FONT_ONEST = "'Kermach Onest', -apple-system, system-ui, sans-serif";
 const FONT_GOLOS = "'Kermach Golos', -apple-system, system-ui, sans-serif";
-const FONT_MONO = "'Kermach JBMono', 'TERMINALUS Mono', ui-monospace, Menlo, monospace";
+const FONT_MONO = "'Kermach JBMono', 'Kermach Mono', ui-monospace, Menlo, monospace";
 /** Шрифт макета (t652): Segoe UI Variable на Windows 11, на macOS — системный. */
 const FONT_KERMACH = "'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif";
 

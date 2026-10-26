@@ -9,7 +9,7 @@
 // Окно проекта этого агента в фокусе — молчим: человек и так смотрит (в Орке так же, suppressWhenFocused; t48).
 // Тот же повод зажигает сигнал на панели задач или точку на значке у часов (attention.js, t108).
 // Звук — системный (shell.beep: «Стандартный звук» Windows), без файлов, окон и процессов.
-// TERMINALUS_SOUND=0 — выключатель для проверок: событие пишется в журнал, но не звучит.
+// KERMACH_SOUND=0 — выключатель для проверок: событие пишется в журнал, но не звучит.
 // Настройка «звук» (settings.js, t181) читается на каждое событие: выключили — не звучит, мигание остаётся.
 // Тот же повод показывает уведомление Windows (notify.js, t151) — после мигания и до проверок звука: у него своя настройка.
 
@@ -21,6 +21,8 @@ const attention = require('./attention');
 const settings = require('./settings');
 const notify = require('./notify');
 const { shownTitle } = require('./tab-look');
+/** Переменная программы: KERMACH_<имя>, нет — TERMINALUS_<имя> до t1307 (platform.envOf). @param {string} n */
+const ENV = (n) => require('../daemon/platform').envOf(process.env, n);
 
 /**
  * Состояния, на которые звучит сигнал, и их слово в main.log. working — нет: агент начал работу, ответа от человека не ждёт.
@@ -62,8 +64,8 @@ function names(s) {
 function attach(client, c) {
   if (attached.has(client)) return;
   attached.add(client);
-  const off = process.env.TERMINALUS_SOUND === '0';
-  if (off) c.log('звук: выключен переменной TERMINALUS_SOUND=0');
+  const off = ENV('SOUND') === '0';
+  if (off) c.log('звук: выключен переменной KERMACH_SOUND=0');
   client.on('exit', (/** @type {any} */ m) => { if (m && m.sid) notify.forget(m.sid); });
   client.on('state', (/** @type {any} */ m) => {
     if (!LOUD_STATES.has(m.state)) return;

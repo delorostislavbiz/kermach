@@ -1,10 +1,4 @@
 #!/bin/sh
-# terminalus (t381): обёртка для sh — Git Bash (в нём команды запускает Claude на Windows) и Mac.
-# Запускает lib/terminalus.js программой из TERMINALUS_NODE (TERMINALUS в режиме Node); её ставит терминал TERMINALUS.
-# Нет TERMINALUS_NODE (терминал не TERMINALUS или открыт до обновления) — node из PATH, объяснит сам скрипт; нет и node — код 2.
-dir=$(dirname "$0")
-if [ -z "$TERMINALUS_NODE" ]; then
-  command -v node >/dev/null 2>&1 || { echo 'terminalus: команда работает только в терминале Kermach. Этот терминал открыт не в Kermach или до обновления — откройте новую вкладку.' >&2; exit 2; }
-  exec node "$dir/lib/terminalus.js" "$@"
-fi
-ELECTRON_RUN_AS_NODE=1 exec "$TERMINALUS_NODE" "$dir/lib/terminalus.js" "$@"
+# terminalus (t381): команда программы до t1307. Тонкая прослойка до 1.0: её помнят агенты в разговорах, начатых до переименования.
+# Всё — в kermach рядом.
+exec "$(dirname "$0")/kermach" "$@"
