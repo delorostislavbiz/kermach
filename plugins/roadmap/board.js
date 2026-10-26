@@ -27,7 +27,7 @@ const DTYPES = ['решение', 'тупик', 'договорённость', 
 /** Поле how записи d<N> (t833): проверено прогоном или догадка. */
 const HOW = ['проверено', 'догадка'];
 /** Отзыв агента о поданной записи (t836): поле used карты, «d12 помогла, d40 не пригодилась». */
-const VERDICTS = ['помогла', 'не пригодилась', 'неверна'];
+const VERDICTS = ['помогла', 'не пригодилась', 'неверна', 'не открывал'];
 /** Значение stack записи d<N> (t988): тема, плагин или библиотека в нижнем регистре, `@scope/` и версия через @ — по желанию. */
 const STACK = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._/-]*(@[0-9a-z][0-9a-z.*x_-]*)?$/;
 /** Заголовок раздела записи для других проектов (t988). */
@@ -50,7 +50,7 @@ const HEAD_KEYS = {
   passport: [],
 };
 /** Свои ключи шапки карты из FORMAT.md (t830): update их пишет, а читаются они, как и прочие чужие ключи, в extra. */
-const OWN_HEAD = { t: ['pick', 'advisor', 'agent_why'], f: [], d: [], passport: [] };
+const OWN_HEAD = { t: ['pick', 'advisor', 'agent_why', 'checked'], f: [], d: [], passport: [] };
 
 /**
  * @typedef {{ file: string, reason: string }} Problem
@@ -65,7 +65,7 @@ const OWN_HEAD = { t: ['pick', 'advisor', 'agent_why'], f: [], d: [], passport: 
  *   effort: string, depends: string[], human: string, created: string, closed: string, source: string, used: Record<string, string>, served: string[], fields: Record<string, string>,
  *   body?: string, from: string, extra: Record<string, string> }} Card
  * from — дело «Дел», из которого карта (t1163): k<N> в .kermach\tasks того же проекта.
- * used — отзыв агента о поданных записях (t836): d<N> → «помогла», «не пригодилась» или «неверна».
+ * used — отзыв агента о поданных записях (t836): d<N> → «помогла», «не пригодилась», «неверна» или «не открывал» (t1336: запись не открыта — в долю «помогла» не входит).
  * served — какие d<N> программа подала агенту в задании (t1008), пишет addServed.
  * @typedef {{ id: string, num: number, file: string, title: string, status: string, health: string, healthWhy: string, healthBy: string, healthAt: string,
  *   goal: string, criteria: Criterion[], ready: boolean, cards: string[], extra: Record<string, string> }} Phase
@@ -104,12 +104,13 @@ const list = (v) => { const m = /^\[(.*)\]$/.exec(v.trim()); return (m ? m[1] : 
 /** Вердикт в тексте отзыва (t1075): падежи и число — «не пригодились», «не помогло» (t1082), «помогло»; «пригодилась» без «не» — помогла. @param {string} s */
 const verdictOf = (s) => {
   const t = norm(s);
+  if (/не\s+открыв/.test(t)) return VERDICTS[3];
   if (/не\s+(пригод|помог)/.test(t)) return VERDICTS[1];
   if (/неверн/.test(t)) return VERDICTS[2];
   return /(^|[^а-я])(помог|пригод)/.test(t) ? VERDICTS[0] : '';
 };
 /** Отзыв без счёта, но и не опечатка: «учтена», «к делу не относятся», «не открывал», пояснение после тире или в скобках. */
-const NEUTRAL = /учтен|соблюд|относ|касал|касает|влия|справочн|прочитан|сведени|не открывал|не запускал|не было|ничего|заведен|создан|затронут|понадоб|договор|[—(]/;
+const NEUTRAL = /учтен|соблюд|относ|касал|касает|влия|справочн|прочитан|сведени|не запускал|не было|ничего|заведен|создан|затронут|понадоб|договор|[—(]/;
 /**
  * Разбор поля used (t836, мягче с t1075): «d1, d284, d285 не пригодились; d2 учтена (opus)». Отзыв — части через «;»,
  * часть — куски через запятую. d<N> без слов ждут вердикта следующего куска; первый вердикт куска забирают все ожидающие.
@@ -407,6 +408,54 @@ function markCriteria(p, sp, list) {
 /** Шапка как объект. @param {Parsed} p */
 const headObj = (p) => Object.fromEntries((p.head || []).map((h) => [h.key, h.value]));
 
+/** Имя MCP-сервера в настройке паспорта — как MCP_NAME ядра (terminals.js). */
+const MCP_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** Без регистра, «ё» как «е». @param {string} s */
+const low = (s) => s.trim().toLowerCase().replace(/ё/g, 'е');
+/**
+ * Лёгкий старт агента карты (t1322): ключи шапки паспорта. card_mcp: все | никаких | имя, имя — MCP-серверы агента;
+ * card_skills: да | нет — скиллы и команды «/». Ключа нет — «все» и «да», как до t1322. Неверное значение — warn, ключ не действует.
+ * @param {Record<string, string>} h шапка паспорта
+ * @returns {{ mcp: 'все' | 'никаких' | string[], skills: boolean, warn: string[] }}
+ */
+function startOf(h) {
+  /** @type {{ mcp: 'все' | 'никаких' | string[], skills: boolean, check: boolean, warn: string[] }} */
+  const out = { mcp: 'все', skills: true, check: true, warn: [] };
+  const m = low(h.card_mcp || '');
+  if (m === 'никаких') out.mcp = 'никаких';
+  else if (m && m !== 'все') {
+    const names = String(h.card_mcp).split(',').map((x) => x.trim()).filter(Boolean);
+    const bad = names.filter((n) => !MCP_NAME.test(n));
+    if (bad.length || names.length > 16) out.warn.push(`card_mcp «${h.card_mcp}»: нужно «все», «никаких» или до 16 имён MCP-серверов через запятую${bad.length ? `, неверно: ${bad.join(', ')}` : ''} — ключ не действует`);
+    else out.mcp = [...new Set(names)];
+  }
+  const k = low(h.card_skills || '');
+  if (k === 'нет') out.skills = false;
+  else if (k && k !== 'да') out.warn.push(`card_skills «${h.card_skills}»: нужно «да» или «нет» — ключ не действует`);
+  // Проверяющий карты (t1330): card_check «нет» — закрытую карту не проверяем.
+  const g = low(h.card_check || '');
+  if (g === 'нет') out.check = false;
+  else if (g && g !== 'да') out.warn.push(`card_check «${h.card_check}»: нужно «да» или «нет» — ключ не действует`);
+  return out;
+}
+
+/**
+ * Настройка старта агента карты проекта (t1322) — только шапка passport.md: полный read доски синхронный и медленный (d449).
+ * Паспорта нет, файл не читается или шапка сломана — как до t1322; сломанная шапка — в warn.
+ * @param {string} project
+ */
+function cardStart(project) {
+  let text;
+  try {
+    const f = path.join(root(project), 'passport.md');
+    if (fs.statSync(f).size > MAX_SIZE) return { ...startOf({}), warn: ['passport.md больше 256 КБ — настройка старта агента не прочитана'] };
+    text = fs.readFileSync(f, 'utf8');
+  } catch { return startOf({}); }
+  const p = parse(text);
+  if (p.error) return { ...startOf({}), warn: [`passport.md: ${p.error} — настройка старта агента не прочитана`] };
+  return startOf(headObj(p));
+}
+
 /**
  * Проверка и разбор одного файла доски. Возвращает предмет или текст ошибки.
  * @param {string} kind t, f, d или passport @param {number} num @param {string} file @param {string} text
@@ -423,7 +472,8 @@ function item(kind, num, file, text) {
     const out = {};
     for (const [k, s] of Object.entries(secs)) out[k] = { title: s.title, text: s.value, empty: !s.value };
     const hidden = hiddenKeys(kind, p);
-    return { item: { file, sections: out, missing: Object.keys(PASSPORT).filter((k) => !secs[k]), hidden, hiddenBy: hidden.length ? (looseFence(p) ? 'loose' : 'pair') : '' } };
+    const st = startOf(h);
+    return { item: { file, sections: out, missing: Object.keys(PASSPORT).filter((k) => !secs[k]), hidden, hiddenBy: hidden.length ? (looseFence(p) ? 'loose' : 'pair') : '' }, ...(st.warn.length ? { warn: st.warn } : {}) };
   }
   if (!p.head) return { error: 'нет шапки: файл начинается со строки ---' };
   const id = `${kind}${num}`;
@@ -1312,4 +1362,4 @@ async function ownRootAsync(project, dir) {
   if (up(rel) || path.isAbsolute(rel)) throw new Error(`папка доски ведёт за пределы проекта: ${real}`);
 }
 
-module.exports = { DIR, MAX_SIZE, ERROR_LINE, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, HOW, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, prime, update, addServed, merge, reviewed, differ, section, nextId, create, watch, codeMask, edges, sameField, alike };
+module.exports = { DIR, MAX_SIZE, ERROR_LINE, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, HOW, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, cardStart, prime, update, addServed, merge, reviewed, differ, section, nextId, create, watch, codeMask, edges, sameField, alike, usedWarn };

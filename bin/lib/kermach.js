@@ -130,8 +130,9 @@ const ROADMAP_HELP = `kermach roadmap — доска «Роадмапа» про
                                  [--error "дословный симптом"] [--text "суть"] [--stack woodmart,php] [--global]
                                        новая запись d<N> к карте tN: решение, тупик, договорённость, паттерн
                                        или заметка; с флагами файл готов сразу; печатает номер и путь файла
-  kermach roadmap close tN --done "что сделано" --proof "доказательство" [--used "d12 помогла, d40 не пригодилась"]
+  kermach roadmap close tN --done "что сделано" --proof "доказательство" [--used "d12 помогла, d40 не пригодилась, d41 не открывал"]
                                        закрыть карту: status: готово, closed: по часам, разделы и отзыв used:
+                                       записей не было — без --used; «нет» и отзыв без вердикта — отказ, код 1
   kermach roadmap run tN [--bg]        запустить карту, как кнопка «Запустить»: вкладка агента в окне проекта, status: в работе;
                                        печатает номер, вкладку, агента и модель. Только в терминале Kermach этого проекта,
                                        окно проекта открыто. --bg — в фоне: вкладка скрыта, у карты кнопка «Показать»,
@@ -147,7 +148,11 @@ const ROADMAP_HELP = `kermach roadmap — доска «Роадмапа» про
   <вывод пробы> | kermach roadmap notes -
                                        то же, текст ошибки со стандартного ввода (UTF-8): удобно для многострочного
   kermach roadmap notes --wrong        записи, которые агент отметил «неверна»: агентам не подаются, ждут человека
-  kermach roadmap --help               эта справка
+  kermach roadmap status [fN]          короткий итог доски, до 40 строк: по фазам сколько карт готово, карты «ждёт ответа»
+                                       с первой строкой вопроса, «в работе», находки карты-ревью. fN — одна фаза
+  kermach roadmap accept fN            «Прими фазу» для главной сессии: признаки фазы, ревью, записи, не начатые карты
+                                       других фаз и инструкция — проверить признаки, сверить черновики, спросить «да»
+  kermach roadmap --help              эта справка
 Номер следующий после самого большого на доске; счётчик counter.json программа ведёт сама. Номер занят — берётся следующий, чужой файл не затирается.
 У новой карты с похожим заголовком печатается «похоже на tNN» — проверьте, не дубль ли.
 Остальное — что сделать, файлы, проверку — допишите в созданный файл.
@@ -254,12 +259,22 @@ function stdinText() {
   return { text, warn };
 }
 
-/** Аргументы kermach roadmap (t684). @param {string[]} rest @returns {{ help?: boolean, notes?: string, wrong?: boolean, kind?: 't' | 'd', title?: string, phase?: string, card?: string }} */
+/** Аргументы kermach roadmap (t684). @param {string[]} rest @returns {{ help?: boolean, status?: boolean, accept?: string, notes?: string, wrong?: boolean, kind?: 't' | 'd', title?: string, phase?: string, card?: string }} */
 function roadmapArgs(rest) {
   // t817: справка — только на месте подкоманды или вида (roadmap --help, roadmap new --help). Дальше --help и -h — слова заголовка или значение флага:
   // заголовок «--help» заводит карту, --phase -h — ошибка значения, а не справка вместо карты.
   const isHelp = (/** @type {string | undefined} */ a) => a === '--help' || a === '-h';
-  if (!rest.length || isHelp(rest[0]) || rest[0] === 'help' || ((rest[0] === 'new' || rest[0] === 'notes' || rest[0] === 'close' || rest[0] === 'run') && isHelp(rest[1]))) return { help: true };
+  if (!rest.length || isHelp(rest[0]) || rest[0] === 'help' || ((rest[0] === 'new' || rest[0] === 'notes' || rest[0] === 'close' || rest[0] === 'run' || rest[0] === 'status' || rest[0] === 'accept') && isHelp(rest[1]))) return { help: true };
+  // t1327: accept fN — факты фазы и инструкция «Прими фазу» главной сессии (plugins\roadmap\accept.js).
+  if (rest[0] === 'accept') {
+    if (rest.length !== 2 || !/^f\d{1,6}$/.test(rest[1])) die('roadmap accept: нужен один номер фазы, например kermach roadmap accept f1. Справка — kermach roadmap --help', 1);
+    return { accept: rest[1] };
+  }
+  // t1328: status [fN] — короткий итог доски: по фазам, ждут ответа, в работе, находки ревью.
+  if (rest[0] === 'status') {
+    if (rest.length > 2 || (rest[1] !== undefined && !/^f\d{1,6}$/.test(rest[1]))) die('roadmap status: нужен не больше чем один номер фазы, например kermach roadmap status f10. Справка — kermach roadmap --help', 1);
+    return { status: true, phase: rest[1] || '' };
+  }
   // t1050: run tN — вкладка агента карты в окне проекта, как кнопка «Запустить»; нужен терминал Kermach этого проекта.
   if (rest[0] === 'run') {
     // t703: --one — пачка одним агентом: номера карт по порядку или --phase fN; --bg тут же, в любом месте.
@@ -310,6 +325,11 @@ function roadmapArgs(rest) {
       o[/** @type {'done' | 'proof' | 'used'} */ (a.slice(2))] = v.trim();
     }
     if (!o.done || !o.proof) die('roadmap close: нужны оба — --done "что сделано" и --proof "доказательство"', 1);
+    // t1333: --used тем же разбором, что замечания доски (board.js usedWarn) — «нет» не попадает в used: замечанием.
+    if (o.used) {
+      const bad = require('../../plugins/roadmap/board.js').usedWarn(o.used, {});
+      if (bad.length) die(`roadmap close: --used не разобран: ${bad.map((/** @type {string} */ s) => `«${s}»`).join(', ')} — нужно d<номер> и помогла, не пригодилась, неверна или не открывал, например --used "d12 помогла, d40 не открывал". Записей в частях 5–6 и notes не было — закройте без --used. Карта не закрыта`, 1);
+    }
     return o;
   }
   if (rest[0] !== 'new') die(`нет такой команды: roadmap ${rest[0]}. Справка — kermach roadmap --help`, 1);
@@ -339,6 +359,57 @@ function roadmapArgs(rest) {
   return o;
 }
 
+const MAX_LINES = 40;
+const cut = (/** @type {string} */ s, n) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+
+/** Первая строка вопроса карты «ждёт ответа»: строка «Вопрос…» в тексте, иначе первая непустая строка «Что сделано», иначе заголовок. */
+function question(/** @type {any} */ c) {
+  const line = String(c.body || '').split('\n').find((l) => /^Вопрос/.test(l));
+  return cut((line || c.fields.done || c.title).replace(/^Вопрос[^:]*:\s*/, ''), 110);
+}
+
+/** Находки ревью фазы: последняя по номеру карта kind: ревью; её «Что сделано» — находки. */
+function review(/** @type {any} */ b, /** @type {any} */ f) {
+  const rv = f.cards.map((/** @type {string} */ id) => b.cards.find((/** @type {any} */ c) => c.id === id)).filter((/** @type {any} */ c) => c && c.kind === 'ревью').sort((/** @type {any} */ x, /** @type {any} */ y) => x.num - y.num).pop();
+  if (!rv) return '';
+  return rv.status === 'готово' ? `  ревью ${rv.id}: ${cut(rv.fields.done, 120) || '—'}` : `  ревью ${rv.id}: ${rv.status}`;
+}
+
+/** t1328: короткий итог доски. @param {any} b результат board.read @param {string} [only] fN — одна фаза, без свёртки
+ * @returns {string[]}
+ */
+function statusLines(b, only) {
+  const cards = b.cards;
+  const count = (/** @type {string} */ s) => cards.filter((/** @type {any} */ c) => c.status === s).length;
+  const phases = only ? b.phases.filter((/** @type {any} */ f) => f.id === only) : b.phases;
+  if (only && !phases.length) return [`фазы ${only} на доске нет`];
+  const scope = new Set(phases.flatMap((/** @type {any} */ f) => f.cards));
+  const mine = cards.filter((/** @type {any} */ c) => scope.has(c.id));
+  const out = [];
+  const stat = (/** @type {any[]} */ list) => ['готово', 'в работе', 'ждёт ответа', 'на проверке', 'на ревью', 'пауза', 'в очереди'].map((s) => [s, list.filter((c) => c.status === s).length]).filter((x) => x[1]).map((x) => `${x[0]} ${x[1]}`).join(', ');
+  out.push(only ? `Фаза ${only}: ${stat(mine)}` : `Доска: фаз ${phases.length}, карт ${cards.length} (${stat(cards)}); во «Входящих» ${b.inbox.length}`);
+
+  const done = (/** @type {any} */ f) => f.cards.length > 0 && f.cards.every((/** @type {string} */ id) => (cards.find((/** @type {any} */ c) => c.id === id) || {}).status === 'готово');
+  const closed = only ? [] : phases.filter((/** @type {any} */ f) => done(f) && f.status === 'готова');
+  for (const f of phases.filter((/** @type {any} */ x) => !closed.includes(x))) {
+    const own = f.cards.map((/** @type {string} */ id) => cards.find((/** @type {any} */ c) => c.id === id)).filter(Boolean);
+    out.push(`${f.id} ${cut(f.title, 40)} [${f.status}]: ${own.filter((/** @type {any} */ c) => c.status === 'готово').length}/${own.length} готово`);
+    const rv = review(b, f);
+    if (rv && (only || !done(f))) out.push(rv);
+  }
+  if (closed.length) out.push(`Закрыты полностью: ${closed.map((/** @type {any} */ f) => `${f.id} (${f.cards.length})`).join(', ')}`);
+
+  const waits = mine.filter((/** @type {any} */ c) => c.status === 'ждёт ответа');
+  out.push(waits.length ? 'Ждут ответа:' : 'Ждут ответа: нет');
+  for (const c of waits) out.push(`  ${c.id} ${cut(c.title, 50)} — ${question(c)}`);
+  const work = mine.filter((/** @type {any} */ c) => c.status === 'в работе');
+  out.push(work.length ? 'В работе:' : 'В работе: нет');
+  for (const c of work) out.push(`  ${c.id} ${cut(c.title, 70)}`);
+
+  if (out.length > MAX_LINES) { const extra = out.length - (MAX_LINES - 1); out.length = MAX_LINES - 1; out.push(`… ещё ${extra} строк — kermach roadmap status fN`); }
+  return out;
+}
+
 /** Папка проекта с доской: от текущей папки вверх до первой, где есть .kermach\roadmap. @returns {string} */
 function boardProject() {
   const fs = require('fs');
@@ -356,6 +427,16 @@ function roadmap(o) {
   if (!project) die(`доски «Роадмапа» нет: ни в ${process.cwd()}, ни выше нет папки .kermach\\roadmap. Откройте в Kermach окно проекта → «Роадмап» → «Составить роадмап»`, 3);
   // Скрипт лежит в bin\lib, доска — в plugins\roadmap того же дерева: и в src, и в собранной программе.
   const board = require(path.join(__dirname, '..', '..', 'plugins', 'roadmap', 'board.js'));
+  if (o.status) {
+    process.stdout.write(`${clean(statusLines(board.read(project), o.phase).join('\n'))}\n`);
+    return;
+  }
+  if (o.accept) {
+    const r = require(path.join(__dirname, '..', '..', 'plugins', 'roadmap', 'accept.js')).accept(board.read(project), o.accept, project);
+    if ('error' in r) return die(`roadmap accept: ${r.error}`, 4);
+    process.stdout.write(clean(r.text));
+    return;
+  }
   if (o.wrong) {
     const prompt = require(path.join(__dirname, '..', '..', 'plugins', 'roadmap', 'prompt.js'));
     const out = prompt.wrongNotes(board.read(project));

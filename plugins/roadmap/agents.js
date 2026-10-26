@@ -93,6 +93,25 @@ function launchArgs(agent, model, effort) {
 }
 
 /**
+ * Лёгкий старт агента карты (t1322, ОПТИМИЗАЦИЯ-процесса.md §3): флаги claude по настройке проекта (board.cardStart, шапка паспорта).
+ * Субагенты агенту карты запрещены всегда — --disallowedTools=Agent: через «=», иначе claude возьмёт в список и первое сообщение.
+ * MCP «никаких» — --strict-mcp-config; список — поле mcp открытия вкладки, файл серверов пишет ядро (terminals.js mcpConfig).
+ * Скиллы «нет» — --disable-slash-commands. У других агентов таких флагов нет: настройка не по умолчанию — строка в skipped.
+ * @param {string} agent @param {{ mcp: 'все' | 'никаких' | string[], skills: boolean }} st
+ * @returns {{ args: string[], mcp?: string[], skipped: string }}
+ */
+function lightArgs(agent, st) {
+  if (agent !== 'claude') {
+    const what = [st.mcp !== 'все' && `MCP «${Array.isArray(st.mcp) ? st.mcp.join(', ') : st.mcp}»`, !st.skills && 'скиллы «нет»'].filter(Boolean);
+    return { args: [], skipped: what.length ? `${what.join(' и ')} из паспорта не ${what.length > 1 ? 'передаются' : 'передаётся'}: флаги есть только у claude` : '' };
+  }
+  const args = ['--disallowedTools=Agent'];
+  if (st.mcp === 'никаких') args.push('--strict-mcp-config');
+  if (!st.skills) args.push('--disable-slash-commands');
+  return Array.isArray(st.mcp) ? { args, mcp: st.mcp, skipped: '' } : { args, skipped: '' };
+}
+
+/**
  * Лестница повторных попыток claude (t830, по ярусам t1046): каждая следующая попытка — ступенью выше, выше верхней не идём.
  * Ступени — ярусы size.js: sonnet низкое (с советником перед сдачей) → opus низкое → opus среднее. Haiku в лестнице нет:
  * его ставит только человек (pick: человек), а такую карту повтор не повышает.
@@ -124,4 +143,4 @@ function raise(agent, model, effort, tries, pick) {
   return { ...LADDER[top], note: `${head} — ${LADDER[top].model} ${LADDER[top].effort} (в карте ${card})` };
 }
 
-module.exports = { AGENTS, MODELS, EFFORT, EFFORTS, TUNE, LADDER, kindOf, launchArgs, raise };
+module.exports = { AGENTS, MODELS, EFFORT, EFFORTS, TUNE, LADDER, kindOf, launchArgs, lightArgs, raise };

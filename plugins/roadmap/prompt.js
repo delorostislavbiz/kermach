@@ -11,7 +11,8 @@
 //   карты этой фазы, закрытые позже (по closed; нет поля — только карта, заведённая позже, t537), решения и тупики с датой не раньше дня карты
 //   по тем же файлам (без файлов — по этой карте или карте той же фазы), договорённости с человеком — все, без отбора по файлам и дате (t833),
 //   открытые карты «Входящих» по тем же файлам. Отменённая запись (cancelled) и запись с прошедшим сроком (until раньше сегодня) не подаются.
-// «Заметки к задаче» (часть 6, t834) — до 5 записей d<N> из всех действующих по словам карты, кроме поданных в «Свежем»; см. pick().
+//   Закрытые карты, решения и тупики — списком (t1324): номер, тип, заголовок, файлы; текст агент открывает сам. Договорённости — полным текстом.
+// «Заметки к задаче» (часть 6, t834) — до 5 записей d<N> из всех действующих по словам карты, кроме поданных в «Свежем»; см. pick(). Тоже списком (listLine).
 //   Первыми строками — утверждённые человеком паттерны (t1004, patterns.served); записи из их from и неутверждённые паттерны не подаются.
 const fs = require('fs');
 const path = require('path');
@@ -178,9 +179,9 @@ function fresh(b, card, now = Date.now()) {
     if (!isNaN(since) && isNaN(t) && !(when(c.created) > since)) { skipped.push({ id: c.id, why: 'нет closed, заведена не позже карты — когда закрыта, неизвестно' }); continue; }
     // t1105: в большой фазе закрытых сотни — без общих файлов карта не подаётся (у карты без файлов — по фазе, как раньше).
     if (own.length && !shared(paths(c.fields.files), own).length) { skipped.push({ id: c.id, why: 'закрыта в этой фазе, но по другим файлам' }); continue; }
-    const proof = flat(c.fields.proof);
-    const done = flat(c.fields.done).replace(/[.;]+$/, '');
-    closedLines.push({ id: c.id, t: isNaN(t) ? 0 : t, line: `Закрыта ${c.id} (${c.agent || 'агент не указан'}): ${done || 'заметки «Что сделано» нет'}${proof ? `; доказательство: ${proof}` : '.'}` });
+    // t1324: строкой списка — «Что сделано» и «Доказательство» агент читает в файле карты, когда нужно.
+    const cf = paths(c.fields.files);
+    closedLines.push({ id: c.id, t: isNaN(t) ? 0 : t, line: `Закрыта ${c.id} (${c.agent || 'агент не указан'}): ${c.title}${cf.length ? `; файлы: ${cf.join(', ')}` : ''}` });
   }
   // Новые первыми; сверх FRESH_CARDS — в skipped и строкой «ещё M» в конце части.
   closedLines.sort((x, y) => y.t - x.t);
@@ -202,9 +203,12 @@ function fresh(b, card, now = Date.now()) {
       const t = when(d.date);
       if (!isNaN(since) && !isNaN(t) && t < dayOf(since)) { skipped.push({ id: d.id, why: `запись ${d.date} старше карты` }); continue; }
     }
-    const who = [d.card, d.agent, d.how === 'догадка' ? 'догадка, не проверено' : ''].filter(Boolean).join(', ');
-    const text = decText(d.text);
-    const line = `${pact ? 'Договорённость' : d.type === 'тупик' ? 'Тупик' : 'Решение'}${who ? ` (${who})` : ''}: ${d.title}${text ? ` — ${text}` : ''}`;
+    let line;
+    if (pact) {
+      const who = [d.card, d.agent, d.how === 'догадка' ? 'догадка, не проверено' : ''].filter(Boolean).join(', ');
+      const text = decText(d.text);
+      line = `Договорённость${who ? ` (${who})` : ''}: ${d.title}${text ? ` — ${text}` : ''}`;
+    } else line = listLine(d);
     // Предел знаков (t1105) — только для решений и тупиков: договорённости подаются всегда.
     if (!pact && used + line.length > FRESH_MAX) { skipped.push({ id: d.id, why: `сверх ${FRESH_MAX} знаков «Свежего»` }); more++; continue; }
     if (!pact) used += line.length;
@@ -401,6 +405,17 @@ function noteLine(d) {
   return `${d.type === 'тупик' ? 'Тупик' : d.type === 'заметка' ? 'Заметка' : 'Решение'} ${d.id}${who ? ` (${who})` : ''}: ${d.title}${text ? ` — ${text}` : ''}`;
 }
 
+/**
+ * Запись строкой списка — части 5 и 6 промпта карты (t1324): номер, тип, заголовок, файлы, без текста. Текст агент открывает сам (d.file в папке доски).
+ * Поданный сразу текст «помог» у 18 % отзывов (ЭТАЛОН-до.md), остальной модель перечитывала каждым запросом. noteLine с текстом — у kermach roadmap notes.
+ * @param {import('./board').Decision} d
+ */
+function listLine(d) {
+  const who = [d.card, d.agent, d.how === 'догадка' ? 'догадка, не проверено' : '', d.repeats.length ? `повторы: ${d.repeats.join(', ')}` : ''].filter(Boolean).join(', ');
+  const files = (d.files || []).filter(Boolean);
+  return `${d.type === 'тупик' ? 'Тупик' : d.type === 'заметка' ? 'Заметка' : 'Решение'} ${d.id}${who ? ` (${who})` : ''}: ${d.title}${files.length ? `; файлы: ${files.join(', ')}` : ''} — ${d.file}`;
+}
+
 /** Порог похожести записей (t835): на повторах доски t834 (t585) при 0.15 нет пометок мимо своей причины, ниже — появляются. */
 const ALIKE_NOTE = 0.15;
 /** Второй проход (t938): порог ниже — при общем имени из кода, которое есть не больше чем у ALIKE_CODE_DF записей, или «Причине» похожей не меньше ALIKE_WHY. */
@@ -510,7 +525,7 @@ function notes(b, card, shown, now = Date.now()) {
   const today = dayOf(now);
   const pool = b.decisions.filter((d) => d.type !== 'договорённость' && d.type !== 'заметка' && !d.cancelled && !d.wrong?.length && !(d.until && when(d.until) < today) && !shown.includes(d.id));
   const r = pick(pool, card);
-  const lines = r.shown.map(({ d }) => noteLine(d));
+  const lines = r.shown.map(({ d }) => listLine(d));
   const n = lines.length, m = r.total;
   if (n && n < m) lines.push(`Показано ${n} записей из ${m}: остальные по словам карты подходят меньше. Нужны другие — ищи по папке доски.`);
   const text = n ? lines.join('\n') : m ? `Подходящих по словам карты нет (действующих записей ${m}).` : 'Записей нет.';
@@ -784,4 +799,4 @@ const compose = (project, opts = {}) => task(project, COMPOSE, opts);
 /** Задание «Новая карта» (t818) из newcard.md: доска уже есть, агент заводит одну карту. @param {string} project @param {{ dataDir?: string }} [opts] */
 const newcard = (project, opts = {}) => task(project, NEWCARD, opts);
 
-module.exports = { TEMPLATES, defuseAt, FRESH_NOTE, ADVISOR_LINE, ADVISOR_ONCE, templates, templateFile, paths, shared, fresh, pick, search, wrongNotes, noteLine, alikeNotes, alikePattern, mergeTitle, notes, build, compose, newcard };
+module.exports = { TEMPLATES, defuseAt, FRESH_NOTE, ADVISOR_LINE, ADVISOR_ONCE, templates, templateFile, paths, shared, fresh, pick, search, wrongNotes, noteLine, listLine, alikeNotes, alikePattern, mergeTitle, notes, build, compose, newcard };

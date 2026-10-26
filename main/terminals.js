@@ -311,11 +311,13 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * Усилие — только известные значения, флаги как в Орке: claude --effort (значения из claude --help); codex -c model_reasoning_effort=… — значения из ответа сервера
  * (spikes\t536-effort\minimal-400.txt): minimal и ultra клиент знает, сервер отвечает 400.
  * У codex -c — общий флаг настроек, им меняют и права (-c sandbox_mode=…): разрешён только ключ model_reasoning_effort одним словом, -c=… и -cX — отказ.
- * @type {Record<string, Record<string, RegExp>>}
+ * Лёгкий старт агента карты (t1322): null — флаг без значения (claude --strict-mcp-config, --disable-slash-commands), «=значение» у него — отказ.
+ * --disallowedTools — только Agent (субагенты агенту карты запрещены). --mcp-config в списке нет: файл серверов пишет ядро само из поля mcp (mcpConfig).
+ * @type {Record<string, Record<string, RegExp | null>>}
  */
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}$/;
 const ALLOW_FLAGS = {
-  claude: { '--model': MODEL_RE, '--effort': /^(low|medium|high|xhigh|max)$/ },
+  claude: { '--model': MODEL_RE, '--effort': /^(low|medium|high|xhigh|max)$/, '--strict-mcp-config': null, '--disable-slash-commands': null, '--disallowedTools': /^Agent$/ },
   codex: { '--model': MODEL_RE, '-m': MODEL_RE, '-c': /^model_reasoning_effort=(none|low|medium|high|xhigh|max)$/ },
   'agent:grok': { '--model': MODEL_RE, '-m': MODEL_RE, '--reasoning-effort': /^(low|medium|high|xhigh)$/, '--resume': UUID_RE },
   'agent:gemini': { '--model': MODEL_RE, '-m': MODEL_RE },
@@ -323,6 +325,11 @@ const ALLOW_FLAGS = {
   'agent:cursor': { '--model': MODEL_RE },
   'agent:omp': { '--model': MODEL_RE },
 };
+/**
+ * Флаги-списки claude (`<tools...>`): в виде «--флаг значение» claude берёт в список и все слова дальше, первое сообщение тоже —
+ * «Input must be provided» (t1322, spikes\t1322-light\variadic-space.txt). Поэтому только «--флаг=значение».
+ */
+const LIST_FLAGS = ['--disallowedTools'];
 
 /**
  * Первый аргумент не из списка разрешённых (t279) — текст отказа; всё в порядке — пусто. Обход слева направо: флаг берёт следующее слово
@@ -339,11 +346,73 @@ function notAllowed(kind, args) {
     if (!Object.prototype.hasOwnProperty.call(allow, f)) {
       return a.startsWith('-') ? `аргумент ${a} не из списка разрешённых для ${kind}` : `аргумент ${a} — не флаг: первое сообщение передаётся полем prompt`;
     }
+    const re = allow[f];
+    if (re === null) {
+      if (eq > 0) return `у аргумента ${f} значения нет`;
+      continue;
+    }
+    if (eq < 0 && LIST_FLAGS.includes(f)) return `аргумент ${f} — только в виде ${f}=значение: иначе claude возьмёт в список и первое сообщение`;
     const v = eq > 0 ? a.slice(eq + 1) : args[++i];
     if (v === undefined) return `у аргумента ${f} нет значения`;
-    if (!allow[f].test(v)) return `значение «${v}» не подходит аргументу ${f}`;
+    if (!re.test(v)) return `значение «${v}» не подходит аргументу ${f}`;
   }
   return '';
+}
+
+/** Имя MCP-сервера в настройках Claude. */
+const MCP_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/**
+ * Файл MCP-серверов для --mcp-config (t1322): только серверы с этими именами, определения — из настроек Claude, как их видит claude в папке проекта:
+ * местные (projects[папка].mcpServers в .claude.json) выше .mcp.json проекта, тот выше общих (mcpServers в .claude.json).
+ * Файл — в папке данных программы (в определениях бывают ключи), имя — по проекту и списку: revive перезаписывает тот же файл свежими определениями.
+ * Путь к файлу плагин не передаёт: с любым файлом --mcp-config подключил бы любой сервер, то есть запустил бы любую команду.
+ * @param {string[]} names @param {string} project
+ * @returns {{ file: string } | { error: string }}
+ */
+function mcpConfig(names, project) {
+  if (!ctx) return { error: 'терминалы ещё не готовы' };
+  /** @param {string} f */
+  const read = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
+  const home = process.env.CLAUDE_CONFIG_DIR ? path.resolve(process.env.CLAUDE_CONFIG_DIR) : os.homedir();
+  const user = read(path.join(home, '.claude.json')) || {};
+  const key = path.resolve(project).toLowerCase();
+  const local = Object.entries(user.projects || {}).find(([k]) => path.resolve(k).toLowerCase() === key);
+  const layers = [local && local[1] && local[1].mcpServers, (read(path.join(project, '.mcp.json')) || {}).mcpServers, user.mcpServers];
+  /** @type {Record<string, any>} */
+  const out = {};
+  for (const n of names) {
+    const def = layers.map((l) => (l && typeof l === 'object' && Object.hasOwn(l, n) ? l[n] : null)).find((d) => d && typeof d === 'object');
+    if (!def) return { error: `MCP-сервера «${n}» нет в настройках Claude: ни в .claude.json, ни в .mcp.json проекта` };
+    out[n] = def;
+  }
+  const dir = path.join(ctx.dataDir, 'mcp');
+  const file = path.join(dir, `${crypto.createHash('sha1').update(`${key}\n${names.join('\n')}`).digest('hex').slice(0, 16)}.json`);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify({ mcpServers: out }, null, 2));
+    fs.renameSync(`${file}.tmp`, file);
+  } catch (e) { return { error: `файл MCP-серверов не записан: ${/** @type {any} */ (e).message || e}` }; }
+  return { file };
+}
+/**
+ * Файлы MCP-серверов живых терминалов (t1342): sid → файл. В определениях бывают ключи — файл удаляется, когда вышел
+ * последний терминал с ним (одинаковый список в одном проекте — один файл). revive пишет файл заново из настроек.
+ * @type {Map<string, string>}
+ */
+const mcpFiles = new Map();
+/** @param {string[]} mcpArgs @returns {string} */
+const mcpFileOf = (mcpArgs) => ((mcpArgs || []).find((a) => a.startsWith('--mcp-config=')) || '').slice('--mcp-config='.length);
+/** Удаляет файл, если его не держит ни один терминал. @param {string} file */
+function mcpDrop(file) {
+  if (!file || [...mcpFiles.values()].includes(file)) return;
+  try { fs.rmSync(file, { force: true }); } catch (e) { if (ctx) ctx.log(`файл MCP-серверов ${file} не удалён: ${/** @type {any} */ (e).message || e}`); }
+}
+/** Терминал вышел: его файл MCP-серверов больше не нужен. @param {string} sid */
+function mcpRelease(sid) {
+  const file = mcpFiles.get(sid);
+  if (!file) return;
+  mcpFiles.delete(sid);
+  mcpDrop(file);
 }
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 // Свои переменные плагинов, имена KERMACH_* ещё до t1307: «Роадмап» передаёт агенту карты KERMACH_CARD и KERMACH_BOARD (t1043).
@@ -398,14 +467,15 @@ function grokConfig(x) {
  * @param {string} kind @param {any} o @param {{ path: string }} p
  * agent — именованный агент Claude (t251): только у вида claude, файл агента есть в ~/.claude/agents или в папке проекта; режим — из файла.
  * resume — номер разговора Claude или Codex, который продолжить (t768); в x не идёт: Claude после перезапуска продолжает по номеру из записи вкладки (claudeSessionId).
- * @returns {{ x: { args?: string[], cwd?: string, env?: Record<string, string> } | null, prompt: string, title: string, ag: { name: string, mode: string } | null, resume: string, agentSkipped: string } | { error: string }}
+ * mcp — имена MCP-серверов Claude (t1322, mcpConfig); флаги к ним — mcpArgs, в x только имена.
+ * @returns {{ x: { args?: string[], cwd?: string, env?: Record<string, string>, mcp?: string[] } | null, prompt: string, title: string, ag: { name: string, mode: string } | null, resume: string, agentSkipped: string, mcpArgs: string[] } | { error: string }}
  */
 function checkExtra(kind, o, p) {
-  if (o === undefined || o === null) return { x: null, prompt: '', title: '', ag: null, resume: '', agentSkipped: '' };
+  if (o === undefined || o === null) return { x: null, prompt: '', title: '', ag: null, resume: '', agentSkipped: '', mcpArgs: [] };
   if (typeof o !== 'object' || Array.isArray(o)) return { error: 'параметры вкладки: ждал объект' };
   // Без вопросов о разрешениях (t851) — только выбор человека: term:create забирает поле меню до checkExtra, сюда оно приходит лишь от плагина.
   if (o.bypass !== undefined || o.human !== undefined) return { error: i18n.t('term.bypassHuman', 'Режим «без вопросов о разрешениях» включает только человек: пункт меню «+» или настройка проекта') };
-  /** @type {{ args?: string[], cwd?: string, env?: Record<string, string> }} */
+  /** @type {{ args?: string[], cwd?: string, env?: Record<string, string>, mcp?: string[] }} */
   const x = {};
   if (o.args !== undefined) {
     if (!Array.isArray(o.args) || o.args.length > 32 || o.args.some((/** @type {any} */ a) => typeof a !== 'string' || a.length > 4096 || a.includes('\0'))) return { error: 'args: до 32 строк, каждая до 4096 знаков' };
@@ -418,6 +488,20 @@ function checkExtra(kind, o, p) {
     if (wrong) return { error: wrong };
     // Аргумент вида "a b" (в кавычках, с пробелом) демон передаёт готовой командной строкой Windows (ptyArgs, t1216): доходит одним аргументом.
     if (o.args.length) x.args = o.args.slice();
+  }
+  // MCP-серверы по именам (t1322): ядро пишет файл и ставит --strict-mcp-config --mcp-config=<файл>; имена — в x, revive пишет файл заново.
+  /** @type {string[]} */
+  let mcpArgs = [];
+  if (o.mcp !== undefined) {
+    if (kind !== 'claude') return { error: 'mcp — только у вкладки Claude' };
+    if (!Array.isArray(o.mcp) || !o.mcp.length || o.mcp.length > 16 || o.mcp.some((/** @type {any} */ n) => typeof n !== 'string' || !MCP_NAME.test(n))) {
+      return { error: 'mcp: от 1 до 16 имён MCP-серверов из букв, цифр и знаков . _ -' };
+    }
+    const names = [...new Set(/** @type {string[]} */ (o.mcp))];
+    const m = mcpConfig(names, p.path);
+    if ('error' in m) return m;
+    x.mcp = names;
+    mcpArgs = [...(x.args || []).includes('--strict-mcp-config') ? [] : ['--strict-mcp-config'], `--mcp-config=${m.file}`];
   }
   if (o.cwd !== undefined && o.cwd !== '') {
     if (typeof o.cwd !== 'string') return { error: 'cwd: ждал строку' };
@@ -487,22 +571,23 @@ function checkExtra(kind, o, p) {
     else if (!found) return { error: `агента Claude ${o.agent} нет ни в ~/.claude/agents, ни в .claude\\agents проекта` };
     else ag = { name: found.name, mode: found.mode };
   }
-  return { x: Object.keys(x).length ? x : null, prompt, title, ag, resume, agentSkipped };
+  return { x: Object.keys(x).length ? x : null, prompt, title, ag, resume, agentSkipped, mcpArgs };
 }
 
 /**
  * launch и запуск от плагина: свои аргументы и первое сообщение в конец, .cmd — мимо cmd.exe (cmd-shim.js). x — в meta.extra:
  * демон хранит его с терминалом, entryOf пишет в файл вкладок, revive повторяет.
  * @param {string} kind @param {string | undefined} resume @param {string | undefined} hooksSettings
- * @param {{ args?: string[], cwd?: string, env?: Record<string, string> } | null} x @param {string} prompt
+ * @param {{ args?: string[], cwd?: string, env?: Record<string, string>, mcp?: string[] } | null} x @param {string} prompt
  * @param {{ name: string, mode: string } | null} [ag] агент Claude (t251)
  * @param {string[]} [codexHook] флаги -c хука SessionStart Codex от демона (t777)
  * @param {boolean} [bypass] без вопросов о разрешениях (t851, launch)
  * @param {string} [name] имя вкладки Claude (t1211, launch)
+ * @param {string[]} [mcpArgs] флаги файла MCP-серверов от checkExtra (t1322): после аргументов плагина, до первого сообщения
  * env — окружение вкладки для демона: env плагина, у Grok с GROK_CONFIG (grokConfig); в meta.extra — x как есть.
  * @returns {{ file: string, args: string[], meta: Record<string, any>, env?: Record<string, string> } | { error: string }}
  */
-function launchWith(kind, resume, hooksSettings, x, prompt, ag, codexHook, bypass, name) {
+function launchWith(kind, resume, hooksSettings, x, prompt, ag, codexHook, bypass, name, mcpArgs = []) {
   const how = launch(kind, resume, hooksSettings, ag, codexHook, bypass, name);
   if ('error' in how || !x && !prompt) return how;
   let args = (x && x.args) || [];
@@ -521,7 +606,7 @@ function launchWith(kind, resume, hooksSettings, x, prompt, ag, codexHook, bypas
   // Сообщение одним словом программа приняла бы за подкоманду (t1211): claude update, codex resume. С пробелом в конце это уже не имя
   // подкоманды, а текст (spikes\t1211-env\subcmd.txt). После флага агента (pf) слово — значение флага, его не трогаем; /init подкомандой не бывает.
   const msg = prompt && !pf && !prompt.startsWith('/') && !/\s/.test(prompt) ? `${prompt} ` : prompt;
-  const w = withExtra(how, [...args, ...pf ? [pf] : []], msg);
+  const w = withExtra(how, [...args, ...mcpArgs, ...pf ? [pf] : []], msg);
   if ('error' in w) return w;
   return { file: w.file, args: w.args, meta: x ? { ...how.meta, extra: x } : how.meta, env };
 }
@@ -706,6 +791,8 @@ async function revive(c, d, p, cols, rows) {
     /** Номер, занятый этой вкладкой в launching (t787). @type {{ title: string, project: string, sid: string } | null} */
     let held = null;
     let heldId = '';
+    /** Файл MCP-серверов, записанный для этой вкладки (t1342): терминал его не взял — удаляется в finally. */
+    let mcpFile = '';
     try {
       const kind = kindOf({ meta: { kind: t.kind } });
       const name = shownTitle({ ...t, meta: { kind } });
@@ -715,8 +802,9 @@ async function revive(c, d, p, cols, rows) {
       let saved = null;
       if (t.extra) { try { saved = JSON.parse(t.extra); } catch {} }
       if (saved && saved.cwd && alive.isNet(p.path)) await alive.state(p.path); // как в openTab (t1300)
-      const ex = checkExtra(kind, saved ? { args: saved.args, cwd: saved.cwd, env: saved.env } : undefined, p);
+      const ex = checkExtra(kind, saved ? { args: saved.args, cwd: saved.cwd, env: saved.env, mcp: saved.mcp } : undefined, p);
       if ('error' in ex) { notices.set(t.sid, `Не запустить заново: ${ex.error}`); continue; }
+      mcpFile = mcpFileOf(ex.mcpArgs);
       // Codex, продолженный плагином (t768), — тот же разговор через codex resume; журнал удалили — новый разговор, как у Claude.
       const cxId = kind === 'codex' && t.codexSessionId && UUID_RE.test(t.codexSessionId) ? t.codexSessionId : '';
       const cxGone = !!cxId && !hasConversation(cxId, 'codex', ex.x && ex.x.env);
@@ -726,7 +814,7 @@ async function revive(c, d, p, cols, rows) {
       // Без вопросов о разрешениях (t851) — как вкладку открыли, а не по нынешней настройке проекта. Запрет в настройках Claude — обычный Claude и строка во вкладке.
       const byOff = kind === 'claude' && t.bypass === '1' ? bypassOff(p.path) : '';
       const bypass = kind === 'claude' && t.bypass === '1' && !byOff;
-      const how = launchWith(kind, resumeId, d.hooksSettings, ex.x, '', ag, kind === 'codex' ? await codexHookArgs(d, (ex.x && ex.x.cwd) || p.path) : [], bypass, tabName(p.path, name));
+      const how = launchWith(kind, resumeId, d.hooksSettings, ex.x, '', ag, kind === 'codex' ? await codexHookArgs(d, (ex.x && ex.x.cwd) || p.path) : [], bypass, tabName(p.path, name), ex.mcpArgs);
       if ('error' in how) { notices.set(t.sid, how.error); continue; }
       // Разговор уже идёт — в соседней вкладке, запущенной этим же revive, или в другом проекте (t778): второй процесс испортил бы журнал.
       // Номер запускает соседнее окно прямо сейчас (t787) — в list демона его ещё нет.
@@ -754,6 +842,7 @@ async function revive(c, d, p, cols, rows) {
           meta: { ...how.meta, ...(t.hidden === '1' ? { hidden: '1' } : {}), ...(t.logPath ? { logPath: t.logPath } : {}) },
         })).session;
         // Закрыли, пока шёл create: новый терминал гасим, в файл вкладок не пишем.
+        if (mcpFile) mcpFiles.set(s.sid, mcpFile);
         if (!left.has(t.sid)) { abandoned.add(s.sid); try { await d.request('kill', { sid: s.sid }); } catch {} tabs.remove(c.dataDir, p.id, s.sid, c.log); exits.delete(s.sid); c.log(`вкладка ${name} в ${p.path} закрыта до запуска: терминал ${s.sid} остановлен`); continue; }
         tabs.replace(c.dataDir, p.id, t.sid, entryOf(s), c.log);
         notices.delete(t.sid);
@@ -773,6 +862,7 @@ async function revive(c, d, p, cols, rows) {
         c.log(`вкладка ${name} в ${p.path} не запущена заново: ${err}`);
       }
     } finally {
+      mcpDrop(mcpFile);
       if (held && launching.get(heldId) === held) launching.delete(heldId);
       left.delete(t.sid);
       const w = projectWindow.windowFor(p.id);
@@ -848,7 +938,7 @@ async function openTabRun(c, d, p, kind, o, ex, k, cols, rows, wc) {
     const live = await projectSessions(d, p.id);
     title = freeTitle(ex.title || (ex.ag && ex.ag.name) || (kind === 'shell' ? i18n.t('term.shell', 'Терминал') : k.title), live, tabs.titles(c.dataDir, p.id, c.log));
   } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; }
-  const how = launchWith(kind, ex.resume || undefined, d.hooksSettings, ex.x, ex.prompt, ex.ag, kind === 'codex' ? await codexHookArgs(d, (ex.x && ex.x.cwd) || p.path) : [], ex.bypass, tabName(p.path, title));
+  const how = launchWith(kind, ex.resume || undefined, d.hooksSettings, ex.x, ex.prompt, ex.ag, kind === 'codex' ? await codexHookArgs(d, (ex.x && ex.x.cwd) || p.path) : [], ex.bypass, tabName(p.path, title), ex.mcpArgs);
   if ('error' in how) return how;
   let s;
   try {
@@ -857,10 +947,11 @@ async function openTabRun(c, d, p, kind, o, ex, k, cols, rows, wc) {
       file: how.file, args: how.args, cwd: (ex.x && ex.x.cwd) || p.path, env: browserCli.envFor(p, how.env), cols, rows,
       project: p.path, title, color: k.color, icon: k.icon, meta: { ...how.meta, ...ex.more },
     })).session;
+    if (mcpFileOf(ex.mcpArgs)) mcpFiles.set(s.sid, mcpFileOf(ex.mcpArgs));
     if (kind === 'codex') codexHintOnce(s.sid);
     if (ex.byOff) fresh.set(s.sid, bypassOffText(ex.byOff));
     if (wc) await attachTo(d, wc, s.sid, cols, rows);
-  } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; }
+  } catch (err) { if (!s) mcpDrop(mcpFileOf(ex.mcpArgs)); return { error: String(/** @type {any} */ (err).message || err) }; }
   tabs.add(c.dataDir, p.id, entryOf(s), c.log);
   const since = c.t0 ? `; от запуска ${Date.now() - c.t0} мс` : '';
   const agLog = `${ex.ag ? `, агент ${ex.ag.name}${ex.ag.mode && !ex.bypass ? ` (--permission-mode ${ex.ag.mode})` : ''}` : ''}${ex.bypass ? ', без вопросов о разрешениях (--dangerously-skip-permissions)' : ''}${ex.byOff ? `, без вопросов о разрешениях не включено: запрет в ${ex.byOff}` : ''}`;
@@ -878,7 +969,8 @@ async function openTabRun(c, d, p, kind, o, ex, k, cols, rows, wc) {
  * followBypass: true — вкладка Claude следует настройке проекта «без вопросов о разрешениях» (t852, агенты карт «Роадмапа»); только плагину при программе.
  * hidden: true — скрытая вкладка (t1059): терминал работает как обычный, окно её не рисует и на неё не переходит, пока не позовут showFromPlugin.
  * logPath — файл внутри папки проекта: демон пишет туда экран вкладки, когда терминал вышел или его закрыли.
- * @param {{ id: string, path: string, bypass?: boolean }} p @param {any} o { kind, args, cwd, env, title, prompt, focus, agent, resume, followBypass, hidden, logPath }
+ * mcp — имена MCP-серверов Claude (t1322, агенты карт): только они, файл серверов пишет ядро (checkExtra, mcpConfig).
+ * @param {{ id: string, path: string, bypass?: boolean }} p @param {any} o { kind, args, cwd, env, title, prompt, focus, agent, resume, followBypass, hidden, logPath, mcp }
  * @param {{ core: boolean }} [from] core — плагин из src\plugins (plugin-bridge.js builtIn)
  */
 async function openFromPlugin(p, o, from) {
@@ -1181,6 +1273,7 @@ function register(c) {
       // Старый демон state в exit не присылает — тогда вкладка просто завершена.
       if (m.state === 'error') exits.set(m.sid, 'error'); else exits.delete(m.sid);
       hiddenS.delete(m.sid);
+      mcpRelease(m.sid);
       for (const { wc, m: table } of [...watchersOf(m.sid)]) {
         const off = table.get(m.sid);
         table.delete(m.sid);

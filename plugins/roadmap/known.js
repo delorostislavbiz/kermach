@@ -206,7 +206,7 @@ function write(file, text) {
  * state.json: записи «номер проекта|dN» → { s, sha1, off }, off — запись больше не подаётся (причина); projects: номер → последняя папка.
  * Номер не записался (папка только для чтения) — вместо него путь папки (pathKey).
  * @typedef {{ s: string, sha1: string, off?: string }} Entry
- * used (t698): s<N> → «номер проекта|tN» → отзыв агента карты из её used: («помогла», «не пригодилась», «неверна»). Ключ — карта,
+ * used (t698): s<N> → «номер проекта|tN» → отзыв агента карты из её used: («помогла», «не пригодилась», «неверна», «не открывал»). Ключ — карта,
  * а не прибавка: sync зовут на каждую сборку промпта и правку доски, повторный обход ту же карту второй раз не считает.
  * @typedef {{ items: Record<string, Entry>, projects: Record<string, { path: string }>, used?: Record<string, Record<string, string>> }} State
  * @param {string} dir @returns {State}
@@ -221,7 +221,7 @@ function readState(dir) {
   return o && o.used ? { ...st, used: obj(o.used) } : st;
 }
 
-const VERDICTS = ['помогла', 'не пригодилась', 'неверна'];
+const VERDICTS = ['помогла', 'не пригодилась', 'неверна', 'не открывал'];
 /**
  * Отзывы карт проекта о записях базы — в st.used (t698). Карта убрала s<N> из used: — её отзыв уходит. Возвращает, изменилось ли что-то.
  * @param {State} st @param {string} who ключ проекта (ownerOf) @param {import('./board').Board} b
@@ -243,7 +243,7 @@ function tallyUsed(st, who, b) {
   return true;
 }
 
-/** Счётчик отзывов записи базы: { помогла, не пригодилась, неверна } — сколько карт всех проектов. @param {State} st @param {string} s */
+/** Счётчик отзывов записи базы: { помогла, не пригодилась, неверна, не открывал } — сколько карт всех проектов. @param {State} st @param {string} s */
 function countOf(st, s) {
   /** @type {Record<string, number>} */
   const n = Object.fromEntries(VERDICTS.map((v) => [v, 0]));
@@ -367,7 +367,7 @@ function conflicted(dir, f) {
  * edited — s<N>.md правили руками, запись в проекте изменилась, removed — s<N>.md удалён из базы, conflict — в s<N>.md метки конфликта git.
  * code и args — та же причина кодом из WHY (t1021): окно переводит по коду; why — текст по-русски, для старых читателей.
  * @typedef {{ id: string, s: string, kind: 'shared' | 'new' | 'not' | 'leak' | 'edited' | 'removed' | 'conflict', why: string, code: string, args: Args, used?: Record<string, number> }} Mark
- * used (t698) — у пометки с s<N>: сколько карт всех проектов отозвались о копии «помогла», «не пригодилась», «неверна» (countOf).
+ * used (t698) — у пометки с s<N>: сколько карт всех проектов отозвались о копии «помогла», «не пригодилась», «неверна», «не открывал» (countOf).
  */
 /** @param {string} id @param {string} s @param {Mark['kind']} kind @param {string} code @param {Args} [args] @returns {Mark} */
 const mark = (id, s, kind, code, args = {}) => ({ id, s, kind, why: whyOf(code, args), code, args });

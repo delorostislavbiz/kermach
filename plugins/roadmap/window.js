@@ -82,7 +82,7 @@ function roadmapSetup(host) {
   /** @type {WeakMap<object, any>} */
   const useMemo = new WeakMap();
   /**
-   * Счётчики пользы (t837) по полю used карт (t836), за всё время. У записи — сколько карт сказали «помогла», «не пригодилась», «неверна».
+   * Счётчики пользы (t837) по полю used карт (t836), за всё время. У записи — сколько карт сказали «помогла», «не пригодилась», «неверна», «не открывал» (per[id][3]).
    * На доске: подано — записи из served карты (t1008) и отзывы used; необъединённые повторы — пометки «похожа на dN» (alikeD, t835); пропущенный повтор — новая запись
    * карты tN похожа на dN, а в served tN записи dN нет: подбор её не подал. dN в утверждённом паттерне dM (alikeP, t1030) — подан, если подан dM.
    * Карта без served (запущена до t1008) — по used, как раньше; без обоих не считается.
@@ -99,9 +99,9 @@ function roadmapSetup(host) {
       const own = Object.entries(c.used || {}).filter(([id]) => id[0] === 'd');
       u.given += new Set([...(Array.isArray(c.served) ? c.served : []), ...own.map(([id]) => id)]).size;
       for (const [id, v] of own) {
-        const i = ['помогла', 'не пригодилась', 'неверна'].indexOf(String(v));
+        const i = ['помогла', 'не пригодилась', 'неверна', 'не открывал'].indexOf(String(v));
         if (i < 0) continue;
-        (per[id] = per[id] || [0, 0, 0])[i]++;
+        (per[id] = per[id] || [0, 0, 0, 0])[i]++;
         if (i === 0) u.ok++;
         if (i === 2) u.bad++;
       }
@@ -127,7 +127,8 @@ function roadmapSetup(host) {
     const n = last && got(useOf(last).per, d.id);
     if (!n) return '';
     const v = { ok: n[0], no: n[1], bad: n[2] };
-    return full ? T('dUse', 'отзывы: помогла {ok}, не пригодилась {no}, неверна {bad}', v) : T('dUseS', 'отзывы {ok}/{no}/{bad}', v);
+    const shut = n[3] ? ` · ${T('dUseN', 'не открывал {n}', { n: n[3] })}` : '';
+    return (full ? T('dUse', 'отзывы: помогла {ok}, не пригодилась {no}, неверна {bad}', v) : T('dUseS', 'отзывы {ok}/{no}/{bad}', v)) + shut;
   };
   /** Ждёт человека (t987): агент отметил «неверна» с причиной (t836), запись не отменена — агентам она не подаётся. @param {any} d */
   const isWrong = (d) => !!(d.wrong && d.wrong.length && !d.cancelled);
@@ -678,6 +679,8 @@ function roadmapSetup(host) {
     const m = got(RM_STATUS, c.status) || RM_STATUS['в очереди'];
     let meta = statusWord(c.status);
     let tone = '';
+    // Черновик дальней фазы (t1325, `draft: да`): волна «все» и «независимые» его не берёт, пока на сверке не допишут «Как проверить».
+    if (c.status !== 'готово' && String((c.extra && c.extra.draft) || '').trim().toLowerCase() === 'да') meta += ` · ${T('draft', 'черновик')}`;
     // Место в волне (t687): «ждёт места» — до старта; «вкладка закрыта, карта не готова» и «не запущена» — после.
     const wi = wItems.get(c.id);
     if (wi && wi.st === 'closed' && c.status !== 'готово') { meta += ` · ${T('wave.closed', 'вкладка закрыта, карта не готова')}`; tone = ' warn'; }
@@ -795,7 +798,8 @@ function roadmapSetup(host) {
     if (x.why === 'status') return statusWord(x.st || '');
     /** @type {Record<string, string>} */
     const WHY = { human: T('wave.why.human', 'нужен человек'), inbox: T('wave.why.inbox', 'во «Входящих»'), running: T('wave.why.running', 'уже запущена'),
-      wave: T('wave.why.wave', 'уже в другой волне'), phase: T('wave.why.phase', 'не в этой фазе'), agent: T('wave.why.agent', 'другой агент') };
+      wave: T('wave.why.wave', 'уже в другой волне'), phase: T('wave.why.phase', 'не в этой фазе'), agent: T('wave.why.agent', 'другой агент'),
+      draft: T('wave.why.draft', 'черновик') };
     return got(WHY, x.why) || x.why;
   };
   /** Строка волны в фазе (t687): буква и вид, «идёт · N из M» / «завершена» / «остановлена человеком · время», полоска, пропуски и закрытые вкладки. @param {any} wv */
@@ -2087,7 +2091,7 @@ function roadmapSetup(host) {
         : '';
     // Отзывы карт всех проектов о копии (t698, known.countOf): «помогла 2 · не пригодилась 1».
     const u = m.used && typeof m.used === 'object' ? m.used : null;
-    const said = u ? [['помогла', 'dc.kUsedOk', 'помогла {n}'], ['не пригодилась', 'dc.kUsedNo', 'не пригодилась {n}'], ['неверна', 'dc.kUsedBad', 'неверна {n}']]
+    const said = u ? [['помогла', 'dc.kUsedOk', 'помогла {n}'], ['не пригодилась', 'dc.kUsedNo', 'не пригодилась {n}'], ['неверна', 'dc.kUsedBad', 'неверна {n}'], ['не открывал', 'dc.kUsedShut', 'не открывал {n}']]
       .filter(([w]) => Number(u[w]) > 0).map(([w, key, ru]) => T(key, ru, { n: Number(u[w]) })).join(' · ') : '';
     return `<div class="dknown${m.kind === 'shared' || m.kind === 'new' ? '' : ' bad'}" data-known="${esc(m.kind)}"><span>${esc(k ? T(k, ru, v) : ru)}</span>`
       + (said ? `<span class="kw" data-kused>${esc(said)}</span>` : '')
