@@ -9,7 +9,7 @@
 <script src="i18n.js"></script>
 <style>
   @font-face {
-    font-family: 'TERMINALUS Mono';
+    font-family: 'Kermach Mono';
     src: url('../fonts/JetBrainsMonoNLNerdFontPropo-ExtraLight.ttf');
   }
   /* Размеры и цвета — экран 2 макета design\TERMINALUS.dc.html. */
@@ -20,7 +20,7 @@
   [hidden] { display: none !important; }
 
   /* Заголовок окна: за него окно перетаскивается, кнопки — нет. */
-  #title { height: 36px; display: flex; align-items: center; padding-left: 14px; flex-shrink: 0; -webkit-app-region: drag; }
+  #title { order: -1; height: 36px; display: flex; align-items: center; padding-left: 14px; flex-shrink: 0; -webkit-app-region: drag; }
   #title .name { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; font-size: 12px; white-space: nowrap; }
   #title .name .muted { color: var(--muted); }
   #pColor { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
@@ -35,7 +35,8 @@
   #main { flex: 1; display: flex; min-height: 0; }
 
   /* Слева — терминалы проекта. */
-  #side { width: 236px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line, rgba(141,145,165,.14)); padding: 6px 0 8px; }
+  /* В узком окне (уже ~800 css px) панель сужается до 140, чтобы вкладке оставалось место (t1214, d160); темы меняют только width. */
+  #side { width: 236px; max-width: max(140px, calc(100vw - 560px)); flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line, rgba(141,145,165,.14)); padding: 6px 0 8px; }
   #side .cap { font-size: 11px; color: var(--muted); padding: 4px 14px 6px; }
   #list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 0 6px; }
   .term { display: flex; align-items: center; gap: 10px; height: 44px; flex-shrink: 0; padding: 0 10px 0 6px; border-radius: 4px; cursor: default; }
@@ -66,7 +67,7 @@
   #addAgents.open { background: var(--hover); }
   #addsAgents { position: absolute; display: flex; flex-direction: column; min-width: 200px; max-height: 70vh; overflow-y: auto; padding: 6px; background: var(--menu); border: 1px solid rgba(var(--muted-rgb),.22); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
   #adds [hidden] { display: none; }
-  #adds.rest > #addClaude, #adds.rest > #addCodex, #adds.rest > #addShell, #adds.rest > #addsSep { display: none; }
+  #adds.rest > #addClaude, #adds.rest > #addClaudeBypass, #adds.rest > #addCodex, #adds.rest > #addShell, #adds.rest > #addsSep { display: none; }
 
   /* В середине — вкладки и терминалы. */
   #center { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -106,7 +107,8 @@
      Разделители .lgrip — между частями, тянутся мышью. Пустая часть .lslot — список вкладок на выбор. */
   #panes.split .pane.focus::after { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--accent, #2091F6); pointer-events: none; z-index: 10; }
   #panes.split .pane:not(.page).focus::after { left: -16px; right: -16px; top: -16px; }
-  .lgrip { position: absolute; z-index: 6; }
+  /* touch-action: none — иначе касание пальцем браузер забирает под прокрутку и шлёт pointercancel (t1214, d304). */
+  .lgrip { position: absolute; z-index: 6; touch-action: none; }
   .lgrip.v { width: 7px; margin-left: -3px; cursor: col-resize; background: linear-gradient(to right, transparent 3px, var(--line, rgba(141,145,165,.14)) 3px, var(--line, rgba(141,145,165,.14)) 4px, transparent 4px); }
   .lgrip.h { height: 7px; margin-top: -3px; cursor: row-resize; background: linear-gradient(to bottom, transparent 3px, var(--line, rgba(141,145,165,.14)) 3px, var(--line, rgba(141,145,165,.14)) 4px, transparent 4px); }
   .lgrip:hover, .lgrip.drag { background: rgba(var(--muted-rgb),.25); }
@@ -144,7 +146,7 @@
      Скрыты, пока плагин сам не снимет hidden. */
   /* Ширину ставит right-resize.js: тянется за левый край, сохраняется, в узком окне вкладке остаётся 400 px (t347). 350 px — как в Орке. */
   #right { width: 350px; flex-shrink: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line, rgba(141,145,165,.14)); }
-  #rightGrip { flex: 0 0 6px; margin: 0 -3px; position: relative; z-index: 3; cursor: col-resize; }
+  #rightGrip { flex: 0 0 6px; margin: 0 -3px; position: relative; z-index: 3; cursor: col-resize; touch-action: none; }
   #rightGrip:hover, #rightGrip.drag { background: rgba(var(--muted-rgb),.25); }
   #main:has(> #right[hidden]) > #rightGrip { display: none; }
   body.rdrag, body.rdrag * { cursor: col-resize !important; user-select: none; }
@@ -157,6 +159,34 @@
 <link rel="stylesheet" href="ui.css">
 </head>
 <body>
+<div id="main">
+  <div id="side">
+    <!-- Шапка панели (t655): плитка, имя и путь проекта — рисует paintProject. «Скрыть панель» (t678) — кнопка в шапке, «Показать» — #sideShow в начале полосы вкладок.
+         Видны только в теме Kermach и Termius Dark (ui-kermach-project.css). -->
+    <div id="sideHead">
+      <div class="tile"><i id="sideTint"></i><span id="sideIcon"></span></div>
+      <div class="pt"><div id="sideName"></div><div id="sidePath"></div></div>
+      <div id="sideHide" title="Скрыть панель" data-i18n-title="page.skrytPanel"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M9.5 4.5v15"/></svg></div>
+    </div>
+    <div class="cap" data-i18n="page.terminaly">Терминалы<span id="termCount"></span></div>
+    <div id="list"></div>
+    <!-- Кнопки «+ Claude», «+ Codex», «+ Shell» (t677) — щелчок по тому же пункту меню «+»; остальные агенты — в меню «+». -->
+    <div id="sideAdds"><div data-for="addClaude"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Claude</div><div data-for="addCodex"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Codex</div><div data-for="addShell" data-i18n="page.shell"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Shell</div></div>
+    <div id="sideFoot" hidden></div>
+    <!-- Строка «Настройки» (t660) — после #sideFoot: строки плагинов дописываются в его конец, а «Настройки» в макете последние. -->
+    <div id="sideSet" data-i18n="dialogs.nastroyki"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>Настройки</div>
+  </div>
+  <div id="center">
+    <div id="tabrow"><div id="sideShow" title="Показать панель" data-i18n-title="page.pokazatPanel"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M9.5 4.5v15"/></svg></div><div id="tabs"></div><div id="plus" title="Новая вкладка" data-i18n-title="page.novayaVkladka"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div><div id="layoutBtn" title="Раскладка" data-i18n-title="layout.title"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg></div><div id="tbBrowser" title="Браузер" data-i18n-title="browser.brauzer" hidden><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></div></div>
+    <div id="adds"><div class="item" id="addClaude" data-icon="claude" data-color="#2091F6">Claude</div><div class="item" id="addCodex" data-icon="openai" data-color="#ECA855">Codex</div><div class="item" id="addShell" data-icon="terminal" data-color="#8D91A5" data-i18n="page.terminal">Терминал</div><div class="sep" id="addsSep" hidden></div><div class="item" id="addAgents" data-icon="bot" data-color="#2091F6" data-i18n="page.agenty" hidden>Агенты</div><div id="addsAgents" hidden></div><div class="sep" id="addsDlgSep"></div><div class="item" id="addAgentsDlg" data-icon="gear" data-i18n="page.agentsDlg">Агенты…</div></div>
+    <div id="panes"><div id="empty" hidden><div class="ask" data-i18n="page.chtoZapustit">Что запустить?</div><div class="btns" id="emptyBtns"></div></div></div>
+  </div>
+  <div id="rightGrip"></div>
+  <div id="right" hidden></div>
+</div>
+<div id="bottom" hidden></div>
+<!-- Шапка — последней в разметке (t761): Chromium собирает области перетаскивания по порядку документа, и drag полосы вкладок и правой панели,
+     стоящих позже, перекрывал no-drag кнопок окна. На экране шапка сверху: order −1 в классическом виде, position absolute в Kermach и Termius Dark. -->
 <div id="title">
   <div class="name"><span id="pColor"></span><span id="pIcon"></span><span id="pName"></span><span class="muted">— Kermach</span></div>
   <div class="btns">
@@ -165,21 +195,6 @@
     <div id="close" title="Закрыть" data-i18n-title="common.close"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1"/></svg></div>
   </div>
 </div>
-<div id="main">
-  <div id="side">
-    <div class="cap" data-i18n="page.vkladki">Вкладки</div>
-    <div id="list"></div>
-    <div id="sideFoot" hidden></div>
-  </div>
-  <div id="center">
-    <div id="tabrow"><div id="tabs"></div><div id="plus" title="Новая вкладка" data-i18n-title="page.novayaVkladka"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div><div id="layoutBtn" title="Раскладка" data-i18n-title="layout.title"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg></div></div>
-    <div id="adds"><div class="item" id="addClaude" data-icon="claude" data-color="#2091F6">Claude</div><div class="item" id="addCodex" data-icon="openai" data-color="#ECA855">Codex</div><div class="item" id="addShell" data-icon="terminal" data-color="#8D91A5" data-i18n="page.terminal">Терминал</div><div class="sep" id="addsSep" hidden></div><div class="item" id="addAgents" data-icon="bot" data-color="#2091F6" data-i18n="page.agenty" hidden>Агенты</div><div id="addsAgents" hidden></div></div>
-    <div id="panes"><div id="empty" hidden><div class="ask" data-i18n="page.chtoZapustit">Что запустить?</div><div class="btns" id="emptyBtns"></div></div></div>
-  </div>
-  <div id="rightGrip"></div>
-  <div id="right" hidden></div>
-</div>
-<div id="bottom" hidden></div>
 <script src="icons.js"></script>
 <script src="states.js"></script>
 <script src="keys.js"></script>

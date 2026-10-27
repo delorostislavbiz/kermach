@@ -4,10 +4,17 @@
 // Ответ look() — в том же виде, что у плагина «Темы» ({ id, kind, window, terminal }), его красит renderer\theme.js;
 // сверх того ui (имя темы для ui.css) и vars — CSS-переменные, которых нет в окне схемы (шрифты, поверхность, радиусы).
 // Чистые функции: акцент системы и светлый/тёмный вид — параметрами.
+// Kermach (макет Claude Design, t651): kermach — Светлая и Тёмная по appearance, termius — Termius Dark, всегда тёмная.
+// termius — наследник «Темы Ростислава»: цвета theme.css и схемы плагина «Темы» (termius() ниже), сверх них — переменные макета.
+// Таблица цветов — README макета, «Токены тем»; новые переменные: --card, --term, --line-strong, --off, --knob, --tint-a, --ok.
 
-/** Имена тем. rostyslav — прежний вид. */
-const UIS = ['rostyslav', 'glass', 'studio', 'deck'];
+/** Имена тем. rostyslav — прежний вид, в «Настройках» его нет (t651), сохранённое значение читается как termius (settings.js). */
+const UIS = ['kermach', 'termius', 'rostyslav', 'glass', 'studio', 'deck'];
+/** Тема по умолчанию (решение t643, вопрос 1): Termius Dark — нынешние цвета программы. */
+const DEFAULT_UI = 'termius';
 const APPEARANCES = ['system', 'light', 'dark'];
+/** Темы, доступные в системе: «Скло» держится на полупрозрачности macOS (vibrancy), на Windows окно было бы прозрачным без фона (t506). @param {string} platform */
+const uisFor = (platform) => UIS.filter((u) => u !== 'glass' || platform === 'darwin');
 
 const rgb = (/** @type {string} */ h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(',');
 
@@ -19,7 +26,9 @@ function win(w) {
 const FONT_SYS = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', system-ui, sans-serif";
 const FONT_ONEST = "'Kermach Onest', -apple-system, system-ui, sans-serif";
 const FONT_GOLOS = "'Kermach Golos', -apple-system, system-ui, sans-serif";
-const FONT_MONO = "'Kermach JBMono', 'TERMINALUS Mono', ui-monospace, Menlo, monospace";
+const FONT_MONO = "'Kermach JBMono', 'Kermach Mono', ui-monospace, Menlo, monospace";
+/** Шрифт макета (t652): Segoe UI Variable на Windows 11, на macOS — системный. */
+const FONT_KERMACH = "'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif";
 
 /**
  * Палитры. a — акцент: у «Скла» — акцент системы (systemPreferences), остальные свои.
@@ -28,6 +37,30 @@ const FONT_MONO = "'Kermach JBMono', 'TERMINALUS Mono', ui-monospace, Menlo, mon
  */
 function palette(ui, mode, sysAccent) {
   const dark = mode === 'dark';
+  if (ui === 'kermach') {
+    // Светлая и Тёмная макета (t651). ok — «работает» (renderer\states.js), info — ссылки и «готов» вкладки сайта.
+    return dark ? {
+      window: win({ bg: '#1E1E20', text: '#F2F2F5', side: '#29292C', title: '#1E1E20', tabbar: '#1E1E20', tabActive: '#3A3A3D', tabActiveFg: '#F2F2F5',
+        tabInactiveFg: '#98989F', status: '#1E1E20', statusFg: '#98989F', line: 'rgba(255,255,255,.08)', hover: 'rgba(255,255,255,.08)', selected: 'rgba(255,255,255,.08)',
+        input: '#161618', menu: '#2E2E31', viewBack: '#161618', raised: '#3A3A3D', tileHover: 'rgba(255,255,255,.10)', muted: '#98989F', faint: '#636366',
+        disabled: '#48484A', accent: '#0A84FF', accentHover: '#409CFF', accentBg: 'rgba(10,132,255,.22)', onAccent: '#FFFFFF', button: '#0A84FF', buttonFg: '#FFFFFF',
+        focus: '#0A84FF', danger: '#FF453A', dangerHover: '#FF6961', warn: '#FF9F0A', info: '#64D2FF', ok: '#32D74B', claude: '#0A84FF', codex: '#FF9F0A',
+        agent: '#30C8B0', overlay: 'rgba(0,0,0,.45)', tileNeed: 'rgba(255,159,10,.14)', tileNeedHover: 'rgba(255,159,10,.2)' }),
+      vars: { '--card': '#2A2A2D', '--term': '#161618', '--line-strong': 'rgba(255,255,255,.14)', '--off': 'rgba(255,255,255,.18)', '--knob': '#FFFFFF', '--tint-a': '.2',
+        '--surface': '#2A2A2D', '--chrome': '#1E1E20', '--card-shadow': 'none' },
+      terminal: term(dark, { background: '#161618', foreground: '#E5E5EA', cursor: '#0A84FF' }),
+    } : {
+      window: win({ bg: '#F2F2F4', text: '#1D1D1F', side: '#E8E8EB', title: '#F2F2F4', tabbar: '#F2F2F4', tabActive: '#FFFFFF', tabActiveFg: '#1D1D1F',
+        tabInactiveFg: '#6E6E73', status: '#F2F2F4', statusFg: '#6E6E73', line: 'rgba(0,0,0,.08)', hover: 'rgba(0,0,0,.06)', selected: 'rgba(0,0,0,.06)',
+        input: '#FFFFFF', menu: '#FFFFFF', viewBack: '#E8E8EB', raised: '#E2E2E6', tileHover: 'rgba(0,0,0,.06)', muted: '#6E6E73', faint: '#A1A1A6',
+        disabled: '#C7C7CC', accent: '#0A7AFF', accentHover: '#0060D6', accentBg: 'rgba(10,122,255,.12)', onAccent: '#FFFFFF', button: '#0A7AFF', buttonFg: '#FFFFFF',
+        focus: '#0A7AFF', danger: '#E0352B', dangerHover: '#C42D24', warn: '#B86E00', info: '#0A64D6', ok: '#1E9E52', claude: '#0A7AFF', codex: '#E08600',
+        agent: '#0E9C8C', overlay: 'rgba(0,0,0,.2)', tileNeed: 'rgba(184,110,0,.12)', tileNeedHover: 'rgba(184,110,0,.18)' }),
+      vars: { '--card': '#FFFFFF', '--term': '#FFFFFF', '--line-strong': 'rgba(0,0,0,.14)', '--off': 'rgba(0,0,0,.14)', '--knob': '#FFFFFF', '--tint-a': '.14',
+        '--surface': '#FFFFFF', '--chrome': '#F2F2F4', '--card-shadow': 'none' },
+      terminal: term(dark, { background: '#FFFFFF', foreground: '#1D1D1F', cursor: '#0A7AFF' }),
+    };
+  }
   if (ui === 'glass') {
     const a = sysAccent || '#0A84FF';
     return dark ? {
@@ -107,6 +140,7 @@ function term(dark, o) {
 
 /** Шрифты и форма темы — CSS-переменные для ui.css. @param {string} ui */
 function shape(ui) {
+  if (ui === 'kermach' || ui === 'termius') return { '--font-ui': FONT_KERMACH, '--font-label': FONT_KERMACH, '--r-sm': '6px', '--r-md': '8px', '--r-lg': '10px' };
   if (ui === 'glass') return { '--font-ui': FONT_SYS, '--font-label': FONT_SYS, '--r-sm': '6px', '--r-md': '8px', '--r-lg': '12px' };
   if (ui === 'studio') return { '--font-ui': FONT_ONEST, '--font-label': FONT_ONEST, '--r-sm': '7px', '--r-md': '10px', '--r-lg': '14px' };
   return { '--font-ui': FONT_GOLOS, '--font-label': FONT_MONO, '--r-sm': '4px', '--r-md': '6px', '--r-lg': '8px' };
@@ -117,13 +151,35 @@ function shape(ui) {
  * @param {{ ui: string, appearance: string, systemDark: boolean, sysAccent?: string }} o
  */
 function look(o) {
-  if (!UIS.includes(o.ui) || o.ui === 'rostyslav') return null;
+  if (!UIS.includes(o.ui) || o.ui === 'rostyslav' || o.ui === 'termius') return null;
   const mode = o.appearance === 'light' ? 'light' : o.appearance === 'dark' ? 'dark' : o.systemDark ? 'dark' : 'light';
   const p = palette(o.ui, mode, o.sysAccent || '');
   return { id: `${o.ui}-${mode}`, ui: o.ui, kind: mode, window: p.window, terminal: p.terminal, vars: { ...shape(o.ui), ...p.vars }, list: [] };
 }
 
+/**
+ * Вид Termius Dark (t651). scheme — схема плагина «Темы» ({ id, kind, window, terminal, list }) или null — плагина нет или он выключен.
+ * Без схемы — null, как «Тема Ростислава» до t651 (проверка t185 ждёт null): окно берёт цвета theme.css,
+ * переменные макета сверх них — renderer\ui-kermach.css, правило html[data-ui="termius"]:not([data-theme]).
+ * Со схемой — её цвета; переменные макета выводятся из неё, ok — зелёный её терминала.
+ * @param {any} scheme
+ */
+function termius(scheme) {
+  if (!scheme || !scheme.window) return null;
+  const W = scheme.window;
+  const m = W.mutedRgb || (/^#[0-9a-f]{6}$/i.test(W.muted || '') ? rgb(W.muted) : '141,145,165');
+  const light = scheme.kind === 'light';
+  const ok = (scheme.terminal && scheme.terminal.green) || W.accent;
+  // Текст окна — цвет текста терминала схемы (t757; в Termius Dark без схемы то же делает ui-kermach.css, t753). Нет цвета у терминала — text схемы.
+  const fg = (scheme.terminal && /^#[0-9a-f]{6}$/i.test(scheme.terminal.foreground || '') && scheme.terminal.foreground) || W.text;
+  return {
+    ...scheme, ui: 'termius', window: { ...W, ok, text: fg, tabActiveFg: fg },
+    vars: { ...shape('termius'), '--card': W.tabActive || W.bg, '--term': (scheme.terminal && scheme.terminal.background) || W.bg, '--line-strong': `rgba(${m},.26)`,
+      '--off': `rgba(${m},.3)`, '--knob': light ? '#FFFFFF' : W.text, '--tint-a': light ? '.14' : '.18' },
+  };
+}
+
 /** Акцент macOS из systemPreferences.getAccentColor(): «rrggbbaa» → #rrggbb; не прочитан — ''. @param {string} s */
 const accentOf = (s) => (/^[0-9a-f]{6}/i.test(String(s || '')) ? `#${String(s).slice(0, 6)}` : '');
 
-module.exports = { UIS, APPEARANCES, look, accentOf, palette };
+module.exports = { UIS, DEFAULT_UI, APPEARANCES, uisFor, look, termius, accentOf, palette, shape };

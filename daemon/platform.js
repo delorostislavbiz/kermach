@@ -9,23 +9,56 @@ const path = require('path');
 const SOCK_MAX = 103;
 
 /**
- * Папка данных. Windows — %APPDATA%\TERMINALUS (нет APPDATA — домашняя папка), macOS — ~/Library/Application Support/TERMINALUS.
- * @param {{ platform: string, env: NodeJS.ProcessEnv, home: string }} o
+ * Папка данных. Windows — %APPDATA%\Kermach (нет APPDATA — домашняя папка), macOS — ~/Library/Application Support/Kermach (t1304).
+ * name 'TERMINALUS' — старая папка, из которой переезжают.
+ * @param {{ platform: string, env: NodeJS.ProcessEnv, home: string, name?: string }} o
  */
-function dataDir({ platform, env, home }) {
-  if (platform === 'darwin') return path.posix.join(home, 'Library', 'Application Support', 'TERMINALUS');
-  return path.join(env.APPDATA || home, 'TERMINALUS');
+function dataDir({ platform, env, home, name = 'Kermach' }) {
+  if (platform === 'darwin') return path.posix.join(home, 'Library', 'Application Support', name);
+  return path.join(env.APPDATA || home, name);
 }
 
 /**
- * Канал к демону. Windows — именованный канал на пользователя. Остальные — файл сокета в папке данных:
- * путь полный, иначе демон и окно, запущенные из разных папок, искали бы разные файлы. Длиннее предела — в /tmp.
- * @param {{ platform: string, user: string, dataDir: string }} o
+ * Какую папку данных брать (t1304). Порядок: папка data рядом с exe (портативный режим, без переезда) → Kermach →
+ * старая TERMINALUS, если есть только она (move — переехать, когда её никто не держит) → Kermach.
+ * @param {{ platform: string, env: NodeJS.ProcessEnv, home: string, execPath: string, exists: (f: string) => boolean }} o
+ * @returns {{ dir: string, portable: boolean, move: { from: string, to: string } | null }}
  */
-function pipePath({ platform, user, dataDir: dir }) {
-  if (platform === 'win32') return `\\\\.\\pipe\\terminalus-${user}`;
+function pickDataDir({ platform, env, home, execPath, exists }) {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const portable = p.join(p.dirname(execPath), 'data');
+  if (execPath && exists(portable)) return { dir: portable, portable: true, move: null };
+  const dir = dataDir({ platform, env, home });
+  const old = dataDir({ platform, env, home, name: 'TERMINALUS' });
+  if (exists(dir) || !exists(old)) return { dir, portable: false, move: null };
+  return { dir: old, portable: false, move: { from: old, to: dir } };
+}
+
+/**
+ * Канал к демону. Windows — именованный канал на пользователя; у портативной папки — свой, с хэшем её пути,
+ * чтобы портативная копия и установленная не делили демон (t1304). Остальные — файл сокета в папке данных:
+ * путь полный, иначе демон и окно, запущенные из разных папок, искали бы разные файлы. Длиннее предела — в /tmp.
+ * name — приставка имени: 'terminalus' — канал демона до t1307, его клиент ищет, пока старый демон не перезапустится.
+ * @param {{ platform: string, user: string, dataDir: string, portable?: boolean, name?: string }} o
+ */
+function pipePath({ platform, user, dataDir: dir, portable = false, name = 'kermach' }) {
+  if (platform === 'win32') {
+    if (!portable) return `\\\\.\\pipe\\${name}-${user}`;
+    const id = require('crypto').createHash('sha1').update(path.win32.resolve(dir).toLowerCase()).digest('hex').slice(0, 12);
+    return `\\\\.\\pipe\\${name}-${user}-p${id}`;
+  }
   const p = path.posix.join(dir, 'daemon.sock');
-  return Buffer.byteLength(p) <= SOCK_MAX ? p : `/tmp/terminalus-${user}.sock`;
+  return Buffer.byteLength(p) <= SOCK_MAX ? p : `/tmp/${name}-${user}.sock`;
+}
+
+/**
+ * Переменная программы (t1307): KERMACH_<имя>, нет её — TERMINALUS_<имя>. Старое имя остаётся у вкладок,
+ * открытых демоном или окном до переименования: из них работают kermach, хуки и строка состояния.
+ * @param {NodeJS.ProcessEnv} env @param {string} name без приставки, например 'PIPE' @returns {string | undefined}
+ */
+function envOf(env, name) {
+  const v = env[`KERMACH_${name}`];
+  return v !== undefined ? v : env[`TERMINALUS_${name}`];
 }
 
 /**
@@ -69,4 +102,4 @@ function nodeCommand({ platform, pathEnv = '', execPath = '', electron = false, 
   return 'node';
 }
 
-module.exports = { dataDir, pipePath, defaultCwd, nodeFile, nodeCommand, shellArg, SOCK_MAX };
+module.exports = { dataDir, pickDataDir, pipePath, envOf, defaultCwd, nodeFile, nodeCommand, shellArg, SOCK_MAX };

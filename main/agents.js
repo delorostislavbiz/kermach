@@ -12,25 +12,30 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const sender = require('./sender');
+const alive = require('./dir-alive');
 const settings = require('./settings');
-const { findProgram, notFound } = require('./find-program');
+const { findProgram, findProgramsAsync, notFound } = require('./find-program');
 const i18n = require('./i18n');
 
 /**
  * Известные агенты. cmd — имена программы по порядку (у Kimi запасное имя), args — что Орка добавляет при запуске.
  * pics — понимает картинку по пути в строке ввода: ему уходят снимок и выбранный элемент со страницы (t38, t39, t416).
- * @typedef {{ id: string, title: string, cmd: string[], args: string[], builtin?: boolean, pics?: boolean }} Agent
+ * prompt — как агент берёт первое сообщение при запуске (t576, promptInjectionMode в tui-agent-config Орки): нет поля — последним аргументом;
+ * строка — флагом перед текстом; false — только вводом после старта, задание при запуске ядро ему не передаёт. «--» перед текстом
+ * (у Орки — grok, prime-agent) не ставим: ядро не пускает первое сообщение с «-» (terminals.js checkExtra), а grok берёт текст аргументом и без него
+ * (~\.grok\docs\user-guide\01-getting-started.md: grok "fix the failing auth test").
+ * @typedef {{ id: string, title: string, cmd: string[], args: string[], builtin?: boolean, pics?: boolean, prompt?: string | false }} Agent
  * @type {Agent[]}
  */
 const CATALOG = [
   { id: 'claude', title: 'Claude', cmd: ['claude'], args: [], builtin: true, pics: true },
   { id: 'codex', title: 'Codex', cmd: ['codex'], args: [], builtin: true, pics: true },
-  { id: 'gemini', title: 'Gemini', cmd: ['gemini'], args: [] },
-  { id: 'antigravity', title: 'Antigravity', cmd: ['agy'], args: [] },
-  { id: 'amp', title: 'Amp', cmd: ['amp'], args: [] },
-  { id: 'opencode', title: 'OpenCode', cmd: ['opencode'], args: [] },
-  { id: 'opencode2', title: 'OpenCode 2', cmd: ['opencode2'], args: ['--standalone'] },
-  { id: 'mimo-code', title: 'MiMo Code', cmd: ['mimo'], args: [] },
+  { id: 'gemini', title: 'Gemini', cmd: ['gemini'], args: [], prompt: '--prompt-interactive' },
+  { id: 'antigravity', title: 'Antigravity', cmd: ['agy'], args: [], prompt: '--prompt-interactive' },
+  { id: 'amp', title: 'Amp', cmd: ['amp'], args: [], prompt: false },
+  { id: 'opencode', title: 'OpenCode', cmd: ['opencode'], args: [], prompt: '--prompt' },
+  { id: 'opencode2', title: 'OpenCode 2', cmd: ['opencode2'], args: ['--standalone'], prompt: '--prompt' },
+  { id: 'mimo-code', title: 'MiMo Code', cmd: ['mimo'], args: [], prompt: '--prompt' },
   { id: 'cursor', title: 'Cursor', cmd: ['cursor-agent'], args: [] },
   { id: 'pi', title: 'Pi', cmd: ['pi'], args: [] },
   { id: 'omp', title: 'OMP', cmd: ['omp'], args: [] },
@@ -38,12 +43,13 @@ const CATALOG = [
   { id: 'droid', title: 'Droid', cmd: ['droid'], args: [] },
   { id: 'command-code', title: 'Command Code', cmd: ['command-code'], args: ['--trust'] },
   { id: 'grok', title: 'Grok', cmd: ['grok'], args: [], pics: true },
-  { id: 'copilot', title: 'GitHub Copilot', cmd: ['copilot'], args: [] },
-  { id: 'hermes', title: 'Hermes', cmd: ['hermes'], args: ['--tui'] },
-  { id: 'devin', title: 'Devin', cmd: ['devin'], args: [] },
-  { id: 'kimi', title: 'Kimi', cmd: ['kimi', 'kimi-code'], args: [] },
-  { id: 'muse', title: 'Muse', cmd: ['muse'], args: ['--trust-workspace'] },
-  { id: 'zcode', title: 'ZCode', cmd: ['zcode'], args: [] },
+  { id: 'copilot', title: 'GitHub Copilot', cmd: ['copilot'], args: [], prompt: '-i' },
+  // hermes у Орки собирает команду сам (hermes-query) — как он берёт задание, не проверено.
+  { id: 'hermes', title: 'Hermes', cmd: ['hermes'], args: ['--tui'], prompt: false },
+  { id: 'devin', title: 'Devin', cmd: ['devin'], args: [], prompt: false },
+  { id: 'kimi', title: 'Kimi', cmd: ['kimi', 'kimi-code'], args: [], prompt: false },
+  { id: 'muse', title: 'Muse', cmd: ['muse'], args: ['--trust-workspace'], prompt: false },
+  { id: 'zcode', title: 'ZCode', cmd: ['zcode'], args: [], prompt: false },
 ];
 const BY_ID = new Map(CATALOG.map((a) => [a.id, a]));
 
@@ -67,6 +73,48 @@ const enabled = (a) => !!a.builtin || settings.agentOn(a.id);
 
 /** Список для настроек, меню «+» и подсказок браузера (pics, t438): весь каталог, найден ли каждый сейчас. @returns {{ id: string, title: string, found: boolean, enabled: boolean, builtin: boolean, pics: boolean }[]} */
 const list = () => CATALOG.map((a) => ({ id: a.id, title: a.title, found: !!find(a), enabled: enabled(a), builtin: !!a.builtin, pics: !!a.pics }));
+
+/**
+ * То же, что list, но поиск идёт асинхронно: главный процесс не стоит на 22 именах × папках PATH (t204, ~100 мс). Кэша нет —
+ * агента удалили, следующий запрос его уже не видит. Поиск делят только запросы одного тика (t1090): запрос, пришедший, когда поиск
+ * уже идёт, не берёт его результат — файл могли удалить после начала поиска; он ждёт следующий поиск, один на всех поздних.
+ */
+/** @type {Promise<Map<string, { file: string, pre: string[] } | null>> | null} */
+let listOpen = null;
+/** @type {Promise<Map<string, { file: string, pre: string[] } | null>> | null} */
+let listRunning = null;
+/** @type {Promise<Map<string, { file: string, pre: string[] } | null>> | null} */
+let listNext = null;
+/** Новый поиск; пока идёт текущий тик, к нему присоединяются другие запросы. */
+const startSearch = () => {
+  const p = findProgramsAsync(CATALOG.flatMap((a) => a.cmd)).finally(() => { if (listRunning === p) listRunning = null; });
+  listRunning = p;
+  listOpen = p;
+  setImmediate(() => { if (listOpen === p) listOpen = null; });
+  return p;
+};
+/** Найденные программы: свежие для этого запроса — поиск начат не раньше, чем запрос пришёл. */
+const searchFresh = () => {
+  if (listOpen) return listOpen;
+  if (!listRunning) return startSearch();
+  if (!listNext) {
+    const after = listRunning.catch(() => null);
+    listNext = after.then(() => { listNext = null; return startSearch(); });
+  }
+  return listNext;
+};
+/** @returns {Promise<ReturnType<typeof list>>} */
+const listAsync = async () => {
+  // «Включён» читается у каждого запроса в свой момент — включили во время поиска, список уже верный.
+  const found = await searchFresh();
+  return CATALOG.map((a) => ({ id: a.id, title: a.title, found: a.cmd.some((n) => !!found.get(n)), enabled: enabled(a), builtin: !!a.builtin, pics: !!a.pics }));
+};
+
+/**
+ * Как передать первое сообщение агенту из каталога (t576): '' — последним аргументом, строка — флаг перед текстом,
+ * false — не берёт при запуске. Неизвестный id — '' (вид проверяет launch). @param {string} id @returns {string | false}
+ */
+const promptFlag = (id) => { const a = BY_ID.get(id); return a && a.prompt !== undefined ? a.prompt : ''; };
 
 /**
  * Как запустить вкладку агента (не Claude и не Codex). Выключен или не найден — ошибка строкой, окно её покажет.
@@ -126,14 +174,16 @@ function readAgents(dir, source) {
 }
 
 /**
- * Именованные агенты Claude для проекта (t251): ~/.claude/agents и <папка проекта>\.claude\agents. Одно имя в обеих — берётся агент проекта,
- * как у самого Claude. Порядок — по имени.
+ * Именованные агенты Claude для проекта (t251): ~/.claude/agents (CLAUDE_CONFIG_DIR, если задана, t1193) и <папка проекта>\.claude\agents.
+ * Одно имя в обеих — берётся агент проекта, как у самого Claude. Порядок — по имени.
  * @param {string} projectPath
  */
 function named(projectPath) {
   const by = new Map();
-  for (const a of readAgents(path.join(os.homedir(), '.claude', 'agents'), 'user')) by.set(a.name, a);
-  for (const a of readAgents(path.join(projectPath, '.claude', 'agents'), 'project')) by.set(a.name, a);
+  const home = process.env.CLAUDE_CONFIG_DIR ? path.resolve(process.env.CLAUDE_CONFIG_DIR) : path.join(os.homedir(), '.claude');
+  for (const a of readAgents(path.join(home, 'agents'), 'user')) by.set(a.name, a);
+  // Мёртвый сетевой проект: readdirSync держал бы все окна 21 с (t1300).
+  if (projectPath && alive.ok(projectPath)) for (const a of readAgents(path.join(projectPath, '.claude', 'agents'), 'project')) by.set(a.name, a);
   return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -481,7 +531,10 @@ async function checkShells() {
       }
     } else if (look.length) { forget(look.map((s) => s.sid), changed); failed = true; }
   } catch (err) {
-    shellCtx?.log(`агент в терминале: таблица процессов не прочитана: ${err}`);
+    // Канал к демону оборвался посреди запроса списка вкладок (client.js отвергает ждущие запросы): строку «связь с демоном потеряна» уже пишет
+    // daemon-link.js, это не сбой опроса и не таблица процессов (t650). Агенты забываются так же — до новой связи.
+    if (/** @type {any} */ (err)?.message === 'канал к демону закрыт') shellCtx?.log('агент в терминале: канал к демону закрыт посреди опроса, агенты во вкладках забыты до новой связи');
+    else shellCtx?.log(`агент в терминале: таблица процессов не прочитана: ${err}`);
     forget([...running.keys()], changed);
     failed = true;
   }
@@ -535,7 +588,7 @@ function register(c) {
   registered = true;
   ipcMain.handle('agents:list', (e) => {
     if (!sender.allowed(e, 'agents:list')) return sender.refused();
-    try { return list(); } catch (err) { c.log(`агенты: список не собран: ${err}`); return []; }
+    return listAsync().catch((err) => { c.log(`агенты: список не собран: ${err}`); return []; });
   });
   // Именованные агенты Claude проекта этого окна (t251): [{ name, description, mode, source }].
   ipcMain.handle('agents:named', (e) => {
@@ -546,4 +599,36 @@ function register(c) {
   });
 }
 
-module.exports = { register, list, takesPics, launchOf, extra, named, LOOK, CATALOG, NAME_RE, watchShells, pokeShell, pokeShells, runningIn, onRunning, agentNow, isShell, agentOfProcess };
+/** Агент для плагина: найден и включён, prompt — берёт ли первое сообщение. @param {ReturnType<typeof list>} all */
+const forPlugin = (all) => all.filter((a) => a.found && a.enabled).map((a) => ({ id: a.id, title: a.title, prompt: promptFlag(a.id) !== false }));
+
+/**
+ * ctx.agents() плагина (t1190, t1275): обещание списка. then, catch, finally и await идут асинхронно, без list().
+ * Прежний синхронный вызов — ctx.agents().map(...), .length, [0] — получает массив старым синхронным поиском
+ * (130–180 мс главного процесса, как до t1190) и одну строку в журнал плагина с подсказкой про await, а не TypeError.
+ * @param {(text: string) => void} log
+ */
+function pluginAgents(log) {
+  const p = listAsync().then(forPlugin);
+  /** @type {ReturnType<typeof forPlugin> | null} */
+  let arr = null;
+  const legacy = () => {
+    if (!arr) {
+      arr = forPlugin(list());
+      log('ctx.agents() вызван без await: список собран синхронно, главный процесс стоял. Пишите const list = await ctx.agents() (docs/для-агентов/плагин.md)');
+    }
+    return arr;
+  };
+  return new Proxy(p, {
+    get(t, k) {
+      if (k === 'then' || k === 'catch' || k === 'finally') return t[k].bind(t);
+      if (k === Symbol.toStringTag) return 'Promise';
+      const a = legacy();
+      const v = Reflect.get(a, k);
+      return typeof v === 'function' ? v.bind(a) : v;
+    },
+    has: (t, k) => k === 'then' || k === 'catch' || k === 'finally' || Reflect.has(legacy(), k),
+  });
+}
+
+module.exports = { register, list, listAsync, pluginAgents, promptFlag, takesPics, launchOf, extra, named, LOOK, CATALOG, NAME_RE, watchShells, pokeShell, pokeShells, runningIn, onRunning, agentNow, isShell, agentOfProcess };

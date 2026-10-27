@@ -1,24 +1,31 @@
 /* Тема Нагорняка: общий слой новых тем интерфейса (main\ui-themes.js). «Тема Ростислава» (data-ui="rostyslav") этот файл не задевает.
+   Окно без data-ui (окно правки снимка, когда схемы нет) — тоже: правила только под явно заданной новой темой (t506).
    Цвета — переменные theme.css, их ставит renderer\theme.js из look() главного процесса; здесь — шрифты и то, что общее у трёх тем.
-   Своё у каждой темы — ui-glass.css, ui-studio.css, ui-deck.css: селекторы только под html[data-ui="<тема>"].
+   Своё у каждой темы — ui-glass.css, ui-studio.css, ui-deck.css, ui-kermach*.css: селекторы только под html[data-ui="<тема>"].
    Переменные новых тем (theme.js, look.vars): --font-ui, --font-label, --r-sm, --r-md, --r-lg, --surface, --chrome, --card-shadow. */
 @import url('ui-glass.css');
 @import url('ui-studio.css');
 @import url('ui-deck.css');
+/* Kermach — макет Claude Design (t651): Светлая, Тёмная, Termius Dark. Свой файл у каждой пачки этапа d1: общее, окно проекта, «Проекты». */
+@import url('ui-kermach.css');
+@import url('ui-kermach-project.css');
+@import url('ui-kermach-projects.css');
 
 @font-face { font-family: 'Kermach Onest'; src: url('../fonts/Onest-Variable.ttf') format('truetype'); font-weight: 100 900; font-display: block; }
 @font-face { font-family: 'Kermach Golos'; src: url('../fonts/GolosText-Variable.ttf') format('truetype'); font-weight: 400 900; font-display: block; }
 @font-face { font-family: 'Kermach JBMono'; src: url('../fonts/JetBrainsMono-Variable.ttf') format('truetype'); font-weight: 100 800; font-display: block; }
 
 /* Шрифт интерфейса — на всё, кроме терминала (xterm задаёт свой) и кода. */
-html:not([data-ui="rostyslav"]) body,
-html:not([data-ui="rostyslav"]) .dlg,
-html:not([data-ui="rostyslav"]) input,
-html:not([data-ui="rostyslav"]) select,
-html:not([data-ui="rostyslav"]) textarea,
-html:not([data-ui="rostyslav"]) button { font-family: var(--font-ui); }
-html:not([data-ui="rostyslav"]) .xterm, html:not([data-ui="rostyslav"]) .xterm * { font-family: inherit; }
-html:not([data-ui="rostyslav"]) body { -webkit-font-smoothing: antialiased; }
-html:not([data-ui="rostyslav"]) ::-webkit-scrollbar { width: 10px; height: 10px; }
-html:not([data-ui="rostyslav"]) ::-webkit-scrollbar-thumb { background: rgba(var(--muted-rgb), .28); border-radius: 10px; border: 3px solid transparent; background-clip: content-box; }
-html:not([data-ui="rostyslav"]) ::-webkit-scrollbar-track { background: transparent; }
+html:where([data-ui]):not([data-ui="rostyslav"]) body,
+html:where([data-ui]):not([data-ui="rostyslav"]) .dlg,
+html:where([data-ui]):not([data-ui="rostyslav"]) input,
+html:where([data-ui]):not([data-ui="rostyslav"]) select,
+html:where([data-ui]):not([data-ui="rostyslav"]) textarea,
+html:where([data-ui]):not([data-ui="rostyslav"]) button { font-family: var(--font-ui); }
+/* Вес (0,1,1) ниже правила DOM-рендерера xterm «.xterm-dom-renderer-owner-N .xterm-rows» (0,2,0): строки берут шрифт xterm,
+   по которому он мерил ширину клетки. С весом выше строки шли шрифтом темы, и текст расходился с курсором (t521). */
+html:where([data-ui]):not([data-ui="rostyslav"]) :where(.xterm, .xterm *) { font-family: inherit; }
+html:where([data-ui]):not([data-ui="rostyslav"]) body { -webkit-font-smoothing: antialiased; }
+html:where([data-ui]):not([data-ui="rostyslav"]) ::-webkit-scrollbar { width: 10px; height: 10px; }
+html:where([data-ui]):not([data-ui="rostyslav"]) ::-webkit-scrollbar-thumb { background: rgba(var(--muted-rgb), .28); border-radius: 10px; border: 3px solid transparent; background-clip: content-box; }
+html:where([data-ui]):not([data-ui="rostyslav"]) ::-webkit-scrollbar-track { background: transparent; }

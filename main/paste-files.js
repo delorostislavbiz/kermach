@@ -1,17 +1,18 @@
 // @ts-check
 // Картинки, вставленные из буфера обмена: окно вставляет в терминал путь к временному PNG, Claude Code читает файл,
 // когда сообщение отправлено. Потом файл не нужен — убираются наши файлы старше недели.
-// Наш файл — только точно такого вида: terminalus-paste-<время в мс>-<номер>.png. Чужие файлы во временной папке не трогаются.
+// Наш файл — только точно такого вида: kermach-paste-<время в мс>-<номер>.png. Чужие файлы во временной папке не трогаются.
+// Путь к файлу человек видит в строке агента, поэтому имя — Kermach (t1267); старые terminalus-paste-*.png уборка тоже убирает.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
 const KEEP_MS = 7 * 24 * 60 * 60 * 1000;
-const NAME = /^terminalus-paste-(\d{13})-[0-9a-f-]{36}\.png$/;
+const NAME = /^(?:kermach|terminalus)-paste-(\d{13})-[0-9a-f-]{36}\.png$/;
 
 /** Новый файл для картинки. @param {string} [dir] */
-const newFile = (dir = os.tmpdir()) => path.join(dir, `terminalus-paste-${Date.now()}-${crypto.randomUUID()}.png`);
+const newFile = (dir = os.tmpdir()) => path.join(dir, `kermach-paste-${Date.now()}-${crypto.randomUUID()}.png`);
 
 /**
  * Убирает наши картинки старше keepMs. Возраст — по времени в имени файла. Ошибки не бросает: пишет в журнал.

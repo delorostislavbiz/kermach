@@ -34,5 +34,5 @@ function autoSetup(host) {
   const offLang = I18n.onChange(draw);
   return () => { stopped = true; if (offChanged) offChanged(); if (offLang) offLang(); row.remove(); };
 }
-// @ts-ignore — terminalusPlugin ставит окно проекта (renderer\project-page.js)
-if (typeof terminalusPlugin === 'function') terminalusPlugin(autoSetup);
+// @ts-ignore — kermachPlugin ставит окно проекта (renderer\project-page.js)
+if (typeof kermachPlugin === 'function') kermachPlugin(autoSetup);

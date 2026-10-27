@@ -3,12 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'">
-<title data-i18n="browser.snimokStranicyTerminalus">Снимок страницы — Kermach</title>
+<title data-i18n="browser.snimokStranicyKermach">Снимок страницы — Kermach</title>
 <!-- Язык окна (t299): словарь даёт editor-preload.cjs, надписи с data-i18n i18n.js переводит сам и при смене языка тоже. -->
 <script src="../../renderer/i18n.js"></script>
+<!-- Termius Dark без схемы (t695): переменные theme.css и ui-kermach.css, как в окне проекта, а не запасные цвета ниже. -->
+<link rel="stylesheet" href="../../renderer/theme.css">
 <style>
   /* Окно правки снимка (t201). Цвета — переменные theme.css под схему плагина «Темы» (t264): их ставит editor.js из ответа open().
-     Схемы нет — запасной цвет после запятой, нынешний вид окна. Значки — линиями, как renderer\icons.js. */
+     Запасной цвет после запятой — только если theme.css не загрузился. Значки — линиями, как renderer\icons.js. */
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg, #141729); color: var(--text, #C9D0DC); font: 13px 'Segoe UI', system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden; user-select: none; }
   body { display: flex; flex-direction: column; }

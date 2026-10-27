@@ -12,7 +12,7 @@
 // На macOS углы окна скруглены, а рамка — нет: снаружи её обрезает окно, внутри остаётся прямой угол. Рамке дан тот же радиус, что у окна.
 (function () {
   const w = /** @type {any} */ (window);
-  const t = w.terminalus;
+  const t = w.kermach;
   const WIDTHS = [4, 6, 8];
   const WIDTH = 6;
   /** Бледность рамки окна без фокуса. */
@@ -22,6 +22,8 @@
   const colorOf = (/** @type {string} */ c) => (/^#[0-9a-f]{6}$/i.test(c) ? c : w.Icons.DEFAULT_COLOR);
   /** @type {HTMLElement | null} */
   let el = null;
+  /** Полоса перетаскивания у верхнего края развёрнутого окна (d195). @type {HTMLElement | null} */
+  let grip = null;
   let color = '';
   let width = WIDTH;
   let focused = document.hasFocus();
@@ -42,6 +44,14 @@
     el.style.opacity = focused ? '1' : String(DIM);
     document.body.style.boxSizing = 'border-box';
     document.body.style.padding = `${px}px`;
+    // Развёрнутое окно (d195): верхний край экрана — место, за которое тянут окно, а под ним отступ body, не шапка.
+    // Полоса перетаскивания на толщину рамки — только у развёрнутого: у обычного окна там край, за который меняют размер.
+    // Стоит в разметке перед шапкой: у кнопок окна no-drag позже и перекрывает её, угловая точка остаётся «Закрыть» (t761).
+    if (grip) {
+      const max = window.outerWidth >= screen.availWidth && window.outerHeight >= screen.availHeight;
+      grip.style.height = `${px}px`;
+      grip.hidden = !max;
+    }
   };
 
   // Цвет проекта сменили в окне «Проекты» — рамка перекрашивается сразу; пока плагин выключен, цвет просто запоминается.
@@ -65,17 +75,32 @@
     paint();
   });
 
-  if (typeof w.terminalusPlugin === 'function') w.terminalusPlugin((/** @type {any} */ host) => {
+  if (typeof w.kermachPlugin === 'function') w.kermachPlugin((/** @type {any} */ host) => {
     if (!color) color = colorOf(host.project.color);
     el = document.createElement('div');
     el.id = 'project-frame';
     el.style.cssText = 'position:fixed;inset:0;box-sizing:border-box;z-index:10000;pointer-events:none';
     document.body.appendChild(el);
+    // Вкладка ждёт ответа — рамка мигает (d234): окно ставит body.waiting (project-page.js). Движение в системе уменьшено — не мигает.
+    if (!document.getElementById('project-frame-style')) {
+      const st = document.createElement('style');
+      st.id = 'project-frame-style';
+      st.textContent = '@keyframes project-frame-pulse{50%{opacity:.25}}body.waiting #project-frame{animation:project-frame-pulse 1.6s ease-in-out infinite}@media (prefers-reduced-motion: reduce){body.waiting #project-frame{animation:none}}';
+      document.head.appendChild(st);
+    }
+    grip = document.createElement('div');
+    grip.id = 'project-frame-grip';
+    grip.style.cssText = 'position:fixed;top:0;left:0;right:0;-webkit-app-region:drag';
+    document.body.insertBefore(grip, document.getElementById('title'));
     focused = document.hasFocus() || focused;
     paint();
     return () => {
       if (el) el.remove();
+      if (grip) grip.remove();
+      const st = document.getElementById('project-frame-style');
+      if (st) st.remove();
       el = null;
+      grip = null;
       document.body.style.padding = '';
       document.body.style.boxSizing = '';
     };

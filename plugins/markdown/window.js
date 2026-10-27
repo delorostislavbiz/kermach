@@ -4,8 +4,8 @@
 // окно файлы не открывает, адреса file:// не загружает. Разбор разметки — marked (marked.umd.js рядом, MIT), грузится при первом включении.
 // Просмотр безопасен: результат marked проходит через <template> и обход DOM — скрипты, обработчики on*, style, чужие схемы ссылок убираются;
 // щелчок по ссылке перехватывается и маршрутизируется здесь: окно само никуда не переходит (t61).
-// Из терминала: terminal.js зовёт window.TerminalusMarkdownOpen(путь) и TerminalusMarkdownHas(имя). Пока плагин выключен, Open нет,
-// а есть TerminalusMarkdownOff(путь): окошко «Встроенный редактор выключен» вместо молчаливой программы системы (t348). Has есть всегда:
+// Из терминала: terminal.js зовёт window.KermachMarkdownOpen(путь) и KermachMarkdownHas(имя). Пока плагин выключен, Open нет,
+// а есть KermachMarkdownOff(путь): окошко «Встроенный редактор выключен» вместо молчаливой программы системы (t348). Has есть всегда:
 // голое имя «README.md» — ссылка и у выключенного, как «./README.md».
 // Включение и выключение на лету — как у Git и Лимитов: setup вызывается при включении, функция остановки закрывает вкладки и убирает пункты «+».
 // Цвета — переменные окна с именами из theme.css плагина «Темы» (t185, t243) и запасным значением из нынешней палитры: тема перекрасит редактор целиком.
@@ -89,17 +89,17 @@
   .mdpane .mdnote button:hover { background: var(--md-bg); }
   .mdpane .mdbody { flex: 1; min-height: 0; display: flex; }
   .mdpane .mded { flex: 1; min-width: 0; resize: none; border: 0; outline: 0; padding: 14px 18px; background: var(--md-field); color: var(--md-fg); caret-color: var(--md-fg); user-select: text; tab-size: 2;
-    font-family: 'TERMINALUS Mono', Consolas, 'Courier New', monospace; font-size: var(--md-ed-px, 17px); line-height: 1.55; white-space: pre; overflow: auto; }
+    font-family: 'Kermach Mono', Consolas, 'Courier New', monospace; font-size: var(--md-ed-px, 17px); line-height: 1.55; white-space: pre; overflow: auto; }
   .mdpane .mdview { flex: 1; min-width: 0; overflow: auto; padding: 14px 24px 40px; user-select: text; font-size: var(--md-pv-px, 17px); line-height: 1.6; overflow-wrap: anywhere; }
   .mdpane.v-view .mded, .mdpane.v-edit .mdview { display: none; }
   .mdpane.v-split .mded { border-right: 1px solid var(--md-edge); }
   .mdpane .mdview > :first-child { margin-top: 0; }
-  .mdpane .mdview pre.mdplain { margin: 0; padding: 0; background: none; border: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: 'TERMINALUS Mono', Consolas, 'Courier New', monospace; font-size: inherit; line-height: 1.55; }
+  .mdpane .mdview pre.mdplain { margin: 0; padding: 0; background: none; border: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: 'Kermach Mono', Consolas, 'Courier New', monospace; font-size: inherit; line-height: 1.55; }
   .mdpane .mdview h1, .mdpane .mdview h2 { padding-bottom: .25em; border-bottom: 1px solid var(--md-line); }
   .mdpane .mdview h1 { font-size: 1.9em; } .mdpane .mdview h2 { font-size: 1.5em; } .mdpane .mdview h3 { font-size: 1.25em; }
   .mdpane .mdview a { color: var(--md-accent); text-decoration: none; cursor: pointer; }
   .mdpane .mdview a:hover { text-decoration: underline; }
-  .mdpane .mdview code { padding: .15em .35em; border-radius: 4px; background: var(--md-panel); font: .9em 'TERMINALUS Mono', Consolas, 'Courier New', monospace; }
+  .mdpane .mdview code { padding: .15em .35em; border-radius: 4px; background: var(--md-panel); font: .9em 'Kermach Mono', Consolas, 'Courier New', monospace; }
   .mdpane .mdview pre { padding: 12px 14px; overflow: auto; border-radius: 6px; background: var(--md-panel); }
   .mdpane .mdview pre code { padding: 0; background: none; }
   .mdpane .mdview blockquote { margin: 1em 0; padding: 0 1em; color: var(--md-muted); border-left: 3px solid var(--md-line); }
@@ -209,11 +209,15 @@
    * Теперь окошко: «Включить редактор» — плагин включается в настройках, файл открывается вкладкой (не вышло — причина окошком, ответ { ok: true });
    * «Открыть программой Windows» — ответ { ok: false },
    * и вызвавший открывает файл как раньше; Esc и «Отмена» — { ok: true }, ничего не открывается.
-   * Функция есть и у выключенного плагина: его код подключён всегда (t182). Включённый ставит TerminalusMarkdownOpen — тогда зовут её, а не эту.
+   * Функция есть и у выключенного плагина: его код подключён всегда (t182). Включённый ставит KermachMarkdownOpen — тогда зовут её, а не эту.
    * @param {unknown} target @returns {Promise<{ ok: boolean, error?: string }>}
    */
-  w.TerminalusMarkdownOff = async (target) => {
+  w.KermachMarkdownOff = async (target) => {
     if (typeof target !== 'string') return { ok: false, error: I18n.t('md.nePut', 'не путь') };
+    // Файла нет или путь за пределами папки проекта (t1209, d161): предлагать открыть нечего. { ok: false } — вызвавший откроет «как раньше»,
+    // а главный процесс скажет причину («нет такого файла», «вне папки проекта») — сообщением в терминале, не окошком про редактор.
+    const has = w.kermach && typeof w.kermach.linkHas === 'function' ? await w.kermach.linkHas(target).catch(() => null) : null;
+    if (has && !has.has) return { ok: false };
     const sys = POSIX ? I18n.t('md.otkrytProgrammoyMac', 'Открыть программой по умолчанию') : I18n.t('md.otkrytProgrammoyWindows', 'Открыть программой Windows');
     // Фокус до окошка (терминал) — вернуть после «Отмена» и «Открыть программой»: иначе набор с клавиатуры уходит в никуда.
     const back = /** @type {HTMLElement | null} */ (document.activeElement);
@@ -229,10 +233,10 @@
     if (pick !== 'on') return { ok: true };
     // Dialogs.change сразу рассылает настройки этой странице — плагин запускается, не дожидаясь главного процесса; без Dialogs — через главный.
     const D = w.Dialogs;
-    if (!(D && typeof D.change === 'function' && await D.change(w.terminalus, { plugins: { markdown: true } }))) await w.terminalus.settings.set({ plugins: { markdown: true } });
-    for (let i = 0; i < 60 && typeof w.TerminalusMarkdownOpen !== 'function'; i++) await new Promise((r) => setTimeout(r, 50));
+    if (!(D && typeof D.change === 'function' && await D.change(w.kermach, { plugins: { markdown: true } }))) await w.kermach.settings.set({ plugins: { markdown: true } });
+    for (let i = 0; i < 60 && typeof w.KermachMarkdownOpen !== 'function'; i++) await new Promise((r) => setTimeout(r, 50));
     // Выбрали редактор — программой системы уже не открываем, даже если не вышло (плагин не запустился, файл больше 8 МБ, не UTF-8): причина окошком, ответ { ok: true }.
-    const r = typeof w.TerminalusMarkdownOpen === 'function' ? await w.TerminalusMarkdownOpen(target).catch((/** @type {any} */ e) => ({ ok: false, error: String(e && e.message || e) }))
+    const r = typeof w.KermachMarkdownOpen === 'function' ? await w.KermachMarkdownOpen(target).catch((/** @type {any} */ e) => ({ ok: false, error: String(e && e.message || e) }))
       : { ok: false, error: I18n.t('md.neVklyuchilsya', 'редактор не включился') };
     if (!r || !r.ok) {
       await modal(I18n.t('md.neOtkrylosZag', 'Не открылось'), 460, `<div class="msg"><div>${esc((r && r.error) || I18n.t('md.netOtveta', 'нет ответа'))}</div></div><div class="btns"><button class="cancel ok">${I18n.t('common.close', 'Закрыть')}</button></div>`, () => {});
@@ -241,13 +245,13 @@
     return { ok: true };
   };
   /** Голое имя из терминала: есть ли такой файл в папке проекта. Есть и у выключенного плагина — ссылка та же, щелчок спросит окошком (t348). */
-  w.TerminalusMarkdownHas = async (/** @type {unknown} */ name) => {
-    if (typeof name !== 'string' || !w.terminalus || !w.terminalus.markdown) return false;
-    const r = await w.terminalus.markdown.has(name);
+  w.KermachMarkdownHas = async (/** @type {unknown} */ name) => {
+    if (typeof name !== 'string' || !w.kermach || !w.kermach.markdown) return false;
+    const r = await w.kermach.markdown.has(name);
     return !!(r && r.ok && r.has);
   };
 
-  w.terminalusPlugin((/** @type {any} */ host) => {
+  w.kermachPlugin((/** @type {any} */ host) => {
     const mdb = host.bridge.markdown;
     const pages = host.pages;
     const projectDir = String(host.project.path || '');
@@ -456,6 +460,42 @@
       ta.setSelectionRange(r.selA, r.selB);
     }
 
+    /**
+     * Tab / Shift+Tab в поле правки: отступ в два пробела. Текст меняется родным insertText, чтобы Ctrl+Z возвращал его одним шагом.
+     * Выделение на двух и более строках — отступ у всех строк (последняя, если выделение кончается в её начале, не трогается).
+     * @param {Doc} d @param {boolean} back
+     */
+    function indentEdit(d, back) {
+      const ta = d.ta;
+      const text = ta.value;
+      const s = ta.selectionStart;
+      const e = ta.selectionEnd;
+      const multi = text.slice(s, e).includes('\n');
+      let a = s;
+      let b = e;
+      let repl = '  ';
+      let selA;
+      let selB;
+      if (!multi && !back) {
+        selA = selB = s + 2;
+      } else {
+        a = text.lastIndexOf('\n', s - 1) + 1;
+        if (multi && text[e - 1] === '\n') b = e - 1;
+        else { const nl = text.indexOf('\n', e); b = nl < 0 ? text.length : nl; }
+        const rows = text.slice(a, b).split('\n');
+        const cut = rows.map((r) => (back ? (/^\t/.test(r) ? 1 : (/^ {1,2}/.exec(r) || [''])[0].length) : 0));
+        repl = rows.map((r, i) => (back ? r.slice(cut[i]) : '  ' + r)).join('\n');
+        if (multi) { selA = a; selB = e + repl.length - (b - a); } else { selA = Math.max(a, s - cut[0]); selB = Math.max(a, e - cut[0]); }
+      }
+      if (back && repl === text.slice(a, b)) return;
+      ta.focus();
+      ta.setSelectionRange(a, b);
+      const want = text.slice(0, a) + repl + text.slice(b);
+      if (repl === '') document.execCommand('delete'); else document.execCommand('insertText', false, repl);
+      if (ta.value !== want) { ta.setRangeText(repl, a, b, 'end'); ta.dispatchEvent(new Event('input')); }
+      ta.setSelectionRange(selA, selB);
+    }
+
     /** @param {Doc} d @param {'view' | 'edit' | 'split'} v */
     function setView(d, v) {
       d.view = v;
@@ -569,6 +609,8 @@
       label(d);
       fontTo(d);
       d.ta.value = d.text;
+      // Курсор — в начало: иначе он встаёт в конец и «Правка» открывается внизу документа (t244).
+      d.ta.setSelectionRange(0, 0);
       d.ta.addEventListener('input', () => {
         d.text = d.ta.value;
         d.dirty = d.text !== d.disk;
@@ -584,10 +626,9 @@
         const kind = (ev.ctrlKey || ev.metaKey) && !ev.shiftKey && !ev.altKey ? { KeyB: 'bold', KeyI: 'italic', KeyK: 'link' }[/** @type {'KeyB'} */ (ev.code)] : '';
         if (kind && !d.plain) { ev.preventDefault(); ev.stopPropagation(); applyTool(d, kind); return; }
         // Tab — отступ в два пробела, а не уход фокуса из редактора.
-        if (ev.key === 'Tab' && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !ev.shiftKey) {
+        if (ev.key === 'Tab' && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
           ev.preventDefault();
-          d.ta.setRangeText('  ', d.ta.selectionStart, d.ta.selectionEnd, 'end');
-          d.ta.dispatchEvent(new Event('input'));
+          indentEdit(d, ev.shiftKey);
         }
       });
       d.pane.addEventListener('keydown', (ev) => {
@@ -647,8 +688,8 @@
         return;
       }
       if (/^https?:/i.test(href)) {
-        const r = typeof w.TerminalusBrowserOpen === 'function' ? w.TerminalusBrowserOpen(href) : null;
-        if (!r || !r.ok) host.bridge.openLink(href);
+        const r = typeof w.KermachBrowserOpen === 'function' ? w.KermachBrowserOpen(href) : null;
+        if (!r || !r.ok) host.bridge.openLink(href, 'markdown');
         return;
       }
       if (SCHEME.test(plain(href))) return;
@@ -656,7 +697,7 @@
       try { rel = decodeURIComponent(rel); } catch {}
       const abs = isAbsPath(rel) ? rel : joinRel(dirOf(d.path), POSIX ? rel : rel.replace(/\\/g, '/'));
       if (DOC.test(abs) || TXT.test(abs)) openPath(abs, true).then((r) => { if (!r.ok) showNote(d, r.error || I18n.t('md.neOtkrylos', 'не открылось'), false); });
-      else host.bridge.openLink(abs).then((/** @type {any} */ r) => { if (r && r.error) showNote(d, r.error, false); });
+      else host.bridge.openLink(abs, 'markdown').then((/** @type {any} */ r) => { if (r && r.error) showNote(d, r.error, false); });
     }
 
     /** Путь или адрес из терминала, меню, окна выбора → вкладка. @param {string} target @param {boolean} select @returns {Promise<{ ok: boolean, error?: string, sid?: string }>} */
@@ -667,7 +708,7 @@
     }
 
     // Из терминала (terminal.js). Ответ — обещание { ok, error? }; функции нет, пока плагин выключен.
-    w.TerminalusMarkdownOpen = (/** @type {unknown} */ target) => (typeof target === 'string' ? openPath(target, true) : Promise.resolve({ ok: false, error: I18n.t('md.nePut', 'не путь') }));
+    w.KermachMarkdownOpen = (/** @type {unknown} */ target) => (typeof target === 'string' ? openPath(target, true) : Promise.resolve({ ok: false, error: I18n.t('md.nePut', 'не путь') }));
 
     /** «Новый документ .md»: имя, можно с подпапкой; существующий не затирается. */
     async function newDoc() {
@@ -761,7 +802,7 @@
       dead = true;
       for (const off of offs.splice(0)) off();
       if (timer) { clearTimeout(timer); timer = 0; }
-      delete w.TerminalusMarkdownOpen;
+      delete w.KermachMarkdownOpen;
       pages.removeButton('addMarkdownNew');
       pages.removeButton('addMarkdownOpen');
       mdb.saveTabs([]);

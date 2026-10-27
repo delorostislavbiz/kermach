@@ -1,6 +1,6 @@
 // @ts-check
 // Окна проектов: у проекта одно окно, все окна — в одном главном процессе.
-// У окна свой appId (TERMINALUS.p.<номер проекта>) — отсюда своя кнопка на панели задач — и цветной значок проекта.
+// У окна свой appId (Kermach.p.<номер проекта>) — отсюда своя кнопка на панели задач — и цветной значок проекта.
 // Значок рисует страница окна (canvas умеет SVG, nativeImage — нет) и присылает PNG; он же ложится в icons\,
 // поэтому со второго открытия значок стоит сразу, а не после загрузки страницы.
 // Место и размер окна — window-state.js.
@@ -37,7 +37,8 @@ const iconFile = (p) => path.join(iconDir(), `${p.id}-${String(p.color).replace(
 /** Обработчики — один раз на процесс. @param {Ctx} c */
 function register(c) {
   if (ctx) return;
-  ctx = c;
+  // Берём только dataDir и log (t683): notify.reopen зовёт open с урезанным ctx, остальные поля главного ctx здесь не читаются.
+  ctx = { dataDir: c.dataDir, log: c.log };
   windowState.init(c.dataDir, c.log);
   settings.register(c);
   windowButtons.register();
@@ -104,11 +105,11 @@ function open(c, p, opt = {}) {
     // webviewTag — для вкладок сайта. Настройки гостя страница не выбирает: их перезаписывает plugins\browser\main.js.
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, webviewTag: true },
   });
-  // Тема (Скло — полупрозрачность macOS): main\settings.js dress.
+  // Тема «Скло» — полупрозрачность, только macOS (main\settings.js dress, t506).
   settings.dress(win);
   // Только Windows и Linux: на macOS этих методов у окна нет, меню — одно на программу (main.js).
   if (!MAC) {
-    win.setAppDetails({ appId: `TERMINALUS.p.${p.id}` });
+    win.setAppDetails({ appId: `Kermach.p.${p.id}` });
     win.setMenu(null);
   }
   // Заголовок — имя проекта; страница его не перебивает.

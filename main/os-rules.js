@@ -10,7 +10,7 @@ const UNIX_EXTRA = ['/opt/homebrew/bin', '/usr/local/bin'];
 /** Сколько ждать оболочку входа. Дольше — программа стартует с PATH как есть плюс UNIX_EXTRA. */
 const SHELL_PATH_MS = 3000;
 /** Метка вокруг PATH в выводе оболочки: .zshrc может печатать своё (приветствие, предупреждения). */
-const MARK = '__TERMINALUS_PATH__';
+const MARK = '__KERMACH_PATH__';
 
 /**
  * PATH из вывода оболочки: текст между двумя метками. Меток нет или между ними пусто — ''.
@@ -44,7 +44,7 @@ function mergePath(shellPath, envPath, home) {
  */
 function loginPath({ shell, env, home, run }) {
   let out = '';
-  // ${PATH} в скобках: без них оболочка прочла бы имя переменной PATH__TERMINALUS_PATH__ — подчёркивание продолжает имя.
+  // ${PATH} в скобках: без них оболочка прочла бы имя переменной PATH__KERMACH_PATH__ — подчёркивание продолжает имя.
   try { out = run(shell, ['-ilc', `printf '%s' "${MARK}\${PATH}${MARK}"`], SHELL_PATH_MS); } catch {}
   const got = parseShellPath(out);
   return { path: mergePath(got, env.PATH, home), from: got ? 'shell' : 'fallback' };
@@ -71,6 +71,18 @@ function parsePs(out) {
 }
 
 /**
+ * Файлы, которые Windows не открывает, а запускает: ссылку на них из терминала программа не открывает (t58), «Файлы» вместо запуска показывают в Проводнике (t327).
+ * Один список на оба места (t503): раньше main.js и plugins\files\main.js держали по копии.
+ */
+const LINK_PROGRAMS = /\.(exe|com|bat|cmd|ps1|psm1|ps1xml|psd1|vbs|vbe|js|jse|wsf|wsh|msc|msi|msp|msix|appx|appinstaller|scr|pif|lnk|url|reg|hta|cpl|jar|appref-ms|application|scf|inf|diagcab|settingcontent-ms|py|pyw|sh)$/i;
+
+/**
+ * Из LINK_PROGRAMS и MAC_LINK_PROGRAMS — скрипты: обычный текст, ссылку на них (src\main\main.js:120) открываем на чтение в Блокноте или TextEdit,
+ * а не программой по умолчанию, которая их выполнила бы (t1209, d127). Exe, установщики, ярлыки и файлы-ссылки сюда не входят — отказ как был.
+ */
+const LINK_TEXT = /\.(js|jse|ps1|psm1|psd1|cmd|bat|vbs|wsf|py|pyw|sh|zsh|bash|rb|pl|command)$/i;
+
+/**
  * Файлы, которые macOS не открывает, а запускает: ссылку на них из терминала программа не открывает (t58, t222-Б).
  * Программы и установщики, скрипты (Finder откроет их в Терминале и выполнит), расширения системы, файлы-ссылки на адрес или файл.
  */
@@ -82,4 +94,4 @@ const MAC_LINK_PROGRAMS = /\.(app|command|tool|sh|zsh|bash|csh|ksh|pkg|mpkg|dmg|
  */
 const executable = (mode) => (mode & 0o111) !== 0;
 
-module.exports = { parseShellPath, mergePath, loginPath, PS_ARGS, parsePs, MAC_LINK_PROGRAMS, executable, UNIX_EXTRA, SHELL_PATH_MS, MARK };
+module.exports = { parseShellPath, mergePath, loginPath, PS_ARGS, parsePs, LINK_PROGRAMS, MAC_LINK_PROGRAMS, LINK_TEXT, executable, UNIX_EXTRA, SHELL_PATH_MS, MARK };

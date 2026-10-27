@@ -1,9 +1,20 @@
 // @ts-check
 // Тема окна (t257, крючки тем для плагина «Темы» t185). Подключается в <head> до отрисовки: цвета темы — CSS-переменными на <html>.
-// Тему отдаёт главный процесс: terminalus.settings.look() — синхронный вызов, main\settings.js читает themes.json плагина с диска.
+// Тему отдаёт главный процесс: kermach.settings.look() — синхронный вызов, main\settings.js читает themes.json плагина с диска.
 // Спрашиваем при открытии (без тёмной вспышки на светлой теме) и после каждого settings:changed: включили плагин, сменили тему.
 // look = null — плагин выключен или его нет: переменные снимаются, окно берёт значения theme.css, то есть Termius dark как до плагина.
 // Терминалы подписываются через Theme.onChange (terminal.js).
+// look = null — это и Termius Dark без схемы (t651): data-ui="termius", переменные макета сверх theme.css — renderer\ui-kermach.css.
+// Ключи localStorage до t1307 — terminalus.*: один раз копируются в kermach.*, старые остаются (откат на прошлую версию их найдёт).
+// Один раз — по метке kermach.moved (t1315): ключ, который программа сняла removeItem, иначе вернулся бы из старого при следующем открытии окна.
+try {
+  if (localStorage.getItem('kermach.moved') === null) for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i) || '';
+    const to = k.startsWith('terminalus.') ? `kermach.${k.slice(11)}` : '';
+    if (to && localStorage.getItem(to) === null) localStorage.setItem(to, /** @type {string} */ (localStorage.getItem(k)));
+  }
+  localStorage.setItem('kermach.moved', '1');
+} catch {}
 (function () {
   const w = /** @type {any} */ (window);
   /** Поле цветов окна темы → CSS-переменная. */
@@ -14,7 +25,7 @@
     faint: '--faint', disabled: '--disabled', accent: '--accent', accentRgb: '--accent-rgb', accentHover: '--accent-hover',
     accentBg: '--accent-bg', onAccent: '--on-accent', button: '--button', buttonFg: '--button-fg', focus: '--focus',
     danger: '--danger', dangerRgb: '--danger-rgb', dangerHover: '--danger-hover', warn: '--warn', info: '--info',
-    claude: '--claude', codex: '--codex', agent: '--agent', overlay: '--overlay', tileNeed: '--tile-need', tileNeedHover: '--tile-need-hover',
+    claude: '--claude', codex: '--codex', agent: '--agent', overlay: '--overlay', tileNeed: '--tile-need', tileNeedHover: '--tile-need-hover', ok: '--ok',
   };
   /** Без своего значения у темы: меню «+» и поле вокруг вида сайта — как поле ввода, плитка под мышью — как нажатая кнопка. */
   const FALLBACK = { menu: 'input', viewBack: 'input', tileHover: 'raised' };
@@ -23,14 +34,18 @@
   const rgb = (/** @type {string} */ h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(',');
   /** @type {any} */
   let look = null;
-  /** Свои переменные темы интерфейса (look.vars: шрифты, поверхность, радиусы), поставленные прошлым apply — снимаются при смене. @type {string[]} */
+  /** Тема интерфейса из ответа главного процесса; null — Termius Dark без схемы плагина (t651). @type {any} */
+  let meta = null;
+  /** Свои переменные темы интерфейса (look.vars: шрифты, поверхность, радиусы), поставленные прошлым apply — снимаются при смене (t506). @type {string[]} */
   let varsSet = [];
   /** @type {Set<() => void>} */
   const subs = new Set();
 
   /** @param {any} next — { id, kind, window, terminal, list } или null */
   function apply(next) {
-    const before = JSON.stringify(look);
+    const before = JSON.stringify(next);
+    const was = JSON.stringify(meta);
+    meta = next && next.ui ? next : null;
     look = next && next.window ? next : null;
     const st = document.documentElement.style;
     if (look) {
@@ -51,18 +66,25 @@
       if (need) { st.setProperty('--need', need); st.setProperty('--need-rgb', rgb(need)); }
       delete document.documentElement.dataset.theme;
     }
-    // Тема интерфейса (main\ui-themes.js): data-ui — для renderer\ui.css, data-mode — светлый или тёмный вид.
+    // Тема интерфейса (main\ui-themes.js, t506): data-ui — для renderer\ui.css, data-mode — светлый или тёмный вид.
+    // color-scheme окна — только у новых тем: у «Темы Ростислава» полосы прокрутки и поля как раньше.
     const root = document.documentElement;
     for (const v of varsSet) st.removeProperty(v);
     varsSet = [];
-    if (look && look.vars) for (const [k, v] of Object.entries(look.vars)) { st.setProperty(k, String(v)); varsSet.push(k); }
-    root.dataset.ui = (look && look.ui) || 'rostyslav';
-    root.dataset.mode = look && look.kind === 'light' ? 'light' : 'dark';
-    st.colorScheme = look && look.kind === 'light' ? 'light' : 'dark';
-    if (JSON.stringify(look) !== before) for (const cb of subs) { try { cb(); } catch {} }
+    if (meta && meta.vars) for (const [k, v] of Object.entries(meta.vars)) { st.setProperty(k, String(v)); varsSet.push(k); }
+    const ui = (meta && meta.ui) || 'termius';
+    root.dataset.ui = ui;
+    root.dataset.mode = meta && meta.kind === 'light' ? 'light' : 'dark';
+    if (ui === 'rostyslav') st.removeProperty('color-scheme'); else st.colorScheme = root.dataset.mode;
+    if (before !== was) for (const cb of subs) { try { cb(); } catch {} }
   }
 
-  const t = w.terminalus;
+  // Бесконечные анимации стоят, пока окно скрыто (t654): класс k-hidden на <html>, правило — renderer\ui-kermach.css.
+  const hidden = () => document.documentElement.classList.toggle('k-hidden', document.hidden);
+  hidden();
+  document.addEventListener('visibilitychange', hidden);
+
+  const t = w.kermach;
   // Нет моста или старый preload без look — окно в цветах theme.css, как до плагина.
   const ask = () => { try { return t.settings.look(); } catch { return null; } };
   if (t && t.settings && typeof t.settings.look === 'function') {
@@ -75,14 +97,12 @@
     terminal: () => (look ? look.terminal : null),
     /** Цвет окна темы по имени поля (muted, accent…) или '' — темы нет. @param {string} name */
     color: (name) => (look && look.window[name]) || '',
-    /** Схемы плагина для выбора в «Настройках»: [{ id, name, kind }]; пусто — плагин выключен. */
-    list: () => (look && Array.isArray(look.list) ? look.list : []),
-    /** Тема интерфейса: rostyslav, glass, studio, deck. */
-    ui: () => (look && look.ui) || 'rostyslav',
+    /** Тема интерфейса: kermach, termius, rostyslav, studio, deck, glass (macOS). */
+    ui: () => (meta && meta.ui) || 'termius',
+    /** Светлый или тёмный вид действующей темы: light или dark. */
+    mode: () => (meta && meta.kind === 'light' ? 'light' : 'dark'),
     /** id действующей схемы или '' — темы нет. */
     id: () => (look ? look.id : ''),
-    /** Переспросить тему у главного процесса: «Настройки» зовут при открытии — схему могли добавить файлом, пока окно открыто. */
-    refresh: () => { if (t && t.settings && typeof t.settings.look === 'function') apply(ask()); },
     /** Тема сменилась. Ответ — функция снятия подписки. @param {() => void} cb */
     onChange: (cb) => { subs.add(cb); return () => subs.delete(cb); },
   };

@@ -1,7 +1,7 @@
 // @ts-check
 // Мост окна правки снимка (t201): только три вызова — взять снимок, отдать готовую PNG, отменить.
 // Свой preload, не общий main\preload.cjs: окну правки не нужны терминалы и проекты. Отправителя проверяет plugins\browser\main.js.
-// Язык (t299): terminalus.settings — ровно то, что берёт renderer\i18n.js: словарь синхронно (свой канал browser:edit-dict,
+// Язык (t299): kermach.settings — ровно то, что берёт renderer\i18n.js: словарь синхронно (свой канал browser:edit-dict,
 // общий settings:dict окно правки не пропустит) и settings:changed — включили или выключили «Українську», пока окно открыто.
 const { contextBridge, ipcRenderer } = require('electron');
 
@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('shotEditor', {
   cancel: () => ipcRenderer.send('browser:edit-cancel'),
 });
 
-contextBridge.exposeInMainWorld('terminalus', {
+contextBridge.exposeInMainWorld('kermach', {
   settings: {
     /** Словарь языка { lang, dict } или null — синхронно, до отрисовки. */
     dict: () => ipcRenderer.sendSync('browser:edit-dict'),

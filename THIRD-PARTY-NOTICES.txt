@@ -3,6 +3,7 @@ Kermach — сторонній код і його ліцензії
 Що саме взято з Orca і в яких файлах — main/THIRD-PARTY-orca.txt.
 Бібліотека marked — plugins/markdown/LICENSE-marked.txt. Кольорові теми — plugins/themes/CREDITS.md.
 Пакети @xterm і node-pty ставляться через npm і мають власні файли LICENSE.
+web-tree-sitter і граматики tree-sitter для карти коду — plugins/roadmap/codemap/vendor/LICENSE-*.
 
 ==============================================================================
 Orca — частину коду і способів роботи Kermach узято з Orca (https://github.com/stablyai/orca). Ліцензія MIT:

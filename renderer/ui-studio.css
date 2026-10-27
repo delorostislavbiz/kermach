@@ -14,7 +14,7 @@ html[data-ui="studio"] {
   --st-ring: 0 0 0 3px rgba(var(--accent-rgb), .16); /* фокус поля */
   --st-seg: 0 1px 2px rgba(16,24,40,.10), 0 0 0 1px rgba(16,24,40,.05); /* нажатая часть переключателя */
   --st-well: var(--chrome);                     /* «колодец» под переключатели и код на листе */
-  --st-mono: 'Kermach JBMono', 'TERMINALUS Mono', ui-monospace, Menlo, monospace;
+  --st-mono: 'Kermach JBMono', 'Kermach Mono', ui-monospace, Menlo, monospace;
   --st-btn-hover: color-mix(in srgb, var(--button) 86%, var(--surface));
   --st-tile: var(--surface);                    /* плитка проекта на листе */
   --st-field: var(--surface);                   /* поле ввода на листе */
@@ -307,7 +307,7 @@ html[data-ui="studio"] .dlg-title .x:hover { background: var(--st-hov2); color: 
 html[data-ui="studio"] .dlg-body { gap: 20px; padding: 4px 22px 22px; }
 html[data-ui="studio"] .dlg .sec { gap: 9px; }
 html[data-ui="studio"] .dlg .cap { font-size: 12px; font-weight: 600; color: var(--text); letter-spacing: .005em; }
-html[data-ui="studio"] .dlg .uinote, html[data-ui="studio"] .dlg .stepper .hint, html[data-ui="studio"] .dlg .agt .sub { color: var(--muted); font-size: 12px; }
+html[data-ui="studio"] .dlg .stepper .hint, html[data-ui="studio"] .dlg .agt .sub { color: var(--muted); font-size: 12px; }
 html[data-ui="studio"] .dlg .prev { height: 50px; padding: 0 12px 0 9px; gap: 11px; border-radius: var(--r-md); background: var(--surface); box-shadow: var(--st-card); margin: 0 1px; }
 html[data-ui="studio"] .dlg .prev .strip { height: 22px; border-radius: 3px; }
 html[data-ui="studio"] .dlg .sw { border-radius: 7px; }
@@ -351,15 +351,6 @@ html[data-ui="studio"] .dlg .stepper > input:focus { outline: 0; border-color: v
 html[data-ui="studio"] .dlg .stepper select { font-family: var(--font-ui); background: var(--surface); color: var(--text); height: 32px !important; border-radius: var(--r-sm) !important; border-color: var(--line) !important; }
 html[data-ui="studio"] .dlg .chk { gap: 10px; }
 html[data-ui="studio"] .dlg .chk input { width: 16px; height: 16px; accent-color: var(--accent); }
-/* «Тема программы»: карточки с образцом окна. */
-html[data-ui="studio"] .dlg .uicards { gap: 10px; }
-html[data-ui="studio"] .dlg .uicard { gap: 4px; padding: 7px 7px 9px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--st-lift);
-  transition: border-color .12s, box-shadow .12s, background-color .12s; }
-html[data-ui="studio"] .dlg .uicard:hover { background: var(--surface); border-color: rgba(var(--muted-rgb), .38); }
-html[data-ui="studio"] .dlg .uicard.on { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .18); }
-html[data-ui="studio"] .dlg .uicard .pv { height: 52px; border-radius: 8px; margin-bottom: 4px; box-shadow: inset 0 0 0 1px rgba(var(--muted-rgb), .14); }
-html[data-ui="studio"] .dlg .uicard .nm { padding: 0 3px; font-size: 12.5px; }
-html[data-ui="studio"] .dlg .uicard .by { padding: 0 3px; font-size: 11px; }
 /* «Агенты». */
 html[data-ui="studio"] .dlg .agt .open, html[data-ui="studio"] .dlg .agt .how button { height: 34px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
   font: 500 13px var(--font-ui); box-shadow: var(--st-lift); }

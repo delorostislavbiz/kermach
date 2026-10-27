@@ -22,13 +22,18 @@
 
   /**
    * Схема плагина «Темы» (t264): plugins\browser\main.js кладёт settings.look() в ответ open() полем look — переменными на <html>, как renderer\theme.js.
-   * Нет look (плагин выключен или его нет) — переменных нет, окно в запасных цветах editor.html, как до плагина.
+   * Нет look (Termius Dark без схемы) — переменных нет, окно в цветах theme.css и ui-kermach.css, как окно проекта (t695).
    * Схему окно берёт один раз, при открытии: оно модальное и живёт, пока правят один снимок. Цвета пометок не меняются — они уходят в PNG.
    * @param {any} look { id, kind, window }
    */
   function paintLook(look) {
+    // Тема интерфейса (main\ui-themes.js, t506): ui.css по data-ui. Нет look — Termius Dark без схемы, как renderer\theme.js (t695).
+    document.documentElement.dataset.ui = (look && look.ui) || 'termius';
     if (!look || !look.window) return;
     const st = document.documentElement.style;
+    document.documentElement.dataset.mode = look.kind === 'light' ? 'light' : 'dark';
+    // Свои переменные новой темы — шрифты, радиусы.
+    if (look.vars) for (const [k, v] of Object.entries(look.vars)) st.setProperty(k, String(v));
     for (const [k, v] of Object.entries(LOOK_VARS)) {
       // Поля вокруг картинки нет в схеме — как поле ввода, так же, как renderer\theme.js.
       const val = look.window[k] || (k === 'viewBack' ? look.window.input : '');

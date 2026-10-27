@@ -1,11 +1,11 @@
 // @ts-check
-// Главный процесс TERMINALUS: окно «Проекты» и окна проектов — все в одном процессе; в окне проекта вкладки Claude, Codex, «Терминал».
+// Главный процесс Kermach: окно «Проекты» и окна проектов — все в одном процессе; в окне проекта вкладки Claude, Codex, «Терминал».
 // Терминалы держит демон (daemon\daemon.js): окно закрылось — claude работает дальше; окно открылось — подключается к нему же.
 // Связь окон с терминалами — main\terminals.js.
 // Проект: --project <папка> — окно проекта (main\project-window.js); без него — окно «Проекты» (main\projects-window.js).
 // Второй запуск программы окон не создаёт: передаёт папку первому и выходит.
 // Закрыто последнее окно — программа выходит (t176); демон и вкладки в нём живут, следующий запуск подключится к ним же.
-// Данные пользователя — только в %APPDATA%\TERMINALUS, в папке программы ничего не пишется.
+// Данные пользователя — в %APPDATA%\Kermach (старая TERMINALUS переезжает сама, t1304) или в папке data рядом с exe (портативный режим).
 // Плагины окна проекта — main\plugins.js. Звук, когда агент закончил или ждёт, — main\sound.js.
 // Связь с демоном и переподключение после обрыва — main\daemon-link.js.
 
@@ -13,7 +13,7 @@ const { app, ipcMain, dialog, clipboard, session, shell, Menu } = require('elect
 const sender = require('./sender');
 const fs = require('fs');
 const path = require('path');
-const { DATA_DIR } = require('../daemon/protocol');
+const { DATA_DIR, MOVE_NOTE } = require('../daemon/protocol');
 // Автоматизация (t252): Планировщик запускает программу с --automation <номер> — один прогон claude без окон.
 // Ветка до app.setPath и requestSingleInstanceLock: прогон не мешает открытой программе, остальное ядро не грузится.
 if (process.argv.includes('--automation')) { require('../plugins/automations/run').cli(process.argv, DATA_DIR); return; }
@@ -26,22 +26,27 @@ const plugins = require('./plugins');
 const pasteFiles = require('./paste-files');
 const codexLimits = require('./codex-limits');
 const sound = require('./sound');
+const notify = require('./notify');
 const settings = require('./settings');
 const agents = require('./agents');
 const tabs = require('./tabs');
 const stop = require('./stop-all');
 const osRules = require('./os-rules');
 const i18n = require('./i18n');
+const singleInstance = require('./single-instance');
+/** Переменная программы: KERMACH_<имя>, нет — TERMINALUS_<имя> до t1307 (platform.envOf). @param {string} n */
+const ENV = (n) => require('../daemon/platform').envOf(process.env, n);
+
+/** Сколько раз ещё ждать демона после «не ответил за 10 с» до ошибки «не запустился» (t1220). */
+const DAEMON_RETRIES = 2;
 
 // macOS (t222-Б): PATH из оболочки входа, меню программы, ссылки на пути /…. Ветка Windows этим не задета.
 const MAC = process.platform === 'darwin';
 
-// Иначе Chromium сложит кэш и настройки прямо в %APPDATA%\TERMINALUS, рядом с sessions.json.
+// Иначе Chromium сложит кэш и настройки прямо в папку данных, рядом с sessions.json.
 app.setPath('userData', path.join(DATA_DIR, 'chromium'));
 
 const LOG_FILE = path.join(DATA_DIR, 'logs', 'main.log');
-/** Файлы, которые Windows не открывает, а запускает: ссылку на них из терминала программа не открывает (t58). */
-const LINK_PROGRAMS = /\.(exe|com|bat|cmd|ps1|psm1|ps1xml|psd1|vbs|vbe|js|jse|wsf|wsh|msc|msi|msp|msix|appx|appinstaller|scr|pif|lnk|url|reg|hta|cpl|jar|appref-ms|application|scf|inf|diagcab|settingcontent-ms|py|pyw|sh)$/i;
 
 fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
 try {
@@ -51,6 +56,7 @@ try {
 const log = (msg) => {
   try { fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} [${process.pid}] ${msg}\n`); } catch {}
 };
+if (MOVE_NOTE) log(MOVE_NOTE);
 
 /** @param {string[]} argv */
 function argProject(argv) {
@@ -64,12 +70,11 @@ function argProject(argv) {
 // Папка из --project уходит первому запуску полной: у второго запуска своя рабочая папка.
 // Отдельным полем, а не в его командной строке: в ней Chromium может переставить ключи и значения.
 const asked = argProject(process.argv);
-if (!app.requestSingleInstanceLock({ project: asked ? path.resolve(asked) : '' })) {
-  // Программа уже открыта — окно откроет она (second-instance), этот запуск выходит.
-  app.quit();
-} else {
-  start(asked);
-}
+// Свой канал, а не app.requestSingleInstanceLock: Chromium гасит первую программу, если её главный поток стоит дольше ~20 с (t1261, d427, d428).
+singleInstance.acquire({ dataDir: DATA_DIR, project: asked ? path.resolve(asked) : '', log }).then((first) => {
+  // Программа уже открыта — окно откроет она (onSecond), этот запуск выходит.
+  if (first) start(asked); else app.quit();
+});
 
 /** @param {string} asked папка из --project; пусто — окно «Проекты» */
 function start(asked) {
@@ -88,9 +93,13 @@ function start(asked) {
   /** @type {import('./projects').ProjectsData | null} */
   let data = null;
   try { data = projects.load(DATA_DIR, { log }); } catch (e) { log(`список проектов не прочитан: ${e}`); }
+  // Сетевые проекты — проверка в фоне сразу (t1300): иначе дела, автоматизации и агенты живого сетевого проекта скрыты до первого ответа.
+  if (data) require('./dir-alive').warm(data.projects.map((p) => p.path));
 
   // Настройки (шрифты, звук; t181): до окон и звука, чтобы первое окно сразу взяло масштаб.
   settings.register({ dataDir: DATA_DIR, log });
+  // Windows: ID уведомлений в реестре и постоянный CLSID (t712) — до первого уведомления. ID процесса и окон не меняется.
+  notify.register({ log });
   // Агенты из системы (t183): список для настроек и меню «+»; включены ли — по настройкам.
   agents.register({ log });
 
@@ -98,18 +107,46 @@ function start(asked) {
   // Связь оборвалась — link переподключается сам, когда демон появится, и отдаёт нового клиента подписчикам (t125).
   const link = daemonLink.create({ log, name: `main ${process.pid}` });
   const daemonReady = link.ready;
-  /** Второй запуск, пришедший во время «Остановить всё» (t216): программа откроется заново после выхода. @type {{ project: string } | null} */
+  /** Второй запуск, пришедший во время «Остановить всё» (t216) или обычного выхода (t1216): программа откроется заново после выхода. @type {{ project: string, why: 'stop' | 'quit' } | null} */
   let relaunch = null;
-  daemonReady.catch((e) => log(`демон не запустился: ${e.stack || e}`));
+  /** Выход начался (will-quit): окна закрыты, процесс ждёт опрос Codex и потоки до 8 с — окно второго запуска закрылось бы вместе с ним (d129, d194). */
+  let quitting = false;
+  // Под нагрузкой демон отвечает дольше 10 с, а потом подключается (t1220): это не ошибка, а ожидание.
+  // Ещё два ensure (до ~30 с всего, окно зовёт тот же ensure); ошибка — если не подключился совсем или ошибка другая.
+  // Второй запуск (ниже) ждёт того же подключения: один ensure — одна строка в журнале.
+  /** @type {Promise<void> | null} */
+  let waiting = null;
+  const ensureLogged = () => {
+    if (waiting) return waiting;
+    const t = Date.now();
+    /** @returns {Promise<void>} */
+    const attempt = (left) => link.ensure().then(
+      () => { if (left < DAEMON_RETRIES) log(`демон ответил через ${Math.round((Date.now() - t) / 1000)} с`); },
+      (e) => {
+        if (left > 0 && /не ответил за/.test(String(e && e.message))) {
+          if (left === DAEMON_RETRIES) log('демон отвечает дольше 10 с, жду');
+          return attempt(left - 1);
+        }
+        log(`демон не запустился: ${e.stack || e}`);
+      });
+    waiting = attempt(DAEMON_RETRIES).finally(() => { waiting = null; });
+    return waiting;
+  };
+  ensureLogged();
+  daemonReady.catch(() => {}); // в журнал его пишет ensureLogged
   // Звук на «закончил», «просит разрешения», «ошибка» (t15). На каждого нового клиента.
   link.onClient((c) => sound.attach(c, { log }));
+  // Точка возврата, когда агент закончил работу (t1169): done и 5 с тишины, только где история включена.
+  link.onClient((c) => require('../plugins/git/auto-points').attach(c, { log }));
   terminals.register({ dataDir: DATA_DIR, log, daemon: daemonReady, link, t0 });
   plugins.register({ dataDir: DATA_DIR, log });
+  // Число дел на сегодня на значке в панели задач (t1186).
+  require('./tasks-badge').start(log);
   // Лимиты Codex — в codex-rate-limits.json раз в 5 минут. Первое чтение через 5 с: app-server (node и codex.exe)
   // не отнимает время у окна, демона и терминалов, пока они поднимаются. Чтение идёт ~2,5 с.
-  // Выключатель — только TERMINALUS_CODEX_LIMITS=0 (t92): его ставят проверки (spikes\gate\run.js — всем), иначе они запускали бы
-  // свой подставной codex или настоящий (t72). Свой канал (TERMINALUS_PIPE) опрос не выключает: вторая копия программы тоже видит лимиты.
-  const codexOn = process.env.TERMINALUS_CODEX_LIMITS !== '0';
+  // Выключатель — только KERMACH_CODEX_LIMITS=0 (t92): его ставят проверки (spikes\gate\run.js — всем), иначе они запускали бы
+  // свой подставной codex или настоящий (t72). Свой канал (KERMACH_PIPE) опрос не выключает: вторая копия программы тоже видит лимиты.
+  const codexOn = ENV('CODEX_LIMITS') !== '0';
   /** @type {ReturnType<typeof codexLimits.start> | null} */
   let codexPoll = null;
   const codexStart = codexOn ? setTimeout(() => { codexPoll = codexLimits.start({ dataDir: DATA_DIR, log }); }, 5000) : null;
@@ -124,6 +161,7 @@ function start(asked) {
   let codexStopped = false;
   let kidsWaited = false;
   app.on('will-quit', (e) => {
+    quitting = true;
     if (codexStart) clearTimeout(codexStart);
     /** @type {Promise<unknown>[]} */
     const waits = [];
@@ -172,26 +210,31 @@ function start(asked) {
     return projectWindow.open(ctx, p);
   }
 
-  app.on('second-instance', (_e, argv, _cwd, extra) => {
-    const want = extra && typeof (/** @type {any} */ (extra).project) === 'string' ? /** @type {any} */ (extra).project : argProject(argv);
+  singleInstance.onSecond(({ project: want }) => {
     log(`второй запуск${want ? `: проект ${want}` : ''}`);
     // Идёт «Остановить всё» (t216): окно сейчас открылось бы и закрылось вместе с программой. Запуск — после выхода, app.relaunch в quit.
     if (stop.stopping()) {
-      relaunch = { project: want };
+      relaunch = { project: want, why: 'stop' };
       log('второй запуск во время полной остановки: отложен до конца остановки, программа откроется заново после выхода');
+      return;
+    }
+    // Программа уже выходит (закрыто последнее окно, t1216): так же — запуск после выхода.
+    if (quitting) {
+      relaunch = { project: want, why: 'quit' };
+      log('второй запуск во время выхода: отложен, программа откроется заново после выхода');
       return;
     }
     app.whenReady().then(() => {
       if (!data) return;
       // Демон упал, а окна остались — второй запуск поднимает его заново (раньше это делал пункт «Проекты» значка у часов, t125, t176).
-      if (!link.current()) link.ensure().catch((e) => log(`демон не запустился: ${e.stack || e}`));
+      if (!link.current()) ensureLogged();
       if (want) openAsked(want);
       else projectsWindow.open(ctx);
     });
   });
 
   // Окна программы не уходят со своей страницы: ссылка, location.href, брошенный на окно файл и window.open отклоняются.
-  // Иначе чужая страница в окне получает весь мост window.terminalus — проект узнаётся по номеру webContents,
+  // Иначе чужая страница в окне получает весь мост window.kermach — проект узнаётся по номеру webContents,
   // а он после перехода тот же (t35, spikes\t35-browser\diag-nav.txt). Как в Орке: пускается только тот же файл.
   // Гости webview (браузер в окне проекта) ходят по сайтам — их не трогаем.
   /** Тот же файл, что открыт сейчас (hash и параметры не важны). @param {string} from @param {string} to */
@@ -211,7 +254,7 @@ function start(asked) {
     };
     wc.on('will-navigate', (ev) => guard(ev, ev.url));
     wc.on('will-redirect', (ev) => guard(ev, ev.url));
-    // Подкадры страницам программы не нужны (t112): iframe с file:// достаёт мост родителя (parent.terminalus),
+    // Подкадры страницам программы не нужны (t112): iframe с file:// достаёт мост родителя (parent.kermach),
     // а такие вызовы идут из главного кадра — проверка отправителя (sender.js) их не отличит. Гости webview — отдельные webContents.
     wc.on('will-frame-navigate', (ev) => {
       if (ev.isMainFrame) return;
@@ -278,36 +321,70 @@ function start(asked) {
   // Больше ничего: текст в терминале печатает любая программа, поэтому чужая схема (javascript:, file:) и программа (.exe, .cmd…)
   // не открываются — openPath запустил бы программу. Путь — полный или от папки проекта окна (за её пределы — нет), только если файл или папка есть.
   // Хвост :строка[:столбец] (src\a.js:120:5) отбрасывается: редактора нет, строку передать некому.
-  ipcMain.handle('link:open', async (e, target) => {
+  // Кто открыл (t895) — для журнала: слово окна, главный процесс его не проверяет; не из списка или пусто — терминал (Ctrl+щелчок как раньше).
+  const LINK_FROM = { terminal: 'из терминала', browser: 'из браузера', agents: 'из окна «Агенты»', markdown: 'из просмотра markdown' };
+  /**
+   * Путь из ссылки → полный путь (t58, t162, t1209): хвост :строка[:столбец] отбрасывается; путь полный или от папки проекта окна (за её пределы нет);
+   * точка и пробел в конце имени, «:» дальше диска, путь от корня диска или от ~ — отказ. Общее для link:open и link:has.
+   * @param {Electron.WebContents} wc @param {string} target @returns {{ path: string, error?: undefined } | { error: string }}
+   */
+  const linkPath = (wc, target) => {
+    const t = target.replace(/(?::\d+){1,2}$/, '');
+    const full = MAC ? t.startsWith('/') : /^[a-zA-Z]:[\\/]/.test(t);
+    // Точку и пробел в конце имени Windows отбрасывает («run.cmd.» — это run.cmd), «:» дальше диска — поток NTFS: такие пути не открываются.
+    // Путь от корня диска (\Windows) и от домашней папки (~\) — тоже нет: это не папка проекта.
+    if (/[.\s]$/.test(t) || t.includes(':', full && !MAC ? 2 : 0) || (!full && /^[\\/~]/.test(t))) return { error: i18n.t('link.refuse', 'не открываю: {t}', { t }) };
+    if (full) return { path: path.resolve(t) };
+    const p = projectWindow.projectOf(wc);
+    if (!p) return { error: i18n.t('link.noProject', 'не открываю: {t} — окно без проекта', { t }) };
+    const rel = path.relative(p.path, path.resolve(p.path, t));
+    if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return { error: i18n.t('link.outside', 'вне папки проекта: {t}', { t }) };
+    return { path: path.resolve(p.path, t) };
+  };
+  // Есть ли файл или папка по ссылке (t1209, d128, d161): окно спрашивает, чтобы не подчёркивать «и/или» и не предлагать открыть файл, которого нет.
+  // Ничего не открывает; отказ по правилам link:open — тоже «нет».
+  ipcMain.handle('link:has', async (e, target) => {
+    if (!sender.allowed(e, 'link:has')) return sender.refused();
+    if (typeof target !== 'string' || !target || target.length > 1024) return { has: false };
+    const r = linkPath(e.sender, target);
+    if (r.error) return { has: false, error: r.error };
+    const st = await fs.promises.stat(r.path).catch(() => null);
+    return { has: !!st, dir: !!st && st.isDirectory() };
+  });
+  ipcMain.handle('link:open', async (e, target, from) => {
     if (!sender.allowed(e, 'link:open')) return sender.refused();
     let t = String(target);
+    const by = typeof from === 'string' && Object.hasOwn(LINK_FROM, from) ? LINK_FROM[/** @type {'terminal'} */ (from)] : LINK_FROM.terminal;
     try {
       if (/^https?:\/\//i.test(t)) {
         const u = new URL(t);
         if (!u.hostname) return { error: i18n.t('link.notUrl', 'не адрес: {t}', { t }) };
         await shell.openExternal(u.href);
-        log(`ссылка из терминала: ${u.href}`);
+        log(`ссылка ${by}: ${u.href}`);
         return {};
       }
-      t = t.replace(/(?::\d+){1,2}$/, '');
-      const full = MAC ? t.startsWith('/') : /^[a-zA-Z]:[\\/]/.test(t);
-      // Точку и пробел в конце имени Windows отбрасывает («run.cmd.» — это run.cmd), «:» дальше диска — поток NTFS: такие пути не открываются.
-      // Путь от корня диска (\Windows) и от домашней папки (~\) — тоже нет: это не папка проекта.
-      if (/[.\s]$/.test(t) || t.includes(':', full && !MAC ? 2 : 0) || (!full && /^[\\/~]/.test(t))) return { error: i18n.t('link.refuse', 'не открываю: {t}', { t }) };
-      if (full) t = path.resolve(t);
-      else {
-        const p = projectWindow.projectOf(e.sender);
-        if (!p) return { error: i18n.t('link.noProject', 'не открываю: {t} — окно без проекта', { t }) };
-        const rel = path.relative(p.path, path.resolve(p.path, t));
-        if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return { error: i18n.t('link.outside', 'вне папки проекта: {t}', { t }) };
-        t = path.resolve(p.path, t);
-      }
-      if ((MAC ? osRules.MAC_LINK_PROGRAMS : LINK_PROGRAMS).test(t)) return { error: i18n.t('link.program', 'программу не запускаю: {t}', { t }) };
+      const r = linkPath(e.sender, t);
+      if (r.error) return { error: r.error };
+      t = r.path;
+      const isProgram = (MAC ? osRules.MAC_LINK_PROGRAMS : osRules.LINK_PROGRAMS).test(t);
+      // Скрипт (.js, .ps1, .cmd…) — текст: открывается на чтение в Блокноте (TextEdit), а не программой по умолчанию, которая его выполнила бы (t1209, d127).
+      const asText = isProgram && osRules.LINK_TEXT.test(t);
+      if (isProgram && !asText) return { error: i18n.t('link.program', 'программу не запускаю: {t}', { t }) };
       const st = await fs.promises.stat(t).catch(() => { throw new Error(i18n.t('link.noFile', 'нет такого файла: {t}', { t })); });
+      if (asText) {
+        if (!st.isFile()) return { error: i18n.t('link.program', 'программу не запускаю: {t}', { t }) };
+        // Блокнот запускается по имени, путь — одним аргументом без оболочки: имя файла не станет командой.
+        const cp = require('child_process');
+        const child = MAC ? cp.spawn('open', ['-t', t], { stdio: 'ignore' }) : cp.spawn('notepad.exe', [t], { stdio: 'ignore' });
+        child.on('error', (err) => log(`текстовый редактор не запустился: ${err}`));
+        child.unref();
+        log(`скрипт на чтение ${by}: ${t}`);
+        return {};
+      }
       if (MAC && st.isFile() && osRules.executable(st.mode)) return { error: i18n.t('link.program', 'программу не запускаю: {t}', { t }) };
       const err = await shell.openPath(t);
       if (err) return { error: i18n.t('link.failed', 'не открылся: {t} — {err}', { t, err }) };
-      log(`файл из терминала: ${t}`);
+      log(`файл ${by}: ${t}`);
       return {};
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
@@ -344,10 +421,10 @@ function start(asked) {
     log('полная остановка из окна');
     return stopAll();
   });
-  // Пустое окно проекта (t360): само ничего не запускает, а предлагает выбрать. TERMINALUS_AUTOSTART=claude (codex, shell) —
+  // Пустое окно проекта (t360): само ничего не запускает, а предлагает выбрать. KERMACH_AUTOSTART=claude (codex, shell) —
   // выключатель для проверок и для того, кто хочет как раньше: пустое окно само открывает этот терминал. Гейт ставит его всем проверкам.
-  const autostart = /^(claude|codex|shell)$/.test(process.env.TERMINALUS_AUTOSTART || '') ? String(process.env.TERMINALUS_AUTOSTART) : '';
-  if (autostart) log(`TERMINALUS_AUTOSTART=${autostart}: пустые окна проектов сами открывают ${autostart}`);
+  const autostart = /^(claude|codex|shell)$/.test(ENV('AUTOSTART') || '') ? String(ENV('AUTOSTART')) : '';
+  if (autostart) log(`KERMACH_AUTOSTART=${autostart}: пустые окна проектов сами открывают ${autostart}`);
   ipcMain.handle('app:autostart', (e) => {
     if (!sender.allowed(e, 'app:autostart')) return sender.refused();
     return autostart;
@@ -370,7 +447,7 @@ function start(asked) {
       if (relaunch.project) args.push('--project', relaunch.project);
       app.releaseSingleInstanceLock();
       app.relaunch({ args });
-      log(`запускаю программу заново после полной остановки${relaunch.project ? `: проект ${relaunch.project}` : ''}`);
+      log(`запускаю программу заново после ${relaunch.why === 'stop' ? 'полной остановки' : 'выхода'}${relaunch.project ? `: проект ${relaunch.project}` : ''}`);
     }
     // Самогашение (t482) — последним, после записи вкладок, связи с демоном и app.relaunch. Поток «Файлов», чей вызов диска не вернулся
     // (зависшая или сетевая папка), terminate не гасит, и Node на выходе ждёт его вечно — программа не закрывалась бы.

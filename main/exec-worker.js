@@ -11,6 +11,9 @@
 // каждого ребёнка (kid, kidExit, kidDone), а главный процесс после выхода потока гасит недогашенное сам, по снимку процессов (watchKids).
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { execFile, execFileSync } = require('child_process');
+const path = require('path');
+// git полным путём (t1280): короткое имя Windows ищет сначала в текущей папке — подложенный в проект git.exe запустился бы.
+const { fullGit } = require('./find-program');
 
 /** Сколько поток живёт без запросов. */
 const IDLE_MS = 60000;
@@ -25,6 +28,12 @@ const EXIT_QUIET_MS = 1000;
 const SETTLE_MS = STOP_MS + 5000;
 
 const WIN = process.platform === 'win32';
+/** taskkill по полному пути (t802): PATH у программы бывает урезан, как у демона (TASKKILL в daemon.js). */
+const TASKKILL = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe');
+/** Код taskkill «процесс не найден»: программа вышла сама, пока taskkill шёл, — не сбой. */
+const NOT_FOUND = 128;
+/** Почему taskkill не сработал — для журнала; текст taskkill в кодировке консоли не пишем. @param {any} e */
+const whyNot = (e) => (e.killed || e.code === 'ETIMEDOUT' ? 'не ответил за 10 с' : `код ${typeof e.code === 'string' ? e.code : typeof e.status === 'number' ? e.status : e.code}`);
 
 /** Программы, запущенные execTree в этом потоке и ещё не вышедшие. @type {Set<import('child_process').ChildProcess>} */
 const kids = new Set();
@@ -42,7 +51,11 @@ const tell = (m) => { if (!isMainThread && parentPort) parentPort.postMessage(m)
 function killTree(child) {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return false;
   if (WIN) {
-    try { execFileSync('taskkill', ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true, stdio: 'ignore', timeout: 10000 }); } catch { return false; }
+    try { execFileSync(TASKKILL, ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true, stdio: 'ignore', timeout: 10000 }); } catch (e) {
+      // Не «не найден» — дерево могло остаться: строка в main.log через главный процесс (note).
+      if (/** @type {any} */ (e).status !== NOT_FOUND) tell({ note: `taskkill дерева ${child.pid} — ${whyNot(e)}` });
+      return false;
+    }
   } else {
     try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { return false; } }
   }
@@ -75,6 +88,7 @@ async function killOrphans(pid, from, to) {
  * @param {(err: any, stdout: string, stderr: string, swept: number[]) => void} cb swept — номера погашенных потомков вышедшей программы
  */
 function execTree(file, args, opts, cb) {
+  [file, args] = fullGit(file, args);
   const { timeout, maxBuffer = 1024 * 1024, ...rest } = opts || {};
   let timedOut = false;
   let over = false;
@@ -258,6 +272,26 @@ function diskRead(root, fn, ms) {
   readQ = turn.catch(() => {});
   return turn;
 }
+/**
+ * Обход папки потоком (список файлов «Файлов», t481 в, е) — в той же очереди, что diskRead: пока он идёт, другой обход и раскрытие папки ждут.
+ * Без очереди окна, начавшие обход в первые секунды зависания (до срока папки), висли каждое на своём чтении, а раскрытие папки — рядом с обходом.
+ * Цена: пока идёт обход (обычно около 1 с с git, большая папка без git — до LIMITS.walkMs), раскрытие папки, «Открыть» и «Показать в Проводнике»
+ * ждут его во всех окнах.
+ * Застрявшее чтение есть — fn не зовётся, ответ { stuck }; выход программы начат — { closing }.
+ * @template T @param {() => Promise<T>} fn держит очередь, пока не решится
+ * @returns {Promise<{ value: T } | { closing: true } | { stuck: { root: string, gone: Promise<void> } }>}
+ */
+function diskTurn(fn) {
+  const turn = readQ.then(async () => {
+    if (closing) return /** @type {{ closing: true }} */ ({ closing: true });
+    const s = await diskStuck();
+    if (s) return { stuck: s };
+    if (closing) return /** @type {{ closing: true }} */ ({ closing: true });
+    return { value: await fn() };
+  });
+  readQ = turn.catch(() => {});
+  return turn;
+}
 
 /**
  * Гашение из главного процесса, когда потока уже нет (t463). Номер берётся только свой: процесс с этим номером запущен внутри нашего execFile
@@ -266,7 +300,8 @@ function diskRead(root, fn, ms) {
  * Происхождение не доказано — номера в снимке нет, а когда программа вышла, неизвестно, — не гасится ничего: потомки с таким номером родителя
  * могут быть детьми чужого процесса, который взял номер и вышел. Остаться может наш процесс — это прежнее поведение; погасить чужой — новый вред (t98).
  * @param {[number, { from: number, to: number, exitedAt: number }][]} left
- * @returns {Promise<{ killed: number[], unproven: number[] }>} погашенные номера; номера, по которым гасить не стал
+ * @returns {Promise<{ killed: number[], unproven: number[], failed: string[] }>} погашенные номера; номера, по которым гасить не стал;
+ *   номера, по которым taskkill не сработал, с причиной
  */
 async function sweep(left) {
   const { snapshot, pickTree } = require('./codex-limits');
@@ -292,13 +327,18 @@ async function sweep(left) {
   }
   /** @type {number[]} */
   const killed = [];
+  /** @type {string[]} */
+  const failed = [];
   for (const pid of one) { try { process.kill(pid, WIN ? undefined : 'SIGKILL'); killed.push(pid); } catch { /* уже вышел */ } }
   await Promise.all(trees.map((pid) => {
-    killed.push(pid);
-    if (!WIN) { try { process.kill(-pid, 'SIGKILL'); } catch {} return null; }
-    return new Promise((r) => execFile('taskkill', ['/T', '/F', '/PID', String(pid)], { windowsHide: true, timeout: 10000 }, () => r(null)));
+    if (!WIN) { killed.push(pid); try { process.kill(-pid, 'SIGKILL'); } catch {} return null; }
+    return new Promise((r) => execFile(TASKKILL, ['/T', '/F', '/PID', String(pid)], { windowsHide: true, timeout: 10000 }, (err) => {
+      if (!err) killed.push(pid);
+      else if (/** @type {any} */ (err).code !== NOT_FOUND) failed.push(`${pid} (${whyNot(err)})`);
+      r(null);
+    }));
   }));
-  return { killed, unproven };
+  return { killed, unproven, failed };
 }
 
 /**
@@ -315,6 +355,7 @@ function watchKids(w, log, what) {
     if ('kid' in m) { book.set(m.kid, { from: m.from, to: m.to, exitedAt: 0 }); return true; }
     if ('kidExit' in m) { const k = book.get(m.kidExit); if (k) k.exitedAt = m.at; return true; }
     if ('kidDone' in m) { book.delete(m.kidDone); return true; }
+    if ('note' in m) { log(`${what}: ${m.note}`); return true; }
     return false;
   };
   /** @type {Promise<void>} */
@@ -323,7 +364,8 @@ function watchKids(w, log, what) {
     const left = [...book];
     book.clear();
     sweep(left).then((r) => log(`${what} вышел, его программы не догашены (${left.map(([p]) => p).join(', ')}) — погашены по снимку: ${r.killed.join(', ') || 'живых уже не было'}`
-      + (r.unproven.length ? `; не гасил ${r.unproven.join(', ')}: номера нет в снимке, а когда вышла программа, неизвестно — её потомков не отличить от чужих` : '')),
+      + (r.unproven.length ? `; не гасил ${r.unproven.join(', ')}: номера нет в снимке, а когда вышла программа, неизвестно — её потомков не отличить от чужих` : '')
+      + (r.failed.length ? `; taskkill не сработал: ${r.failed.join(', ')}` : '')),
       (e) => log(`${what}: гашение его программ не удалось: ${e && e.stack || e}`)).finally(resolve);
   }));
   return { take, done };
@@ -425,4 +467,4 @@ function execWorker(log = () => {}) {
   };
 }
 
-module.exports = { execWorker, execTree, killKids, watchKids, hold, settle, diskThread, diskEnding, diskStuck, diskSettle, diskThreads, diskRead, IDLE_MS, STOP_MS, EXIT_QUIET_MS, END_MS };
+module.exports = { execWorker, execTree, killKids, watchKids, hold, settle, diskThread, diskEnding, diskStuck, diskSettle, diskThreads, diskRead, diskTurn, IDLE_MS, STOP_MS, EXIT_QUIET_MS, END_MS };

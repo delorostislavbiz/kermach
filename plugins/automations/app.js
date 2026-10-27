@@ -15,6 +15,8 @@ const i18n = require('../../main/i18n');
 const store = require('./store');
 // macOS — задачи launchd (schedule-mac.js), Windows — Планировщик. Договор у обоих один.
 const schedule = process.platform === 'darwin' ? require('./schedule-mac') : require('./schedule');
+const { notifyDir } = require('./run');
+const notify = require('../../main/notify');
 const { execWorker } = require('../../main/exec-worker');
 
 const PAGE = path.join(__dirname, 'window.html');
@@ -37,7 +39,7 @@ function projectsOf(dataDir) {
 }
 
 /**
- * Чем запускать прогон: собранная программа — TERMINALUS.exe --automation id; разработка — electron.exe <главный файл> --automation id.
+ * Чем запускать прогон: собранная программа — Kermach.exe --automation id; разработка — electron.exe <главный файл> --automation id.
  * Тот же набор пишется в задачу Планировщика.
  */
 function command() {
@@ -89,7 +91,8 @@ function row(i) {
 function listAll() {
   const c = /** @type {Ctx} */ (ctx);
   const projects = projectsOf(c.dataDir);
-  return { projects, filter, items: store.list(c.dataDir, projects.map((p) => p.path)).map(row) };
+  // warn — реестр слишком большой (t527): окно говорит, почему проектные автоматизации стали «чужими».
+  return { projects, filter, items: store.list(c.dataDir, projects.map((p) => p.path)).map(row), warn: store.regWarn(c.dataDir) };
 }
 
 /** Число и точка для кнопки «Проектов» (project '') и строки окна проекта. Чужие не считаются. @param {string} project */
@@ -110,28 +113,103 @@ function changed() {
   }, 300);
 }
 
-/** Живые слежения по папкам; упавшее убирается и включается снова при открытии окна. @type {Map<string, fs.FSWatcher>} */
+/** Живые слежения по папкам; упавшее убирается и включается снова при открытии окна. @type {Map<string, { close: () => void }>} */
 const watchers = new Map();
+
+/** Как часто опрашивается папка автоматизаций проекта (.kermach\automations). */
+const POLL_MS = 2000;
+
+/**
+ * Слежение за папкой автоматизаций проекта опросом, а не fs.watch (t535): на Windows fs.watch держит папку и все папки выше,
+ * и проект нельзя переименовать, пока окно открыто (EPERM). Смотрим <dir>/<id>/* и <dir>/automation-runs/<id>/<время прогона>/*:
+ * подпись «имя mtime размер»; изменилась — событие. Круги не накладываются: следующий ставится после конца предыдущего.
+ * @param {string} dir @param {() => void} onChange
+ */
+function pollDir(dir, onChange) {
+  let closed = false, sig = /** @type {string | null} */ (null), timer = /** @type {NodeJS.Timeout | null} */ (null);
+  const names = async (/** @type {string} */ d) => { try { return await fs.promises.readdir(d, { withFileTypes: true }); } catch { return []; } };
+  const lap = async () => {
+    /** @type {string[]} */
+    const out = [];
+    const files = async (/** @type {string} */ d) => {
+      for (const e of await names(d)) {
+        const f = path.join(d, e.name);
+        if (e.isFile()) { const s = await fs.promises.stat(f).catch(() => null); if (s) out.push(`${f} ${s.mtimeMs} ${s.size}`); }
+        else if (e.isDirectory()) out.push(`${f}/`);
+      }
+    };
+    for (const e of await names(dir)) {
+      if (!e.isDirectory()) continue;
+      if (e.name === store.RUNS) {
+        // <id>/<время прогона>/итог.json; <id>/работа — копия проекта для прогона, её не смотрим (старое слежение стреляло на каждый её файл)
+        for (const r of await names(path.join(dir, e.name))) {
+          if (!r.isDirectory()) continue;
+          for (const st of await names(path.join(dir, e.name, r.name))) if (st.isDirectory() && st.name !== 'работа') await files(path.join(dir, e.name, r.name, st.name));
+        }
+      }
+      else await files(path.join(dir, e.name));
+    }
+    const now = out.sort().join('\n');
+    if (sig !== null && now !== sig && !closed) onChange();
+    sig = now;
+  };
+  const next = () => { if (!closed) timer = setTimeout(() => lap().catch(() => {}).then(next), POLL_MS); };
+  lap().catch(() => {}).then(next);
+  return { close() { closed = true; if (timer) clearTimeout(timer); } };
+}
 
 /**
  * Прогоны и описания меняет и процесс прогона, без программы: следим за папками данных. Папки нет — создаём, иначе watch бросит.
- * Проектные включённые на этом компьютере пишут прогоны в <проект>\.terminalus — следим за ней у каждого проекта из реестра;
+ * Проектные включённые на этом компьютере пишут прогоны в <проект>\.kermach\automations — следим за ней у каждого проекта из реестра;
  * её не создаём (в ней уже лежит описание). Новый проект в реестре — слежение с вызова watch() при сохранении и открытии окна.
  */
 function watch() {
   const c = /** @type {Ctx} */ (ctx);
   const own = [path.join(c.dataDir, store.RUNS), store.commonRoot(c.dataDir)];
-  const projects = Object.values(store.registry(c.dataDir)).map((r) => r.project).filter(Boolean).map((p) => path.join(p, '.terminalus'));
+  const projects = Object.values(store.registry(c.dataDir)).map((r) => r.project).filter(Boolean).map((p) => store.home(p)); // home переносит старую .terminalus (t1305)
   for (const dir of [...own, ...new Set(projects)]) {
     if (watchers.has(dir)) continue;
     try {
       if (own.includes(dir)) fs.mkdirSync(dir, { recursive: true });
       else if (!fs.existsSync(dir)) continue;
-      const w = fs.watch(dir, { recursive: true }, changed);
-      w.on('error', (e) => { log(`слежение за ${dir} остановлено: ${e.message}`); w.close(); watchers.delete(dir); });
-      watchers.set(dir, w);
+      if (own.includes(dir)) {
+        const w = fs.watch(dir, { recursive: true }, () => { changed(); toastsSoon(); });
+        w.on('error', (e) => { log(`слежение за ${dir} остановлено: ${e.message}`); w.close(); watchers.delete(dir); });
+        watchers.set(dir, w);
+      } else watchers.set(dir, pollDir(dir, changed));
     } catch (e) { log(`слежение за ${dir} не включено: ${e instanceof Error ? e.message : e}`); }
   }
+}
+
+/** Запрос старше этого — прогон уже показал тост сам или упал: удаляется без показа (например, лежал с прошлого запуска программы). */
+const TOAST_STALE_MS = 30000;
+
+/**
+ * Запросы тоста от прогонов (t1233, run.js handoff): взять файл — удалить его — и показать тост от имени программы.
+ * Не удалился (ENOENT) — его уже забрал прогон и показывает через PowerShell. Решение «показывать ли» — здесь (настройка «уведомления»):
+ * файл удаляется и при выключенной настройке, иначе прогон показал бы тост в обход неё. Щелчок — окно автоматизаций с отбором по проекту.
+ */
+function toasts() {
+  const c = /** @type {Ctx} */ (ctx);
+  const dir = notifyDir(c.dataDir);
+  let names;
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.json')); } catch { return; }
+  for (const n of names) {
+    const f = path.join(dir, n);
+    let q = null;
+    try { if (fs.statSync(f).size < 65536) q = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {}
+    try { fs.unlinkSync(f); } catch { continue; }
+    if (!q || typeof q.title !== 'string' || !(Date.now() - Number(q.at) < TOAST_STALE_MS)) { log(`запрос уведомления ${n} ${q ? 'устарел' : 'не прочитан'} — удалён без показа`); continue; }
+    const project = String(q.project || '');
+    notify.remind({ key: `auto:${q.id}`, title: q.title, body: String(q.text || ''), on: settings.get().notify !== false, click: () => open(project) }, log);
+  }
+}
+
+/** События fs.watch идут пачкой на каждую запись прогона: запросы смотрим один раз на пачку. */
+let toastTick = /** @type {NodeJS.Timeout | null} */ (null);
+function toastsSoon() {
+  if (toastTick) return;
+  toastTick = setTimeout(() => { toastTick = null; try { toasts(); } catch (e) { log(`уведомление прогона: ${e instanceof Error ? e.message : e}`); } }, 50);
 }
 
 /**
@@ -197,6 +275,31 @@ async function syncTasks() {
   if (n) changed();
 }
 
+/**
+ * Задачи прежней папки Планировщика TERMINALUS — в Kermach (t1305). Сначала новая задача, старая удаляется только после неё:
+ * сбой посередине оставит две задачи (вторая не запустится — IgnoreNew и замок прогона), но не ни одной.
+ * Описание видно — задача пишется по нему, как при сохранении; не видно — копия старой (тот же триггер). Не вышло — старая остаётся до следующего запуска.
+ */
+async function moveTasks() {
+  const c = /** @type {Ctx} */ (ctx);
+  const old = await schedule.tasks(run, schedule.OLD_FOLDER);
+  if (!old || !Object.keys(old).length) return;
+  const have = (await schedule.tasks(run)) || {};
+  const items = new Map(store.list(c.dataDir, projectsOf(c.dataDir).map((p) => p.path))
+    .filter((i) => !i.foreign && !i.error && i.cfg && i.cfg.repeat).map((i) => [i.id, i]));
+  for (const id of Object.keys(old)) {
+    const i = items.get(id);
+    let bad = '';
+    if (have[id] === undefined) {
+      if (i) bad = await schedulePut(i);
+      else { const r = await schedule.copyOld(id, run); bad = r.code === 0 ? '' : r.out || `schtasks: код ${r.code}`; }
+    }
+    if (bad) { log(`задача ${id} не перенесена в папку ${schedule.FOLDER}: ${bad}`); continue; }
+    const r = await schedule.drop(id, run, schedule.OLD_FOLDER);
+    log(`задача ${id} перенесена в папку ${schedule.FOLDER}${r.code === 0 ? '' : `, старая не удалена: ${r.out}`}`);
+  }
+}
+
 /** Запустить прогон отдельным процессом, без окна; программа его не ждёт. @param {string} id */
 function runNow(id) {
   const { exe, args } = command();
@@ -223,7 +326,11 @@ function register(c) {
   if (ctx) return;
   ctx = c;
   ex = execWorker(log);
+  // Сетевая папка проекта ответила иначе (t1300): store.list пропускал её автоматизации — окнам «изменилось».
+  require('../../main/dir-alive').onChange(() => changed());
   watch();
+  toastsSoon(); // запросы, оставшиеся с прошлого запуска, — без показа
+  inQueue(moveTasks).catch((e) => log(`перенос задач Планировщика: ${e instanceof Error ? e.message : e}`));
   ipcMain.handle('auto:summary', (e, project) => {
     if (!sender.allowed(e, 'auto:summary')) return sender.refused();
     // Плагин выключен в «Настройках» — кнопки «Проектов» нет; задачи Планировщика при этом остаются.
@@ -257,16 +364,11 @@ function register(c) {
   handle('auto:run', (dir, stamp) => {
     const i = itemOf(dir);
     if (!i || i.foreign || !/^[\d_-]+$/.test(String(stamp))) return { error: 'нет прогона' };
-    const d = path.join(store.runsOf(c.dataDir, i.id), String(stamp));
-    /** @type {any} */
-    let res = null;
-    try { res = JSON.parse(fs.readFileSync(path.join(d, 'итог.json'), 'utf8')); } catch {}
-    let md = '';
-    try { md = fs.readFileSync(path.join(d, 'ответ.md'), 'utf8'); } catch {}
-    const files = ((res && res.files) || []).map((/** @type {string} */ f) => { let size = -1; try { size = fs.statSync(f).size; } catch {} return { path: f, size }; });
+    // Итог, ответ и файлы — с пределами размера (t527): итог.json в сотни МБ подвесил бы главный процесс.
+    const { result, md, files, more } = store.readRun(path.join(store.runsOf(c.dataDir, i.id), String(stamp)));
     store.markSeen(c.dataDir, i.id, String(stamp));
     changed();
-    return { result: res || { stamp, status: '' }, md, files, work: store.workOf(c.dataDir, i.id) };
+    return { result: { stamp, ...result }, md, files, more, work: store.workOf(c.dataDir, i.id) };
   });
   handle('auto:save', async (f) => {
     const cfg = cfgOf(f);
@@ -275,10 +377,19 @@ function register(c) {
     if (f.dir && !item) return { error: 'описание не найдено' };
     if (item) store.update(item, cfg, task);
     else { const id = store.create(c.dataDir, { project: f.project ? String(f.project) : '', cfg, task }); item = store.find(c.dataDir, id); }
-    item = /** @type {store.Item} */ (itemOf(/** @type {store.Item} */ (item).dir));
-    if (!!f.on !== item.on) store.setOn(c.dataDir, item, !!f.on);
-    item = /** @type {store.Item} */ (itemOf(item.dir));
-    const warn = await inQueue(() => schedulePut(/** @type {store.Item} */ (itemOf(/** @type {store.Item} */ (item).dir)) || /** @type {store.Item} */ (item)));
+    const saved = itemOf(/** @type {store.Item} */ (item).dir);
+    if (!saved) return { error: 'описание не найдено' };
+    item = saved;
+    // Номер занят своей (копия проекта) — setOn переносит папку под новый номер: искать по номеру, а не по старой папке.
+    if (!!f.on !== item.on) {
+      const moved = store.find(c.dataDir, store.setOn(c.dataDir, item, !!f.on));
+      // Папку убрали посреди сохранения: искать нечего.
+      if (!moved) return { error: 'описание не найдено' };
+      item = moved;
+    }
+    item = /** @type {store.Item} */ (itemOf(item.dir) || item);
+    // Пришедшая с папкой проекта и не включённая здесь: её задачи в Планировщике нет, а номер может быть у своей — schedulePut выключил бы ту (t472).
+    const warn = item.foreign ? '' : await inQueue(() => schedulePut(item));
     watch();
     changed();
     return { ok: true, dir: item.dir, warn };
@@ -287,7 +398,9 @@ function register(c) {
     const i = itemOf(dir);
     if (!i) return { error: 'описание не найдено' };
     const id = store.setOn(c.dataDir, i, !!on);
-    const now = /** @type {store.Item} */ (store.find(c.dataDir, id));
+    const now = store.find(c.dataDir, id);
+    // Описание убрали между поиском и записью (t1202): без этой проверки окно получало бы TypeError про null.
+    if (!now) return { error: 'описание не найдено' };
     const warn = await inQueue(() => schedulePut(/** @type {store.Item} */ (itemOf(now.dir)) || now));
     watch();
     changed();
@@ -297,7 +410,8 @@ function register(c) {
     const i = itemOf(dir);
     if (!i) return { error: 'описание не найдено' };
     if (!i.foreign) {
-      const r = await inQueue(() => schedule.drop(i.id, run));
+      let r = await inQueue(() => schedule.drop(i.id, run));
+      if (r.code !== 0) { const o = await inQueue(() => schedule.drop(i.id, run, schedule.OLD_FOLDER)); if (o.code === 0) r = o; } // не перенесённая ещё задача (t1305)
       if (r.code !== 0) log(`задача ${i.id} не удалена из Планировщика: код ${r.code}, ${r.out}`);
     }
     store.remove(c.dataDir, i);

@@ -6,10 +6,12 @@
 /**
  * @param {Pick<import('electron').Input, 'type' | 'key' | 'code' | 'control' | 'meta' | 'alt' | 'shift'>} i
  * @param {boolean} mac
- * @returns {'' | 'recent' | 'prev' | 'next'}
+ * @returns {'' | 'recent' | 'prev' | 'next' | 'close'}
  */
 function tabKeyOf(i, mac) {
   if (i.type !== 'keyDown' || i.alt) return '';
+  // Ctrl+Shift+W (Mac — Cmd+Shift+W) — закрыть вкладку (t739, t1198), как в терминале: по code, не зависит от раскладки.
+  if (i.shift && i.code === 'KeyW' && (mac ? i.meta && !i.control : i.control && !i.meta)) return 'close';
   if (mac && i.meta && i.shift && !i.control) return i.code === 'BracketLeft' ? 'prev' : i.code === 'BracketRight' ? 'next' : '';
   if (!i.control || i.meta) return '';
   if (i.key === 'Tab') return 'recent';

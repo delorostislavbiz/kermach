@@ -188,3 +188,14 @@ button.cv-pick { background-image: none; padding-right: 10px; }
 .cv-l.warn .cv-l-v { color: var(--warn); }
 .cv-l.bad .cv-l-v { color: var(--danger); }
 .cv-l-r { opacity: .85; }
+
+/* Kermach и Termius Dark (ui-kermach-project.css): вкладка — карточка с отступом --pane-pad и своей шапкой .phead 34 px, место под неё —
+   padding-top у .xterm. Слой занимает саму карточку; шапку карточки заменяет верхняя строка слоя — в ней то же имя и состояние и переключатель. */
+html:is([data-ui="kermach"], [data-ui="termius"]) .pane > .cv { inset: 0; background: var(--term); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .pane:has(> .cv) > .phead { display: none; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .pane.cv-term { padding-top: 0; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .pane.cv-term > .cv { bottom: auto; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .cv-top { height: 40px; padding: 0 12px; border-bottom-color: var(--line); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .cv-seg { background: var(--card); border: 1px solid var(--line); }
+html:is([data-ui="kermach"], [data-ui="termius"]) .cv-seg button.on { background: var(--selected); box-shadow: none; }
+html:is([data-ui="kermach"], [data-ui="termius"]) .cv-comp { background: var(--card); border-color: var(--line); }

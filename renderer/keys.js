@@ -47,5 +47,17 @@
     return '';
   }
 
-  /** @type {any} */ (globalThis).Keys = { mac: /Mac/.test(globalThis.navigator ? navigator.platform : ''), mod, zoom, tab, clip };
+  /**
+   * Команды вкладки (t739): 'rename' — F2 без модификаторов, 'close' — Ctrl+Shift+W (Mac — Cmd+Shift+W), '' — не эта клавиша.
+   * Ctrl+W не берём: в bash, PowerShell и поле Claude Code это «стереть слово». Закрытие — как в Windows Terminal. W — по ev.code.
+   * F2 в терминале не перехватывается (это решает terminal.js): там клавиша нужна программам.
+   * @param {K} ev @param {boolean} mac
+   */
+  function tabCmd(ev, mac) {
+    if (ev.key === 'F2' && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.shiftKey) return 'rename';
+    if (mod(ev, mac) && ev.shiftKey && ev.code === 'KeyW') return 'close';
+    return '';
+  }
+
+  /** @type {any} */ (globalThis).Keys = { mac: /Mac/.test(globalThis.navigator ? navigator.platform : ''), mod, zoom, tab, clip, tabCmd };
 })();

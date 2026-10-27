@@ -1,6 +1,6 @@
 // @ts-check
 // Язык окна (t258, крючки языка для модуля «Перевод программы» t184). Подключается в <head> после theme.js, до отрисовки.
-// Словарь отдаёт главный процесс: terminalus.settings.dict() — синхронный вызов, main\i18n.js читает файл плагина с диска.
+// Словарь отдаёт главный процесс: kermach.settings.dict() — синхронный вызов, main\i18n.js читает файл плагина с диска.
 // Спрашиваем при открытии и после каждого settings:changed: включили плагин языка, сменили lang.
 // dict = null — языка нет: I18n.t отдаёт русский текст из вызова, окно выглядит как до t258.
 // Надписи окон на ключи переводит t184. Разметку html с data-i18n этот файл переводит сам, и при смене языка тоже;
@@ -77,7 +77,7 @@
   // Разметка ещё не разобрана, пока скрипт стоит в <head>: первый проход — когда она готова. Без словаря проход ничего не меняет.
   if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('DOMContentLoaded', () => { if (cur) applyDom(); });
 
-  const t = w.terminalus;
+  const t = w.kermach;
   // Нет моста или старый preload без dict — окно по-русски, как до t258.
   const ask = () => { try { return t.settings.dict(); } catch { return null; } };
   if (t && t.settings && typeof t.settings.dict === 'function') {

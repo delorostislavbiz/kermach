@@ -1,7 +1,7 @@
 // Мост окна к терминалу: странице доступны только эти вызовы, Node и файлы ей недоступны.
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
-contextBridge.exposeInMainWorld('terminalus', {
+const bridge = {
   // Кнопки своего заголовка.
   win: {
     minimize: () => ipcRenderer.send('win:min'),
@@ -16,19 +16,34 @@ contextBridge.exposeInMainWorld('terminalus', {
   // Ответ: true — остановка идёт, false — человек отказался.
   app: {
     stopAll: () => ipcRenderer.invoke('app:stop-all'),
-    // Что пустое окно проекта открывает само (t360): '' — ничего, кнопки выбора; иначе claude, codex или shell (TERMINALUS_AUTOSTART).
+    // Что пустое окно проекта открывает само (t360): '' — ничего, кнопки выбора; иначе claude, codex или shell (KERMACH_AUTOSTART).
     autostart: () => ipcRenderer.invoke('app:autostart'),
   },
   // Окно «Проекты».
   projects: {
     list: () => ipcRenderer.invoke('projects:list'),
-    pickFolder: () => ipcRenderer.invoke('projects:pick'),
+    pickFolder: (kind) => ipcRenderer.invoke('projects:pick', kind),
+    presets: () => ipcRenderer.invoke('projects:presets'),
+    create: (o) => ipcRenderer.invoke('projects:create', o),
     add: (dir) => ipcRenderer.invoke('projects:add', dir),
+    orcaHas: () => ipcRenderer.invoke('projects:orcaHas'),
+    orcaImport: () => ipcRenderer.invoke('projects:orcaImport'),
     open: (id) => ipcRenderer.send('projects:open', id),
     update: (id, look) => ipcRenderer.invoke('projects:update', id, look),
     remove: (id) => ipcRenderer.invoke('projects:remove', id),
+    canCopy: (id) => ipcRenderer.invoke('projects:canCopy', id),
+    copy: (id) => ipcRenderer.invoke('projects:copy', id),
+    isCopy: (id) => ipcRenderer.invoke('projects:isCopy', id),
+    removeCopy: (id, force) => ipcRenderer.invoke('projects:removeCopy', id, !!force),
+    canHistory: (id) => ipcRenderer.invoke('projects:canHistory', id),
+    enableHistory: (id) => ipcRenderer.invoke('projects:enableHistory', id),
     collapse: (keys, shut) => ipcRenderer.invoke('projects:collapse', keys, shut),
     setMode: (mode) => ipcRenderer.invoke('projects:mode', mode),
+    groupAdd: (name, projectId) => ipcRenderer.invoke('projects:groupAdd', name, projectId),
+    groupRename: (id, name) => ipcRenderer.invoke('projects:groupRename', id, name),
+    groupMove: (id, step) => ipcRenderer.invoke('projects:groupMove', id, step),
+    groupRemove: (id) => ipcRenderer.invoke('projects:groupRemove', id),
+    setGroup: (id, groupId) => ipcRenderer.invoke('projects:setGroup', id, groupId),
     onChanged: (cb) => ipcRenderer.on('projects:changed', () => cb()),
   },
   // Окно проекта: какой у него проект и значок для панели задач. onChanged — у проекта сменились цвет или значок.
@@ -52,10 +67,17 @@ contextBridge.exposeInMainWorld('terminalus', {
     write: (sid, data) => ipcRenderer.send('term:write', { sid, data }),
     // Снимок и описание со страницы — в терминал агента (t38, t39); главный процесс проверяет агента и чистит текст. Ответ — вставлено ли.
     paste: (sid, text, mode) => ipcRenderer.invoke('term:paste', { sid, text, mode }),
+    // Картинка «[Image #N]» разговора Claude этой вкладки (t1148): { url } или { missing: true }.
+    image: (sid, n) => ipcRenderer.invoke('term:image', { sid, n }),
     resize: (sid, cols, rows) => ipcRenderer.send('term:resize', { sid, cols, rows }),
     update: (sid, fields) => ipcRenderer.invoke('term:update', { sid, fields }),
     close: (sid) => ipcRenderer.invoke('term:close', { sid }),
     reorder: (sids) => ipcRenderer.invoke('term:reorder', { sids }),
+    // Скрытую вкладку (t1059) — на полосу: кнопка «в фоне» (t1061).
+    unhide: (sid) => ipcRenderer.invoke('term:unhide', { sid }),
+    // И обратно — «Спрятать в фон» в меню вкладки (d307); onHide — вкладку спрятали (меню или плагин): окно снимает её с полосы.
+    hide: (sid) => ipcRenderer.invoke('term:hide', { sid }),
+    onHide: (cb) => ipcRenderer.on('term:hide', (_e, m) => cb(m.sid)),
     onData: (cb) => ipcRenderer.on('term:data', (_e, m) => cb(m.sid, m.data)),
     onExit: (cb) => ipcRenderer.on('term:exit', (_e, m) => cb(m.sid, m.code, m.state)),
     onChanged: (cb) => ipcRenderer.on('term:changed', () => cb()),
@@ -93,6 +115,12 @@ contextBridge.exposeInMainWorld('terminalus', {
     open: (o) => ipcRenderer.invoke('auto:open', o || {}),
     onChanged: (cb) => { const f = () => cb(); ipcRenderer.on('auto:changed', f); return () => ipcRenderer.removeListener('auto:changed', f); },
   },
+  // Плагин «История» для окна «Проекты» (plugins\history\app.js, t1127): waits — { counts: { номер проекта: N } } разговоров «ждут вас»,
+  // { off: true } — плагин выключен. fresh — перечитать пометки «идёт». onChanged отвечает функцией снятия подписки.
+  history: {
+    waits: (fresh) => ipcRenderer.invoke('history:waits', !!fresh),
+    onChanged: (cb) => { const f = () => cb(); ipcRenderer.on('history:changed', f); return () => ipcRenderer.removeListener('history:changed', f); },
+  },
   // Плагин «Markdown» (plugins\markdown\main.js, t220): документы .md проекта. Главный процесс отвечает, только пока плагин включён, и только про файлы,
   // которые окно получило от него же (resolve, pick, list, create, tabs) — читать и писать что угодно по пути нельзя.
   markdown: {
@@ -129,15 +157,26 @@ contextBridge.exposeInMainWorld('terminalus', {
     views: () => ipcRenderer.invoke('browser:views'),
     setViews: (patch) => ipcRenderer.invoke('browser:views-set', patch),
     onViews: (cb) => { const f = (_e, v) => cb(v); ipcRenderer.on('browser:views', f); return () => ipcRenderer.removeListener('browser:views', f); },
+    // Закладки проекта (t881): [{ url, title }] по порядку; setMarks пишет весь список и отвечает записанным, onMarks — список от другого окна проекта.
+    marks: () => ipcRenderer.invoke('browser:marks'),
+    setMarks: (list) => ipcRenderer.invoke('browser:marks-set', list),
+    onMarks: (cb) => { const f = (_e, v) => cb(v); ipcRenderer.on('browser:marks', f); return () => ipcRenderer.removeListener('browser:marks', f); },
   },
   // Настройки программы (main\settings.js, t181): { uiZoom, termFont, sound, lang }. set принимает часть полей и отвечает всеми.
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     set: (patch) => ipcRenderer.invoke('settings:set', patch),
-    // Тема окна (t257): { id, kind, window, terminal, list } или null — плагина «Темы» нет или он выключен. Синхронно: renderer\theme.js ставит цвета до отрисовки.
+    // Папка новых проектов и «Входящих» (t1286): pickDir — системный выбор, '' — отмена; dir — записать, ответ — настройки или { error }.
+    pickDir: (key) => ipcRenderer.invoke('settings:pickDir', key),
+    dir: (key, value) => ipcRenderer.invoke('settings:dir', key, value),
+    // Тема окна (t257): { id, kind, window, terminal } или null — схема не выбрана, плагина «Темы» нет. Синхронно: renderer\theme.js ставит цвета до отрисовки.
     look: () => ipcRenderer.sendSync('settings:look'),
+    // Схемы плагина «Темы» для списка «Тема» в «Настройках» (t723): [{ id, name, kind }], синхронно.
+    schemes: () => ipcRenderer.sendSync('settings:schemes'),
     // Словарь языка для окна (t258): { lang, dict } или null — синхронно, до отрисовки. Читает renderer\i18n.js.
     dict: () => ipcRenderer.sendSync('settings:dict'),
+    // Номер версии из package.json (t1264), синхронно: «Настройки» пишут его внизу.
+    version: () => ipcRenderer.sendSync('settings:version'),
     // Отвечает функцией снятия подписки (t218): «Браузер» подписывается при каждом включении и снимает подписку при выключении.
     onChanged: (cb) => { const f = (_e, s) => cb(s); ipcRenderer.on('settings:changed', f); return () => ipcRenderer.removeListener('settings:changed', f); },
   },
@@ -149,11 +188,22 @@ contextBridge.exposeInMainWorld('terminalus', {
     list: () => ipcRenderer.invoke('agents:list'),
     named: () => ipcRenderer.invoke('agents:named'),
   },
+  // Хук Codex (main\terminals.js, t797): итог проверки у самого Codex — { state: 'ok' | 'fixed' | 'off', version, why, at } или null, пока
+  // не проверяли (проверка — при первой вкладке Codex); recheck — проверить снова, ответ тот же или { error }.
+  codexHook: {
+    status: () => ipcRenderer.invoke('codexHook:status'),
+    recheck: () => ipcRenderer.invoke('codexHook:recheck'),
+  },
   log: (msg) => ipcRenderer.send('term:log', msg),
   // Путь брошенного файла (t62): у File в Electron нет поля path, путь даёт только webUtils — и только здесь.
   filePath: (file) => webUtils.getPathForFile(file),
   // Ссылка из терминала (t58): адрес http(s) или полный путь к файлу. Ответ {} или { error }.
-  openLink: (target) => ipcRenderer.invoke('link:open', target),
+  // from — кто открыл, только для журнала (t895): 'browser' — кнопка вкладки сайта, 'agents' — окно «Агенты», 'markdown' — просмотр markdown (t902); без него — терминал.
+  openLink: (target, from) => ipcRenderer.invoke('link:open', target, from),
+  linkHas: (target) => ipcRenderer.invoke('link:has', target),
   clipRead: () => ipcRenderer.invoke('clip:read'),
   clipWrite: (text) => ipcRenderer.send('clip:write', text),
-});
+};
+contextBridge.exposeInMainWorld('kermach', bridge);
+// Старое имя моста до t1307: плагины человека (%APPDATA%\Kermach\plugins, t855) могут звать window.terminalus. До 1.0.
+contextBridge.exposeInMainWorld('terminalus', bridge);

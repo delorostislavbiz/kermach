@@ -13,18 +13,21 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const { spawn, spawnSync } = require('child_process');
+/** @param {string} n */
+const envOf = (n) => require('./platform').envOf(process.env, n);
 
 // Сколько ждать скрипт пользователя, мс. Дольше — его вывод обрезается тем, что успело прийти.
 const USER_MS = 3000;
 // Сколько ждать приёмник демона, мс. Демон не ответил — номер придёт со следующим обновлением строки или с хуком.
 const POST_MS = 1000;
 // Метка в окружении скрипта пользователя: если он сам окажется этой обёрткой, второй раз она ничего не запускает.
-const GUARD = 'TERMINALUS_STATUSLINE';
+const GUARD = 'KERMACH_STATUSLINE';
 // Время запуска: демон отбрасывает строку, запущенную до прошлой смены номера (опоздавшую строку прежнего разговора).
 const STARTED = Date.now();
 
 const limitsFile = process.argv[2] || '';
-const nested = !!process.env[GUARD];
+// TERMINALUS_STATUSLINE — та же метка до t1307: скрипт пользователя мог запустить старую обёртку.
+const nested = !!process.env[GUARD] || !!process.env.TERMINALUS_STATUSLINE;
 const chunks = /** @type {Buffer[]} */ ([]);
 /** @type {Promise<void>} */
 let posted = Promise.resolve();
@@ -63,12 +66,13 @@ function saveLimits(input) {
 }
 
 /**
- * session_id — приёмнику демона, с ключом и ключом вкладки из окружения терминала (как у хуков). Вне вкладки TERMINALUS
+ * session_id — приёмнику демона, с ключом и ключом вкладки из окружения терминала (как у хуков). Вне вкладки Kermach
  * переменных нет — ничего не шлётся. Ошибки и молчание демона глотаются: строка состояния важнее.
  * @param {Buffer} input @returns {Promise<void>}
  */
 function report(input) {
-  const { TERMINALUS_HOOK_TOKEN: token, TERMINALUS_TAB_KEY: tab, TERMINALUS_HOOK_PORT: port } = process.env;
+  // KERMACH_*, нет — TERMINALUS_* (t1307): вкладка старого демона; заголовки — оба имени, старый демон читает только X-Terminalus-*.
+  const token = envOf('HOOK_TOKEN'), tab = envOf('TAB_KEY'), port = envOf('HOOK_PORT');
   if (!token || !tab || !/^\d+$/.test(port || '')) return Promise.resolve();
   let sessionId = '';
   try { sessionId = String(JSON.parse(input.toString('utf8')).session_id || ''); } catch {}
@@ -77,7 +81,7 @@ function report(input) {
   return new Promise((resolve) => {
     try {
       const req = http.request({ host: '127.0.0.1', port: Number(port), path: '/hook/claude', method: 'POST', timeout: POST_MS,
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'X-Terminalus-Token': token, 'X-Terminalus-Tab': tab } },
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'X-Kermach-Token': token, 'X-Kermach-Tab': tab, 'X-Terminalus-Token': token, 'X-Terminalus-Tab': tab } },
       (res) => { res.resume(); res.on('end', () => resolve()); res.on('error', () => resolve()); });
       req.on('timeout', () => req.destroy());
       req.on('error', () => resolve());
@@ -87,10 +91,11 @@ function report(input) {
   });
 }
 
-/** Команда строки состояния пользователя; пусто — её нет или это сама обёртка. */
+/** Команда строки состояния пользователя (settings.json в CLAUDE_CONFIG_DIR, иначе в ~/.claude, t1193); пусто — её нет или это сама обёртка. */
 function userCommand() {
   try {
-    const s = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'));
+    const home = process.env.CLAUDE_CONFIG_DIR ? path.resolve(process.env.CLAUDE_CONFIG_DIR) : path.join(os.homedir(), '.claude');
+    const s = JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8'));
     const cmd = s && s.statusLine && s.statusLine.type !== 'static' && typeof s.statusLine.command === 'string' ? s.statusLine.command : '';
     return /claude-statusline\.js/i.test(cmd) ? '' : cmd;
   } catch {
@@ -129,8 +134,9 @@ function runUser(command, input) {
     // Чужих /T не задевает (t98): зовётся, только пока cmd.exe жив, — Node держит его хэндл, номер не переиспользован;
     // сирот старше родителя taskkill /T не трогает (spikes\t71-find\taskkill-probe.txt). cmd.exe уже вышел, а внук держит
     // вывод — done ещё false, но номер свободен (exit-vs-close.txt там же): тогда не гасим, просто выходим.
+    // taskkill — по полному пути (t802): PATH у скрипта строки состояния бывает урезан.
     if (process.platform !== 'win32') child.kill();
-    else if (child.pid && child.exitCode === null && child.signalCode === null) spawnSync('taskkill', ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true, stdio: 'ignore' });
+    else if (child.pid && child.exitCode === null && child.signalCode === null) spawnSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true, stdio: 'ignore' });
     finish();
   }, USER_MS).unref();
 }

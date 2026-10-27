@@ -9,7 +9,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
-const { PROTOCOL_VERSION, PIPE, KEY_FILE, lineReader, frame } = require('./protocol');
+const { PROTOCOL_VERSION, PIPE, LEGACY_PIPE, KEY_FILE, lineReader, frame } = require('./protocol');
 
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -26,6 +26,8 @@ class DaemonClient extends EventEmitter {
     this.daemonPid = 0;
     /** Файл настроек для claude --settings (хуки на приёмник демона). Пусто — демон старый, claude без хуков. */
     this.hooksSettings = '';
+    /** Флаги -c хука SessionStart для codex (t777). Пусто — демон старый, codex без хука. @type {string[]} */
+    this.codexHookArgs = [];
     /** Как запущен демон, если его запустил этот клиент: 'rundll32' или 'напрямую'. @type {string} */
     this.spawnedVia = '';
     this.nextId = 1;
@@ -115,9 +117,16 @@ class DaemonClient extends EventEmitter {
  * @param {{ role?: string, name?: string, version?: number }} [o]
  * @returns {Promise<DaemonClient | null>}
  */
-function connect({ role = 'client', name = '', version = PROTOCOL_VERSION } = {}) {
+async function connect(o = {}) {
+  const c = await connectTo(PIPE, o);
+  // Канал до t1307: живой старый демон переходит на новое имя только со своего перезапуска.
+  return c || !LEGACY_PIPE ? c : connectTo(LEGACY_PIPE, o);
+}
+
+/** connect к одному каналу. @param {string} pipe @param {{ role?: string, name?: string, version?: number }} o @returns {Promise<DaemonClient | null>} */
+function connectTo(pipe, { role = 'client', name = '', version = PROTOCOL_VERSION }) {
   return new Promise((resolve, reject) => {
-    const sock = net.connect(PIPE);
+    const sock = net.connect(pipe);
     const noDaemon = () => resolve(null);
     sock.once('error', noDaemon);
     sock.once('connect', async () => {
@@ -128,6 +137,7 @@ function connect({ role = 'client', name = '', version = PROTOCOL_VERSION } = {}
         const r = await c.request('hello', { v: version, role, name, key: readKey() });
         c.daemonPid = r.pid;
         c.hooksSettings = String(r.hooksSettings || '');
+        c.codexHookArgs = Array.isArray(r.codexHookArgs) ? r.codexHookArgs.map(String) : [];
         resolve(c);
       } catch (e) {
         c.close();

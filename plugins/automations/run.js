@@ -1,16 +1,19 @@
 // @ts-check
-// Автоматизации (t252): один прогон. Планировщик зовёт программу: TERMINALUS.exe --automation <номер> (main\main.js, ветка до окон) → cli().
+// Автоматизации (t252): один прогон. Планировщик зовёт программу: Kermach.exe --automation <номер> (main\main.js, ветка до окон) → cli().
 // «Запустить сейчас» зовёт ту же команду отдельным процессом. Устройство — spikes\t252-auto\DESIGN.md п. 2, 4, 5, 7, 8.
 // Флаги claude — строгий режим по пробам spikes\t252-auto\РАЗБОР.md (j4, h2): режим default, запись только Edit(<своя папка>/**), команды поимённо.
 // --setting-sources "": настройки, хуки и CLAUDE.md проекта и человека не грузятся — права только из флагов (design\p5-V4, p5-V5).
 // CLAUDE.md проекта проектная автоматизация получает в начале задания (spikes\t252-auto\code\md-result.txt: с "" claude его не читает).
-// TERMINALUS_CLAUDE — путь к своему claude (.js — запускается этим же exe как Node); TERMINALUS_NOTIFY=0 — без уведомления, путь .js — своя замена тоста.
+// KERMACH_CLAUDE — путь к своему claude (.js — запускается этим же exe как Node); KERMACH_NOTIFY=0 — без уведомления, путь .js — своя замена тоста.
+// Уведомление о конце прогона показывает открытая программа (t1233, файл в notifyDir); закрыта или стоит — PowerShell.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn, spawnSync } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const store = require('./store');
 const { findProgram } = require('../../main/find-program');
+/** Переменная программы: KERMACH_<имя>, нет — TERMINALUS_<имя> до t1307 (platform.envOf). @param {string} n */
+const ENV = (n) => require('../../daemon/platform').envOf(process.env, n);
 
 const TIMEOUT_MS = 30 * 60 * 1000;
 /** Сколько CLAUDE.md проекта класть в задание. */
@@ -53,7 +56,7 @@ function stampOf(/** @type {Date} */ d) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-/** Файлы, изменённые после since. Без .git, node_modules, .terminalus; не больше max. @param {string} root @param {number} since @param {number} max */
+/** Файлы, изменённые после since. Без .git, node_modules, папки автоматизаций (.kermach\automations, до t1305 .terminalus); не больше max. @param {string} root @param {number} since @param {number} max */
 function changed(root, since, max = 200) {
   /** @type {string[]} */
   const out = [];
@@ -65,7 +68,10 @@ function changed(root, since, max = 200) {
     for (const it of items) {
       if (++seen > 20000 || out.length >= max) return;
       const f = path.join(dir, it.name);
-      if (it.isDirectory()) { if (!['.git', 'node_modules', '.terminalus'].includes(it.name)) walk(f, depth + 1); continue; }
+      if (it.isDirectory()) {
+        if (!['.git', 'node_modules', store.OLD_HOME].includes(it.name) && !(it.name === 'automations' && path.basename(dir) === '.kermach')) walk(f, depth + 1);
+        continue;
+      }
       try { if (fs.statSync(f).mtimeMs >= since) out.push(f); } catch {}
     }
   };
@@ -73,12 +79,15 @@ function changed(root, since, max = 200) {
   return out;
 }
 
-/** Остановить claude с детьми: claude.cmd идёт через cmd.exe, p.kill() снял бы только cmd. @param {import('child_process').ChildProcess} p */
+/** Остановить claude с детьми: claude.cmd идёт через cmd.exe, p.kill() снял бы только cmd. taskkill — по полному пути (t802): PATH бывает урезан. @param {import('child_process').ChildProcess} p */
 function killTree(p) {
-  if (process.platform === 'win32' && p.pid) spawnSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { windowsHide: true });
+  if (!p.pid) { p.kill(); return Promise.resolve(); }
   // macOS: claude запущен своей группой (detached) — гасим группу целиком, с его bash и прочими детьми.
-  else if (p.pid) { try { process.kill(-p.pid, 'SIGTERM'); } catch { p.kill(); } }
-  else p.kill();
+  if (process.platform !== 'win32') { try { process.kill(-p.pid, 'SIGTERM'); } catch { p.kill(); } return Promise.resolve(); }
+  // Асинхронно (t1190): процесс не стоит, пока taskkill снимает дерево; ответ — когда taskkill вышел (не дольше 10 с).
+  return new Promise((resolve) => {
+    execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(p.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }, () => resolve());
+  });
 }
 
 /** Запуск своей группой процессов на macOS: killTree гасит её целиком. На Windows — как было. */
@@ -89,30 +98,82 @@ const STATUS_TEXT = { done: 'готово', error: 'ошибка', budget: 'ос
 /** Сколько прогон ждёт процесс уведомления. Тост уходит за 1–2 с; повис дольше — прогон его снимает и заканчивается. */
 const NOTIFY_MS = 15000;
 
+/** Цена в уведомлении — как в окне (cost() в page.js): запятая, меньше $0,10 — до тысячных без лишнего нуля, $0,001 не «$0,00». @param {number} n */
+function money(n) {
+  if (!Number.isFinite(n)) return '—';
+  if (n > 0 && n < 0.0005) return '<$0,001';
+  const s = n < 0.1 ? n.toFixed(3).replace(/(\.\d\d)0$/, '$1') : n.toFixed(2);
+  return `$${s.replace('.', ',')}`;
+}
+
+/** Сколько прогон ждёт, что открытая программа возьмёт запрос тоста (t1233). Не взяла — программа закрыта или стоит (d414): тост через PowerShell. */
+const HANDOFF_MS = 3000;
+
+/** Папка запросов тоста: за <данные>\automation-runs программа уже следит (app.js watch). @param {string} dataDir */
+const notifyDir = (dataDir) => path.join(dataDir, store.RUNS, 'notify');
+
 /**
- * Уведомление Windows о конце прогона: PowerShell 5.1, WinRT-тост с номером приложения PowerShell (DESIGN.md п. 8).
+ * Тост через открытую программу (t1233): запрос — файл <номер>-<время>.json в notifyDir. Программа берёт его — удаляет — и показывает тост
+ * через notify.remind: имя Kermach, предел частоты, щелчок — окно автоматизаций. Ответ true — взяла.
+ * Кто удалил файл, тот и показывает: удаляют оба, ENOENT — взял другой; так тост не выйдет дважды на границе HANDOFF_MS.
+ * Замок одного экземпляра (requestSingleInstanceLock) не годится: программу, стоящую дольше 20 с, Chromium гасит (d427).
+ * @param {{ dataDir: string, id: string, stamp: string, project: string }} o @param {string} title @param {string} text
+ * @param {(m: string) => void} log @returns {Promise<boolean>}
+ */
+function handoff(o, title, text, log) {
+  const file = path.join(notifyDir(o.dataDir), `${o.id}-${o.stamp}.json`);
+  try { store.writeAtomic(file, JSON.stringify({ id: o.id, title, text, project: o.project, at: Date.now() })); } catch (e) {
+    log(`уведомление: запрос программе не записан: ${e instanceof Error ? e.message : e}`);
+    return Promise.resolve(false);
+  }
+  const t0 = Date.now();
+  return new Promise((resolve) => {
+    const tick = () => {
+      if (!fs.existsSync(file)) return resolve(true);
+      if (Date.now() - t0 < HANDOFF_MS) return void setTimeout(tick, 100);
+      try { fs.unlinkSync(file); resolve(false); } catch (e) {
+        // Файл держит программа (читает его) — она и покажет; другая ошибка дольше 1 с — тост через PowerShell, запрос остался (программа удалит старый без показа).
+        const code = /** @type {any} */ (e).code;
+        if (code === 'ENOENT') return resolve(true);
+        if ((code === 'EPERM' || code === 'EBUSY') && Date.now() - t0 < HANDOFF_MS + 1000) return void setTimeout(tick, 100);
+        log(`уведомление: запрос программе не убран: ${e instanceof Error ? e.message : e}`);
+        resolve(false);
+      }
+    };
+    tick();
+  });
+}
+
+/**
+ * Уведомление о конце прогона. Программа открыта — тост показывает она (handoff, t1233). Не взяла — PowerShell 5.1, WinRT-тост
+ * с номером приложения PowerShell (DESIGN.md п. 8), только Windows.
  * Скрипт — через -EncodedCommand (UTF-16 base64): кириллица не портится. Процесс без окна; ответ — когда он вышел или прошло NOTIFY_MS.
  * Без detached: с ним у powershell нет консоли, и тост теряется молча, код 0 (t377). Ждать обязательно: потомок без detached
  * сидит в задании (job) процесса прогона и умирает вместе с ним после app.exit.
- * @param {string} title @param {string} text @param {(m: string) => void} log @returns {Promise<void>}
+ * Подмена KERMACH_NOTIFY=<путь .js> идёт мимо программы: проверки ждут свою подмену сразу, без HANDOFF_MS.
+ * @param {string} title @param {string} text @param {(m: string) => void} log
+ * @param {{ dataDir: string, id: string, stamp: string, project: string }} [o] без o — сразу PowerShell
+ * @returns {Promise<void>}
  */
-function notify(title, text, log) {
-  const alt = process.env.TERMINALUS_NOTIFY;
-  if (alt === '0') return Promise.resolve();
+async function notify(title, text, log, o) {
+  const alt = ENV('NOTIFY');
+  if (alt === '0') return;
+  const fake = !!alt && alt.endsWith('.js');
+  if (!fake && o && await handoff(o, title, text, log)) { log(`уведомление: показывает программа — «${title}»`); return; }
   // Текст пользователя (название автоматизации) в код скрипта не попадает: идёт данными через переменные окружения в base64.
   // XML тоста строит CreateTextNode — он сам экранирует <, & и кавычки.
   const b64 = (/** @type {string} */ s) => Buffer.from(s, 'utf8').toString('base64');
-  const env = { ...process.env, TERMINALUS_TOAST_TITLE: b64(title), TERMINALUS_TOAST_TEXT: b64(text) };
-  let file = 'powershell.exe';
+  const env = { ...process.env, KERMACH_TOAST_TITLE: b64(title), KERMACH_TOAST_TEXT: b64(text) };
+  let file = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'); // полный путь (t1191)
   /** @type {string[]} */
   let args;
-  if (alt && alt.endsWith('.js')) { file = process.execPath; args = [alt, title, text]; env.ELECTRON_RUN_AS_NODE = '1'; }
+  if (fake) { file = process.execPath; args = [/** @type {string} */ (alt), title, text]; env.ELECTRON_RUN_AS_NODE = '1'; }
   // macOS: уведомление Центра уведомлений через osascript. Текст — аргументами (argv), в код скрипта не попадает.
   else if (process.platform === 'darwin') {
     file = '/usr/bin/osascript';
     args = ['-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title (item 1 of argv)', '-e', 'end run', title, text];
   }
-  else if (process.platform !== 'win32') return Promise.resolve();
+  else if (process.platform !== 'win32') return;
   else args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(psToast(), 'utf16le').toString('base64')];
   return new Promise((resolve) => {
     /** @type {NodeJS.Timeout | undefined} */
@@ -122,20 +183,20 @@ function notify(title, text, log) {
       const p = spawn(file, args, { windowsHide: true, stdio: 'ignore', env });
       p.on('error', (e) => { log(`уведомление не показано: ${e.message}`); done(); });
       p.on('exit', done);
-      timer = setTimeout(() => { log(`уведомление: процесс не вышел за ${NOTIFY_MS / 1000} с — снят`); killTree(p); done(); }, NOTIFY_MS);
+      timer = setTimeout(() => { log(`уведомление: процесс не вышел за ${NOTIFY_MS / 1000} с — снят`); killTree(p).then(done); }, NOTIFY_MS);
     } catch (e) { log(`уведомление не показано: ${e instanceof Error ? e.message : e}`); done(); }
   });
 }
 
-/** Скрипт тоста для powershell: заголовок и текст — из TERMINALUS_TOAST_TITLE и TERMINALUS_TOAST_TEXT. */
+/** Скрипт тоста для powershell: заголовок и текст — из KERMACH_TOAST_TITLE и KERMACH_TOAST_TEXT. */
 function psToast() {
   const dec = (/** @type {string} */ v) => `[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:${v}))`;
   return [
     "$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]",
     '$x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)',
     "$t = $x.GetElementsByTagName('text')",
-    `$null = $t.Item(0).AppendChild($x.CreateTextNode(${dec('TERMINALUS_TOAST_TITLE')}))`,
-    `$null = $t.Item(1).AppendChild($x.CreateTextNode(${dec('TERMINALUS_TOAST_TEXT')}))`,
+    `$null = $t.Item(0).AppendChild($x.CreateTextNode(${dec('KERMACH_TOAST_TITLE')}))`,
+    `$null = $t.Item(1).AppendChild($x.CreateTextNode(${dec('KERMACH_TOAST_TEXT')}))`,
     "$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'",
     '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($x))',
   ].join('\n');
@@ -203,7 +264,8 @@ function runAutomation({ dataDir, id, log, scheduled = false }) {
       log(`${id}: прогон ${stamp} — ${status}, код ${exit}${extra.cost !== undefined ? `, $${extra.cost}` : ''}`);
       // Ответ — после уведомления: cli() сразу зовёт app.exit, и процесс уведомления умер бы вместе с прогоном.
       if (!(item && item.cfg && item.cfg.notify !== false)) return resolve(exit);
-      notify(`Автоматизация «${name}»`, `${/** @type {any} */ (STATUS_TEXT)[status] || status}${extra.cost !== undefined ? `, $${Number(extra.cost).toFixed(2)}` : ''}`, log).then(() => resolve(exit));
+      notify(`Автоматизация «${name}»`, `${/** @type {any} */ (STATUS_TEXT)[status] || status}${extra.cost !== undefined ? `, ${money(Number(extra.cost))}` : ''}`, log,
+        { dataDir, id, stamp, project: item.project || '' }).then(() => resolve(exit));
     };
     const refuse = (/** @type {string} */ why) => finish(2, 'refused', `Отказ до запуска claude: ${why}\n`, { error: why });
 
@@ -218,7 +280,7 @@ function runAutomation({ dataDir, id, log, scheduled = false }) {
     let file = '';
     /** @type {string[]} */
     let pre = [];
-    const alt = process.env.TERMINALUS_CLAUDE;
+    const alt = ENV('CLAUDE');
     if (alt && alt.endsWith('.js')) { file = process.execPath; pre = [alt]; env.ELECTRON_RUN_AS_NODE = '1'; }
     else if (alt) file = alt;
     else { const found = findProgram('claude'); if (found) { file = found.file; pre = found.pre; } }
@@ -287,4 +349,4 @@ function cli(argv, dataDir) {
   runAutomation({ dataDir, id, log, scheduled }).then((code) => app.exit(code), (e) => { log(`ошибка: ${e.stack || e}`); app.exit(1); });
 }
 
-module.exports = { flags, prompt, rulePath, changed, runAutomation, cli, notify };
+module.exports = { flags, prompt, rulePath, changed, runAutomation, cli, notify, notifyDir };

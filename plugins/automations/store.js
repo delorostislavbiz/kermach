@@ -1,20 +1,25 @@
 // @ts-check
 // Автоматизации (t252): что где лежит. Без Electron — работает и в окне программы, и в прогоне из Планировщика (run.js), и в проверке под node.
 // Устройство — spikes\t252-auto\DESIGN.md, п. 4, 6, 7.
-//   Описание: общая — <данные>\automations\<id>\, проектная — <проект>\.terminalus\automations\<id>\; в папке automation.json и задание.md.
+//   Описание: общая — <данные>\automations\<id>\, проектная — <проект>\.kermach\automations\automations\<id>\; в папке automation.json и задание.md.
 //   Реестр компьютера: <данные>\automations.json — { "<id>": { dir, project, on, seen } }. Включена на этом компьютере = запись с тем же dir.
-//   Прогоны: общей — <данные>\automation-runs\<id>\, проектной — <проект>\.terminalus\automation-runs\<id>\ (решение Ростислава 07.10:
+//   Прогоны: общей — <данные>\automation-runs\<id>\, проектной — <проект>\.kermach\automations\automation-runs\<id>\ (решение Ростислава 07.10:
 //   «Глобальные в папке программы, проектные в папке проекта»; прогоны проектной идут в git вместе с проектом — так он выбрал).
 //   Внутри — работа\ (постоянная рабочая папка агента), <время>\ (один прогон), running.json (идёт сейчас).
+//   До t1305 проектная папка звалась <проект>\.terminalus — переезжает в .kermach\automations при первом обращении (home).
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+// Жива ли папка без заморозки окон на мёртвом сетевом пути (t1300); вне программы — existsSync.
+const dirAlive = (() => { try { return require('../../main/dir-alive'); } catch { return { ok: (/** @type {string} */ p) => fs.existsSync(p) }; } })();
 
-/** Имя папки прогонов: в папке данных у общих, в .terminalus проекта у проектных. */
+/** Имя папки прогонов: в папке данных у общих, в .kermach\automations проекта у проектных. */
 const RUNS = 'automation-runs';
 /** Сколько прогонов хранить у одной автоматизации. */
 const KEEP = 50;
+/** Больше — automation.json и задание.md не читаем и не пишем: «слишком большой» (t524). Как у доски Роадмапа. */
+const MAX_SIZE = 256 * 1024;
 const ID_RE = /^a-[0-9a-f]{8}$/;
 const MODELS = ['auto', 'haiku', 'sonnet', 'opus'];
 const KINDS = ['once', 'daily', 'weekdays', 'weekly', 'hours'];
@@ -89,15 +94,104 @@ function nextRun(r, from) {
 
 const newId = () => `a-${crypto.randomBytes(4).toString('hex')}`;
 const commonRoot = (/** @type {string} */ dataDir) => path.join(dataDir, 'automations');
-const projectRoot = (/** @type {string} */ project) => path.join(project, '.terminalus', 'automations');
+
+/** Папка автоматизаций в проекте (t1305): своя подпапка .kermach, рядом с роадмапом и отчётами, не вперемешку. */
+const HOME = ['.kermach', 'automations'];
+/** Старое место — до t1305. */
+const OLD_HOME = '.terminalus';
+/** Проекты, где переезд в этом процессе уже сделан или не нужен. */
+const moved = new Set();
+
+/**
+ * Папка автоматизаций проекта; старая .terminalus переезжает в неё одним переименованием. Прогон из старой папки держит в ней
+ * открытые файлы — переименование на Windows не пройдёт, папка останется до следующего обращения; жив процесс из running.json — не пробуем вовсе.
+ * Новая папка уже есть — переносим по одной то, чего в ней нет; опустевшая старая удаляется.
+ * Переезд отложен или не вышел — ответ старая папка: описания и прогоны до переезда читаются и пишутся там, где лежат.
+ * @param {string} project
+ */
+function home(project) {
+  const dir = path.join(project, ...HOME);
+  const key = path.resolve(project).toLowerCase();
+  if (moved.has(key)) return dir;
+  const old = path.join(project, OLD_HOME);
+  if (!fs.existsSync(old)) { moved.add(key); return dir; }
+  if (busy(old)) return old;
+  try {
+    if (!fs.existsSync(dir)) { fs.mkdirSync(path.dirname(dir), { recursive: true }); fs.renameSync(old, dir); }
+    else {
+      for (const sub of ['automations', RUNS]) {
+        const from = path.join(old, sub);
+        for (const n of fs.existsSync(from) ? fs.readdirSync(from) : []) {
+          const to = path.join(dir, sub, n);
+          if (!fs.existsSync(to)) { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.renameSync(path.join(from, n), to); }
+        }
+        try { fs.rmdirSync(from); } catch {}
+      }
+      fs.rmdirSync(old);
+    }
+    moved.add(key);
+  } catch {}
+  return fs.existsSync(old) ? old : dir;
+}
+
+/** Идёт ли прогон из папки: running.json с живым процессом у какой-нибудь автоматизации. @param {string} base */
+function busy(base) {
+  /** @type {string[]} */
+  let ids = [];
+  try { ids = fs.readdirSync(path.join(base, RUNS)); } catch { return false; }
+  return ids.some((id) => {
+    let r = null;
+    try { r = readJson(path.join(base, RUNS, id, 'running.json')); } catch {}
+    return !!(r && Number.isInteger(r.pid) && !(r.host && r.host !== os.hostname()) && alive(r.pid));
+  });
+}
+
+/**
+ * Путь из реестра со старым местом — в новое, если описание уже переехало (старого пути нет, новый есть); сам файл реестра поправится при следующей записи.
+ * @param {RegEntry} r
+ */
+function fixDir(r) {
+  if (!r || !r.project || typeof r.dir !== 'string') return r;
+  const old = path.join(r.project, OLD_HOME) + path.sep;
+  if (!r.dir.toLowerCase().startsWith(old.toLowerCase())) return r;
+  const dir = path.join(r.project, ...HOME, r.dir.slice(old.length));
+  return !fs.existsSync(r.dir) && fs.existsSync(dir) ? { ...r, dir } : r;
+}
+
+const projectRoot = (/** @type {string} */ project) => path.join(home(project), 'automations');
+
+/**
+ * Куда на деле ведёт путь в проекте, если за пределы проекта (ссылка или junction на .kermach и ниже, t523); '' — внутри.
+ * Смотрит ближайшую существующую папку пути: её realpath раскрывает все ссылки выше, а новые папки mkdir создаст уже внутри неё.
+ * Не прочитать путь — тоже «за пределами»: писать туда нельзя. @param {string} project @param {string} file
+ */
+function outside(project, file) {
+  try {
+    const base = fs.realpathSync(path.resolve(project));
+    let d = path.resolve(file);
+    while (!fs.existsSync(d) && path.dirname(d) !== d) d = path.dirname(d);
+    const real = fs.realpathSync(d);
+    const rel = path.relative(base, real);
+    return rel.startsWith('..') || path.isAbsolute(rel) ? real : '';
+  } catch (e) { return `${file} (${e instanceof Error ? e.message : e})`; }
+}
+
+/** Отказ, если путь в проекте ведёт за его пределы. @param {string} project @param {string} file */
+function ownPath(project, file) {
+  if (!fs.existsSync(project)) throw new Error(`нет папки проекта ${project}`);
+  const real = outside(project, file);
+  if (real) throw new Error(`папка .kermach ведёт за пределы проекта: ${real}`);
+}
+
 /**
  * Папка прогонов. Проект — из реестра этого компьютера. Нет записи или папки проекта (отказ «нет папки проекта») — папка данных:
- * не создавать папку пропавшего проекта.
+ * не создавать папку пропавшего проекта. Папка прогонов в проекте ведёт за его пределы — тоже папка данных: туда ляжет отказ прогона (readItem), а не чужая папка.
  * @param {string} dataDir @param {string} id
  */
 function runsOf(dataDir, id) {
   const p = (registry(dataDir)[id] || {}).project;
-  return p && fs.existsSync(p) ? path.join(p, '.terminalus', RUNS, id) : path.join(dataDir, RUNS, id);
+  const own = p && fs.existsSync(p) ? path.join(home(p), RUNS, id) : '';
+  return own && !outside(p, own) ? own : path.join(dataDir, RUNS, id);
 }
 const workOf = (/** @type {string} */ dataDir, /** @type {string} */ id) => path.join(runsOf(dataDir, id), 'работа');
 const regFile = (/** @type {string} */ dataDir) => path.join(dataDir, 'automations.json');
@@ -111,19 +205,53 @@ function writeAtomic(file, text) {
   fs.renameSync(tmp, file);
 }
 
-/** @param {string} file */
+/** Код ошибки «слишком большой» у readSmall. */
+const TOO_BIG = 'TOO_BIG';
+
+/**
+ * JSON реестра или прогона (t527). Нет файла или битый — null. Больше MAX_SIZE — ошибка «слишком большой»: файл в сотни МБ подвесил бы главный процесс,
+ * а что делать с таким файлом, решает вызывающий. @param {string} file
+ */
 function readJson(file) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+  let text;
+  try { text = readSmall(file); } catch (e) { if (/** @type {any} */ (e).code === TOO_BIG) throw e; return null; }
+  try { return JSON.parse(text); } catch { return null; }
 }
 
-/** Реестр компьютера. Битый или нет файла — пустой. @param {string} dataDir @returns {Record<string, RegEntry>} */
+/** Файл описания текстом; больше MAX_SIZE — ошибка «слишком большой», файл в память не берётся. @param {string} file */
+function readSmall(file) {
+  const size = fs.statSync(file).size;
+  if (size > MAX_SIZE) throw Object.assign(new Error(`слишком большой: ${size} байт, предел ${MAX_SIZE}`), { code: TOO_BIG });
+  return fs.readFileSync(file, 'utf8');
+}
+
+/** Описание на запись: проверка и предел размера задания. Текст ошибки или ''. @param {Config} cfg @param {string} task */
+function checkSave(cfg, task) {
+  const size = Buffer.byteLength(task);
+  return check(cfg) || (cfg.repeat ? '' : 'нет повтора') || (size > MAX_SIZE ? `задание.md слишком большой: ${size} байт, предел ${MAX_SIZE}` : '');
+}
+
+/**
+ * Реестр компьютера. Битый или нет файла — пустой. Слишком большой — тоже пустой: описания в папках читаются, общие включены по умолчанию,
+ * а писать в такой реестр нельзя (regWritable) — записи остальных автоматизаций в нём не затираются. @param {string} dataDir @returns {Record<string, RegEntry>}
+ */
 function registry(dataDir) {
-  const r = readJson(regFile(dataDir));
-  return r && typeof r === 'object' && !Array.isArray(r) ? r : {};
+  let r = null;
+  try { r = readJson(regFile(dataDir)); } catch {}
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return {};
+  for (const id of Object.keys(r)) r[id] = fixDir(r[id]);
+  return r;
+}
+
+/** Отказ, если реестр больше MAX_SIZE (t527): он прочитан пустым, и запись затёрла бы все его записи. Зовётся до первых изменений на диске. @param {string} dataDir */
+function regWritable(dataDir) {
+  let size = 0;
+  try { size = fs.statSync(regFile(dataDir)).size; } catch { return; }
+  if (size > MAX_SIZE) throw new Error(`реестр ${regFile(dataDir)} слишком большой: ${size} байт, предел ${MAX_SIZE} — автоматизации не меняю, пока его не уменьшить или не удалить`);
 }
 
 /** @param {string} dataDir @param {Record<string, RegEntry>} reg */
-function saveRegistry(dataDir, reg) { writeAtomic(regFile(dataDir), JSON.stringify(reg, null, 2)); }
+function saveRegistry(dataDir, reg) { regWritable(dataDir); writeAtomic(regFile(dataDir), JSON.stringify(reg, null, 2)); }
 
 /** Описание из папки. @param {string} dir @param {string} project @param {Record<string, RegEntry>} reg @returns {Item} */
 function readItem(dir, project, reg) {
@@ -131,8 +259,14 @@ function readItem(dir, project, reg) {
   let cfg = null;
   let error = '';
   let task = '';
-  try { cfg = JSON.parse(fs.readFileSync(path.join(dir, 'automation.json'), 'utf8')); error = check(cfg); } catch (e) { error = `automation.json не прочитан: ${e instanceof Error ? e.message : e}`; }
-  try { task = fs.readFileSync(path.join(dir, 'задание.md'), 'utf8'); } catch { if (!error) error = 'нет задание.md'; }
+  const away = project ? outside(project, dir) || outside(project, path.join(home(project), RUNS, id)) : '';
+  if (away) error = `папка .kermach ведёт за пределы проекта: ${away}`;
+  else {
+    try { cfg = JSON.parse(readSmall(path.join(dir, 'automation.json'))); error = check(cfg); } catch (e) { error = `automation.json не прочитан: ${e instanceof Error ? e.message : e}`; }
+    try { task = readSmall(path.join(dir, 'задание.md')); } catch (e) {
+      if (!error) error = /** @type {any} */ (e).code === 'ENOENT' ? 'нет задание.md' : `задание.md не прочитан: ${e instanceof Error ? e.message : e}`;
+    }
+  }
   const r = reg[id];
   const mine = !!r && same(r.dir, dir);
   return { id, dir, project, cfg: error ? null : cfg, raw: cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : null, task, error, on: mine && !!r.on, foreign: !mine };
@@ -145,9 +279,12 @@ function idDirs(root) {
 
 /** Все автоматизации: общие и из папок проектов. Общие своего компьютера не бывают чужими. @param {string} dataDir @param {string[]} projects @returns {Item[]} */
 function list(dataDir, projects) {
+  const live = projects.filter((p) => dirAlive.ok(p));
+  for (const p of live) home(p); // переезд до чтения реестра: иначе запись со старым путём покажется чужой
   const reg = registry(dataDir);
   const out = idDirs(commonRoot(dataDir)).map((d) => ({ ...readItem(d, '', reg), foreign: false, on: !!(reg[path.basename(d)] || { on: true }).on }));
-  for (const p of projects) for (const d of idDirs(projectRoot(p))) out.push(readItem(d, p, reg));
+  // Мёртвый сетевой проект: readdirSync держал бы все окна 21 с (t1300).
+  for (const p of live) for (const d of idDirs(projectRoot(p))) out.push(readItem(d, p, reg));
   return out;
 }
 
@@ -156,17 +293,22 @@ function find(dataDir, id) {
   if (!ID_RE.test(id)) return null;
   // Общая без записи (реестр потерян) — своя по определению: лежит в папке данных этого компьютера.
   const common = path.join(commonRoot(dataDir), id);
-  const r = registry(dataDir)[id] || (fs.existsSync(common) ? { dir: common, project: '', on: true } : null);
+  const was = registry(dataDir)[id];
+  if (was && was.project && fs.existsSync(was.project)) home(was.project); // переезд до чтения пути: путь из реестра переводится, только когда описание уже в новом месте
+  const r = (was ? registry(dataDir)[id] : null) || (fs.existsSync(common) ? { dir: common, project: '', on: true } : null);
   if (!r || !fs.existsSync(r.dir)) return null;
   return readItem(r.dir, r.project || '', { [id]: r });
 }
 
 /** Новая автоматизация: папка, файлы, запись в реестре (включена). @param {string} dataDir @param {{ project?: string, cfg: Config, task: string }} o @returns {string} номер */
 function create(dataDir, o) {
-  const bad = check(o.cfg) || (o.cfg.repeat ? '' : 'нет повтора');
+  const bad = checkSave(o.cfg, o.task);
   if (bad) throw new Error(bad);
+  regWritable(dataDir);
   const id = newId();
   const dir = path.join(o.project ? projectRoot(o.project) : commonRoot(dataDir), id);
+  // Папки проекта ещё нет — mkdir создаст её целиком, ссылок внутри неё быть не может.
+  if (o.project && fs.existsSync(o.project)) { ownPath(o.project, dir); ownPath(o.project, path.join(home(o.project), RUNS, id)); }
   fs.mkdirSync(dir, { recursive: true });
   writeAtomic(path.join(dir, 'automation.json'), JSON.stringify(o.cfg, null, 2));
   writeAtomic(path.join(dir, 'задание.md'), o.task);
@@ -178,8 +320,9 @@ function create(dataDir, o) {
 
 /** Поменять описание. @param {Item} item @param {Config} cfg @param {string} task */
 function update(item, cfg, task) {
-  const bad = check(cfg) || (cfg.repeat ? '' : 'нет повтора');
+  const bad = checkSave(cfg, task);
   if (bad) throw new Error(bad);
+  if (item.project) ownPath(item.project, item.dir);
   writeAtomic(path.join(item.dir, 'automation.json'), JSON.stringify(cfg, null, 2));
   writeAtomic(path.join(item.dir, 'задание.md'), task);
 }
@@ -189,6 +332,8 @@ function update(item, cfg, task) {
  * @param {string} dataDir @param {Item} item @param {boolean} on @returns {string} номер после включения
  */
 function setOn(dataDir, item, on) {
+  if (item.project) ownPath(item.project, item.dir);
+  regWritable(dataDir);
   const reg = registry(dataDir);
   let { id, dir } = item;
   if (reg[id] && !same(reg[id].dir, dir)) {
@@ -204,6 +349,10 @@ function setOn(dataDir, item, on) {
 
 /** Удалить: описание, прогоны, запись реестра. Пришедшую с папкой (не своя) — только описание в папке проекта. @param {string} dataDir @param {Item} item */
 function remove(dataDir, item) {
+  // Через junction rmSync стёр бы чужую папку за пределами проекта (t523). Папки проекта уже нет — удалять там нечего, запись реестра уберём.
+  if (item.project && fs.existsSync(item.dir)) ownPath(item.project, item.dir);
+  // Реестр не прочитать — запись и прогоны остались бы без описания; удаление отказывает целиком (t527).
+  regWritable(dataDir);
   fs.rmSync(item.dir, { recursive: true, force: true });
   const reg = registry(dataDir);
   if (reg[item.id] && same(reg[item.id].dir, item.dir)) {
@@ -225,7 +374,55 @@ function runDirs(dataDir, id) {
 
 /** Прогоны с итогами, новые первыми. Прогон без итог.json (прерван, идёт) — с status: '' . @param {string} dataDir @param {string} id @param {number} [max] @returns {Result[]} */
 function runs(dataDir, id, max = KEEP) {
-  return runDirs(dataDir, id).slice(0, max).map((stamp) => ({ ...(readJson(path.join(runsOf(dataDir, id), stamp, 'итог.json')) || { status: '' }), stamp }));
+  const dir = runsOf(dataDir, id);
+  return runDirs(dataDir, id).slice(0, max).map((stamp) => ({ ...readResult(path.join(dir, stamp)), stamp }));
+}
+
+/**
+ * Итог прогона из его папки. Нет или битый — status '' («Прерван»). Больше MAX_SIZE (t527) — status error с причиной:
+ * прогон остаётся в списке, а не «Прерван» — про сам прогон по такому файлу ничего не известно. @param {string} dir @returns {any}
+ */
+function readResult(dir) {
+  try { return readJson(path.join(dir, 'итог.json')) || { status: '' }; } catch (e) {
+    return { status: 'error', error: `итог.json не прочитан: ${e instanceof Error ? e.message : e}` };
+  }
+}
+
+/** Ответ агента длиннее — в окне только начало с пометкой «обрезано» (t527). */
+const ANSWER_MAX = 1024 * 1024;
+/** Сколько путей из files итога проверять (stat) и показывать. */
+const FILES_MAX = 200;
+
+/** Начало текстового файла не длиннее max байт: { text, size }. Нет файла — пустой текст. @param {string} file @param {number} max */
+function readHead(file, max) {
+  let fd;
+  try { fd = fs.openSync(file, 'r'); } catch { return { text: '', size: 0 }; }
+  try {
+    const size = fs.fstatSync(fd).size;
+    const buf = Buffer.alloc(Math.min(size, max));
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    const text = buf.subarray(0, n).toString('utf8');
+    // Обрезано посреди буквы UTF-8 — неполная последняя буква отбрасывается.
+    return { text: n < size ? text.replace(/�+$/, '') : text, size };
+  } catch { return { text: '', size: 0 }; } finally { fs.closeSync(fd); }
+}
+
+/**
+ * Прогон для окна (auto:run): итог, ответ агента и файлы, которые он создал. Каждое чтение с пределом (t527): итог — readResult,
+ * ответ — первые ANSWER_MAX байт и пометка «обрезано», файлы — первые FILES_MAX путей. @param {string} dir папка прогона
+ */
+function readRun(dir) {
+  const result = readResult(dir);
+  const a = readHead(path.join(dir, 'ответ.md'), ANSWER_MAX);
+  const md = a.size > ANSWER_MAX ? `${a.text}\n\n… обрезано: показано ${Math.round(ANSWER_MAX / 1024)} КБ из ${Math.round(a.size / 1024)} КБ, весь ответ — ответ.md в папке прогона` : a.text;
+  const list = Array.isArray(result.files) ? result.files.filter((/** @type {any} */ f) => typeof f === 'string') : [];
+  const files = list.slice(0, FILES_MAX).map((/** @type {string} */ f) => { let size = -1; try { size = fs.statSync(f).size; } catch {} return { path: f, size }; });
+  return { result, md, files, more: Math.max(0, list.length - FILES_MAX) };
+}
+
+/** Реестр больше MAX_SIZE — текст для окна (t527): он прочитан пустым, проектные автоматизации показаны «чужими». '' — реестр в порядке. @param {string} dataDir */
+function regWarn(dataDir) {
+  try { regWritable(dataDir); return ''; } catch (e) { return `${e instanceof Error ? e.message : e}. Проектные автоматизации показаны пришедшими с папкой проекта.`; }
 }
 
 /** Процесс жив. EPERM — жив, но чужой. @param {number} pid */
@@ -239,7 +436,9 @@ function alive(pid) {
  * @param {string} dataDir @param {string} id
  */
 function running(dataDir, id) {
-  const r = readJson(path.join(runsOf(dataDir, id), 'running.json'));
+  // Слишком большой — как битый (t527): прогон не идёт, и замок прогона (run.js, lock) считает файл брошенным.
+  let r = null;
+  try { r = readJson(path.join(runsOf(dataDir, id), 'running.json')); } catch {}
   if (!r || !Number.isInteger(r.pid) || (r.host && r.host !== os.hostname())) return null;
   return alive(r.pid) ? { pid: r.pid, start: String(r.start || ''), stamp: String(r.stamp || '') } : null;
 }
@@ -267,6 +466,6 @@ function prune(dataDir, id, keep = KEEP) {
 }
 
 module.exports = {
-  RUNS, KEEP, ID_RE, MODELS, KINDS, check, checkRepeat, nextRun, newId, commonRoot, projectRoot, runsOf, workOf, writeAtomic,
-  registry, saveRegistry, list, find, create, update, setOn, remove, runDirs, runs, running, state, markSeen, prune,
+  RUNS, KEEP, MAX_SIZE, ID_RE, MODELS, KINDS, check, checkRepeat, nextRun, newId, commonRoot, projectRoot, home, OLD_HOME, runsOf, workOf, writeAtomic,
+  registry, saveRegistry, list, find, create, update, setOn, remove, runDirs, runs, readResult, readRun, regWarn, running, state, markSeen, prune,
 };
