@@ -486,7 +486,11 @@ module.exports = (ctx) => {
       const c = b.cards.find((x) => x.id === id);
       // t1340: карту увели из «готово» посреди проверки (человек вручную, «готово→в работе→готово») — итог той проверки уже не про эту работу.
       // cut: grading её ещё держит; когда старая закончится, сверка начнёт тот же круг заново, gradeOne старой итог не запишет (grade.at другой).
-      if (c && c.status !== 'готово' && run.grade && run.grade.st === 'run') { run = { ...run, grade: { st: 'cut', round: run.grade.round } }; ch[id] = run; }
+      // t1352: итог старой проверки всё равно выброшен — её claude -p гасим сразу, а не ждём до 10 мин.
+      if (c && c.status !== 'готово' && run.grade && run.grade.st === 'run') {
+        if (run.grade.at && grader.cancel(gradeKey(id, run, run.grade.at))) ctx.log(`${id}: проверяющий, круг ${run.grade.round} — остановлен: карту увели из «готово»`);
+        run = { ...run, grade: { st: 'cut', round: run.grade.round } }; ch[id] = run;
+      }
       if (!c && hurt.has(id)) {
         if (!unread.has(id)) { unread.add(id); ctx.log(`${id}: файл карты не читается — статус не меняю, запуск помню`); }
         continue;
@@ -889,23 +893,33 @@ module.exports = (ctx) => {
     await ctx.writeTab(sid, '\r');
     return '';
   };
+  /** Ключ grader.shared: проект, карта, начало запуска, начало проверки. @param {string} id @param {any} run @param {number} at */
+  const gradeKey = (id, run, at) => `${project}\n${id}\n${run.started}\n${at}`;
   /** Поставить проверку в общую очередь программы; итог — sync. @param {string} id @param {any} run запись запуска на момент «готово» @param {number} round */
   const gradeLater = (id, run, round, at) => {
     grading.add(id);
-    gradeQueue.last = gradeQueue.last.then(async () => {
-      try { if (!stopped) await gradeOne(id, run, round, at); } catch (e) { ctx.log(`${id}: проверяющий: ${why(e)}`); }
+    const go = async (/** @type {any} */ took) => {
+      try { if (!stopped) await gradeOne(id, run, round, at, took); } catch (e) { ctx.log(`${id}: проверяющий: ${why(e)}`); }
       finally { grading.delete(id); }
       if (!stopped) sync();
-    });
+    };
+    // t1352: claude -p этой проверки уже идёт (окно переоткрыли) — берём его сразу, мимо очереди. Другие окна держат модуль, а с ним и очередь:
+    // в ней новый экземпляр стоял бы за старым gradeOne, а тот ждёт этот же claude -p — release погасил бы его и проверка пошла бы с начала.
+    // Очередь старый gradeOne держит до конца claude -p: второй проверяющий в программе не запустится.
+    const took = grader.adopt(gradeKey(id, run, at));
+    // Взятая держится этим экземпляром сразу: выйди gradeOne раньше своего held.add — stop() всё равно отдаст её release.
+    if (took) { held.add(gradeKey(id, run, at)); go(took); return; }
+    gradeQueue.last = gradeQueue.last.then(() => go(null));
   };
   /**
    * Проверка одной карты: задание из grader.md, claude -p, итог в карту. Запись запуска сверяем после каждого await: карту могли перезапустить или открыть снова.
    * Итоги: «выполнено» и сбой проверяющего — карта остаётся «готово», дальше обычный путь (сообщение источнику, закрытие скрытой вкладки);
    * «нужна доработка» — замечания во вкладку агента и «в работе», после GRADE_ROUNDS кругов — «ждёт ответа»; «критерии не подходят» — «ждёт ответа».
    * Своя проверка — тот же запуск и та же grade.at (t1340): grade done — уже проверена, другая at — карту уводили из «готово», итог устарел.
-   * @param {string} id @param {any} run @param {number} round @param {number} at
+   * took — идущая проверка, взятая после переоткрытия окна (grader.adopt, t1352): задание уже у её claude -p, своё не собираем.
+   * @param {string} id @param {any} run @param {number} round @param {number} at @param {Promise<any> | null} [took]
    */
-  const gradeOne = async (id, run, round, at) => {
+  const gradeOne = async (id, run, round, at, took) => {
     const same = () => { const now = runsOf()[id]; return now && now.started === run.started && now.grade && now.grade.st === 'run' && now.grade.at === at ? now : null; };
     const cardNow = () => board.read(project).cards.find((x) => x.id === id);
     const c = cardNow();
@@ -916,17 +930,27 @@ module.exports = (ctx) => {
       const now = same();
       if (now) patchRuns({ [id]: { ...now, grade: { st: 'done', round } } });
     };
-    // Запись без base (git ответил после «готово» или запуск до t1330) — начало по времени запуска.
-    const base = run.base || (same() || {}).base || await grader.baseAt(project, run.started);
-    let text;
-    try { text = grader.build(grader.template(ctx.dataDir), c, await grader.changesOf(project, { base, since: run.started, files: c.fields.files })); }
-    catch (e) { ctx.log(`${id}: задание проверяющему не собрано: ${why(e)}`); keep(`не проверена: задание не собрано — ${oneLine(why(e), 150)}`); return; }
     // Один claude -p на проверку и после переоткрытия окна: ключ общий для всех экземпляров процесса (grader.shared).
-    const key = `${project}\n${id}\n${run.started}\n${at}`;
-    if (grader.running(key)) ctx.log(`${id}: проверяющий, круг ${round} — идущая проверка взята после переоткрытия, второй claude не запускается`);
-    else ctx.log(`${id}: проверяющий, круг ${round} — claude sonnet низкое, задание ${text.length} знаков`);
+    const key = gradeKey(id, run, at);
+    /** @type {Promise<any>} */
+    let wait;
+    if (took) {
+      ctx.log(`${id}: проверяющий, круг ${round} — идущая проверка взята после переоткрытия, второй claude не запускается`);
+      wait = took;
+    } else {
+      // Запись без base (git ответил после «готово» или запуск до t1330) — начало по времени запуска.
+      const base = run.base || (same() || {}).base || await grader.baseAt(project, run.started);
+      let text;
+      try { text = grader.build(grader.template(ctx.dataDir), c, await grader.changesOf(project, { base, since: run.started, files: c.fields.files }), { dataDir: ctx.dataDir, project }); }
+      catch (e) { ctx.log(`${id}: задание проверяющему не собрано: ${why(e)}`); keep(`не проверена: задание не собрано — ${oneLine(why(e), 150)}`); return; }
+      // Пока собиралось задание (t1352), окно закрыли — claude -p не запускаем: его некому было бы отдать release, новый экземпляр начнёт сам;
+      // карту увели из «готово» (cut) или перезапустили — итог был бы выброшен.
+      if (stopped || !same()) return;
+      ctx.log(`${id}: проверяющий, круг ${round} — claude sonnet низкое, задание ${text.length} знаков`);
+      wait = grader.shared(key, project, text);
+    }
     held.add(key);
-    const r = await grader.shared(key, project, text);
+    const r = await wait;
     held.delete(key);
     if (stopped) return;
     const now = same();
@@ -1707,6 +1731,10 @@ module.exports = (ctx) => {
         const openIn = s.openIn && typeof s.openIn === 'object' ? s.openIn : {};
         const open = Object.keys(openIn).length ? Object.hasOwn(openIn, key) && !!openIn[key] : !!s.open;
         return { open, hideDone: !!s.hideDone, maxRuns: maxOf(), bg: !!s.bg };
+      }
+      // t1354: ответ человека из панели — раздел в карте и отпечаток в папке данных; проверяющий верит только таким ответам.
+      if (cmd === 'answer') {
+        try { return grader.answer(ctx.dataDir, project, String(args[0] || ''), String(args[1] || '')); } catch (e) { return { error: why(e) }; }
       }
       if (cmd === 'update') {
         const [ref, changes, base] = args;

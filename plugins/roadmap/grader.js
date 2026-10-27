@@ -152,30 +152,105 @@ function template(dataDir) {
 
 /**
  * Задание проверяющему. Подстановки по одной, без повторного разбора: «{что}» в тексте карты не раскрывается.
- * @param {string} tpl @param {any} c карта @param {string} changes
+ * o — папка данных плагина и проекта: по ним ответы человека (answersOf). @param {string} tpl @param {any} c карта @param {string} changes
+ * @param {{ dataDir?: string, project?: string }} [o]
  */
-function build(tpl, c, changes) {
+function build(tpl, c, changes, o = {}) {
   /** @type {Record<string, string>} */
-  const vars = { карта: c.id, что: String(c.fields.what || '').trim() || '(пусто)', проверка: String(c.fields.check || '').trim() || '(пусто)', изменения: changes, ответы: answersOf(c.body) || '(нет)' };
+  const vars = { карта: c.id, что: String(c.fields.what || '').trim() || '(пусто)', проверка: String(c.fields.check || '').trim() || '(пусто)', изменения: changes, ответы: answersOf(c.body, { ...o, ref: c.id }) || '(нет)' };
   return prompt.defuseAt(tpl.replace(/\{(карта|что|проверка|изменения|ответы)\}/g, (m, k) => vars[k]));
 }
 
+/** Отпечатки ответов человека (t1354) — в папке данных плагина, куда агент карты не пишет: файл карты он правит сам. */
+const ANSWERS = 'answers.json';
+/** Больше — файл не читаем: это не наш файл. */
+const ANSWERS_MAX = 1024 * 1024;
+/** Раздел ответа человека: «## Ответ человека (26.10 22:40)». */
+const ANSWER_HEAD = /^##\s+Ответ человека(?:\s.*)?$/;
+const FIELD_LINE = /^(?:Что сделать|Зачем|Файлы|Как проверить|Особые указания|Что сделано|Доказательство):/;
+
+/** Ключ проекта: полный путь, на Windows без регистра. @param {string} project */
+const projectKey = (project) => (process.platform === 'win32' ? path.resolve(project).toLowerCase() : path.resolve(project));
+/** Отпечаток ответа: проект, карта и текст — ответ, перенесённый в другую карту, не совпадёт. @param {string} project @param {string} ref @param {string} text */
+const answerSha = (project, ref, text) => require('crypto').createHash('sha1').update(`${projectKey(project)}|${ref}|${text}`).digest('hex');
+
 /**
- * Ответы из текста карты (t1349): строка «Ответ оркестратора …», «Ответ Ростислава …» или раздел «## Ответ …» —
- * до следующего поля карты, раздела или другого ответа. Ответы меняют критерии, проверяющий их видит.
- * @param {string} [body]
+ * Разделы «## Ответ человека …» из текста карты: текст до следующего заголовка или поля карты, края без пустых строк.
+ * Тот же разбор и при записи отпечатка (answer), и при проверке (answersOf). @param {string} [body] @returns {{ head: string, text: string }[]}
  */
-function answersOf(body) {
-  /** @type {string[][]} */
+function answerSections(body) {
+  /** @type {{ head: string, lines: string[] }[]} */
   const out = [];
-  /** @type {string[] | null} */
+  /** @type {{ head: string, lines: string[] } | null} */
   let cur = null;
-  for (const l of String(body || '').split('\n')) {
-    if (/^(?:#{1,6}\s*)?Ответ (?:оркестратора|Ростислава)/i.test(l)) { cur = [l]; out.push(cur); continue; }
-    if (cur && (/^#{1,6}\s/.test(l) || /^(?:Что сделать|Зачем|Файлы|Как проверить|Особые указания|Что сделано|Доказательство):/.test(l))) cur = null;
-    if (cur) cur.push(l);
+  for (const l of String(body || '').replace(/\r/g, '').split('\n')) {
+    if (ANSWER_HEAD.test(l)) { cur = { head: l.trim(), lines: [] }; out.push(cur); continue; }
+    if (cur && (/^#{1,6}\s/.test(l) || FIELD_LINE.test(l))) cur = null;
+    if (cur) cur.lines.push(l);
   }
-  return out.map((a) => a.join('\n').trim()).join('\n\n');
+  return out.map((a) => ({ head: a.head, text: a.lines.join('\n').trim() })).filter((a) => a.text);
+}
+
+/** Отпечатки: sha1 → { at, where }. Файла нет — пусто; битый или большой — ошибка. @param {string} dataDir @returns {Record<string, { at: string, where: string }>} */
+function readAnswers(dataDir) {
+  const f = path.join(dataDir, ANSWERS);
+  let st;
+  try { st = fs.statSync(f); } catch (e) { if (e && /** @type {any} */ (e).code === 'ENOENT') return {}; throw e; }
+  if (!st.isFile()) throw new Error(`${f} — не файл`);
+  if (st.size > ANSWERS_MAX) throw new Error(`${f} больше ${ANSWERS_MAX} байт`);
+  const o = JSON.parse(fs.readFileSync(f, 'utf8'));
+  return o && o.items && typeof o.items === 'object' && !Array.isArray(o.items) ? o.items : {};
+}
+
+/**
+ * Записать ответ человека в карту (t1354): раздел «## Ответ человека (ДД.ММ ЧЧ:ММ)» в конец файла карты и отпечаток в answers.json папки данных.
+ * Пишут только панель (команда answer плагина) и главная сессия (kermach roadmap answer); из вкладки агента карты команда отказывает.
+ * Строки «#…», «```» и подписи полей в тексте — отказ: они стали бы разметкой карты, и ответ разобрался бы не тем текстом.
+ * Файл карты и answers.json — через временный файл и rename. @param {string} dataDir @param {string} project @param {string} ref @param {string} text
+ * @returns {{ head: string, sha1: string }}
+ */
+function answer(dataDir, project, ref, text, now = new Date()) {
+  if (!dataDir) throw new Error('нет папки данных программы');
+  if (!/^t\d{1,6}$/.test(ref)) throw new Error('нужен номер карты, например t12');
+  const t = String(text || '').replace(/\r/g, '').split('\n').map((l) => l.replace(/\s+$/, '')).join('\n').trim();
+  if (!t) throw new Error('текст ответа пустой');
+  const bad = t.split('\n').find((l) => /^#/.test(l) || /^\s*```/.test(l) || FIELD_LINE.test(l));
+  if (bad !== undefined) throw new Error(`строка «${bad.slice(0, 60)}» стала бы разметкой карты — уберите «#», «\`\`\`» или подпись поля в начале строки`);
+  const board = require('./board');
+  const file = path.join(board.root(project), `${ref}.md`);
+  const old = fs.readFileSync(file, 'utf8');
+  const z = (/** @type {number} */ n) => String(n).padStart(2, '0');
+  const head = `## Ответ человека (${z(now.getDate())}.${z(now.getMonth() + 1)} ${z(now.getHours())}:${z(now.getMinutes())})`;
+  const next = `${old.replace(/\s+$/, '')}\n\n${head}\n${t}\n`;
+  if (Buffer.byteLength(next) > board.MAX_SIZE) throw new Error(`карта станет больше ${board.MAX_SIZE} байт`);
+  // Отпечаток — от разобранного текста, как его увидит answersOf, а не от аргумента.
+  const mine = answerSections(next).pop();
+  if (!mine || mine.head !== head) throw new Error('ответ не разобрался после записи');
+  const sha1 = answerSha(project, ref, mine.text);
+  const items = readAnswers(dataDir);
+  items[sha1] = { at: board.stamp(), where: `${projectKey(project)}|${ref}` };
+  fs.mkdirSync(dataDir, { recursive: true });
+  const af = path.join(dataDir, ANSWERS), atmp = `${af}.${process.pid}.tmp`;
+  fs.writeFileSync(atmp, JSON.stringify({ items }, null, 1) + '\n', 'utf8');
+  fs.renameSync(atmp, af);
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, next, 'utf8');
+  fs.renameSync(tmp, file);
+  return { head, sha1 };
+}
+
+/**
+ * Ответы человека для проверяющего (t1349, t1354): только разделы «## Ответ человека …», чей отпечаток записан в answers.json.
+ * Строку «Ответ …», которую вписал в карту сам агент, программа не записывала — её нет. Без dataDir или project — ответов нет.
+ * @param {string} [body] @param {{ dataDir?: string, project?: string, ref?: string }} [o]
+ */
+function answersOf(body, o = {}) {
+  if (!o.dataDir || !o.project || !o.ref) return '';
+  /** @type {Record<string, any>} */
+  let items = {};
+  try { items = readAnswers(o.dataDir); } catch { return ''; }
+  const { project, ref } = /** @type {{ project: string, ref: string }} */ (o);
+  return answerSections(body).filter((a) => Object.hasOwn(items, answerSha(project, ref, a.text))).map((a) => `${a.head}\n${a.text}`).join('\n\n');
 }
 
 /**
@@ -276,6 +351,27 @@ function shared(key, project, text) {
 /** Идёт ли проверка key в этом процессе. @param {string} key */
 function running(key) { return RUNS.has(key); }
 
+/**
+ * Взять идущую проверку key (t1352): её обещание, отложенная остановка снята — или null, если такой нет. Синхронно:
+ * проверка и захват в одном куске, между ними claude -p не успеет закончиться и запуститься заново. @param {string} key
+ */
+function adopt(key) {
+  const e = RUNS.get(key);
+  if (!e) return null;
+  if (e.kill) { clearTimeout(e.kill); e.kill = null; }
+  return e.done;
+}
+
+/** Итог проверки key больше не нужен (t1352, карту увели из «готово»): гасим claude -p деревом сразу, ключ свободен. Была ли такая. @param {string} key */
+function cancel(key) {
+  const e = RUNS.get(key);
+  if (!e) return false;
+  if (e.kill) { clearTimeout(e.kill); e.kill = null; }
+  RUNS.delete(key);
+  if (e.p && e.p.exitCode === null) killTree(e.p);
+  return true;
+}
+
 /** Экземпляр остановлен: проверку key гасим деревом через ms, если её не взял новый экземпляр (shared). @param {string} key @param {number} ms */
 function release(key, ms) {
   const e = RUNS.get(key);
@@ -321,4 +417,4 @@ function checkedLine(round, max, r) {
   return `${head}: ${tail}`.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
 }
 
-module.exports = { TEMPLATE, VERDICTS, SOFT, hasCommand, skipOf, baseOf, baseAt, pathsOf, changesOf, template, build, answersOf, parse, flags, grade, shared, running, release, report, checkedLine };
+module.exports = { TEMPLATE, VERDICTS, SOFT, hasCommand, skipOf, baseOf, baseAt, pathsOf, changesOf, template, build, ANSWERS, answerSections, answer, answersOf, parse, flags, grade, shared, running, adopt, cancel, release, report, checkedLine };

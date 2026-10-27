@@ -2,7 +2,7 @@
 // Команда kermach (t381, имя с t396). Запуск — обёртки в папке выше: kermach.cmd (Windows) и kermach (sh: Git Bash, где команды запускает Claude, и Mac).
 // Старые обёртки terminalus и terminalus.cmd — прослойки до 1.0 (t1307): зовут kermach, их помнят агенты в разговорах до переименования.
 // Сам скрипт не в той папке (t388): она в PATH, а .JS в PATHEXT — «kermach.js» в cmd открыл бы Windows Script Host.
-// Они берут программу из KERMACH_NODE (сам Kermach.exe в режиме Node, ELECTRON_RUN_AS_NODE=1): у Ростислава Node может не быть.
+// Они берут программу из KERMACH_NODE (сам Kermach.exe в режиме Node, ELECTRON_RUN_AS_NODE=1): у человека Node может не быть.
 // Канал и подпись проекта — в окружении терминала программы (plugins\browser\cli.js, envFor). Здесь только разбор аргументов, один запрос
 // и печать ответа; доступ проверяет главный процесс. Читать — любые вкладки сайта своего проекта; действовать (t382) — только в отданных агенту.
 'use strict';
@@ -152,13 +152,18 @@ const ROADMAP_HELP = `kermach roadmap — доска «Роадмапа» про
                                        с первой строкой вопроса, «в работе», находки карты-ревью. fN — одна фаза
   kermach roadmap accept fN            «Прими фазу» для главной сессии: признаки фазы, ревью, записи, не начатые карты
                                        других фаз и инструкция — проверить признаки, сверить черновики, спросить «да»
+  kermach roadmap answer tN "текст"   ответ человека на вопрос карты: раздел «## Ответ человека (ДД.ММ ЧЧ:ММ)» в конце карты
+  kermach roadmap answer tN -          и отпечаток в папке данных Kermach. Проверяющий карты верит только таким ответам —
+                                       строку «Ответ …», вписанную в карту руками или агентом, он не видит. «-» — текст со
+                                       стандартного ввода. Только главная сессия: из вкладки агента карты — отказ, код 5
   kermach roadmap --help              эта справка
 Номер следующий после самого большого на доске; счётчик counter.json программа ведёт сама. Номер занят — берётся следующий, чужой файл не затирается.
 У новой карты с похожим заголовком печатается «похоже на tNN» — проверьте, не дубль ли.
 Остальное — что сделать, файлы, проверку — допишите в созданный файл.
 
 Коды выхода: 0 — готово, 1 — не те аргументы, 2 — run не из терминала Kermach этого проекта, 3 — доски нет в этой папке и выше
-(у run — окно проекта закрыто или Kermach не отвечает), 4 — файл не создан, у run — отказ запуска (карты нет, уже запущена, готова).`;
+(у run — окно проекта закрыто или Kermach не отвечает), 4 — файл не создан, у run — отказ запуска (карты нет, уже запущена, готова),
+5 — answer из вкладки агента карты: ответ человека агент сам не пишет.`;
 
 /** Действия во вкладке (t382): только в отданных агенту. */
 const ACTS = ['snapshot', 'click', 'fill', 'keypress', 'goto', 'back', 'reload', 'scroll', 'wait', 'eval'];
@@ -264,7 +269,21 @@ function roadmapArgs(rest) {
   // t817: справка — только на месте подкоманды или вида (roadmap --help, roadmap new --help). Дальше --help и -h — слова заголовка или значение флага:
   // заголовок «--help» заводит карту, --phase -h — ошибка значения, а не справка вместо карты.
   const isHelp = (/** @type {string | undefined} */ a) => a === '--help' || a === '-h';
-  if (!rest.length || isHelp(rest[0]) || rest[0] === 'help' || ((rest[0] === 'new' || rest[0] === 'notes' || rest[0] === 'close' || rest[0] === 'run' || rest[0] === 'status' || rest[0] === 'accept') && isHelp(rest[1]))) return { help: true };
+  if (!rest.length || isHelp(rest[0]) || rest[0] === 'help' || ((rest[0] === 'new' || rest[0] === 'notes' || rest[0] === 'close' || rest[0] === 'run' || rest[0] === 'status' || rest[0] === 'accept' || rest[0] === 'answer') && isHelp(rest[1]))) return { help: true };
+  // t1354: answer tN "текст" | - — ответ человека с отпечатком; из вкладки агента карты (KERMACH_CARD) — отказ, код 5.
+  if (rest[0] === 'answer') {
+    if (ENV('CARD')) die('roadmap answer: нет доступа — команду вызвал агент карты (вкладка с KERMACH_CARD). Ответ человека пишет человек: панель «Роадмап» или главная сессия', 5);
+    const ref = rest[1] || '';
+    if (!/^t\d{1,6}$/.test(ref) || rest.length < 3) die('roadmap answer: нужен номер карты и текст, например kermach roadmap answer t12 "вариант 1". Справка — kermach roadmap --help', 1);
+    let text = rest.slice(2).join(' ');
+    if (rest.length === 3 && rest[2] === '-') {
+      const r = stdinText();
+      if (r.warn) process.stderr.write(`${r.warn}\n`);
+      text = r.text;
+    }
+    if (!text.trim()) die('roadmap answer: текст ответа пустой. Справка — kermach roadmap --help', 1);
+    return { answer: ref, text };
+  }
   // t1327: accept fN — факты фазы и инструкция «Прими фазу» главной сессии (plugins\roadmap\accept.js).
   if (rest[0] === 'accept') {
     if (rest.length !== 2 || !/^f\d{1,6}$/.test(rest[1])) die('roadmap accept: нужен один номер фазы, например kermach roadmap accept f1. Справка — kermach roadmap --help', 1);
@@ -451,6 +470,16 @@ function roadmap(o) {
     if (!out.length) out.push(r.total ? `Ничего не нашлось: по словам ошибки записей нет (действующих записей ${r.total}). Ищите по папке доски: ${board.root(project)}` : 'Записей на доске нет.');
     else if (out.length < r.total) out.push(`Показано ${out.length} записей из ${r.total}. Целиком — файлы d<номер>.md в ${board.root(project)}`);
     process.stdout.write(`${clean(out.join('\n'))}\n`);
+    return;
+  }
+  if (o.answer) {
+    // Папка данных плагина — та же, что ctx.dataDir у окна (plugin-bridge.js): <папка данных Kermach>\plugins-data\roadmap.
+    const { DATA_DIR } = require(path.join(__dirname, '..', '..', 'daemon', 'protocol.js'));
+    /** @type {any} */
+    let r;
+    try { r = require(path.join(__dirname, '..', '..', 'plugins', 'roadmap', 'grader.js')).answer(path.join(DATA_DIR, 'plugins-data', 'roadmap'), project, o.answer, o.text); }
+    catch (e) { return die(`ответ не записан: ${e instanceof Error ? e.message : e}`, 4); }
+    process.stdout.write(`${clean(`записан ответ в ${o.answer}: раздел «${r.head}», отпечаток ${r.sha1.slice(0, 12)}`)}\n`);
     return;
   }
   if (o.close) {

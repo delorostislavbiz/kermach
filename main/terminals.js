@@ -414,6 +414,18 @@ function mcpRelease(sid) {
   mcpFiles.delete(sid);
   mcpDrop(file);
 }
+let mcpSeq = 0;
+/**
+ * Держатель файла на время запуска (t1353): checkExtra уже записал файл, терминала ещё нет. Без держателя выход соседа
+ * с тем же списком удалил бы файл, и claude стартовал бы без MCP. Ключ не похож на sid; снимает его mcpRelease —
+ * после mcpFiles.set(s.sid) файл остаётся, без терминала удаляется. @param {string} file @returns {string} ключ или ''
+ */
+function mcpHold(file) {
+  if (!file) return '';
+  const key = `запуск:${++mcpSeq}`;
+  mcpFiles.set(key, file);
+  return key;
+}
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 // Свои переменные плагинов, имена KERMACH_* ещё до t1307: «Роадмап» передаёт агенту карты KERMACH_CARD и KERMACH_BOARD (t1043).
 // Остальные KERMACH_* и TERMINALUS_* — переменные программы, плагину их не подменить.
@@ -791,7 +803,7 @@ async function revive(c, d, p, cols, rows) {
     /** Номер, занятый этой вкладкой в launching (t787). @type {{ title: string, project: string, sid: string } | null} */
     let held = null;
     let heldId = '';
-    /** Файл MCP-серверов, записанный для этой вкладки (t1342): терминал его не взял — удаляется в finally. */
+    /** Файл MCP-серверов, записанный для этой вкладки (t1342): терминал его не взял — удаляется в finally (держатель запуска снимает вложенный finally, t1353). */
     let mcpFile = '';
     try {
       const kind = kindOf({ meta: { kind: t.kind } });
@@ -805,61 +817,67 @@ async function revive(c, d, p, cols, rows) {
       const ex = checkExtra(kind, saved ? { args: saved.args, cwd: saved.cwd, env: saved.env, mcp: saved.mcp } : undefined, p);
       if ('error' in ex) { notices.set(t.sid, `Не запустить заново: ${ex.error}`); continue; }
       mcpFile = mcpFileOf(ex.mcpArgs);
-      // Codex, продолженный плагином (t768), — тот же разговор через codex resume; журнал удалили — новый разговор, как у Claude.
-      const cxId = kind === 'codex' && t.codexSessionId && UUID_RE.test(t.codexSessionId) ? t.codexSessionId : '';
-      const cxGone = !!cxId && !hasConversation(cxId, 'codex', ex.x && ex.x.env);
-      const resumeId = kind === 'claude' ? (noConv ? undefined : t.claudeSessionId) : cxId && !cxGone ? cxId : undefined;
-      // Агент Claude (t251) — тот же, с тем же режимом, что при открытии: файл агента могли изменить или удалить, вкладка от этого не меняется.
-      const ag = kind === 'claude' && t.agent && agents.NAME_RE.test(t.agent) ? { name: t.agent, mode: t.agentMode && /^(default|acceptEdits|plan)$/.test(t.agentMode) ? t.agentMode : '' } : null;
-      // Без вопросов о разрешениях (t851) — как вкладку открыли, а не по нынешней настройке проекта. Запрет в настройках Claude — обычный Claude и строка во вкладке.
-      const byOff = kind === 'claude' && t.bypass === '1' ? bypassOff(p.path) : '';
-      const bypass = kind === 'claude' && t.bypass === '1' && !byOff;
-      const how = launchWith(kind, resumeId, d.hooksSettings, ex.x, '', ag, kind === 'codex' ? await codexHookArgs(d, (ex.x && ex.x.cwd) || p.path) : [], bypass, tabName(p.path, name), ex.mcpArgs);
-      if ('error' in how) { notices.set(t.sid, how.error); continue; }
-      // Разговор уже идёт — в соседней вкладке, запущенной этим же revive, или в другом проекте (t778): второй процесс испортил бы журнал.
-      // Номер запускает соседнее окно прямо сейчас (t787) — в list демона его ещё нет.
-      if (resumeId) {
-        /** @type {any} */
-        let busy = launching.get(resumeId);
-        if (!busy) {
-          held = { title: name, project: p.path, sid: t.sid };
-          heldId = resumeId;
-          launching.set(resumeId, held);
-          try { busy = await runningConversation(d, resumeId); } catch (err) { notices.set(t.sid, `Не запустить заново: ${/** @type {any} */ (err).message || err}`); continue; }
-        }
-        if (busy) {
-          notices.set(t.sid, `Не запустить заново: разговор уже идёт во вкладке «${shownTitle(busy)}» (${busy.project || 'без проекта'})`);
-          c.log(`вкладка ${name} в ${p.path} не запущена заново: разговор ${resumeId} уже идёт во вкладке «${shownTitle(busy)}» (${busy.project || 'без проекта'}), терминал ${busy.sid}`);
-          continue;
-        }
-      }
+      // Держатель до конца запуска (t1353): ниже ожидания, а соседний терминал с тем же файлом может выйти.
+      const hold = mcpHold(mcpFile);
       try {
-        const s = (await d.request('create', {
-          file: how.file, args: how.args, cwd: (ex.x && ex.x.cwd) || p.path, env: browserCli.envFor(p, how.env), cols, rows, project: p.path,
-          // Тема — от прежнего разговора: новому её не переносить, вкладка снова «Claude 2», пока Claude не напишет свою.
-          title: t.title, color: t.color, icon: t.icon, autoTitle: noConv || cxGone ? '' : t.autoTitle, titleManual: t.titleManual === '1',
-          // Скрытая вкладка и её журнал (t1059) — как при открытии.
-          meta: { ...how.meta, ...(t.hidden === '1' ? { hidden: '1' } : {}), ...(t.logPath ? { logPath: t.logPath } : {}) },
-        })).session;
-        // Закрыли, пока шёл create: новый терминал гасим, в файл вкладок не пишем.
-        if (mcpFile) mcpFiles.set(s.sid, mcpFile);
-        if (!left.has(t.sid)) { abandoned.add(s.sid); try { await d.request('kill', { sid: s.sid }); } catch {} tabs.remove(c.dataDir, p.id, s.sid, c.log); exits.delete(s.sid); c.log(`вкладка ${name} в ${p.path} закрыта до запуска: терминал ${s.sid} остановлен`); continue; }
-        tabs.replace(c.dataDir, p.id, t.sid, entryOf(s), c.log);
-        notices.delete(t.sid);
-        exits.delete(t.sid);
-        fresh.delete(t.sid);
-        if (byOff) { fresh.set(s.sid, bypassOffText(byOff)); c.log(`вкладка ${name} в ${p.path}: без вопросов о разрешениях не включено — запрет в ${byOff}`); }
-        if (noConv) {
-          fresh.set(s.sid, i18n.t('term.newConversation', 'Прежний разговор не найден, начат новый'));
-          c.log(`запустил заново ${name} в ${p.path}: терминал ${s.sid} вместо ${t.sid}, pid ${s.pid}; прежний разговор ${t.claudeSessionId} не найден в ${conversationsDir()} — начат новый, claude --session-id ${how.meta.claudeSessionId}`);
-        } else if (cxGone) {
-          fresh.set(s.sid, i18n.t('term.newConversation', 'Прежний разговор не найден, начат новый'));
-          c.log(`запустил заново ${name} в ${p.path}: терминал ${s.sid} вместо ${t.sid}, pid ${s.pid}; прежний разговор Codex ${cxId} не найден в ${codexSessionsDir(ex.x && ex.x.env)} — начат новый`);
-        } else c.log(`запустил заново ${name} в ${p.path}: терминал ${s.sid} вместо ${t.sid}, pid ${s.pid}${how.meta.claudeSessionId ? `, claude --resume ${how.meta.claudeSessionId}` : how.meta.codexSessionId ? `, codex resume ${how.meta.codexSessionId}` : ''}`);
-        if (kind === 'codex') codexHintOnce(s.sid);
-      } catch (err) {
-        notices.set(t.sid, i18n.t('term.reviveFail', 'Не запустился заново: {err}', { err: /** @type {any} */ (err).message || err }));
-        c.log(`вкладка ${name} в ${p.path} не запущена заново: ${err}`);
+        // Codex, продолженный плагином (t768), — тот же разговор через codex resume; журнал удалили — новый разговор, как у Claude.
+        const cxId = kind === 'codex' && t.codexSessionId && UUID_RE.test(t.codexSessionId) ? t.codexSessionId : '';
+        const cxGone = !!cxId && !hasConversation(cxId, 'codex', ex.x && ex.x.env);
+        const resumeId = kind === 'claude' ? (noConv ? undefined : t.claudeSessionId) : cxId && !cxGone ? cxId : undefined;
+        // Агент Claude (t251) — тот же, с тем же режимом, что при открытии: файл агента могли изменить или удалить, вкладка от этого не меняется.
+        const ag = kind === 'claude' && t.agent && agents.NAME_RE.test(t.agent) ? { name: t.agent, mode: t.agentMode && /^(default|acceptEdits|plan)$/.test(t.agentMode) ? t.agentMode : '' } : null;
+        // Без вопросов о разрешениях (t851) — как вкладку открыли, а не по нынешней настройке проекта. Запрет в настройках Claude — обычный Claude и строка во вкладке.
+        const byOff = kind === 'claude' && t.bypass === '1' ? bypassOff(p.path) : '';
+        const bypass = kind === 'claude' && t.bypass === '1' && !byOff;
+        const how = launchWith(kind, resumeId, d.hooksSettings, ex.x, '', ag, kind === 'codex' ? await codexHookArgs(d, (ex.x && ex.x.cwd) || p.path) : [], bypass, tabName(p.path, name), ex.mcpArgs);
+        if ('error' in how) { notices.set(t.sid, how.error); continue; }
+        // Разговор уже идёт — в соседней вкладке, запущенной этим же revive, или в другом проекте (t778): второй процесс испортил бы журнал.
+        // Номер запускает соседнее окно прямо сейчас (t787) — в list демона его ещё нет.
+        if (resumeId) {
+          /** @type {any} */
+          let busy = launching.get(resumeId);
+          if (!busy) {
+            held = { title: name, project: p.path, sid: t.sid };
+            heldId = resumeId;
+            launching.set(resumeId, held);
+            try { busy = await runningConversation(d, resumeId); } catch (err) { notices.set(t.sid, `Не запустить заново: ${/** @type {any} */ (err).message || err}`); continue; }
+          }
+          if (busy) {
+            notices.set(t.sid, `Не запустить заново: разговор уже идёт во вкладке «${shownTitle(busy)}» (${busy.project || 'без проекта'})`);
+            c.log(`вкладка ${name} в ${p.path} не запущена заново: разговор ${resumeId} уже идёт во вкладке «${shownTitle(busy)}» (${busy.project || 'без проекта'}), терминал ${busy.sid}`);
+            continue;
+          }
+        }
+        try {
+          const s = (await d.request('create', {
+            file: how.file, args: how.args, cwd: (ex.x && ex.x.cwd) || p.path, env: browserCli.envFor(p, how.env), cols, rows, project: p.path,
+            // Тема — от прежнего разговора: новому её не переносить, вкладка снова «Claude 2», пока Claude не напишет свою.
+            title: t.title, color: t.color, icon: t.icon, autoTitle: noConv || cxGone ? '' : t.autoTitle, titleManual: t.titleManual === '1',
+            // Скрытая вкладка и её журнал (t1059) — как при открытии.
+            meta: { ...how.meta, ...(t.hidden === '1' ? { hidden: '1' } : {}), ...(t.logPath ? { logPath: t.logPath } : {}) },
+          })).session;
+          // Закрыли, пока шёл create: новый терминал гасим, в файл вкладок не пишем.
+          if (mcpFile) mcpFiles.set(s.sid, mcpFile);
+          if (!left.has(t.sid)) { abandoned.add(s.sid); try { await d.request('kill', { sid: s.sid }); } catch {} tabs.remove(c.dataDir, p.id, s.sid, c.log); exits.delete(s.sid); c.log(`вкладка ${name} в ${p.path} закрыта до запуска: терминал ${s.sid} остановлен`); continue; }
+          tabs.replace(c.dataDir, p.id, t.sid, entryOf(s), c.log);
+          notices.delete(t.sid);
+          exits.delete(t.sid);
+          fresh.delete(t.sid);
+          if (byOff) { fresh.set(s.sid, bypassOffText(byOff)); c.log(`вкладка ${name} в ${p.path}: без вопросов о разрешениях не включено — запрет в ${byOff}`); }
+          if (noConv) {
+            fresh.set(s.sid, i18n.t('term.newConversation', 'Прежний разговор не найден, начат новый'));
+            c.log(`запустил заново ${name} в ${p.path}: терминал ${s.sid} вместо ${t.sid}, pid ${s.pid}; прежний разговор ${t.claudeSessionId} не найден в ${conversationsDir()} — начат новый, claude --session-id ${how.meta.claudeSessionId}`);
+          } else if (cxGone) {
+            fresh.set(s.sid, i18n.t('term.newConversation', 'Прежний разговор не найден, начат новый'));
+            c.log(`запустил заново ${name} в ${p.path}: терминал ${s.sid} вместо ${t.sid}, pid ${s.pid}; прежний разговор Codex ${cxId} не найден в ${codexSessionsDir(ex.x && ex.x.env)} — начат новый`);
+          } else c.log(`запустил заново ${name} в ${p.path}: терминал ${s.sid} вместо ${t.sid}, pid ${s.pid}${how.meta.claudeSessionId ? `, claude --resume ${how.meta.claudeSessionId}` : how.meta.codexSessionId ? `, codex resume ${how.meta.codexSessionId}` : ''}`);
+          if (kind === 'codex') codexHintOnce(s.sid);
+        } catch (err) {
+          notices.set(t.sid, i18n.t('term.reviveFail', 'Не запустился заново: {err}', { err: /** @type {any} */ (err).message || err }));
+          c.log(`вкладка ${name} в ${p.path} не запущена заново: ${err}`);
+        }
+      } finally {
+        mcpRelease(hold);
       }
     } finally {
       mcpDrop(mcpFile);
@@ -888,6 +906,23 @@ async function openTab(p, kind, o, cols, rows, wc, human, follow, more) {
   if (o && o.cwd && alive.isNet(p.path)) await alive.state(p.path);
   const ex0 = checkExtra(kind, o, p);
   if ('error' in ex0) return ex0;
+  // Файл MCP-серверов держится до конца запуска (t1353): ниже ожидания, а соседний терминал с тем же файлом может выйти.
+  const hold = mcpHold(mcpFileOf(ex0.mcpArgs));
+  try {
+    return await openTabHeld(c, p, kind, o, ex0, cols, rows, wc, human, follow, more);
+  } finally {
+    mcpRelease(hold);
+  }
+}
+
+/**
+ * Остаток openTab после checkExtra (t1353): файл MCP-серверов держит mcpHold в openTab, на любом выходе его снимает openTab.
+ * @param {Ctx} c @param {{ id: string, path: string, bypass?: boolean }} p @param {any} kind @param {any} o @param {any} ex0 итог checkExtra
+ * @param {number} cols @param {number} rows @param {import('electron').WebContents | null} wc
+ * @param {{ bypass: boolean } | null} [human] @param {boolean} [follow] @param {Record<string, string>} [more]
+ * @returns {Promise<{ session: any } | { error: string }>}
+ */
+async function openTabHeld(c, p, kind, o, ex0, cols, rows, wc, human, follow, more) {
   // Без вопросов о разрешениях (t851): пункт меню или настройка проекта — только у вкладки Claude, открытой человеком. Вкладки плагинов — без режима,
   // кроме плагина при программе с followBypass (t852, агенты «Роадмапа»): он следует настройке проекта, сам режим не включает.
   // Запрет в настройках Claude: пункт меню — отказ, настройка — обычный Claude и строка во вкладке.
@@ -951,7 +986,7 @@ async function openTabRun(c, d, p, kind, o, ex, k, cols, rows, wc) {
     if (kind === 'codex') codexHintOnce(s.sid);
     if (ex.byOff) fresh.set(s.sid, bypassOffText(ex.byOff));
     if (wc) await attachTo(d, wc, s.sid, cols, rows);
-  } catch (err) { if (!s) mcpDrop(mcpFileOf(ex.mcpArgs)); return { error: String(/** @type {any} */ (err).message || err) }; }
+  } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; } // create упал — файл без терминала удалит openTab (mcpRelease держателя)
   tabs.add(c.dataDir, p.id, entryOf(s), c.log);
   const since = c.t0 ? `; от запуска ${Date.now() - c.t0} мс` : '';
   const agLog = `${ex.ag ? `, агент ${ex.ag.name}${ex.ag.mode && !ex.bypass ? ` (--permission-mode ${ex.ag.mode})` : ''}` : ''}${ex.bypass ? ', без вопросов о разрешениях (--dangerously-skip-permissions)' : ''}${ex.byOff ? `, без вопросов о разрешениях не включено: запрет в ${ex.byOff}` : ''}`;

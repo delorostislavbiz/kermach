@@ -1,7 +1,7 @@
 {
   "name": "kermach",
   "productName": "Kermach",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "main": "main/main.js",
   "dependencies": {
