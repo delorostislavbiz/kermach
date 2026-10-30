@@ -21,7 +21,7 @@ const alive = require('../../main/dir-alive');
 const PAGE = path.join(__dirname, 'window.html');
 const PRELOAD = path.join(__dirname, 'preload.cjs');
 const KEY = Symbol.for('kermach.tasks');
-/** Папка «Входящих»: проект Kermach с этой папкой (решение Ростислава 20.10). */
+/** Папка «Входящих»: проект Kermach с этой папкой (решение пользователя 20.10). */
 const inboxDir = () => settings.get().inboxDir || path.join(settings.get().projectsBase || require('os').homedir(), '_дела');
 const POLL_MS = 2000;
 

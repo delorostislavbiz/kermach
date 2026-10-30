@@ -177,7 +177,7 @@ async function readNumstat(dir, run = here) {
   const os = require('os');
   const base = await baseOf(dir, run);
   // t1180: diff против HEAD обновляет время файлов в индексе и переписывает .git/index даже с --no-optional-locks.
-  // Опрос раз в 4 с — считаем по копии индекса во временной папке, настоящий не трогаем.
+  // Опрос по таймеру — считаем по копии индекса во временной папке, настоящий не трогаем.
   const where = await git(dir, ['rev-parse', '--path-format=absolute', '--git-path', 'index'], run);
   const real = where.err ? '' : where.stdout.trim();
   let tmp = '';

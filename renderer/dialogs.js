@@ -856,7 +856,8 @@
         cps.checked = s.copySelect !== false;
         // Поле с ошибкой или в фокусе не перетираем: человек правит путь.
         dlg.querySelectorAll('.dirs input.dir').forEach((x) => { const i = /** @type {HTMLInputElement} */ (x); if (document.activeElement !== i && i.dataset.bad !== '1') i.value = s[i.dataset.k || ''] || ''; });
-        dlg.querySelectorAll('.plg input').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); const on = s.plugins && s.plugins[i.dataset.id || '']; i.checked = typeof on === 'boolean' ? on : plgDefault.get(i.dataset.id || '') !== false; });
+        dlg.querySelectorAll('.plg input[data-id]').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); const on = s.plugins && s.plugins[i.dataset.id || '']; i.checked = typeof on === 'boolean' ? on : plgDefault.get(i.dataset.id || '') !== false; });
+        dlg.querySelectorAll('.plg input[data-main]').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); i.checked = !!(s.pluginMain && s.pluginMain[i.dataset.main || ''] === true); });
         // Размеры видов браузера (t207) — только пока «Браузер» включён.
         dlg.querySelectorAll('.bvws').forEach((r) => { /** @type {HTMLElement} */ (r).style.display = s.plugins && s.plugins.browser === false ? 'none' : ''; });
         q('.set-off').hidden = !(s.plugins && s.plugins.browser === false);
@@ -881,10 +882,10 @@
       // Плагины (t182): у каждого выключатель; окна проектов включают и выключают плагин сразу, без перезагрузки.
       const plg = q('.plg');
       // «Браузер» встроен и в списке плагинов главного процесса его нет (t188): выключатель добавляется здесь, после Git и «Лимитов».
-      t.plugins.list().catch(() => []).then((/** @type {{ id: string, name: string, defaultOn?: boolean, own?: boolean, langs?: Record<string, string> }[]} */ list) => {
+      t.plugins.list().catch(() => []).then((/** @type {{ id: string, name: string, defaultOn?: boolean, own?: boolean, hasMain?: boolean, langs?: Record<string, string> }[]} */ list) => {
         for (const pl of Array.isArray(list) ? list : []) plgDefault.set(pl.id, pl.defaultOn !== false);
         const withLangs = (Array.isArray(list) ? list : []).filter((pl) => pl.langs && Object.keys(pl.langs).length);
-        list = [...(Array.isArray(list) ? list : []), { id: 'browser', name: 'Браузер' }];
+        list = [...(Array.isArray(list) ? list : []), { id: 'browser', name: I18n.t('browser.brauzer', 'Браузер') }];
         for (const pl of list) {
           // У плагина «Темы» выключателя нет (t723): его схемы — пункты списка «Тема», выбор схемы включает её сам.
           if (pl.id === 'themes') continue;
@@ -916,6 +917,20 @@
             warn.style.cssText = 'margin:-4px 0 6px 22px;font-size:11px';
             tx(warn, 'dialogs.pluginOwn', 'Свой плагин: у него те же права, что у программы — запускает команды и агентов, читает и меняет файлы. Включайте, только если доверяете автору.');
             plg.appendChild(warn);
+            // Главная часть своего плагина (main.js) — require в главном процессе со всеми правами: отдельная галочка, без неё не грузится (t1384).
+            if (pl.hasMain) {
+              const ml = document.createElement('label');
+              ml.className = 'chk pmain';
+              ml.style.cssText = 'margin:-2px 0 6px 22px';
+              const mc = document.createElement('input');
+              mc.type = 'checkbox';
+              mc.dataset.main = pl.id;
+              mc.addEventListener('change', () => change(t, { pluginMain: { [pl.id]: mc.checked } }));
+              const ms = document.createElement('span');
+              tx(ms, 'dialogs.pluginMain', 'Главная часть (main.js): разрешить ей работать с правами программы');
+              ml.append(mc, ms);
+              plg.appendChild(ml);
+            }
           }
           if (pl.id === 'browser') browserViews(t, plg, tx);
           if (pl.id === 'frame') frame = frameRow(t, lab, tx, (s) => (s.plugins && typeof s.plugins.frame === 'boolean' ? s.plugins.frame : plgDefault.get('frame') !== false));
@@ -925,7 +940,7 @@
         plg.hidden = false;
         if (cur) paint(cur);
       });
-      // Агенты из системы (t183): найденные — строками прямо в разделе (t1150, Ростислав 20.10: «установленных показывать сразу, а не прятать в окне»),
+      // Агенты из системы (t183): найденные — строками прямо в разделе (t1150, пользователь 20.10: «установленных показывать сразу, а не прятать в окне»),
       // весь каталог — окошком «Агенты» (t407): подключить нового и управлять найденным. Окошко одно за раз, поэтому «Настройки» закрываются;
       // после «Агентов» они заново не открываются. focus — id строки, которую окошко выделит, или 'new' — к неустановленным.
       const openAgents = (/** @type {string} */ focus) => { done(null); agents(t, focus); };

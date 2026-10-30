@@ -310,7 +310,7 @@
     const files = x.files || [];
     // Окну отдаётся не больше 200 путей (store.readRun, t527); more — сколько ещё в итоге.
     const more = Number(x.more) || 0;
-    const size = (/** @type {number} */ b) => (b < 0 ? t('noFile', 'файла уже нет') : b < 1024 ? `${b} Б` : `${(b / 1024).toFixed(1).replace('.', ',')} КБ`);
+    const size = (/** @type {number} */ b) => (b < 0 ? t('noFile', 'файла уже нет') : b < 1024 ? t('sizeB', '{n} Б', { n: b }) : t('sizeKB', '{n} КБ', { n: (b / 1024).toFixed(1).replace('.', I18n.lang() === 'en' ? '.' : ',') }));
     const short = (/** @type {string} */ f) => (f.toLowerCase().startsWith(x.work.toLowerCase()) ? f.slice(x.work.length + 1) : f);
     const start = new Date(r.start);
     return `<div class="back" id="toBack">${ic('back', 13)}${esc(nameOf(a))}</div>

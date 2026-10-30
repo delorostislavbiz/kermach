@@ -7,13 +7,17 @@
 //   Копии нет — встроенный prompt.md рядом с этим файлом. Копию человек кладёт сам: кнопки для неё нет (t547).
 // Задание «Составить роадмап» (t519, compose) — шаблон compose.md, своя копия в той же папке данных; пути FORMAT.md и образцов подставляются абсолютные.
 // Задание «Новая карта» (t818, newcard) — шаблон newcard.md, устроен и читается так же.
-// «Свежее» (часть 5) — то, чего не было, когда карту писали (её created):
-//   карты этой фазы, закрытые позже (по closed; нет поля — только карта, заведённая позже, t537), решения и тупики с датой не раньше дня карты
-//   по тем же файлам (без файлов — по этой карте или карте той же фазы), договорённости с человеком — все, без отбора по файлам и дате (t833),
-//   открытые карты «Входящих» по тем же файлам. Отменённая запись (cancelled) и запись с прошедшим сроком (until раньше сегодня) не подаются.
-//   Закрытые карты, решения и тупики — списком (t1324): номер, тип, заголовок, файлы; текст агент открывает сам. Договорённости — полным текстом.
-// «Заметки к задаче» (часть 6, t834) — до 5 записей d<N> из всех действующих по словам карты, кроме поданных в «Свежем»; см. pick(). Тоже списком (listLine).
-//   Первыми строками — утверждённые человеком паттерны (t1004, patterns.served); записи из их from и неутверждённые паттерны не подаются.
+// «Заметки к задаче» (часть 5; до t1433 — часть 6, а частью 5 было «Свежее» с решениями и тупиками по дате) — по порядку:
+//   договорённости агенту полным текстом — все действующие, без отбора по файлам и дате (t833); «for: программа» и заметки не подаются (t1433);
+//   утверждённые человеком паттерны (t1004, patterns.served); записи из их from и неутверждённые паттерны не подаются;
+//   до 6 решений и тупиков из всех действующих по словам и файлам карты (t834, см. pick()) — списком (t1324): номер, тип, заголовок, файлы, текст агент открывает сам;
+//   карты этой фазы, закрытые позже карты (по closed; нет поля — только карта, заведённая позже, t537), по тем же файлам; открытые карты «Входящих» по тем же файлам.
+//   Отменённая запись (cancelled) и запись с прошедшим сроком (until раньше сегодня) не подаются.
+// Своя копия устарела (t1417): программа сверяет отпечаток копии со встроенным — sha256 текста без строки отметки, первые 12 знаков.
+//   В копии человек пишет строку «<!-- основа: <отпечаток встроенного> -->»: с какого встроенного текста она сделана. Отметка равна отпечатку
+//   встроенного или текст копии совпадает со встроенным — молчим; иначе предупреждение со строкой, которую дописать. По времени файла не сравниваем:
+//   git clone и перенос программы меняют время файла, а не текст. Сама программа в копию не пишет: её кладёт и правит человек (t547).
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const board = require('./board');
@@ -26,21 +30,110 @@ const OWN = 'prompt.md';
 const COMPOSE = 'compose.md';
 /** Шаблон задания «Новая карта» (t818): своя копия — newcard.md в ctx.dataDir. */
 const NEWCARD = 'newcard.md';
-const SAMPLE = path.join(__dirname, 'samples', 't12.md');
+/** Шаблоны со своей копией в dataDir, которые сверяются со встроенным (t1417); язык в имени — prompt.uk.md (t1428). */
+const OWN_RE = /^(prompt|compose|newcard|grader|orchestrator)(\.[a-z]{2})?\.md$/;
+/** Строка отметки основы в своей копии (t1417). */
+const BASE_RE = /^[ \t]*<!--[ \t]*основа:[ \t]*([0-9a-f]{12})[ \t]*-->[ \t]*$/im;
+const SAMPLES = 'samples';
 const MAX_TEMPLATES = 64 * 1024;
-const RULES = 'Общие правила';
-/** «Свежее» (t1105): до стольких закрытых карт, новые первыми, и предел знаков для решений и тупиков; остальное — строкой «Ещё M». */
-const FRESH_CARDS = 8;
-const FRESH_MAX = 20000;
-const KIND_RE = /^шаблон:\s*(.+)$/i;
-const FRESH_NOTE = 'заметки карт этой фазы, закрытых после составления роадмапа; новые решения и тупики; все действующие договорённости; карты во «Входящих» по тем же файлам';
-/** Строка карты с advisor: да (t830). Инструмента нет (чужая машина без advisorModel) — агент говорит об этом, а не молчит. */
-const ADVISOR_LINE = 'Советник: позови советника (инструмент advisor) до первой правки и ещё раз перед тем, как закрыть карту. Инструмента advisor нет — напиши об этом в «Что сделано» и работай без него.';
 /**
- * Строка карты яруса sonnet (t1046): советник один раз, перед сдачей. Замер t1042: без советника Sonnet сдал скрытую ошибку t802 в 4 прогонах из 4,
- * с советником перед сдачей — 0 из 4; вызов «до первой правки» ошибок не ловил и стоил 20 % шагов.
+ * Язык промпта (t1428): язык доски (lang: паспорта, его ставит «Составить роадмап» по языку окна) или opts.lang. ru, пусто и незнакомое — '' (русский).
+ * Русский файл — источник, перевод рядом: prompt.uk.md, FORMAT.en.md, samples.de\. Перевода нет — русский файл.
+ * @param {unknown} v
  */
-const ADVISOR_ONCE = 'Советник: перед тем, как закрыть карту, позови советника (инструмент advisor) один раз и исправь, что он нашёл. Инструмента advisor нет — напиши об этом в «Что сделано» и работай без него.';
+const langOf = (v) => { const s = String(v || '').trim().toLowerCase(); return board.LANGS.includes(s) && s !== 'ru' ? s : ''; };
+/** Имя перевода: prompt.md → prompt.uk.md, samples → samples.uk; русский — само имя. @param {string} name @param {string} [lang] */
+const nameIn = (name, lang) => { const l = langOf(lang); return !l ? name : /\.md$/i.test(name) ? name.replace(/\.md$/i, `.${l}.md`) : `${name}.${l}`; };
+/** Встроенный файл или папка рядом с кодом на языке lang; перевода нет — русский. @param {string} name @param {string} [lang] */
+const builtinIn = (name, lang) => { const f = path.join(__dirname, nameIn(name, lang)); return langOf(lang) && fs.existsSync(f) ? f : path.join(__dirname, name); };
+/** {язык} (t1428) — на каком языке агент пишет текст для человека: название языка на нём самом. */
+const LANG_NAMES = { '': 'русский', uk: 'українська', en: 'English', de: 'Deutsch' };
+/** @param {string} [lang] */
+const langName = (lang) => LANG_NAMES[/** @type {keyof typeof LANG_NAMES} */ (langOf(lang))];
+/**
+ * Строки промпта, которые пишет код (t1428): ключ — русский текст с подстановками {n}, значение — uk, en, de.
+ * Русская доска — ключ как есть: прежний текст промпта не меняется. Окно подписи частей переводит само (roadmap.pnote.*), журнал (warnings, skipped) — по-русски.
+ * @type {Record<string, [string, string, string]>}
+ */
+const SAY = {
+  'Общие правила': ['Загальні правила', 'General rules', 'Allgemeine Regeln'],
+  'Паспорт проекта': ['Паспорт проєкту', 'Project passport', 'Projektpass'],
+  'Шаблон вида работы': ['Шаблон виду роботи', 'Work type template', 'Vorlage der Arbeitsart'],
+  'Карта': ['Картка', 'Card', 'Karte'],
+  'Заметки к задаче': ['Нотатки до задачі', 'Notes for the task', 'Notizen zur Aufgabe'],
+  '(общих правил нет)': ['(загальних правил немає)', '(no general rules)', '(keine allgemeinen Regeln)'],
+  '(шаблона нет)': ['(шаблону немає)', '(no template)', '(keine Vorlage)'],
+  'Паспорта нет: файл passport.md в папке доски не заведён.': ['Паспорта немає: файл passport.md у папці дошки не створено.', 'No passport: passport.md is missing in the board folder.', 'Kein Projektpass: passport.md fehlt im Board-Ordner.'],
+  '(не заполнено)': ['(не заповнено)', '(empty)', '(leer)'],
+  '(без заголовка)': ['(без заголовка)', '(no title)', '(ohne Titel)'],
+  'Зависит от: {v}': ['Залежить від: {v}', 'Depends on: {v}', 'Hängt ab von: {v}'],
+  'карты нет': ['картки немає', 'no such card', 'keine solche Karte'],
+  'Человек: {v}': ['Людина: {v}', 'Human: {v}', 'Mensch: {v}'],
+  'агент не указан': ['агента не вказано', 'agent not set', 'Agent nicht angegeben'],
+  'Закрыта {id} ({who}): {title}': ['Закрита {id} ({who}): {title}', 'Closed {id} ({who}): {title}', 'Geschlossen {id} ({who}): {title}'],
+  '; файлы: {v}': ['; файли: {v}', '; files: {v}', '; Dateien: {v}'],
+  'догадка, не проверено': ['здогадка, не перевірено', 'guess, not verified', 'Vermutung, nicht geprüft'],
+  'повторы: {v}': ['повтори: {v}', 'repeats: {v}', 'Wiederholungen: {v}'],
+  'Договорённость': ['Домовленість', 'Agreement', 'Vereinbarung'],
+  'Решение': ['Рішення', 'Decision', 'Entscheidung'],
+  'Тупик': ['Глухий кут', 'Dead end', 'Sackgasse'],
+  'Заметка': ['Нотатка', 'Note', 'Notiz'],
+  'Входящие {id} ({v}): {title}': ['Вхідні {id} ({v}): {title}', 'Inbox {id} ({v}): {title}', 'Eingang {id} ({v}): {title}'],
+  'Ещё {n} закрытых карт: не показаны, искать в папке доски {v}.': ['Ще {n} закритих карток: не показано, шукати в папці дошки {v}.', '{n} more closed cards: not shown, look in the board folder {v}.', 'Noch {n} geschlossene Karten: nicht gezeigt, im Board-Ordner {v} suchen.'],
+  ' (целиком — {v})': [' (повністю — {v})', ' (full text — {v})', ' (vollständig — {v})'],
+  'Показано {n} записей из {m}: остальные по словам карты подходят меньше. Нужны другие — ищи по папке доски.': ['Показано {n} записів із {m}: решта за словами картки підходить менше. Потрібні інші — шукай у папці дошки.', 'Shown {n} entries of {m}: the rest match the card words less. Need others — search the board folder.', 'Gezeigt {n} von {m} Einträgen: die übrigen passen weniger zu den Wörtern der Karte. Andere nötig — im Board-Ordner suchen.'],
+  'Подходящих по словам карты нет (действующих записей {m}).': ['За словами картки підхожих немає (чинних записів {m}).', 'Nothing matches the card words ({m} entries in force).', 'Nichts passt zu den Wörtern der Karte (gültige Einträge: {m}).'],
+  'Записей нет.': ['Записів немає.', 'No entries.', 'Keine Einträge.'],
+  'Паттерн {id} (утвердил человек {v}): {title}': ['Патерн {id} (затвердила людина {v}): {title}', 'Pattern {id} (approved by a human {v}): {title}', 'Muster {id} (vom Menschen bestätigt {v}): {title}'],
+  'Ещё {n} паттернов: grep "type: паттерн" по {v}': ['Ще {n} патернів: grep "type: {w}" по {v}', '{n} more patterns: grep "type: {w}" in {v}', 'Noch {n} Muster: grep "type: {w}" in {v}'],
+  'паттерн из другого проекта, утвердил человек': ['патерн з іншого проєкту, затвердила людина', 'pattern from another project, approved by a human', 'Muster aus einem anderen Projekt, vom Menschen bestätigt'],
+  'тупик из другого проекта': ['глухий кут з іншого проєкту', 'dead end from another project', 'Sackgasse aus einem anderen Projekt'],
+  'решение из другого проекта': ['рішення з іншого проєкту', 'decision from another project', 'Entscheidung aus einem anderen Projekt'],
+  'Общая база {id} ({v}) [{s}]: {title}': ['Спільна база {id} ({v}) [{s}]: {title}', 'Shared base {id} ({v}) [{s}]: {title}', 'Gemeinsame Basis {id} ({v}) [{s}]: {title}'],
+  'Общая база: показано {n} из {m}. Остальные — grep по {v}.': ['Спільна база: показано {n} із {m}. Решта — grep по {v}.', 'Shared base: shown {n} of {m}. The rest — grep {v}.', 'Gemeinsame Basis: gezeigt {n} von {m}. Der Rest — grep in {v}.'],
+  'Ориентир в коде: проект большой ({n} файлов в карте кода) — места не подбирал. Ищи сам: kermach code words "слова".': ['Орієнтир у коді: проєкт великий ({n} файлів у карті коду) — місць не підбирав. Шукай сам: kermach code words "слова".', 'Code pointers: the project is large ({n} files in the code map) — no places picked. Search yourself: kermach code words "words".', 'Wegweiser im Code: das Projekt ist groß ({n} Dateien in der Code-Karte) — keine Stellen ausgewählt. Selbst suchen: kermach code words "Wörter".'],
+  'Ориентир в коде: проект большой ({n} файлов в карте кода) — места по словам не подбирал; лучшие места в файлах из поля «Файлы», проверь сам, это подсказка:': ['Орієнтир у коді: проєкт великий ({n} файлів у карті коду) — місць за словами не підбирав; найкращі місця у файлах з поля «{f}», перевір сам, це підказка:', 'Code pointers: the project is large ({n} files in the code map) — no places picked by words; best places in the files from the «{f}» field, check yourself, this is a hint:', 'Wegweiser im Code: das Projekt ist groß ({n} Dateien in der Code-Karte) — keine Stellen nach Wörtern ausgewählt; beste Stellen in den Dateien aus dem Feld «{f}», selbst prüfen, das ist ein Hinweis:'],
+  'Ориентир в коде: по словам заголовка карты надёжных мест нет{v} — ищи сам: kermach code words "слова".': ['Орієнтир у коді: за словами заголовка картки надійних місць немає{v} — шукай сам: kermach code words "слова".', 'Code pointers: no reliable places for the card title words{v} — search yourself: kermach code words "words".', 'Wegweiser im Code: keine verlässlichen Stellen für die Wörter des Kartentitels{v} — selbst suchen: kermach code words "Wörter".'],
+  ' (в коде нет «{v}»)': [' (у коді немає «{v}»)', ' (not in the code: «{v}»)', ' (nicht im Code: «{v}»)'],
+  'Ориентир в коде — сначала файлы из поля «Файлы», потом места по словам заголовка карты (kermach code words){v}, проверь сам, это подсказка:': ['Орієнтир у коді — спершу файли з поля «{f}», потім місця за словами заголовка картки (kermach code words){v}, перевір сам, це підказка:', 'Code pointers — first the files from the «{f}» field, then places by the card title words (kermach code words){v}, check yourself, this is a hint:', 'Wegweiser im Code — zuerst die Dateien aus dem Feld «{f}», dann Stellen nach den Wörtern des Kartentitels (kermach code words){v}, selbst prüfen, das ist ein Hinweis:'],
+  'не посчитаны — доска не прочитана.': ['не пораховано — дошку не прочитано.', 'not counted — the board was not read.', 'nicht gezählt — das Board wurde nicht gelesen.'],
+  'кандидатов нет — доски ещё нет.': ['кандидатів немає — дошки ще немає.', 'no candidates — there is no board yet.', 'keine Kandidaten — noch kein Board.'],
+  'кандидатов нет.': ['кандидатів немає.', 'no candidates.', 'keine Kandidaten.'],
+  'похожи': ['схожі', 'similar', 'ähnlich'],
+  'один «Текст ошибки:»': ['один «Текст помилки:»', 'one «Error text:»', 'ein «Fehlertext:»'],
+  '{x} входит и в кандидата {y}': ['{x} входить і до кандидата {y}', '{x} is also in candidate {y}', '{x} gehört auch zum Kandidaten {y}'],
+  '{y} — центр своего кандидата': ['{y} — центр свого кандидата', '{y} is the center of its own candidate', '{y} ist das Zentrum eines eigenen Kandidaten'],
+  '{v} — и в кандидате {y}': ['{v} — і в кандидаті {y}', '{v} — also in candidate {y}', '{v} — auch im Kandidaten {y}'],
+  '{id} — находок одной причины {n}: {v}': ['{id} — знахідок однієї причини {n}: {v}', '{id} — findings with one cause: {n}: {v}', '{id} — Funde mit einer Ursache: {n}: {v}'],
+  '; повторы в картах {v}': ['; повтори в картках {v}', '; repeats in cards {v}', '; Wiederholungen in Karten {v}'],
+  '; пересекается: {v} — один паттерн или два, решает человек': ['; перетинається: {v} — один патерн чи два, вирішує людина', '; overlaps: {v} — one pattern or two, a human decides', '; überschneidet sich: {v} — ein Muster oder zwei, entscheidet der Mensch'],
+  'ещё кандидатов: {n} — программа покажет их, когда эти соберут в паттерны.': ['ще кандидатів: {n} — програма покаже їх, коли ці зберуть у патерни.', '{n} more candidates — the program will show them once these are made into patterns.', 'weitere Kandidaten: {n} — das Programm zeigt sie, sobald diese zu Mustern zusammengefasst sind.'],
+  ' — их нет, слова заголовка в коде почти не встречаются': [' — їх немає, слова заголовка в коді майже не трапляються', ' — there are none, the title words hardly occur in the code', ' — es gibt keine, die Titelwörter kommen im Code kaum vor'],
+  'Ориентир в коде — места по словам заголовка карты (kermach code words), проверь сам, это подсказка:': ['Орієнтир у коді — місця за словами заголовка картки (kermach code words), перевір сам, це підказка:', 'Code pointers — places by the card title words (kermach code words), check yourself, this is a hint:', 'Wegweiser im Code — Stellen nach den Wörtern des Kartentitels (kermach code words), selbst prüfen, das ist ein Hinweis:'],
+};
+/**
+ * Строка кода на языке lang (t1428): перевод из SAY, нет — русский ключ; {имя} — из vars. Незнакомая подстановка остаётся как есть.
+ * @param {string} lang @param {string} ru @param {Record<string, string | number>} [vars]
+ */
+const tr = (lang, ru, vars = {}) => {
+  const i = board.LANGS.indexOf(langOf(lang));
+  const s = (i > 0 && SAY[ru] && SAY[ru][i - 1]) || ru;
+  return s.replace(/\{([a-z]+)\}/g, (all, k) => (Object.hasOwn(vars, k) ? String(vars[k]) : all));
+};
+/** Тип записи строкой части 5 на языке lang. @param {string} type @param {string} [lang] */
+const typeWord = (type, lang = '') => tr(lang, type === 'тупик' ? 'Тупик' : type === 'заметка' ? 'Заметка' : 'Решение');
+const RULES = 'Общие правила';
+/** Закрытые карты фазы в части записей (t1105): до стольких, новые первыми; остальное — строкой «Ещё M». */
+const FRESH_CARDS = 8;
+const KIND_RE = /^шаблон:\s*(.+)$/i;
+/**
+ * Строки для агента вне частей промпта (t1425, В5) — разделы prompt.md, правятся своей копией, как правила:
+ * batch — начало промпта пачки (t703); advisor — строка карты с advisor: да (t830), инструмента нет — агент говорит об этом, а не молчит;
+ * advisorOnce — ярус sonnet (t1046): советник один раз, перед сдачей. Замер t1042: без советника Sonnet сдал скрытую ошибку t802 в 4 прогонах из 4,
+ * с советником перед сдачей — 0 из 4; вызов «до первой правки» ошибок не ловил и стоил 20 % шагов;
+ * answer, answerSession — ответ на вопрос во вкладку агента; remarks — замечания проверяющего (t1330).
+ */
+const LINES = { batch: 'Пачка', advisor: 'Советник: два раза', advisorOnce: 'Советник: перед сдачей', answer: 'Ответ человека', answerSession: 'Ответ главной сессии', remarks: 'Замечания проверяющего' };
 /** Значение «да» в шапке: без регистра, пробелы по краям не важны. @param {unknown} v */
 const isYes = (v) => typeof v === 'string' && norm(v) === 'да';
 
@@ -86,28 +179,121 @@ function readSmall(file, max) {
  * Текст до первого «## » — пояснение для человека, в промпт не идёт. @param {string} [file]
  */
 function templates(file = TEMPLATES) {
-  /** @type {{ rules: string, kinds: Record<string, string>, error: string }} */
-  const out = { rules: '', kinds: {}, error: '' };
+  /** @type {{ rules: string, kinds: Record<string, string>, lines: Record<string, string>, error: string }} */
+  const out = { rules: '', kinds: {}, lines: {}, error: '' };
   let text;
-  try { text = readSmall(file, MAX_TEMPLATES); } catch (e) { out.error = `шаблоны не прочитаны: ${e instanceof Error ? e.message : e}`; return out; }
+  try { text = unstamp(readSmall(file, MAX_TEMPLATES)); } catch (e) { out.error = `шаблоны не прочитаны: ${e instanceof Error ? e.message : e}`; return out; }
   for (const p of heads(text)) {
     const head = headName(p.head);
     const body = p.lines.join('\n').trim();
     if (norm(head) === norm(RULES)) out.rules = body;
     const m = KIND_RE.exec(head);
     if (m) { const k = board.KINDS.find((x) => norm(x) === norm(m[1])); if (k) out.kinds[k] = body; }
+    // t1425: строки для агента (LINES) — по ключу.
+    const l = Object.entries(LINES).find(([, v]) => norm(v) === norm(head));
+    if (l) out.lines[l[0]] = body;
   }
   return out;
 }
 
 /**
- * Какие шаблоны берёт сборка: своя копия в dataDir, если она есть, иначе встроенные. name — имя файла шаблона (compose.md — задание t519).
- * @param {string} [dataDir] @param {string} [name] @returns {{ file: string, own: boolean }}
+ * Строка для агента из раздела LINES[key] (t1425): из шаблонов t; там раздела нет (своя копия старше t1425) — из встроенного prompt.md.
+ * one — одной строкой: её печатают во вкладку, перенос строки отправил бы её раньше времени. Раздела нет и во встроенном — ''.
+ * lang (t1428) — язык строки: запасной текст берётся из встроенного перевода, {язык} — его название.
+ * @param {keyof typeof LINES} key @param {Record<string, string>} vars @param {{ lines: Record<string, string> } | null} [t] @param {boolean} [one] @param {string} [lang]
  */
-function templateFile(dataDir, name = OWN) {
-  const own = dataDir ? path.join(dataDir, name) : '';
-  if (own) { try { fs.lstatSync(own); return { file: own, own: true }; } catch { /* копии нет */ } }
-  return { file: path.join(__dirname, name), own: false };
+function lineOf(key, vars, t, one, lang = '') {
+  // t1428: запасной — встроенный перевод языка lang, в нём раздела нет — встроенный русский.
+  let s = (t && t.lines[key]) || (langOf(lang) ? templates(builtinIn(OWN, lang)).lines[key] : '') || templates(TEMPLATES).lines[key] || '';
+  if (!Object.hasOwn(vars, 'язык')) vars = { ...vars, 'язык': langName(lang) };
+  s = subst(s, vars);
+  return one ? s.replace(/\s*\n\s*/g, ' ') : s;
+}
+
+/**
+ * Строка для агента по шаблонам, которые берёт сборка: своя копия в dataDir или встроенный prompt.md (main.js: пачка, ответ, замечания проверяющего).
+ * lang (t1428) — язык доски: шаблоны этого языка. Без него — русские, как до t1428.
+ * @param {keyof typeof LINES} key @param {Record<string, string>} vars @param {string} [dataDir] @param {boolean} [one] @param {string} [lang]
+ */
+function line(key, vars, dataDir, one, lang = '') {
+  const t = templates(templateFile(dataDir, OWN, lang).file);
+  return lineOf(key, vars, t.error ? null : t, one, lang);
+}
+
+/** Файл или ссылка по пути есть? @param {string} f */
+const has = (f) => { try { fs.lstatSync(f); return true; } catch { return false; } };
+/**
+ * Какие шаблоны берёт сборка: своя копия в dataDir, если она есть, иначе встроенные. name — имя файла шаблона (compose.md — задание t519).
+ * lang (t1428) — язык доски. Порядок: своя копия перевода (prompt.uk.md) → своя русская копия → встроенный перевод → встроенный русский.
+ * Своя копия — правка человека (t547), она главнее встроенного перевода: русская копия на доске uk берётся, а сборка предупреждает — ownRu, путь перевода.
+ * @param {string} [dataDir] @param {string} [name] @param {string} [lang]
+ * @returns {{ file: string, own: boolean, lang: string, ownRu?: string }}
+ */
+function templateFile(dataDir, name = OWN, lang = '') {
+  const l = langOf(lang);
+  const own = (/** @type {string} */ n) => (dataDir ? path.join(dataDir, n) : '');
+  const tr8 = l ? path.join(__dirname, nameIn(name, l)) : '';
+  if (l) {
+    const o = own(nameIn(name, l));
+    if (o && has(o)) return { file: o, own: true, lang: l };
+  }
+  const o = own(name);
+  if (o && has(o)) return { file: o, own: true, lang: '', ...(tr8 && has(tr8) ? { ownRu: tr8 } : {}) };
+  if (tr8 && has(tr8)) return { file: tr8, own: false, lang: l };
+  return { file: path.join(__dirname, name), own: false, lang: '' };
+}
+/** Предупреждение о своей русской копии на доске другого языка (t1428). @param {{ file: string, ownRu?: string }} tf */
+const skippedOwn = (tf) => (tf.ownRu ? `своя копия ${tf.file} — русская, а доска на другом языке: взята она, агент получит русский текст. Нужен перевод — положите рядом копию ${path.basename(tf.ownRu)} (образец — ${tf.ownRu})` : '');
+
+/** Текст без строк отметки основы (t1417): отметка агенту не идёт и в отпечаток не входит. @param {string} text */
+const unstamp = (text) => text.replace(new RegExp(`${BASE_RE.source}\\n?`, 'gim'), '');
+/** Отпечаток шаблона: sha256 текста без отметки и без пустого хвоста, 12 знаков. @param {string} text */
+const printOf = (text) => crypto.createHash('sha256').update(unstamp(text).replace(/\s+$/, '')).digest('hex').slice(0, 12);
+/** Кэш отпечатков по файлу: snapshot доски зовёт сверку на каждом шаге sync — файл читается, только когда сменились время или размер. */
+/** @type {Map<string, { sig: string, print: string, stamp: string }>} */
+const printCache = new Map();
+/** Отпечаток и отметка файла шаблона; нет файла, не обычный файл или не читается — null. @param {string} file */
+function printed(file) {
+  let st;
+  try { st = fs.lstatSync(file); } catch { return null; }
+  if (st.isSymbolicLink() || !st.isFile()) return null;
+  const sig = `${st.mtimeMs}:${st.size}`;
+  const was = printCache.get(file);
+  if (was && was.sig === sig) return was;
+  let text;
+  try { text = readSmall(file, MAX_TEMPLATES); } catch { printCache.delete(file); return null; }
+  const m = BASE_RE.exec(text);
+  const out = { sig, print: printOf(text), stamp: m ? m[1].toLowerCase() : '' };
+  printCache.set(file, out);
+  return out;
+}
+
+/**
+ * Своя копия name в dataDir отстала от встроенного (t1417)? Копии нет, текст совпадает со встроенным или отметка основы равна его отпечатку — null.
+ * Иначе reason — строка для человека: что не так, путь встроенного файла и строка отметки, которую дописать после сверки.
+ * @param {string} [dataDir] @param {string} [name] @returns {{ file: string, builtin: string, print: string, stamp: string, reason: string } | null}
+ */
+function stale(dataDir, name = OWN) {
+  if (!dataDir) return null;
+  const file = path.join(dataDir, name);
+  const builtin = path.join(__dirname, name);
+  const o = printed(file);
+  const b = o && printed(builtin);
+  if (!o || !b || o.print === b.print || o.stamp === b.print) return null;
+  const line = `<!-- основа: ${b.print} -->`;
+  const reason = o.stamp
+    ? `встроенный ${name} обновился после вашей копии (отметка основы ${o.stamp}, встроенный сейчас ${b.print}): новые правки встроенного агентам не доходят. Сверьте копию со встроенным ${builtin}, перенесите нужное и замените строку отметки на «${line}»`
+    : `в своей копии нет отметки основы, а текст расходится со встроенным ${builtin}: правки встроенного после вашей копии агентам не доходят. Сверьте копию со встроенным, перенесите нужное и первой строкой копии допишите «${line}»`;
+  return { file, builtin, print: b.print, stamp: o.stamp, reason };
+}
+
+/** Все свои копии шаблонов в dataDir, отставшие от встроенного (t1417): prompt, compose, newcard, grader и их переводы. @param {string} [dataDir] */
+function staleAll(dataDir) {
+  if (!dataDir) return [];
+  /** @type {string[]} */
+  let names = [];
+  try { names = fs.readdirSync(dataDir).filter((n) => OWN_RE.test(n)).sort(); } catch { return []; }
+  return names.map((n) => stale(dataDir, n)).filter((x) => x !== null);
 }
 
 /** Подстановки по ключам vars: {папка}, {образец}, {карта} — промпт карты; {проект}, {формат}, {образцы} — задание t519. Чужие скобки остаются как есть. @param {string} text @param {Record<string, string>} vars */
@@ -117,7 +303,12 @@ function templateFile(dataDir, name = OWN) {
  * «@» внутри слова (e-mail, user@host) Claude Code не трогает — и мы не трогаем. @param {string} s
  */
 const defuseAt = (s) => String(s).replace(/(^|[\s"'`([{<«„])@(?=[^\s@])/gm, '$1＠');
-const subst = (text, vars) => text.replace(/\{([^{}\n]{1,20})\}/g, (all, k) => (Object.hasOwn(vars, k) ? vars[k] : all));
+const subst = (text, vars) => text.replace(/\{([^{}\n]{1,60})\}/g, (all, k) => (Object.hasOwn(vars, k) ? vars[k] : all));
+/**
+ * Слова формата доски для шаблонов (t1429): {доска:готово}, {доска:Как проверить} → слово на языке доски («готово», «done»…). Русская доска — русское слово.
+ * Так шаблон называет агенту статус или подпись поля тем словом, которое программа сама пишет в файлы этой доски. @param {string} lang
+ */
+const boardWords = (lang) => Object.fromEntries(Object.keys(board.WORDS).map((w) => [`доска:${w}`, board.say(w, lang)]));
 
 /**
  * Пути файлов из поля «Файлы» карты или списка files решения: в обратных кавычках, если они есть, иначе через запятую.
@@ -153,21 +344,25 @@ const flat = (s) => String(s || '').split('\n').map((l) => l.trim()).filter(Bool
 const decText = (s) => flat(String(s || '').replace(/^Текст ошибки:\s*—\s*$/gm, ''));
 
 /**
- * Часть 5 «свежее» для карты. Когда закрыта карта — только по closed в её файле (t537): время правки файла после git clone
- * или копирования доски у всех карт одно — время копии. Нет closed — карта свежая, только если заведена позже (created): закрыть её раньше нельзя.
- * Записи d<N> (t833): отменённая и просроченная — в skipped; договорённость — всегда, без отбора по файлам и дате: она действует, пока её не отменят.
+ * Окружение карты в части записей (до t1433 — отдельная часть 5 «Свежее»): договорённости агенту, закрытые карты фазы и «Входящие» по тем же файлам.
+ * Решения и тупики здесь не подаются (t1433, ЗАМЕЧАНИЯ-роадмапа.md З4): отбор по дате давал свежие записи о другой части программы — их подбирает только pick.
+ * Когда закрыта карта — только по closed в её файле (t537): время правки файла после git clone или копирования доски у всех карт одно — время копии.
+ * Нет closed — карта свежая, только если заведена позже (created): закрыть её раньше нельзя.
+ * Договорённость (t833) — без отбора по файлам и дате: она действует, пока её не отменят; отменённая, просроченная и «for: программа» (t1433) — в skipped.
+ * pacts — строки договорённостей (первыми в части), lines — закрытые карты и «Входящие».
  * @param {import('./board').Board} b @param {import('./board').Card} card @param {number} [now] «сегодня» для срока until (проба)
  */
 function fresh(b, card, now = Date.now()) {
   const since = when(card.created);
   const today = dayOf(now);
   const own = paths(card.fields.files);
-  const phaseCards = new Set(b.cards.filter((c) => card.phase && c.phase === card.phase).map((c) => c.id));
   /** @type {string[]} */
   const lines = [];
+  /** @type {string[]} */
+  const pacts = [];
   /** @type {Skip[]} */
   const skipped = [];
-  /** @type {string[]} записи d<N>, которые уже в «Свежем»: подбор t834 их не повторяет */
+  /** @type {string[]} договорённости, поданные агенту: подбор t834 их не повторяет */
   const shown = [];
   /** @type {{ id: string, t: number, line: string }[]} */
   const closedLines = [];
@@ -181,38 +376,23 @@ function fresh(b, card, now = Date.now()) {
     if (own.length && !shared(paths(c.fields.files), own).length) { skipped.push({ id: c.id, why: 'закрыта в этой фазе, но по другим файлам' }); continue; }
     // t1324: строкой списка — «Что сделано» и «Доказательство» агент читает в файле карты, когда нужно.
     const cf = paths(c.fields.files);
-    closedLines.push({ id: c.id, t: isNaN(t) ? 0 : t, line: `Закрыта ${c.id} (${c.agent || 'агент не указан'}): ${c.title}${cf.length ? `; файлы: ${cf.join(', ')}` : ''}` });
+    closedLines.push({ id: c.id, t: isNaN(t) ? 0 : t, line: `${tr(b.lang, 'Закрыта {id} ({who}): {title}', { id: c.id, who: c.agent || tr(b.lang, 'агент не указан'), title: c.title })}${cf.length ? tr(b.lang, '; файлы: {v}', { v: cf.join(', ') }) : ''}` });
   }
   // Новые первыми; сверх FRESH_CARDS — в skipped и строкой «ещё M» в конце части.
   closedLines.sort((x, y) => y.t - x.t);
   for (const x of closedLines.slice(FRESH_CARDS)) skipped.push({ id: x.id, why: `сверх ${FRESH_CARDS} новых закрытых` });
   lines.push(...closedLines.slice(0, FRESH_CARDS).map((x) => x.line));
-  let more = Math.max(0, closedLines.length - FRESH_CARDS);
-  let used = lines.reduce((n, l) => n + l.length, 0);
+  const more = Math.max(0, closedLines.length - FRESH_CARDS);
   for (const d of b.decisions) {
+    if (d.type === 'заметка') { skipped.push({ id: d.id, why: 'заметка: агенту не подаётся, она во «Входящих» человека' }); continue; }
     if (d.cancelled) { skipped.push({ id: d.id, why: `отменена ${d.cancelled}` }); continue; }
     if (d.wrong?.length) { skipped.push({ id: d.id, why: `агент ${d.wrong.join(', ')} отметил «неверна», ждёт человека` }); continue; }
     if (d.until && when(d.until) < today) { skipped.push({ id: d.id, why: `срок до ${d.until} прошёл` }); continue; }
-    if (d.type === 'заметка') { skipped.push({ id: d.id, why: 'заметка: агенту не подаётся' }); continue; }
-    const pact = d.type === 'договорённость';
-    if (!pact) {
-      const df = paths(d.files);
-      const common = shared(df, own);
-      const related = df.length ? common.length > 0 : d.card === card.id || phaseCards.has(d.card);
-      if (!related) { skipped.push({ id: d.id, why: df.length ? `чужие файлы: ${df.join(', ')}` : `без файлов, карта ${d.card || 'не указана'} не из этой фазы` }); continue; }
-      const t = when(d.date);
-      if (!isNaN(since) && !isNaN(t) && t < dayOf(since)) { skipped.push({ id: d.id, why: `запись ${d.date} старше карты` }); continue; }
-    }
-    let line;
-    if (pact) {
-      const who = [d.card, d.agent, d.how === 'догадка' ? 'догадка, не проверено' : ''].filter(Boolean).join(', ');
-      const text = decText(d.text);
-      line = `Договорённость${who ? ` (${who})` : ''}: ${d.title}${text ? ` — ${text}` : ''}`;
-    } else line = listLine(d);
-    // Предел знаков (t1105) — только для решений и тупиков: договорённости подаются всегда.
-    if (!pact && used + line.length > FRESH_MAX) { skipped.push({ id: d.id, why: `сверх ${FRESH_MAX} знаков «Свежего»` }); more++; continue; }
-    if (!pact) used += line.length;
-    lines.push(line);
+    if (d.type !== 'договорённость') continue;
+    if (d.for === 'программа') { skipped.push({ id: d.id, why: 'договорённость программы и оркестратора (for: программа): агенту карты не нужна' }); continue; }
+    const who = [d.card, d.agent, d.how === 'догадка' ? tr(b.lang, 'догадка, не проверено') : ''].filter(Boolean).join(', ');
+    const text = decText(d.text);
+    pacts.push(`${tr(b.lang, 'Договорённость')} ${d.id}${who ? ` (${who})` : ''}: ${d.title}${text ? ` — ${text}` : ''}`);
     shown.push(d.id);
   }
   for (const id of b.inbox) {
@@ -220,23 +400,26 @@ function fresh(b, card, now = Date.now()) {
     if (!c || c.id === card.id || c.status === 'готово') continue;
     const common = shared(own, paths(c.fields.files));
     if (!common.length) { skipped.push({ id: c.id, why: 'во «Входящих», но по другим файлам' }); continue; }
-    lines.push(`Входящие ${c.id} (${common.join(', ')}): ${c.title}`);
+    lines.push(tr(b.lang, 'Входящие {id} ({v}): {title}', { id: c.id, v: common.join(', '), title: c.title }));
   }
-  if (more) lines.push(`Ещё ${more}: не показаны, искать в папке доски ${b.root}.`);
-  return { text: lines.length ? lines.join('\n') : 'Нового нет.', lines, skipped, shown };
+  if (more) lines.push(tr(b.lang, 'Ещё {n} закрытых карт: не показаны, искать в папке доски {v}.', { n: more, v: b.root }));
+  return { lines, pacts, skipped, shown };
 }
 
-// Часть 6 «Заметки к задаче» (t834, И3): до 5 записей d<N> из всех действующих, кроме уже показанных в «Свежем» и договорённостей
-// (договорённости «Свежее» подаёт всегда). Только слова и поля, без поиска по смыслу. Порядок — по ярусам, а не суммой весов:
+// Часть 5 «Заметки к задаче» (t834, И3; до t1433 — часть 6): до 6 решений и тупиков из всех действующих; договорённости подаёт fresh,
+// заметки не подаются. Только слова и поля, без поиска по смыслу. Порядок — по ярусам, а не суммой весов:
 // куски текста ошибки → редкие слова названия → редкие слова текста (тема) → общие файлы; при равенстве проверенная выше догадки,
 // больше повторов выше, новее выше. Образец на 8 наших повторах — spikes\t834-pick5\ (4 из 8; сегодняшний отбор — 0 из 8).
 // Тот же порядок (rank) — у kermach roadmap notes «текст ошибки» (t863): запрос — ошибка из работы, а не карта; ещё 3 из 4 промахов, spikes\t863-notes\.
-const PICK_LIMIT = 5;
+// t1433: 6, а не 5 — без «Свежего» свежие записи соревнуются в отборе; 6 возвращает замеру t920 6 попаданий из 18 (при 5 — 5).
+const PICK_LIMIT = 6;
+/** kermach roadmap notes — по-прежнему до 5 записей (справка команды, t863). */
+const SEARCH_LIMIT = 5;
 /** Слово есть больше чем в этой доле записей — общее для доски («окно», «проект»), в ярусы не идёт. На образце счёт лучше веса по редкости. */
 const PICK_COMMON = 0.08;
 /** Отсекать общие слова, только когда записей не меньше этого. */
 const PICK_MIN_COMMON = 25;
-/** Текст записи в части 6 — до стольких знаков, дальше агент открывает файл. */
+/** Текст записи в части 5 — до стольких знаков, дальше агент открывает файл. */
 const PICK_TEXT = 400;
 /** t959: строки «Причина:» и первая «Текст ошибки:» в обрезанном тексте — всегда, каждая до стольких знаков. */
 const PICK_LINE = 200;
@@ -307,10 +490,10 @@ function queryBits(text) {
 }
 
 /**
- * Записи по тексту ошибки (t863, И12 — kermach roadmap notes): тот же порядок ярусов, что у части 6; ярус «ошибка» — куски самого запроса.
+ * Записи по тексту ошибки (t863, И12 — kermach roadmap notes): тот же порядок ярусов, что у части 5; ярус «ошибка» — куски самого запроса.
  * @param {import('./board').Board} b @param {string} text @param {number} [limit] @param {number} [now]
  */
-function search(b, text, limit = PICK_LIMIT, now = Date.now()) {
+function search(b, text, limit = SEARCH_LIMIT, now = Date.now()) {
   const today = dayOf(now);
   // Паттерн (t1004) notes не показывает: утверждение — в папке данных программы, а у команды её нет; неутверждённый ушёл бы агенту как «Решение».
   const pool = b.decisions.filter((d) => d.type !== 'договорённость' && d.type !== 'паттерн' && d.type !== 'заметка' && !d.cancelled && !d.wrong?.length && !(d.until && when(d.until) < today));
@@ -330,7 +513,7 @@ function wrongNotes(b) {
 }
 
 /**
- * Общий подбор части 6 и kermach roadmap notes. q.text — текст запроса (карта или ошибка), q.errs — куски текста ошибки, q.files — пути.
+ * Общий подбор части 5 и kermach roadmap notes. q.text — текст запроса (карта или ошибка), q.errs — куски текста ошибки, q.files — пути.
  * minTheme — сколько слов текста записи нужно, если других совпадений (ошибка, название, файлы) нет.
  * @param {import('./board').Decision[]} decisions @param {{ text: string, errs: string[], files: string[] }} q @param {number} limit @param {number} [minTheme]
  * @returns {{ shown: Pick[], ranked: Pick[], total: number }}
@@ -372,7 +555,7 @@ function rank(decisions, q, limit, minTheme = 1) {
 }
 
 /**
- * Длинный текст записи для части 6: первые PICK_TEXT знаков. Начало «Причина:» или первой «Текст ошибки:» за краем (t959) — тогда эти строки
+ * Длинный текст записи для части 5: первые PICK_TEXT знаков. Начало «Причина:» или первой «Текст ошибки:» за краем (t959) — тогда эти строки
  * остаются, до PICK_LINE знаков каждая, прочие (и другие «Текст ошибки:») по порядку — в остаток. Иначе симптомы повторов под `# …` (t933)
  * вытесняют «Причину». Запись — до ~800 знаков при любом числе повторов. @param {string} s
  */
@@ -397,23 +580,26 @@ function cutText(s) {
   return out.join(' ');
 }
 
-/** Одна запись строкой — в части 6 и в выводе kermach roadmap notes. @param {import('./board').Decision} d */
-function noteLine(d) {
-  const who = [d.card, d.agent, d.how === 'догадка' ? 'догадка, не проверено' : '', d.repeats.length ? `повторы: ${d.repeats.join(', ')}` : ''].filter(Boolean).join(', ');
+/** Кто и как записал запись — скобка строки части 5 на языке lang (t1428). @param {import('./board').Decision} d @param {string} lang */
+const whoOf = (d, lang) => [d.card, d.agent, d.how === 'догадка' ? tr(lang, 'догадка, не проверено') : '', d.repeats.length ? tr(lang, 'повторы: {v}', { v: d.repeats.join(', ') }) : ''].filter(Boolean).join(', ');
+
+/** Одна запись строкой — в части 5 и в выводе kermach roadmap notes. lang (t1428) — язык доски. @param {import('./board').Decision} d @param {string} [lang] */
+function noteLine(d, lang = '') {
+  const who = whoOf(d, lang);
   const t = decText(d.text);
-  const text = t.length > PICK_TEXT ? `${cutText(d.text)} (целиком — ${d.file})` : t;
-  return `${d.type === 'тупик' ? 'Тупик' : d.type === 'заметка' ? 'Заметка' : 'Решение'} ${d.id}${who ? ` (${who})` : ''}: ${d.title}${text ? ` — ${text}` : ''}`;
+  const text = t.length > PICK_TEXT ? `${cutText(d.text)}${tr(lang, ' (целиком — {v})', { v: d.file })}` : t;
+  return `${typeWord(d.type, lang)} ${d.id}${who ? ` (${who})` : ''}: ${d.title}${text ? ` — ${text}` : ''}`;
 }
 
 /**
- * Запись строкой списка — части 5 и 6 промпта карты (t1324): номер, тип, заголовок, файлы, без текста. Текст агент открывает сам (d.file в папке доски).
+ * Запись строкой списка — часть 5 промпта карты (t1324): номер, тип, заголовок, файлы, без текста. Текст агент открывает сам (d.file в папке доски).
  * Поданный сразу текст «помог» у 18 % отзывов (ЭТАЛОН-до.md), остальной модель перечитывала каждым запросом. noteLine с текстом — у kermach roadmap notes.
  * @param {import('./board').Decision} d
  */
-function listLine(d) {
-  const who = [d.card, d.agent, d.how === 'догадка' ? 'догадка, не проверено' : '', d.repeats.length ? `повторы: ${d.repeats.join(', ')}` : ''].filter(Boolean).join(', ');
+function listLine(d, lang = '') {
+  const who = whoOf(d, lang);
   const files = (d.files || []).filter(Boolean);
-  return `${d.type === 'тупик' ? 'Тупик' : d.type === 'заметка' ? 'Заметка' : 'Решение'} ${d.id}${who ? ` (${who})` : ''}: ${d.title}${files.length ? `; файлы: ${files.join(', ')}` : ''} — ${d.file}`;
+  return `${typeWord(d.type, lang)} ${d.id}${who ? ` (${who})` : ''}: ${d.title}${files.length ? tr(lang, '; файлы: {v}', { v: files.join(', ') }) : ''} — ${d.file}`;
 }
 
 /** Порог похожести записей (t835): на повторах доски t834 (t585) при 0.15 нет пометок мимо своей причины, ниже — появляются. */
@@ -518,23 +704,23 @@ function mergeTitle(old, rep) {
 }
 
 /**
- * Часть 6 для карты. shown — записи, уже поданные «Свежим» (fresh().shown).
+ * Решения и тупики части 5 для карты. shown — уже поданные договорённости (fresh().shown).
  * @param {import('./board').Board} b @param {import('./board').Card} card @param {string[]} shown @param {number} [now]
  */
 function notes(b, card, shown, now = Date.now()) {
   const today = dayOf(now);
   const pool = b.decisions.filter((d) => d.type !== 'договорённость' && d.type !== 'заметка' && !d.cancelled && !d.wrong?.length && !(d.until && when(d.until) < today) && !shown.includes(d.id));
   const r = pick(pool, card);
-  const lines = r.shown.map(({ d }) => listLine(d));
+  const lines = r.shown.map(({ d }) => listLine(d, b.lang));
   const n = lines.length, m = r.total;
-  if (n && n < m) lines.push(`Показано ${n} записей из ${m}: остальные по словам карты подходят меньше. Нужны другие — ищи по папке доски.`);
-  const text = n ? lines.join('\n') : m ? `Подходящих по словам карты нет (действующих записей ${m}).` : 'Записей нет.';
+  if (n && n < m) lines.push(tr(b.lang, 'Показано {n} записей из {m}: остальные по словам карты подходят меньше. Нужны другие — ищи по папке доски.', { n, m }));
+  const text = n ? lines.join('\n') : m ? tr(b.lang, 'Подходящих по словам карты нет (действующих записей {m}).', { m }) : tr(b.lang, 'Записей нет.');
   return { text, n, m, ids: r.shown.map((x) => x.d.id) };
 }
 
 /**
- * Утверждённые паттерны (t1004, patterns.served) — первые строки части 6, до 5, текст до PICK_TEXT знаков; больше — строка с grep.
- * hide и skipped — что убрать из частей 5 и 6. approved.json не читается — паттернов нет, предупреждение.
+ * Утверждённые паттерны (t1004, patterns.served) — строки части 5 после договорённостей, до 5, текст до PICK_TEXT знаков; больше — строка с grep.
+ * hide и skipped — что убрать из части 5. approved.json не читается — паттернов нет, предупреждение.
  * @param {string | undefined} dataDir @param {string} project @param {import('./board').Board} b @param {string[]} warnings
  */
 function patternNotes(dataDir, project, b, warnings) {
@@ -543,15 +729,15 @@ function patternNotes(dataDir, project, b, warnings) {
   if (r.error) warnings.push(`утверждения паттернов не прочитаны: ${r.error} — паттерны не поданы`);
   const lines = r.shown.map((d) => {
     const t = decText(d.text);
-    const text = t.length > PICK_TEXT ? `${cutText(d.text)} (целиком — ${d.file})` : t;
-    return `Паттерн ${d.id} (утвердил человек ${d.approved}): ${d.title}${text ? ` — ${text}` : ''}`;
+    const text = t.length > PICK_TEXT ? `${cutText(d.text)}${tr(b.lang, ' (целиком — {v})', { v: d.file })}` : t;
+    return `${tr(b.lang, 'Паттерн {id} (утвердил человек {v}): {title}', { id: d.id, v: d.approved, title: d.title })}${text ? ` — ${text}` : ''}`;
   });
-  if (r.more) lines.push(`Ещё ${r.more} паттернов: grep "type: паттерн" по ${b.root}${path.sep}`);
+  if (r.more) lines.push(tr(b.lang, 'Ещё {n} паттернов: grep "type: паттерн" по {v}', { n: r.more, v: b.root + path.sep, w: board.say('паттерн', b.lang) }));
   return { lines, n: r.shown.length, ids: r.shown.map((d) => d.id), hide: r.hide, skipped: r.skipped };
 }
 
 /**
- * Общая база (t844, known.js) в части 6 — после своих записей: сначала свести записи проекта с базой, потом до 3 чужих по «Стек:» паспорта
+ * Общая база (t844, known.js) в части 5 — после своих записей: сначала свести записи проекта с базой, потом до 3 чужих по «Стек:» паспорта
  * или тексту ошибки в карте. Сбой базы промпт не ломает — предупреждение. @param {string} dataDir @param {string} project
  * @param {import('./board').Board} b @param {import('./board').Card} card @param {string[]} warnings
  */
@@ -566,14 +752,15 @@ function knownNotes(dataDir, project, b, card, warnings) {
   if (r.cut) warnings.push(`общая база: ${r.cut} старых записей не прочитано, читаются последние ${known.MAX_FILES} файлов s<N>.md`);
   for (const x of r.shown) {
     const t = decText(x.text);
-    const text = t.length > PICK_TEXT ? `${cutText(x.text)} (целиком — ${x.file})` : t;
-    lines.push(`Общая база ${x.id} (${x.type === 'паттерн' ? 'паттерн из другого проекта, утвердил человек' : `${x.type === 'тупик' ? 'тупик' : 'решение'} из другого проекта`}) [${x.stack.join(', ')}]: ${x.title}${text ? ` — ${text}` : ''}`);
+    const text = t.length > PICK_TEXT ? `${cutText(x.text)}${tr(b.lang, ' (целиком — {v})', { v: x.file })}` : t;
+    const kind = tr(b.lang, x.type === 'паттерн' ? 'паттерн из другого проекта, утвердил человек' : x.type === 'тупик' ? 'тупик из другого проекта' : 'решение из другого проекта');
+    lines.push(`${tr(b.lang, 'Общая база {id} ({v}) [{s}]: {title}', { id: x.id, v: kind, s: x.stack.join(', '), title: x.title })}${text ? ` — ${text}` : ''}`);
   }
-  if (r.shown.length && r.shown.length < r.total) lines.push(`Общая база: показано ${r.shown.length} из ${r.total}. Остальные — grep по ${path.join(dataDir, known.KNOWN, 'known.md')}.`);
+  if (r.shown.length && r.shown.length < r.total) lines.push(tr(b.lang, 'Общая база: показано {n} из {m}. Остальные — grep по {v}.', { n: r.shown.length, m: r.total, v: path.join(dataDir, known.KNOWN, 'known.md') }));
   return { lines, n: r.shown.length, m: r.total };
 }
 
-// Ориентир в коде (t843, И14) — до 5 мест карты кода (.kermach\codemap\map.jsonl) под заметками части 6: агент начинает с места, а не с grep.
+// Ориентир в коде (t843, И14) — до 5 мест карты кода (.kermach\codemap\map.jsonl) под записями части 5: агент начинает с места, а не с grep.
 // Запрос — только заголовок карты: длинный текст карты топит его общими словами («агент», «файл», «прогон»). Замер на 10 закрытых картах
 // по src до их работы — 7 из 10 с правленым файлом; с заголовком и 25 словами текста — 2–3 из 10 (spikes\t843-orient\bench-result*.txt).
 // Порог и порядок — как у kermach code words, по одному месту на файл. Карты нет или она старая — ориентира нет, без строки.
@@ -587,14 +774,15 @@ const ORIENT_MAX_FILES = 400;
 // eslint-disable-next-line no-control-regex
 const ORIENT_UNSAFE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g;
 
-/** Строки ориентира для карты; '' — карты кода нет. @param {string} project @param {import('./board').Card} card */
-function orient(project, card) {
+/** Строки ориентира для карты; '' — карты кода нет. lang (t1428) — язык доски. @param {string} project @param {import('./board').Card} card @param {string} [lang] */
+function orient(project, card, lang = '') {
+  const f = board.say(board.CARD_FIELDS.files, lang);
   const cm = require('./codemap/index.js');
   const map = cm.readMap(path.join(project, '.kermach', 'codemap', 'map.jsonl'));
   if (!map) return '';
   const { byWords, weakOf } = require('./codemap/cli.js');
   // Сначала файлы из поля «Файлы» (t954): их назвал человек, это точнее слов. Лучшее место каждого — даже ниже порога, хоть одно слово заголовка.
-  // Путь поля — как у заметок части 6 (paths); подходит целиком, хвостом («src/main/x.js» ↔ «main/x.js») или именем без папки.
+  // Путь поля — как у записей части 5 (paths); подходит целиком, хвостом («src/main/x.js» ↔ «main/x.js») или именем без папки.
   const own = paths(card.fields && card.fields.files);
   const fits = (/** @type {string} */ file) => { const f = file.toLowerCase(); return own.some((p) => f === p || f.endsWith(`/${p}`) || p.endsWith(`/${f}`) || (!p.includes('/') && f.slice(f.lastIndexOf('/') + 1) === p)); };
   if (map.files.length > ORIENT_MAX_FILES) {
@@ -602,9 +790,9 @@ function orient(project, card) {
     const files = own.length ? map.files.filter((x) => fits(x.file)) : [];
     const seen = new Set();
     const got = files.length ? byWords({ head: map.head, files }, project, card.title || '').hits.filter((h) => !seen.has(h.file) && seen.add(h.file)).slice(0, ORIENT_LIMIT) : [];
-    if (!got.length) return `Ориентир в коде: проект большой (${map.files.length} файлов в карте кода) — места не подбирал. Ищи сам: kermach code words "слова".`;
+    if (!got.length) return tr(lang, 'Ориентир в коде: проект большой ({n} файлов в карте кода) — места не подбирал. Ищи сам: kermach code words "слова".', { n: map.files.length });
     const lines = got.map((h) => `${h.file}:${h.at || h.s.start}${h.s.kind === 'строки' ? '' : ` ${h.s.kind} ${h.s.q}`}${h.text ? ` — ${h.text}` : ''}`.replace(ORIENT_UNSAFE, ''));
-    return [`Ориентир в коде: проект большой (${map.files.length} файлов в карте кода) — места по словам не подбирал; лучшие места в файлах из поля «Файлы», проверь сам, это подсказка:`, ...lines].join('\n');
+    return [tr(lang, 'Ориентир в коде: проект большой ({n} файлов в карте кода) — места по словам не подбирал; лучшие места в файлах из поля «Файлы», проверь сам, это подсказка:', { n: map.files.length, f }), ...lines].join('\n');
   }
   const { words, hits, missing } = byWords(map, project, card.title || '');
   const need = Math.max(1, Math.ceil(words.length / 2));
@@ -615,62 +803,68 @@ function orient(project, card) {
   // На 10 картах t843 слабый только t815, правленого файла в её местах и так не было (spikes\t961-orient-weak\bench-result.txt). Места из «Файлов» остаются.
   const weak = rest.length > 0 && weakOf(words, missing, rest);
   const got = [...first, ...(weak ? [] : rest)].slice(0, ORIENT_LIMIT);
-  if (!got.length && weak) return `Ориентир в коде: по словам заголовка карты надёжных мест нет${missing.length ? ` (в коде нет «${missing.join('», «')}»)` : ''} — ищи сам: kermach code words "слова".`.replace(ORIENT_UNSAFE, '');
+  if (!got.length && weak) return tr(lang, 'Ориентир в коде: по словам заголовка карты надёжных мест нет{v} — ищи сам: kermach code words "слова".', { v: missing.length ? tr(lang, ' (в коде нет «{v}»)', { v: missing.join('», «') }) : '' }).replace(ORIENT_UNSAFE, '');
   if (!got.length) return '';
   const lines = got.map((h) => `${h.file}:${h.at || h.s.start}${h.s.kind === 'строки' ? '' : ` ${h.s.kind} ${h.s.q}`}${h.text ? ` — ${h.text}` : ''}`.replace(ORIENT_UNSAFE, ''));
-  const head = first.length ? `Ориентир в коде — сначала файлы из поля «Файлы», потом места по словам заголовка карты (kermach code words)${weak ? ' — их нет, слова заголовка в коде почти не встречаются' : ''}, проверь сам, это подсказка:` : 'Ориентир в коде — места по словам заголовка карты (kermach code words), проверь сам, это подсказка:';
+  const head = first.length ? tr(lang, 'Ориентир в коде — сначала файлы из поля «Файлы», потом места по словам заголовка карты (kermach code words){v}, проверь сам, это подсказка:', { f, v: weak ? tr(lang, ' — их нет, слова заголовка в коде почти не встречаются') : '' }) : tr(lang, 'Ориентир в коде — места по словам заголовка карты (kermach code words), проверь сам, это подсказка:');
   return [head, ...lines].join('\n');
 }
 
 /** Паспорт строками «Раздел: текст»; пустой раздел — «(не заполнено)». @param {import('./board').Board} b */
 function passportText(b) {
   const p = b.passport;
-  if (!p) return { text: 'Паспорта нет: файл passport.md в папке доски не заведён.', empty: Object.keys(board.PASSPORT).length };
+  if (!p) return { text: tr(b.lang, 'Паспорта нет: файл passport.md в папке доски не заведён.'), empty: Object.keys(board.PASSPORT).length };
   let empty = 0;
-  const lines = Object.entries(board.PASSPORT).map(([k, title]) => {
+  const lines = Object.entries(board.PASSPORT).map(([k, ru]) => {
+    // t1428: название раздела — словом доски, как в её паспорте.
+    const title = board.say(ru, b.lang);
     const s = p.sections[k];
     const v = s && s.text ? s.text.split('\n').map((l) => l.trim()).filter(Boolean) : [];
     if (!v.length) empty++;
-    return v.length ? [`${title}: ${v[0]}`, ...v.slice(1)].join('\n') : `${title}: (не заполнено)`;
+    return v.length ? [`${title}: ${v[0]}`, ...v.slice(1)].join('\n') : `${title}: ${tr(b.lang, '(не заполнено)')}`;
   });
   return { text: lines.join('\n'), empty };
 }
 
 /**
  * Сама карта: заголовок, поля с подписями, зависимости со статусами, человек.
- * model — модель запуска (ступень лестницы из main.js nextOf); пусто — модель карты или ярус size.js.
- * @param {import('./board').Board} b @param {import('./board').Card} c @param {string} [model]
+ * model — модель запуска (ступень лестницы из main.js nextOf); пусто — модель карты или ярус size.js. t — шаблоны сборки: строки советника (t1425).
+ * @param {import('./board').Board} b @param {import('./board').Card} c @param {string} [model] @param {{ lines: Record<string, string> } | null} [t]
  */
-function cardText(b, c, model) {
-  const lines = [`${c.id}: ${c.title || '(без заголовка)'}`];
+function cardText(b, c, model, t) {
+  const L = b.lang;
+  const lines = [`${c.id}: ${c.title || tr(L, '(без заголовка)')}`];
   if (c.body) {
     // t1105: весь текст карты по порядку файла — ответы «## Ответ оркестратора» и свободные строки доходят до агента.
     // Пустые «Что сделано: —» и «Доказательство: —» не подаём, как раньше; поле, которого в файле нет, — строкой «—» в конце.
-    const empty = new RegExp(`^(${board.CARD_FIELDS.done}|${board.CARD_FIELDS.proof}):\\s*[—-]?\\s*$`);
+    // t1428: подпись в файле — русская или на языке доски (board.js читает обе), новая строка — на языке доски.
+    const both = (/** @type {string} */ ru) => [...new Set([ru, board.say(ru, L)])];
+    const esc = (/** @type {string} */ s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const empty = new RegExp(`^(${[...both(board.CARD_FIELDS.done), ...both(board.CARD_FIELDS.proof)].map(esc).join('|')}):\\s*[—-]?\\s*$`);
     lines.push(...c.body.split('\n').filter((l) => !empty.test(l)));
     for (const [k, label] of Object.entries(board.CARD_FIELDS)) {
-      if (k === 'done' || k === 'proof' || c.body.split('\n').some((l) => l.startsWith(`${label}:`))) continue;
-      lines.push(`${label}: —`);
+      if (k === 'done' || k === 'proof' || c.body.split('\n').some((l) => both(label).some((x) => l.startsWith(`${x}:`)))) continue;
+      lines.push(`${board.say(label, L)}: —`);
     }
   } else for (const [k, label] of Object.entries(board.CARD_FIELDS)) {
     const v = c.fields[k];
     if (!v && (k === 'done' || k === 'proof')) continue;
     const ls = v ? v.split('\n') : ['—'];
-    lines.push(`${label}: ${ls[0]}`, ...ls.slice(1));
+    lines.push(`${board.say(label, L)}: ${ls[0]}`, ...ls.slice(1));
   }
   if (c.depends.length) {
-    lines.push(`Зависит от: ${c.depends.map((d) => { const x = b.cards.find((y) => y.id === d); return `${d} (${x ? x.status : 'карты нет'})`; }).join(', ')}`);
+    lines.push(tr(L, 'Зависит от: {v}', { v: c.depends.map((d) => { const x = b.cards.find((y) => y.id === d); return `${d} (${x ? board.say(x.status, L) : tr(L, 'карты нет')})`; }).join(', ') }));
   }
-  if (c.human) lines.push(`Человек: ${c.human}`);
+  if (c.human) lines.push(tr(L, 'Человек: {v}', { v: board.say(c.human, L) }));
   // Советник (t830): карта с advisor: да — прод, деньги, необратимое; длинная правка кода по готовому брифу (t831). Без прямой строки Sonnet его не зовёт (spikes\advisor-cmp\ИТОГ.md).
   // Инструмент advisor есть только у claude: у codex и других агентов строку не даём, даже при ручном advisor: да.
   const claude = norm(c.agent || 'claude') === 'claude';
-  if (isYes(c.extra.advisor) && claude) lines.push(ADVISOR_LINE);
+  if (isYes(c.extra.advisor) && claude) lines.push(lineOf('advisor', {}, t, false, L));
   else if (claude) {
     // Ярус sonnet (t1046): советник один раз перед сдачей. Модель запуска — из nextOf; без неё — поле карты или ярус size.js (команда prompt, окно).
     const step = size.stepOf(c);
     const m = norm(model || c.model || (step ? step.model : ''));
-    if (m === 'sonnet') lines.push(ADVISOR_ONCE);
+    if (m === 'sonnet') lines.push(lineOf('advisorOnce', {}, t, false, L));
   }
   return lines.join('\n');
 }
@@ -679,55 +873,64 @@ function cardText(b, c, model) {
  * Промпт карты. Возвращает части с подписями и весь текст; ошибка — { error }.
  * opts.board — уже прочитанная доска; opts.dataDir — папка данных плагина (своя копия шаблонов); opts.templates — файл шаблонов прямо (проба);
  * opts.model — модель этого запуска (ступень лестницы), для строки советника.
+ * opts.lang (t1428) — язык промпта вместо языка доски (lang: паспорта): шаблоны этого языка, строки кода, {язык}.
  * @param {string} project @param {string} ref
- * @param {{ board?: import('./board').Board, dataDir?: string, templates?: string, model?: string }} [opts]
+ * @param {{ board?: import('./board').Board, dataDir?: string, templates?: string, model?: string, lang?: string }} [opts]
  */
 function build(project, ref, opts = {}) {
-  const b = opts.board || board.read(project);
+  const b0 = opts.board || board.read(project);
+  const b = opts.lang !== undefined ? { ...b0, lang: langOf(opts.lang) } : b0;
   const card = b.cards.find((c) => c.id === ref);
   if (!card) return { error: `карты ${ref} нет на доске или файл с ошибкой` };
   /** @type {string[]} */
   const warnings = [];
-  const tf = opts.templates ? { file: opts.templates, own: false } : templateFile(opts.dataDir);
+  /** @type {{ file: string, own: boolean, lang?: string, ownRu?: string }} */
+  const tf = opts.templates ? { file: opts.templates, own: false } : templateFile(opts.dataDir, OWN, b.lang);
+  { const w = skippedOwn(tf); if (w) warnings.push(w); }
   let t = templates(tf.file);
   // Своя копия не читается (слишком большая, не файл) — встроенный текст и предупреждение: промпт всё равно собирается.
-  if (t.error && tf.own) { warnings.push(`своя копия ${tf.file}: ${t.error} — взят встроенный текст`); tf.file = TEMPLATES; tf.own = false; t = templates(TEMPLATES); }
+  // t1428: встроенный — того же языка, перевода нет — русский.
+  if (t.error && tf.own) { const bi = builtinIn(OWN, b.lang); warnings.push(`своя копия ${tf.file}: ${t.error} — взят встроенный текст`); tf.file = bi; tf.own = false; t = templates(bi); }
   if (t.error) warnings.push(t.error);
+  // t1417: своя копия отстала от встроенного prompt.md — иначе правки встроенного молча не доходят до агента.
+  const st = tf.own ? stale(opts.dataDir, path.basename(tf.file)) : null;
+  if (st) warnings.push(`своя копия ${st.file}: ${st.reason}`);
   if (!t.error && !t.rules) warnings.push(`в prompt.md нет раздела «## ${RULES}»`);
   let sample = '';
-  try { sample = readSmall(SAMPLE, MAX_TEMPLATES).trim(); } catch (e) { warnings.push(`образец карты не прочитан: ${e instanceof Error ? e.message : e}`); }
-  const vars = { 'папка': b.root + path.sep, 'образец': sample, 'карта': card.id };
+  try { sample = readSmall(path.join(builtinIn(SAMPLES, b.lang), 't12.md'), MAX_TEMPLATES).trim(); } catch (e) { warnings.push(`образец карты не прочитан: ${e instanceof Error ? e.message : e}`); }
+  const vars = { ...boardWords(b.lang), 'папка': b.root + path.sep, 'образец': sample, 'карта': card.id, 'язык': langName(b.lang) };
   const pass = passportText(b);
   const kindText = t.kinds[card.kind];
   if (!t.error && !kindText) warnings.push(`в prompt.md нет раздела «## Шаблон: ${card.kind}»`);
   const phase = b.phases.find((f) => f.id === card.phase);
-  // t1004: паттерны — не записи частей 5 и 6. Утверждённый идёт первой строкой части 6, неутверждённый не подаётся, записи из from утверждённого — тоже.
+  // t1004: паттерн — не решение и не тупик. Утверждённый идёт строкой части 5 после договорённостей, неутверждённый не подаётся, записи из from утверждённого — тоже.
   const pt = patternNotes(opts.dataDir, project, b, warnings);
   const bb = pt.hide.size ? { ...b, decisions: b.decisions.filter((d) => !pt.hide.has(d.id)) } : b;
+  // t1433: части «Свежее» нет — её договорённости, закрытые карты фазы и «Входящие» по тем же файлам идут в часть 5, решения и тупики — только подбором.
   const fr = fresh(bb, card);
   fr.skipped.push(...pt.skipped);
   const nt = notes(bb, card, fr.shown);
-  if (pt.lines.length) nt.text = `${pt.lines.join('\n')}\n${nt.text}`;
+  nt.text = [...fr.pacts, ...pt.lines, nt.text, ...fr.lines].join('\n');
   const sh = opts.dataDir ? knownNotes(opts.dataDir, project, b, card, warnings) : { lines: [], n: 0, m: 0 };
   if (sh.lines.length) nt.text += `\n${sh.lines.join('\n')}`;
   let code = '';
-  try { code = orient(project, card); } catch (e) { warnings.push(`ориентир в коде не собран: ${e instanceof Error ? e.message : e}`); }
+  try { code = orient(project, card, b.lang); } catch (e) { warnings.push(`ориентир в коде не собран: ${e instanceof Error ? e.message : e}`); }
   if (code) nt.text += `\n\n${code}`;
   /** @type {Part[]} */
   const parts = [
-    { n: 1, key: 'rules', title: 'Общие правила', note: 'один текст на все проекты', v: {}, text: subst(t.rules, vars) || '(общих правил нет)' },
-    { n: 2, key: 'passport', title: 'Паспорт проекта', note: `9 разделов, пустых ${pass.empty}`, v: { empty: String(pass.empty) }, text: pass.text },
-    { n: 3, key: 'kind', title: 'Шаблон вида работы', note: `шаблон «${card.kind}»`, v: { kind: card.kind }, text: subst(kindText || '', vars) || '(шаблона нет)' },
-    { n: 4, key: 'card', title: 'Карта', note: `${card.id} · ${phase ? phase.title || phase.id : 'Входящие'}`, v: { id: card.id, phase: phase ? phase.title || phase.id : '' }, text: cardText(b, card, opts.model) },
-    { n: 5, key: 'fresh', title: 'Свежее', note: FRESH_NOTE, v: {}, text: fr.text },
-    { n: 6, key: 'notes', title: 'Заметки к задаче', note: `${pt.n ? `паттернов ${pt.n}; ` : ''}показано ${nt.n} из ${nt.m}, подбор по словам карты${sh.m ? `; общая база ${sh.n} из ${sh.m}` : ''}`,
-      v: { n: String(nt.n), m: String(nt.m), sn: String(sh.n), sm: String(sh.m), pn: String(pt.n) }, text: nt.text },
+    { n: 1, key: 'rules', title: tr(b.lang, 'Общие правила'), note: 'один текст на все проекты', v: {}, text: subst(t.rules, vars) || tr(b.lang, '(общих правил нет)') },
+    { n: 2, key: 'passport', title: tr(b.lang, 'Паспорт проекта'), note: `9 разделов, пустых ${pass.empty}`, v: { empty: String(pass.empty) }, text: pass.text },
+    { n: 3, key: 'kind', title: tr(b.lang, 'Шаблон вида работы'), note: `шаблон «${card.kind}»`, v: { kind: card.kind }, text: subst(kindText || '', vars) || tr(b.lang, '(шаблона нет)') },
+    { n: 4, key: 'card', title: tr(b.lang, 'Карта'), note: `${card.id} · ${phase ? phase.title || phase.id : 'Входящие'}`, v: { id: card.id, phase: phase ? phase.title || phase.id : '' }, text: cardText(b, card, opts.model, t.error ? null : t) },
+    { n: 5, key: 'notes', title: tr(b.lang, 'Заметки к задаче'),
+      note: `${fr.pacts.length ? `договорённостей ${fr.pacts.length}; ` : ''}${pt.n ? `паттернов ${pt.n}; ` : ''}показано ${nt.n} из ${nt.m}, подбор по словам карты${sh.m ? `; общая база ${sh.n} из ${sh.m}` : ''}`,
+      v: { n: String(nt.n), m: String(nt.m), sn: String(sh.n), sm: String(sh.m), pn: String(pt.n), an: String(fr.pacts.length) }, text: nt.text },
   ];
   // t1128: «@путь» из карты, записей и шаблонов не должен стать вложением файла у Claude Code.
   for (const p of parts) p.text = defuseAt(p.text);
   const text = parts.map((p) => `## ${p.n}. ${p.title}\n${p.text}`).join('\n\n') + '\n';
   // template — раздел «## Шаблон: <вид>» как в файле, без подстановок: его показывает «Открыть шаблон» (t604).
-  // served (t1008) — d<N>, поданные в частях 5 и 6, с утверждёнными паттернами; s<N> общей базы — не номера этой доски, не входят.
+  // served (t1008) — d<N>, поданные в части 5: договорённости, утверждённые паттерны, решения и тупики; s<N> общей базы — не номера этой доски, не входят.
   const served = [...new Set([...pt.ids, ...fr.shown, ...nt.ids])];
   return { card: card.id, title: card.title, kind: card.kind, parts, text, chars: text.length, warnings, skipped: fr.skipped, served, templates: tf,
     template: { kind: card.kind, text: kindText || '', file: tf.file, own: tf.own } };
@@ -736,30 +939,35 @@ function build(project, ref, opts = {}) {
 /**
  * Задание вкладки из шаблона name (compose.md, newcard.md): всё после строки первого «## », с подстановками путей.
  * Пути FORMAT.md и образцов — абсолютные, из папки плагина: агент читает их сам. Ошибка — { error }.
- * @param {string} project @param {string} name @param {{ dataDir?: string }} opts
+ * lang (t1429) — язык доски для подстановок {доска:…}: у «Составить роадмап» доски ещё нет, язык даёт окно; иначе — из паспорта.
+ * t1428: по нему же — перевод задания (compose.uk.md), FORMAT и образцов этого языка, {язык}.
+ * @param {string} project @param {string} name @param {{ dataDir?: string, lang?: string }} opts
  */
 function task(project, name, opts) {
-  const tf = templateFile(opts.dataDir, name);
+  const lang = langOf(board.LANGS.includes(String(opts.lang || '')) ? String(opts.lang) : board.boardLang(project));
+  const tf = templateFile(opts.dataDir, name, lang);
   /** @type {string[]} */
   const warnings = [];
+  { const w = skippedOwn(tf); if (w) warnings.push(w); }
   /** @type {string | null} */
   let text = '';
   // null — в файле нет строки «## », '' — строка есть, а после неё пусто (t571: это разные предупреждения).
   // Первый «## » вне блока кода ``` (t612): пример с «## » в пояснении выше задания его не обрезает.
-  const read = (/** @type {string} */ f) => { const s = readSmall(f, MAX_TEMPLATES); const h = heads(s); return h.length ? s.split('\n').slice(h[0].at + 1).join('\n').trim() : null; };
+  const read = (/** @type {string} */ f) => { const s = unstamp(readSmall(f, MAX_TEMPLATES)); const h = heads(s); return h.length ? s.split('\n').slice(h[0].at + 1).join('\n').trim() : null; };
   const lack = (/** @type {string | null} */ t) => t === null ? 'нет заголовка «## »' : 'после заголовка «## » пусто';
   try { text = read(tf.file); } catch (e) { if (!tf.own) return { error: `задание не прочитано: ${e instanceof Error ? e.message : e}` }; warnings.push(`своя копия ${tf.file}: ${e instanceof Error ? e.message : e} — взят встроенный текст`); }
   // Своя копия не читается, в ней нет «## » или после него пусто — встроенный текст и предупреждение, как у шаблонов карты.
   if (!text && tf.own) {
     if (!warnings.length) warnings.push(`в своей копии ${tf.file} ${lack(text)} — взят встроенный текст`);
-    tf.file = path.join(__dirname, name); tf.own = false;
+    tf.file = builtinIn(name, lang); tf.own = false;
     try { text = read(tf.file); } catch (e) { return { error: `задание не прочитано: ${e instanceof Error ? e.message : e}` }; }
   }
   if (!text) return { error: `в ${path.basename(tf.file)} ${lack(text)}: задание пустое` };
   /** @type {Record<string, string>} */
-  const vars = { 'проект': project, 'папка': board.root(project) + path.sep, 'формат': path.join(__dirname, 'FORMAT.md'), 'образцы': path.join(__dirname, 'samples') + path.sep };
-  if (name === COMPOSE) vars['паттерны'] = patternList(project, warnings);
+  const vars = { ...boardWords(lang), 'проект': project, 'папка': board.root(project) + path.sep, 'формат': builtinIn('FORMAT.md', lang), 'образцы': builtinIn(SAMPLES, lang) + path.sep, 'язык': langName(lang) };
+  if (name === COMPOSE) vars['паттерны'] = patternList(project, warnings, lang);
   // t1025: своя копия сделана до t1007 — кандидатов в ней нет, а человек об этом не знает.
+  { const st = tf.own ? stale(opts.dataDir, path.basename(tf.file)) : null; if (st) warnings.push(`своя копия ${st.file}: ${st.reason}`); }
   if (name === COMPOSE && tf.own && !text.includes('{паттерны}')) warnings.push(`в своей копии ${tf.file} нет {паттерны}: кандидаты в паттерн агенту не попадут — допишите строку «Кандидаты в паттерн …» из встроенного compose.md, шаг 5`);
   const out = subst(text, vars) + '\n';
   return { text: out, chars: out.length, warnings, templates: tf };
@@ -769,34 +977,39 @@ function task(project, name, opts) {
 const COMPOSE_PATTERNS = 10;
 /**
  * {паттерны} в compose.md (t1007): кандидаты в паттерн по доске (patterns.candidates, порог PATTERN_MIN), строкой на кандидата.
- * Считает программа, а не агент на глаз. Доска не читается — предупреждение и «не посчитаны». @param {string} project @param {string[]} warnings
+ * Считает программа, а не агент на глаз. Доска не читается — предупреждение и «не посчитаны». lang (t1428) — язык задания.
+ * @param {string} project @param {string[]} warnings @param {string} [lang]
  */
-function patternList(project, warnings) {
+function patternList(project, warnings, lang = '') {
   /** @type {import('./board').Board} */
   let b;
-  try { b = board.read(project); } catch (e) { warnings.push(`кандидаты в паттерн не посчитаны: ${e instanceof Error ? e.message : e}`); return 'не посчитаны — доска не прочитана.'; }
-  if (!b.exists) return 'кандидатов нет — доски ещё нет.';
+  try { b = board.read(project); } catch (e) { warnings.push(`кандидаты в паттерн не посчитаны: ${e instanceof Error ? e.message : e}`); return tr(lang, 'не посчитаны — доска не прочитана.'); }
+  if (!b.exists) return tr(lang, 'кандидатов нет — доски ещё нет.');
   if (b.errors.length) warnings.push(`кандидаты в паттерн: файлов доски с ошибкой ${b.errors.length}, их записи не учтены`);
   const c = require('./patterns').candidates(b);
-  if (!c.length) return 'кандидатов нет.';
-  const how = { alike: 'похожи', error: 'один «Текст ошибки:»' };
+  if (!c.length) return tr(lang, 'кандидатов нет.');
+  const how = { alike: tr(lang, 'похожи'), error: tr(lang, 'один «Текст ошибки:»') };
   // t1024: кандидаты пересекаются (план t845: d136 — в «звезде» d77 и центр своей) — пометка с обеих сторон, выбирает человек.
   const cross = (/** @type {import('./patterns').Candidate} */ x) => c.filter((y) => y !== x).map((y) => {
-    if (y.members.includes(x.id)) return `${x.id} входит и в кандидата ${y.id}`;
-    if (x.members.includes(y.id)) return `${y.id} — центр своего кандидата`;
+    if (y.members.includes(x.id)) return tr(lang, '{x} входит и в кандидата {y}', { x: x.id, y: y.id });
+    if (x.members.includes(y.id)) return tr(lang, '{y} — центр своего кандидата', { y: y.id });
     const both = x.members.filter((m) => y.members.includes(m));
-    return both.length ? `${both.join(', ')} — и в кандидате ${y.id}` : '';
+    return both.length ? tr(lang, '{v} — и в кандидате {y}', { v: both.join(', '), y: y.id }) : '';
   }).filter(Boolean);
-  const lines = c.slice(0, COMPOSE_PATTERNS).map((x) => `- ${x.id} — находок одной причины ${x.n}: ${[x.id, ...x.members].join(', ')}`
-    + `${x.repeats.length ? `; повторы в картах ${x.repeats.join(', ')}` : ''}${x.by.length ? ` (${x.by.map((k) => how[k]).join(', ')})` : ''}`
-    + `${cross(x).length ? `; пересекается: ${cross(x).join('; ')} — один паттерн или два, решает человек` : ''}`);
-  if (c.length > COMPOSE_PATTERNS) lines.push(`- ещё кандидатов: ${c.length - COMPOSE_PATTERNS} — программа покажет их, когда эти соберут в паттерны.`);
+  const lines = c.slice(0, COMPOSE_PATTERNS).map((x) => `- ${tr(lang, '{id} — находок одной причины {n}: {v}', { id: x.id, n: x.n, v: [x.id, ...x.members].join(', ') })}`
+    + `${x.repeats.length ? tr(lang, '; повторы в картах {v}', { v: x.repeats.join(', ') }) : ''}${x.by.length ? ` (${x.by.map((k) => how[k]).join(', ')})` : ''}`
+    + `${cross(x).length ? tr(lang, '; пересекается: {v} — один паттерн или два, решает человек', { v: cross(x).join('; ') }) : ''}`);
+  if (c.length > COMPOSE_PATTERNS) lines.push(`- ${tr(lang, 'ещё кандидатов: {n} — программа покажет их, когда эти соберут в паттерны.', { n: c.length - COMPOSE_PATTERNS })}`);
   return `\n${lines.join('\n')}`;
 }
 
-/** Задание «Составить роадмап» (t519) из compose.md. @param {string} project @param {{ dataDir?: string }} [opts] */
+/** Задание «Составить роадмап» (t519) из compose.md. @param {string} project @param {{ dataDir?: string, lang?: string }} [opts] */
 const compose = (project, opts = {}) => task(project, COMPOSE, opts);
 /** Задание «Новая карта» (t818) из newcard.md: доска уже есть, агент заводит одну карту. @param {string} project @param {{ dataDir?: string }} [opts] */
 const newcard = (project, opts = {}) => task(project, NEWCARD, opts);
 
-module.exports = { TEMPLATES, defuseAt, FRESH_NOTE, ADVISOR_LINE, ADVISOR_ONCE, templates, templateFile, paths, shared, fresh, pick, search, wrongNotes, noteLine, listLine, alikeNotes, alikePattern, mergeTitle, notes, build, compose, newcard };
+/** Строки советника встроенного prompt.md (t830, t1046): пробы ищут их в промпте. Сборка берёт строку из своих шаблонов (lineOf). */
+const ADVISOR_LINE = lineOf('advisor', {});
+const ADVISOR_ONCE = lineOf('advisorOnce', {});
+
+module.exports = { TEMPLATES, defuseAt, langOf, langName, nameIn, builtinIn, tr, SAY, LINES, ADVISOR_LINE, ADVISOR_ONCE, line, templates, templateFile, stale, staleAll, paths, shared, fresh, pick, search, wrongNotes, noteLine, listLine, alikeNotes, alikePattern, mergeTitle, notes, build, compose, newcard };

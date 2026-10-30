@@ -45,6 +45,7 @@
     $('groupIcon').innerHTML = svg('plus', tc('text', '#C9D0DC'), 12);
     $('stopIcon').innerHTML = svg('power', tc('danger', '#F24E50'), 14);
     $('autosIcon').innerHTML = svg('clock', tc('accent', '#21B568'), 14);
+    $('dashIcon').innerHTML = svg('grid', tc('accent', '#21B568'), 14);
     // Значок «Настройки» виден только в новом виде (t663): там у кнопок справа нет подписей.
     $('setIcon').innerHTML = svg('gear', tc('text', '#C9D0DC'), 14);
   };
@@ -383,6 +384,9 @@
   // Кнопка «Автоматизации N» (t252): окно автоматизаций; число — свои автоматизации, зелёное — есть прогон, который не открывали.
   // Плагин выключен в «Настройках» — кнопки нет, задачи Планировщика остаются. Подпись — кодом: разметку, которую меняет JS, data-i18n не переводит (t287).
   $('autos').onclick = () => t.auto.open({});
+  // Кнопка «Дашборд» (t1402): окно карты закреплённых проектов (main\dashboard-window.js). Моста нет — кнопки нет.
+  $('dash').hidden = !(t.dashboard && t.dashboard.open);
+  $('dash').onclick = () => t.dashboard.open();
   const autosText = () => {
     $('autosName').textContent = I18n.t('auto.name', 'Автоматизации');
     $('autos').title = I18n.t('auto.buttonTitle', 'Задания для агента по расписанию');
@@ -462,7 +466,7 @@
     showError('');
     if (document.querySelector('.dlg')) return;
     const r = await t.projects.presets();
-    if (!r || r.error) return showError((r && r.error) || 'нет вариантов');
+    if (!r || r.error) return showError((r && r.error) || I18n.t('projects.noPresets', 'нет вариантов'));
     /** @type {{ name: string, desc: string, icon: string, color: string, git: boolean, files: number }[]} */
     const list = r.presets;
     const sep = /^[a-zA-Z]:\\|\\\\/.test(r.base) ? '\\' : '/';
@@ -496,7 +500,7 @@
       err('', '');
       try {
         const res = await t.projects.create({ name: nm.value, dir: dir.value, preset: sel.name, git: git.checked });
-        if (!res || res.error) return err(res && res.field ? res.field : 'all', (res && res.error) || 'не создан');
+        if (!res || res.error) return err(res && res.field ? res.field : 'all', (res && res.error) || I18n.t('projects.notCreated', 'не создан'));
         close();
         fresh = res.project.id;
         /** @type {HTMLInputElement} */ ($('q')).value = '';

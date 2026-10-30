@@ -15,7 +15,7 @@ const TERM_MIN = 10;
 const TERM_MAX = 28;
 /** Сдвиг шрифта просмотра Markdown от «Шрифта терминала», px: кнопки A−/A+ (t242). Видимый размер окно держит в TERM_MIN…TERM_MAX. */
 const MD_SHIFT = TERM_MAX - TERM_MIN;
-const DEFAULTS = { uiZoom: 100, termFont: 17, mdShift: 0, sound: true, notify: true, copySelect: true, theme: '', ui: uiThemes.DEFAULT_UI, appearance: 'system', lang: '', projectsBase: '', inboxDir: '', plugins: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
+const DEFAULTS = { uiZoom: 100, termFont: 17, mdShift: 0, sound: true, notify: true, copySelect: true, theme: '', ui: uiThemes.DEFAULT_UI, appearance: 'system', lang: '', projectsBase: '', inboxDir: '', plugins: {}, pluginMain: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
 /** Предел мешка настроек одного плагина в JSON, знаков (t256): больше — запись отклоняется, остаётся прежняя. */
 const BAG_MAX = 64 * 1024;
 /** Пресеты раскладок окна проекта (t397): не больше PRESETS_MAX, имя до 60 знаков. */
@@ -28,23 +28,24 @@ const partKind = (k) => (PART_KINDS.includes(k) || (typeof k === 'string' && /^a
 
 /**
  * plugins — выключатели плагинов по имени папки (t182): false — выключен; нет записи — включён.
+ * pluginMain — галочка «главная часть» своего плагина (папка пользователя, t1384): true — его main.js загружается в главный процесс; нет записи — нет.
  * agents — выключатели агентов из системы по id (t183, main\agents.js): true — включён; нет записи — выключен.
  * pluginSettings — свои настройки плагинов по имени папки (t256): объект, который плагин хранит как хочет; программа его не разбирает.
  * theme — id схемы плагина «Темы» (t257): строка без проверки по списку. Пусто, termius-dark или такой схемы нет — схемы нет, Termius Dark в цветах макета (t723).
  * ui — тема интерфейса (main\ui-themes.js, t506, t651): kermach — Светлая и Тёмная макета; termius — Termius Dark, по умолчанию, со схемами плагина «Темы»;
- *   rostyslav (прежнее имя) читается как termius; studio и deck — темы Нагорняка; glass (только macOS) — в «Настройках» его нет, сохранённый работает.
+ *   прежний вид (до t651) читается как termius — тема по умолчанию; studio и deck — темы Нагорняка; glass (только macOS) — в «Настройках» его нет, сохранённый работает.
  * appearance — светлый или тёмный вид: system (как в системе), light, dark. У Termius Dark вид задаёт схема, без схемы — тёмный.
  * Все поля выбирает один список «Тема» в «Настройках» (t723, renderer\dialogs.js): пункт пишет ui, appearance, theme и plugins.themes вместе;
  *   plugins.themes — признак «схема включена», своего выключателя у плагина «Темы» нет.
  * lang — язык надписей (t258): '' — русский; иначе ключ из поля "lang" plugin.json включённого плагина (main\i18n.js).
  * layoutPresets — пресеты раскладок окна проекта (t397), общие для всех проектов: { name, kind, fr, parts, files: { open, width } };
  *   parts — вид вкладки в каждой части ('' — часть пустая), files — панель «Файлы» (открыта ли, ширина в px).
- * @typedef {{ uiZoom: number, termFont: number, mdShift: number, sound: boolean, notify: boolean, copySelect: boolean, theme: string, ui: string, appearance: string, lang: string, plugins: Record<string, boolean>, agents: Record<string, boolean>,
+ * @typedef {{ uiZoom: number, termFont: number, mdShift: number, sound: boolean, notify: boolean, copySelect: boolean, theme: string, ui: string, appearance: string, lang: string, plugins: Record<string, boolean>, pluginMain: Record<string, boolean>, agents: Record<string, boolean>,
  *   pluginSettings: Record<string, Record<string, any>>, layoutPresets: any[] }} Settings
  */
 
 /** @type {Settings} */
-let cur = { ...DEFAULTS, plugins: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
+let cur = { ...DEFAULTS, plugins: {}, pluginMain: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
 let file = '';
 /** Подписчики главного процесса на смену настроек (t256, main\plugin-bridge.js: выключили плагин — его главная часть останавливается). @type {((s: Settings) => void)[]} */
 const listeners = [];
@@ -95,6 +96,8 @@ function cleanPresets(raw, base) {
 
 /** Плагин включён по записи в настройках; записи нет — по умолчанию (plugin.json, "enabled": false — выключен, t220; нет признака — включён). @param {string} id @param {boolean} [def] */
 const pluginOn = (id, def = true) => (typeof cur.plugins[id] === 'boolean' ? cur.plugins[id] : def);
+/** Галочка «главная часть» своего плагина (t1384): только явное true. @param {string} id */
+const pluginMainOn = (id) => cur.pluginMain[id] === true;
 /** Агент из системы включён, только если его включили. @param {string} id */
 const agentOn = (id) => cur.agents[id] === true;
 
@@ -116,14 +119,15 @@ function clean(raw, base) {
     copySelect: typeof r.copySelect === 'boolean' ? r.copySelect : base.copySelect,
     // Строка без проверки по списку схем (t257): схемы — файл плагина, его меняют без перезапуска программы.
     theme: typeof r.theme === 'string' && r.theme.length <= 64 ? r.theme : base.theme,
-    // Тема не этой системы («Скло» в файле, перенесённом с Mac) — прежняя или умолчание (t506). «Тема Ростислава» теперь Termius Dark (t651).
-    ui: r.ui === 'rostyslav' ? 'termius' : uiThemes.uisFor(process.platform).includes(r.ui) ? r.ui : base.ui,
+    // Тема не этой системы («Скло» в файле, перенесённом с Mac) — прежняя или умолчание (t506). «Тема разработчика» теперь Termius Dark (t651).
+    ui: uiThemes.uisFor(process.platform).includes(r.ui) ? r.ui : base.ui,
     appearance: uiThemes.APPEARANCES.includes(r.appearance) ? r.appearance : base.appearance,
     lang: typeof r.lang === 'string' && r.lang.length <= 16 ? r.lang : base.lang,
     // Папка новых проектов и папка «Входящих» «Дел» (t1265): пусто — домашняя папка; только полный путь.
     projectsBase: typeof r.projectsBase === 'string' && r.projectsBase.length <= 500 && (r.projectsBase === '' || path.isAbsolute(r.projectsBase)) ? r.projectsBase : base.projectsBase,
     inboxDir: typeof r.inboxDir === 'string' && r.inboxDir.length <= 500 && (r.inboxDir === '' || path.isAbsolute(r.inboxDir)) ? r.inboxDir : base.inboxDir,
     plugins: cleanFlags(r.plugins, base.plugins),
+    pluginMain: cleanFlags(r.pluginMain, base.pluginMain || {}),
     agents: cleanFlags(r.agents, base.agents),
     pluginSettings: cleanBags(r.pluginSettings, base.pluginSettings),
     layoutPresets: cleanPresets(r.layoutPresets, base.layoutPresets || []),
@@ -150,7 +154,7 @@ let langUnset = false;
 /** Читает файл. Нет — молча умолчания; испорчен — умолчания и строка в журнал. @param {string} dataDir */
 function load(dataDir) {
   file = path.join(dataDir, 'settings.json');
-  cur = { ...DEFAULTS, plugins: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
+  cur = { ...DEFAULTS, plugins: {}, pluginMain: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
   langUnset = false;
   let text;
   try { text = fs.readFileSync(file, 'utf8'); } catch { langUnset = true; return cur; }
@@ -175,7 +179,7 @@ function load(dataDir) {
       save();
     }
   } catch (e) {
-    cur = { ...DEFAULTS, plugins: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
+    cur = { ...DEFAULTS, plugins: {}, pluginMain: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
     log(`настройки: settings.json не прочитан (${e instanceof Error ? e.message : e}), взяты умолчания`);
   }
   return cur;
@@ -283,14 +287,14 @@ function dress(w) {
  */
 function syncNative() {
   try {
-    const want = cur.ui === 'rostyslav' ? 'system' : cur.ui === 'termius' ? ((look() || {}).kind === 'light' ? 'light' : 'dark') : /** @type {'system' | 'light' | 'dark'} */ (cur.appearance);
+    const want = cur.ui === 'termius' ? ((look() || {}).kind === 'light' ? 'light' : 'dark') : /** @type {'system' | 'light' | 'dark'} */ (cur.appearance);
     if (nativeTheme.themeSource !== want) nativeTheme.themeSource = want;
   } catch (e) { log(`тема: вид системных частей окна не задан: ${e}`); }
 }
 const dressAll = () => { for (const w of BrowserWindow.getAllWindows()) dress(w); };
 
 /** @returns {Settings} */
-const get = () => ({ ...cur, plugins: { ...cur.plugins }, agents: { ...cur.agents }, pluginSettings: JSON.parse(JSON.stringify(cur.pluginSettings)), layoutPresets: JSON.parse(JSON.stringify(cur.layoutPresets)) });
+const get = () => ({ ...cur, plugins: { ...cur.plugins }, pluginMain: { ...cur.pluginMain }, agents: { ...cur.agents }, pluginSettings: JSON.parse(JSON.stringify(cur.pluginSettings)), layoutPresets: JSON.parse(JSON.stringify(cur.layoutPresets)) });
 
 /** @param {any} patch @returns {Settings} */
 function set(patch) {
@@ -299,17 +303,17 @@ function set(patch) {
   const part = (/** @type {any} */ x) => (x && typeof x === 'object' ? x : {});
   // Мешок плагина заменяется целиком (t256): плагин присылает свой объект полностью; null — мешок удалить.
   const bags = { ...cur.pluginSettings, ...part(pt.pluginSettings) };
-  const merged = { ...cur, ...pt, plugins: { ...cur.plugins, ...part(pt.plugins) }, agents: { ...cur.agents, ...part(pt.agents) }, pluginSettings: bags };
+  const merged = { ...cur, ...pt, plugins: { ...cur.plugins, ...part(pt.plugins) }, pluginMain: { ...cur.pluginMain, ...part(pt.pluginMain) }, agents: { ...cur.agents, ...part(pt.agents) }, pluginSettings: bags };
   const next = clean(merged, cur);
   if (next.uiZoom === cur.uiZoom && next.termFont === cur.termFont && next.mdShift === cur.mdShift && next.sound === cur.sound && next.notify === cur.notify && next.copySelect === cur.copySelect && next.theme === cur.theme && next.lang === cur.lang && next.projectsBase === cur.projectsBase && next.inboxDir === cur.inboxDir
     && next.ui === cur.ui && next.appearance === cur.appearance
-    && JSON.stringify(next.plugins) === JSON.stringify(cur.plugins) && JSON.stringify(next.agents) === JSON.stringify(cur.agents)
+    && JSON.stringify(next.plugins) === JSON.stringify(cur.plugins) && JSON.stringify(next.pluginMain) === JSON.stringify(cur.pluginMain) && JSON.stringify(next.agents) === JSON.stringify(cur.agents)
     && JSON.stringify(next.pluginSettings) === JSON.stringify(cur.pluginSettings) && JSON.stringify(next.layoutPresets) === JSON.stringify(cur.layoutPresets)) return get();
   // Схема плагина «Темы» и его выключатель тоже меняют вид: у Termius Dark светлая схема — светлые системные части окна (t710).
   const restyle = next.ui !== cur.ui || next.appearance !== cur.appearance || next.theme !== cur.theme || next.plugins.themes !== cur.plugins.themes;
   cur = next;
   save();
-  log(`настройки: шрифт окон ${cur.uiZoom} %, шрифт терминала ${cur.termFont}, сдвиг Markdown ${cur.mdShift}, звук ${cur.sound ? 'вкл' : 'выкл'}, уведомления ${cur.notify ? 'вкл' : 'выкл'}, копирование выделенного ${cur.copySelect ? 'вкл' : 'выкл'}, тема ${cur.theme || 'по умолчанию'}${cur.ui === 'termius' ? '' : `, интерфейс ${cur.ui} (${cur.appearance})`}, язык ${cur.lang || 'ru'}, выключены плагины: ${Object.keys(cur.plugins).filter((k) => !cur.plugins[k]).join(', ') || 'нет'}, включены агенты: ${Object.keys(cur.agents).filter((k) => cur.agents[k]).join(', ') || 'нет'}`);
+  log(`настройки: шрифт окон ${cur.uiZoom} %, шрифт терминала ${cur.termFont}, сдвиг Markdown ${cur.mdShift}, звук ${cur.sound ? 'вкл' : 'выкл'}, уведомления ${cur.notify ? 'вкл' : 'выкл'}, копирование выделенного ${cur.copySelect ? 'вкл' : 'выкл'}, тема ${cur.theme || 'по умолчанию'}${cur.ui === 'termius' ? '' : `, интерфейс ${cur.ui} (${cur.appearance})`}, язык ${cur.lang || 'ru'}, выключены плагины: ${Object.keys(cur.plugins).filter((k) => !cur.plugins[k]).join(', ') || 'нет'}, включены агенты: ${Object.keys(cur.agents).filter((k) => cur.agents[k]).join(', ') || 'нет'}${Object.values(cur.pluginMain).some(Boolean) ? `, главная часть своих плагинов: ${Object.keys(cur.pluginMain).filter((k) => cur.pluginMain[k]).join(', ')}` : ''}`);
   if (restyle) syncNative();
   for (const w of pages()) apply(w);
   if (restyle) dressAll();
@@ -392,7 +396,7 @@ function register(c) {
   ipcMain.handle('settings:dir', async (e, key, value) => (sender.allowed(e, 'settings:dir') ? setDir(key, value) : sender.refused()));
   // Система сменила светлый/тёмный вид (на macOS и акцент) — новые темы в режиме «как в системе» перекрашиваются сразу (t506).
   syncNative();
-  const sysChanged = () => { if (cur.ui !== 'rostyslav' && cur.ui !== 'termius') { for (const w of pages()) apply(w); dressAll(); } };
+  const sysChanged = () => { if (cur.ui !== 'termius') { for (const w of pages()) apply(w); dressAll(); } };
   nativeTheme.on('updated', sysChanged);
   if (process.platform === 'darwin') { try { systemPreferences.on('accent-color-changed', sysChanged); } catch {} }
   // Тема до первой отрисовки (t257): preload спрашивает синхронно, renderer\theme.js ставит цвета в <head> — без тёмной вспышки.
@@ -405,4 +409,4 @@ function register(c) {
   ipcMain.on('settings:dict', (e) => { e.returnValue = sender.allowed(e, 'settings:dict') ? require('./i18n').dict() : null; });
 }
 
-module.exports = { register, load, get, set, setDir, look, schemes, background, dress, onChange, pluginOn, agentOn, sysLang, ZOOMS, TERM_MIN, TERM_MAX, DEFAULTS };
+module.exports = { register, load, get, set, setDir, look, schemes, background, dress, onChange, pluginOn, pluginMainOn, agentOn, sysLang, ZOOMS, TERM_MIN, TERM_MAX, DEFAULTS };

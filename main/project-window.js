@@ -7,6 +7,8 @@
 // Вкладки сайта (встроенный плагин «Браузер», plugins\browser\) — тег webview; его защиту ставит plugins\browser\main.js.
 const { BrowserWindow, ipcMain, nativeImage } = require('electron');
 const sender = require('./sender');
+const appScheme = require('./app-scheme');
+const legacyStorage = require('./legacy-storage');
 const fs = require('fs');
 const path = require('path');
 const windowState = require('./window-state');
@@ -83,6 +85,7 @@ function register(c) {
  */
 function open(c, p, opt = {}) {
   register(c);
+  legacyStorage.register(c);
   const had = windows.get(p.id);
   if (had && !had.isDestroyed()) {
     if (had.isMinimized()) had.restore();
@@ -126,7 +129,9 @@ function open(c, p, opt = {}) {
   byContents.set(wcId, p);
   win.on('closed', () => { windows.delete(p.id); byContents.delete(wcId); pluginBridge.closeProject(p.id); });
   if (opt.show !== false) win.once('ready-to-show', () => (pl.maximized ? win.maximize() : win.show()));
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  // Со своей схемы, не с диска (t1404): под CSP окна свой плагин не загрузит файл с диска (main\app-scheme.js).
+  // Сначала снимок localStorage из file:// (t1409): окно на новом источнике начинало бы с пустого хранилища.
+  legacyStorage.take().then(() => { if (!win.isDestroyed()) win.loadURL(appScheme.pageUrl('index.html')); });
   c.log(`окно проекта ${p.path}`);
   return win;
 }

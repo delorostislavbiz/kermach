@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'">
+<title>Kermach — Дашборд</title>
+<link rel="stylesheet" href="../../renderer/theme.css">
+<script src="../../renderer/theme.js"></script>
+<script src="../../renderer/i18n.js"></script>
+<style>
+  /* Окно «Дашборд» (t1402): карта мыслей — «Поточні проекти» в центре, закреплённые проекты вокруг, ветки в цвет проекта. Цвета — переменные тем. */
+  :root { --line: rgba(var(--muted-rgb),.16); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 'Segoe UI', system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  #title { height: 36px; display: flex; align-items: center; padding-left: 14px; flex-shrink: 0; -webkit-app-region: drag; font-size: 12px; }
+  #title .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; color: var(--muted); }
+  #title .btns { display: flex; height: 100%; -webkit-app-region: no-drag; }
+  #title .btns div { width: 46px; display: flex; align-items: center; justify-content: center; }
+  #title .btns div:hover { background: rgba(var(--muted-rgb),.14); }
+  #title .btns #close:hover { background: var(--danger); color: #fff; }
+  /* t1415: карта масштабируется по рамке узлов; прокрутка — только при наименьшем масштабе. margin:auto центрирует и не режет левый край при прокрутке. */
+  #scroll { flex: 1; min-height: 0; overflow: auto; display: flex; }
+  #stage { position: relative; margin: auto; flex-shrink: 0; overflow: hidden; }
+  #map { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  #links { position: absolute; left: 0; top: 0; pointer-events: none; }
+  .center { position: absolute; transform: translate(-50%, -50%); padding: 14px 22px; border-radius: 12px; background: var(--raised, rgba(var(--muted-rgb),.12)); border: 1px solid var(--line); font-size: 18px; font-weight: 600; white-space: nowrap; }
+  .node { position: absolute; width: 250px; transform: translate(-50%, -50%); padding: 9px 11px; border-radius: 9px; background: var(--side); border: 1px solid var(--line); border-left: 4px solid var(--c); cursor: pointer; }
+  .node:hover { background: var(--hover); }
+  .node .nm { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--c); }
+  .node .row { margin-top: 3px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .node .k { color: var(--muted); }
+  .node .src { color: var(--faint, var(--muted)); font-size: 11px; opacity: .8; }
+  .node .bar { height: 4px; border-radius: 2px; background: rgba(var(--muted-rgb),.2); margin-top: 3px; overflow: hidden; }
+  .node .bar i { display: block; height: 100%; background: var(--c); }
+  /* Серый — без прозрачности: ветка под узлом не должна просвечивать. */
+  .node.gray { --c: var(--muted) !important; color: var(--muted); }
+  .node.gray .row b, .node.gray .row { color: var(--muted); }
+  .node .st-working { color: var(--ok, var(--accent)); }
+  .node .st-waiting { color: var(--warn, #e0a030); }
+  .node .st-error { color: var(--danger); }
+  #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="title">
+  <div class="name" data-i18n="dashboard.title">Kermach — Дашборд</div>
+  <div class="btns">
+    <div id="min" title="Свернуть" data-i18n-title="common.minimize"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" stroke-width="1"/></svg></div>
+    <div id="max" title="Развернуть" data-i18n-title="common.maximize"><svg width="10" height="10" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg></div>
+    <div id="close" title="Закрыть" data-i18n-title="common.close"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1"/></svg></div>
+  </div>
+</div>
+<div id="scroll"><div id="stage"><div id="map"><svg id="links"></svg></div></div></div>
+<script src="page.js"></script>
+</body>
+</html>

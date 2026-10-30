@@ -1,5 +1,4 @@
-/* Тема Нагорняка: общий слой новых тем интерфейса (main\ui-themes.js). «Тема Ростислава» (data-ui="rostyslav") этот файл не задевает.
-   Окно без data-ui (окно правки снимка, когда схемы нет) — тоже: правила только под явно заданной новой темой (t506).
+/* Тема Нагорняка: общий слой новых тем интерфейса (main\ui-themes.js).   Окно без data-ui (окно правки снимка, когда схемы нет) — тоже: правила только под явно заданной новой темой (t506).
    Цвета — переменные theme.css, их ставит renderer\theme.js из look() главного процесса; здесь — шрифты и то, что общее у трёх тем.
    Своё у каждой темы — ui-glass.css, ui-studio.css, ui-deck.css, ui-kermach*.css: селекторы только под html[data-ui="<тема>"].
    Переменные новых тем (theme.js, look.vars): --font-ui, --font-label, --r-sm, --r-md, --r-lg, --surface, --chrome, --card-shadow. */
@@ -16,16 +15,16 @@
 @font-face { font-family: 'Kermach JBMono'; src: url('../fonts/JetBrainsMono-Variable.ttf') format('truetype'); font-weight: 100 800; font-display: block; }
 
 /* Шрифт интерфейса — на всё, кроме терминала (xterm задаёт свой) и кода. */
-html:where([data-ui]):not([data-ui="rostyslav"]) body,
-html:where([data-ui]):not([data-ui="rostyslav"]) .dlg,
-html:where([data-ui]):not([data-ui="rostyslav"]) input,
-html:where([data-ui]):not([data-ui="rostyslav"]) select,
-html:where([data-ui]):not([data-ui="rostyslav"]) textarea,
-html:where([data-ui]):not([data-ui="rostyslav"]) button { font-family: var(--font-ui); }
+html[data-ui] body,
+html[data-ui] .dlg,
+html[data-ui] input,
+html[data-ui] select,
+html[data-ui] textarea,
+html[data-ui] button { font-family: var(--font-ui); }
 /* Вес (0,1,1) ниже правила DOM-рендерера xterm «.xterm-dom-renderer-owner-N .xterm-rows» (0,2,0): строки берут шрифт xterm,
    по которому он мерил ширину клетки. С весом выше строки шли шрифтом темы, и текст расходился с курсором (t521). */
-html:where([data-ui]):not([data-ui="rostyslav"]) :where(.xterm, .xterm *) { font-family: inherit; }
-html:where([data-ui]):not([data-ui="rostyslav"]) body { -webkit-font-smoothing: antialiased; }
-html:where([data-ui]):not([data-ui="rostyslav"]) ::-webkit-scrollbar { width: 10px; height: 10px; }
-html:where([data-ui]):not([data-ui="rostyslav"]) ::-webkit-scrollbar-thumb { background: rgba(var(--muted-rgb), .28); border-radius: 10px; border: 3px solid transparent; background-clip: content-box; }
-html:where([data-ui]):not([data-ui="rostyslav"]) ::-webkit-scrollbar-track { background: transparent; }
+html[data-ui] :where(.xterm, .xterm *) { font-family: inherit; }
+html[data-ui] body { -webkit-font-smoothing: antialiased; }
+html[data-ui] ::-webkit-scrollbar { width: 10px; height: 10px; }
+html[data-ui] ::-webkit-scrollbar-thumb { background: rgba(var(--muted-rgb), .28); border-radius: 10px; border: 3px solid transparent; background-clip: content-box; }
+html[data-ui] ::-webkit-scrollbar-track { background: transparent; }

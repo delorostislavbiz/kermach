@@ -21,6 +21,9 @@ html:is([data-ui="kermach"], [data-ui="termius"]) #barTools .bbtn:hover { backgr
 html:is([data-ui="kermach"], [data-ui="termius"]) #barTools .bbtn:disabled { opacity: .45; background: none; }
 html:is([data-ui="kermach"], [data-ui="termius"]) #barTools .lbl { display: none; }
 html:is([data-ui="kermach"], [data-ui="termius"]) #barTools svg { width: 16px; height: 16px; }
+/* «Дашборд» (t1414): подпись рядом со значком, чтобы было понятно, что это; на узком окне — снова один значок (минимальная ширина окна — 480, projects-window.js:538). */
+html:is([data-ui="kermach"], [data-ui="termius"]) #barTools #dash .lbl { display: inline; white-space: nowrap; font-size: 12px; }
+@media (max-width: 560px) { html:is([data-ui="kermach"], [data-ui="termius"]) #barTools #dash .lbl { display: none; } }
 /* Значки — цвета кнопки (--muted, под мышью --text), как в макете; «Остановить всё» остаётся красным. */
 html:is([data-ui="kermach"], [data-ui="termius"]) #barTools .bbtn:not(.danger) svg { stroke: currentColor; color: currentColor; }
 html:is([data-ui="kermach"], [data-ui="termius"]) #barTools .bbtn.danger:hover { background: rgba(var(--danger-rgb), .12); color: var(--danger); }

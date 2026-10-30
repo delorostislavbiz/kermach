@@ -1,6 +1,20 @@
 // Мост окна к терминалу: странице доступны только эти вызовы, Node и файлы ей недоступны.
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+// t1409: окно на схеме kermach-app — новый источник, localStorage пуст. Один раз переносим снимок из file:// (main\legacy-storage.js).
+// Метка kermach.legacy — «уже переносили»: ключ, который окно сняло само, не вернётся. Существующие ключи не перезаписываем.
+try {
+  if (location.protocol === 'kermach-app:' && localStorage.getItem('kermach.legacy') === null) {
+    const old = ipcRenderer.sendSync('storage:legacy');
+    // null — снимка нет (не снят или уже перенесён раньше): метку не ставим, в следующий раз спросим снова.
+    if (old) {
+      for (const k of Object.keys(old)) if (localStorage.getItem(k) === null) localStorage.setItem(k, String(old[k]));
+      localStorage.setItem('kermach.legacy', '1');
+      ipcRenderer.send('storage:legacy-done');
+    }
+  }
+} catch {}
+
 const bridge = {
   // Кнопки своего заголовка.
   win: {
@@ -106,6 +120,8 @@ const bridge = {
     open: (o) => ipcRenderer.invoke('auto:open', o || {}),
     onChanged: (cb) => { const f = () => cb(); ipcRenderer.on('auto:changed', f); return () => ipcRenderer.removeListener('auto:changed', f); },
   },
+  // Окно «Дашборд» (main\dashboard-window.js, t1402): кнопка окна «Проекты».
+  dashboard: { open: () => ipcRenderer.invoke('dashboard:open') },
   // Плагин «История» для окна «Проекты» (plugins\history\app.js, t1127): waits — { counts: { номер проекта: N } } разговоров «ждут вас»,
   // { off: true } — плагин выключен. fresh — перечитать пометки «идёт». onChanged отвечает функцией снятия подписки.
   history: {

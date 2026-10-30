@@ -249,7 +249,7 @@
       s.btn.agent.classList.toggle('on', s.agent);
       s.btn.agent.title = s.agent ? I18n.t('browser.agentuOn', 'Вкладка отдана агенту: Claude может нажимать, заполнять поля и открывать адреса в ней. Щёлкните, чтобы забрать.')
         : I18n.t('browser.agentuOff', 'Отдать вкладку агенту: Claude сможет нажимать, заполнять поля и открывать адреса в ней. Читать страницу он может и без этого.');
-      // «Все сайты» (решение Ростислава 09.10): видна при включённом «Агенту». Выключена — агент действует только на сайте, открытом при включении.
+      // «Все сайты» (решение пользователя 09.10): видна при включённом «Агенту». Выключена — агент действует только на сайте, открытом при включении.
       s.btn.any.style.display = s.agent ? '' : 'none';
       s.btn.any.classList.toggle('on', s.any);
       s.btn.any.title = s.any ? I18n.t('browser.vseSaytyOn', 'Агент может уходить на другие сайты. Щёлкните, чтобы оставить только {v1}.', { v1: s.site || '?' })
@@ -872,7 +872,7 @@
           return { guest, url: x.url, title: x.untitled ? '' : x.title, active: x.sid === live, agent: x.agent, human: x.human, site: x.site, any: x.any };
         });
       };
-      // Агент действует во вкладке (t382): строка рядом с адресом — Ростислав видит, что сделал агент, если вкладка на виду.
+      // Агент действует во вкладке (t382): строка рядом с адресом — пользователь видит, что сделал агент, если вкладка на виду.
       w.KermachBrowserAct = (/** @type {number} */ guest, /** @type {unknown} */ what) => {
         const x = list.find((s) => { try { return !!s.view && s.view.getWebContentsId() === guest; } catch { return false; } });
         if (!x) return false;

@@ -196,7 +196,7 @@ function markHuman(g) {
   g.once('destroyed', () => humanGuests.delete(g.id));
 }
 
-/** Отказ агенту во вкладке «только для меня» (t885) — с записью в журнал, чтобы Ростислав видел попытку. @param {any} q @param {number} n */
+/** Отказ агенту во вкладке «только для меня» (t885) — с записью в журнал, чтобы пользователь видел попытку. @param {any} q @param {number} n */
 const refuseHuman = (q, n) => {
   if (ctx) ctx.log(`браузер: команда kermach — ${clean(q && q.cmd).slice(0, 40)} отклонена, вкладка ${n} «только для меня»`);
   return fail(5, humanMsg(n));
@@ -237,7 +237,7 @@ async function tabsOf(host) {
 
 /** Сайт адреса: имя хоста без www. (как siteOf в window.js). @param {string} u */
 const siteOf = (u) => { try { return new URL(u).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; } };
-/** Вкладка на чужом сайте для действия (решение Ростислава 09.10): без «Все сайты» — только сайт, открытый при включении «Агенту». Пусто — можно. @param {Tab} t @param {string} url */
+/** Вкладка на чужом сайте для действия (решение пользователя 09.10): без «Все сайты» — только сайт, открытый при включении «Агенту». Пусто — можно. @param {Tab} t @param {string} url */
 const offSite = (t, url) => t.any || siteOf(url) === t.site ? ''
   : `вкладка ушла с сайта ${t.site || '(пусто)'}; попросите включить «Агенту» заново или «Все сайты»`;
 
@@ -658,10 +658,16 @@ async function handle(q) {
   if (!id) return fail(2, 'нет доступа: команду можно вызвать только из терминала Kermach, открытого в этом проекте');
   // kermach roadmap run (t1050) идёт тем же каналом и той же подписью — свой канал повторил бы ключ, подпись и окружение терминала. «Браузер» ему не нужен.
   if (q.cmd === 'roadmap-run') return roadmapRun(q, id);
+  // kermach roadmap answer (t1393) — ответ уже в карте, окно отдаёт его во вкладку агента.
+  if (q.cmd === 'roadmap-answer') return roadmapAnswer(q, id);
+  // kermach roadmap start и wave (t1423) — вкладка главной сессии и волна фазы, тем же каналом.
+  if (q.cmd === 'roadmap-start' || q.cmd === 'roadmap-wave') return roadmapOrch(q, id);
   // kermach tab list / close (t1052) — вкладки терминалов окна, тоже без «Браузера».
   if (q.cmd === 'tab-list' || q.cmd === 'tab-close') return termTab(q, id);
   // kermach tab buffer (t1231) — экран вкладки в окне против текста демона.
   if (q.cmd === 'tab-buffer') return termBuffer(q, id);
+  // kermach diag cpu (t1431) — профиль процессора главного процесса.
+  if (q.cmd === 'diag-cpu') return require('../../main/diag-cpu').cpuProfile(Number(q.sec), DATA_DIR);
   if (!settings.pluginOn('browser')) return fail(3, '«Браузер» выключен: «Настройки» → «Плагины» → «Браузер»');
   const n = busy.get(id) || 0;
   if (n >= LIMIT.busy) return fail(3, `занято: окно проекта уже выполняет ${n} команды kermach browser — повторите через несколько секунд`);
@@ -720,6 +726,60 @@ async function roadmapRun(q, id) {
   }
   return { ok: true, project: clean(p.name).slice(0, 200), ref, sid: str(r.session && r.session.sid), agent: str(l.agent), model: str(l.model), effort: str(l.effort),
     skipped: str(r.skipped), warn: str(r.warn), hidden: !!r.hidden, log: str(r.log) };
+}
+
+/**
+ * kermach roadmap answer tN (t1393): ответ записала сама команда, здесь — доставка во вкладку агента командой answer плагина «Роадмап».
+ * Доска — проекта подписи терминала, как у roadmapRun. Ответ — sent и sid или sent: false и why.
+ * @param {any} q @param {string} id номер проекта
+ */
+async function roadmapAnswer(q, id) {
+  const ref = typeof q.ref === 'string' && /^t\d{1,6}$/.test(q.ref) ? q.ref : '';
+  if (!ref || typeof q.text !== 'string' || typeof q.head !== 'string') return fail(1, 'нужны номер карты, текст и раздел ответа');
+  const host = hostOf(id);
+  const p = host ? /** @type {any} */ (projectOf(host)) : null;
+  if (!p) return fail(3, 'окно проекта закрыто');
+  if (typeof q.board !== 'string' || !q.board || !p.path || !samePath(q.board, p.path)) return { ...fail(2, `нет доступа: доска ${clean(q.board).slice(0, 300)} не в проекте этого терминала`), signed: true };
+  const r = await require('../../main/plugin-bridge').callFor(id, 'roadmap', 'answer', [ref, q.text.slice(0, 20000), { head: q.head.slice(0, 200), sha1: String(q.sha1 || '').slice(0, 40), from: q.from === 'session' ? 'session' : '' }]);
+  if (!r || 'error' in r) return fail(r && r.closed ? 3 : 4, r ? String(r.error) : 'нет ответа');
+  const a = r.agent || {};
+  return { ok: true, sent: !!a.sent, waiting: !!a.waiting, sid: clean(a.sid || '').slice(0, 80), why: clean(a.why || '').slice(0, 300) };
+}
+
+/** Причины пропуска карты волной словами (t1423) — как WHY окна «Роадмапа». */
+const WAVE_WHY = { human: 'нужен человек', draft: 'черновик', inbox: 'во «Входящих»', running: 'уже запущена', wave: 'уже в другой волне', phase: 'не в этой фазе', status: 'статус' };
+/**
+ * kermach roadmap start и wave fN (t1423): start плагина «Роадмап» — вкладка главной сессии (А2, Д8), wave — волна фазы в режиме «все» (Е, 2.1).
+ * Доска — проекта подписи терминала, как у roadmapRun. «Уже открыта» у start — не отказ: already и номер вкладки. Отказ плагина — код 4 с его текстом.
+ * @param {any} q @param {string} id номер проекта
+ */
+async function roadmapOrch(q, id) {
+  const start = q.cmd === 'roadmap-start';
+  const phase = !start && typeof q.phase === 'string' && /^f\d{1,6}$/.test(q.phase) ? q.phase : '';
+  if (!start && !phase) return fail(1, 'нужен номер фазы, например f2');
+  const what = start ? 'roadmap start' : `roadmap wave ${phase}`;
+  const host = hostOf(id);
+  const p = host ? /** @type {any} */ (projectOf(host)) : null;
+  if (!p) return fail(3, 'окно проекта закрыто — откройте проект в Kermach и повторите');
+  if (typeof q.board !== 'string' || !q.board || !p.path || !samePath(q.board, p.path)) {
+    /** @type {Ctx} */ (ctx).log(`${what}: отказ — доска не в проекте терминала (${clean(p.path).slice(0, 300)})`);
+    return { ...fail(2, `нет доступа: доска ${clean(q.board).slice(0, 300)} не в проекте этого терминала «${clean(p.name).slice(0, 200)}» (${clean(p.path).slice(0, 300)})`), signed: true };
+  }
+  const bridge = require('../../main/plugin-bridge');
+  const str = (/** @type {unknown} */ v) => clean(v).slice(0, 300);
+  const skip = (/** @type {any} */ s) => Array.isArray(s) ? s.map((x) => `${x.id} — ${/** @type {any} */ (WAVE_WHY)[x.why] || x.why}${x.st ? ` «${x.st}»` : ''}`).join(', ') : '';
+  const project = clean(p.name).slice(0, 200);
+  if (start) {
+    const r = await bridge.callFor(id, 'roadmap', 'start', ['', { summary: typeof q.summary === 'string' ? q.summary.slice(0, 20000) : '' }]);
+    if (r && 'error' in r && typeof r.sid === 'string' && r.sid) return { ok: true, project, already: true, sid: str(r.sid) };
+    if (!r || 'error' in r) return fail(r && r.closed ? 3 : 4, r ? String(r.error) : 'нет ответа');
+    const l = r.launch || {};
+    return { ok: true, project, sid: str(r.session && r.session.sid), title: str(r.session && r.session.ownTitle), agent: str(l.agent), model: str(l.model), effort: str(l.effort) };
+  }
+  const r = await bridge.callFor(id, 'roadmap', 'wave', [phase, 'all']);
+  if (!r || 'error' in r) return fail(r && r.closed ? 3 : 4, r ? `${String(r.error)}${r.skipped && r.skipped.length ? `; пропущены: ${skip(r.skipped)}` : ''}` : 'нет ответа');
+  const w = r.wave || {};
+  return { ok: true, project, letter: str(w.letter), ids: str((w.items || []).map((/** @type {any} */ it) => it.id).join(', ')), skipped: str(skip(w.skipped)), cut: str((r.cut || []).join(', ')) };
 }
 
 /**
@@ -810,7 +870,7 @@ async function work(q, id) {
   /** @type {Tab | undefined} */
   let tab;
   if (acts) {
-    // Действие (t382) — только во вкладке, которую Ростислав отдал агенту («Агенту» на вкладке). Без --tab — единственная отданная.
+    // Действие (t382) — только во вкладке, которую пользователь отдал агенту («Агенту» на вкладке). Без --tab — единственная отданная.
     const given = tabs.filter((t) => t.agent);
     if (want) {
       tab = tabs.find((t) => t.n === want);
@@ -826,7 +886,7 @@ async function work(q, id) {
   if (!g) return fail(3, `во вкладке ${tab.n} нет страницы — в ней не открыт адрес`);
   const head = { ok: true, project, tab: { ...tab, url: clean(g.getURL()).slice(0, 4096), title: clean(g.getTitle()).replace(/\s+/g, ' ').slice(0, 300) }, count: tabs.length };
   if (acts) {
-    // Отметку спрашиваем у окна заново перед каждым выполнением кода в странице: Ростислав мог снять её, пока шла команда.
+    // Отметку спрашиваем у окна заново перед каждым выполнением кода в странице: пользователь мог снять её, пока шла команда.
     const still = async () => {
       const now = await tabsOf(host);
       const t = now && now.find((x) => x.guest === tab.guest);
@@ -836,7 +896,7 @@ async function work(q, id) {
     if (off) return fail(5, off);
     const r = await act(q, g, still, tab).catch((/** @type {any} */ err) => ({ error: `${clean(err.message || err)}`.slice(0, 500), code: Number.isInteger(err.code) ? err.code : 4 }));
     if ('error' in r) return fail(r.code || 4, r.error);
-    // Строка рядом с адресом вкладки: Ростислав видит, что делает агент.
+    // Строка рядом с адресом вкладки: пользователь видит, что делает агент.
     host.executeJavaScript(`typeof window.KermachBrowserAct === "function" && window.KermachBrowserAct(${g.id}, ${JSON.stringify(r.say)})`, false).catch(() => {});
     c.log(`браузер: команда kermach — ${q.cmd} во вкладке ${tab.n}`);
     return { ...head, tab: { ...head.tab, url: clean(g.getURL()).slice(0, 4096), title: clean(g.getTitle()).replace(/\s+/g, ' ').slice(0, 300) }, ...r };

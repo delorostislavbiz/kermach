@@ -13,10 +13,6 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
-const pty = require('node-pty');
-const { Terminal } = require('@xterm/headless');
-const { SerializeAddon } = require('@xterm/addon-serialize');
-const { Unicode11Addon } = require('@xterm/addon-unicode11');
 const { PROTOCOL_VERSION, PIPE, LEGACY_PIPE, DATA_DIR, KEY_FILE, lineReader, frame } = require('./protocol');
 const ownRoot = require('./own-root');
 const platform = require('./platform');
@@ -37,7 +33,9 @@ const HOOK_TOKEN = crypto.randomBytes(32).toString('hex');
 const PIPE_KEY = crypto.randomBytes(32).toString('hex');
 // Секунды. Без него Claude ждёт ответа http-хука до 600 с — зависший демон подвесил бы все вкладки.
 const HOOK_TIMEOUT = 5;
-const HOOK_EVENTS = ['UserPromptSubmit', 'PermissionRequest', 'Stop', 'StopFailure'];
+const HOOK_EVENTS = ['UserPromptSubmit', 'PermissionRequest', 'Notification', 'Stop', 'StopFailure'];
+// Notification (t1380): «требует ответа» только по этим notification_type — вопрос MCP-сервера и «разрешить?». idle_prompt и прочие — не вопрос.
+const NOTIFY_WAIT = ['elicitation_dialog', 'permission_prompt'];
 // Хуки Codex (t777, t1210): обёртка шлёт событие на /hook/codex. SessionStart — номер разговора, остальные — состояние вкладки, как у Claude.
 // Значение — имя события в ключе доверия и в хэше Codex (hooks/src/engine/discovery.rs). Interrupt у Codex нет: прерванный ход — по экрану (t648).
 const CODEX_HOOK = path.join(__dirname, 'codex-hook.js');
@@ -58,6 +56,31 @@ try {
 const log = (msg) => {
   try { fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} [${process.pid}] ${msg}\n`); } catch {}
 };
+
+// Необработанная ошибка (t1456) — в журнал: stderr демона никто не читает, daemon.log оставался пуст, окно ждало 10 с.
+// Строку «упал: …» окно показывает человеку (terminals.js, daemon). Только пока демон запускается: перед hookServer.listen
+// его сменяет обработчик, который лишь пишет в журнал (t116) — иначе ошибка одной команды погасила бы все терминалы.
+/** @param {any} err */
+function startFail(err) {
+  log(`необработанная ошибка: ${err && err.stack || err}`);
+  log(`упал: ${String(err && err.message || err).split('\n')[0]}`);
+  process.exit(1);
+}
+process.on('uncaughtException', startFail);
+
+// Модули с собственным кодом — после журнала (t1456): установщики 1.0.0 и 1.0.1 вышли без node_modules,
+// и require('node-pty') ронял демона раньше первой строки журнала.
+/** @template T @param {string} name @param {() => T} load @returns {T} */
+const need = (name, load) => {
+  try { return load(); } catch (e) {
+    log(`упал: модуль ${name} не загрузился — ${String(/** @type {any} */ (e) && /** @type {any} */ (e).message || e).split('\n')[0]}`);
+    process.exit(1);
+  }
+};
+const pty = need('node-pty', () => require('node-pty'));
+const { Terminal } = need('@xterm/headless', () => require('@xterm/headless'));
+const { SerializeAddon } = need('@xterm/addon-serialize', () => require('@xterm/addon-serialize'));
+const { Unicode11Addon } = need('@xterm/addon-unicode11', () => require('@xterm/addon-unicode11'));
 
 // Переменные запускающей сессии (Claude Code, Орка, сам Electron) в терминалы не попадают:
 // иначе claude внутри подключится к чужой сессии или сработают чужие хуки (журнал 17:09).
@@ -150,6 +173,14 @@ const SETTLE_MS = 1500;
 const LOUD_WORK_MS = 1500;
 // sessions.json — не чаще раза в SAVE_MS (t85): тема Claude меняется до 20 раз в секунду, и каждая смена переписывала файл.
 const SAVE_MS = 1000;
+// Посторонний процесс пишет прямо в консоль ConPTY (headless Chrome: «[…] N bytes written to file …png», t1464): альтернативный экран
+// прокручивается, а полноэкранный агент рисует только изменившиеся клетки — ввод ложится поверх чужого текста (d598).
+// Прокрутку всего альтернативного экрана во вкладке агента считаем незаказанной: через JOLT_QUIET_MS тишины ширина pty на столбец
+// меньше и через JOLT_STEP_MS обратно — программа рисует кадр заново, как после смены размера окна. JOLT_CALM_MS после — не смотрим:
+// ConPTY перерисовывает экран сам.
+const JOLT_QUIET_MS = 150;
+const JOLT_STEP_MS = 300;
+const JOLT_CALM_MS = 1000;
 // Дерево процессов терминала гасит taskkill (Session.terminate, t127). Полный путь: PATH у демона бывает урезан.
 const TASKKILL = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe');
 const TREE_KILL_MS = 5000;
@@ -374,6 +405,13 @@ class Session {
     // Терминал закрыли командой kill — выход с любым кодом не ошибка.
     this.killed = false;
     this.term.parser.registerOscHandler(9, (d) => this.onOsc9(d));
+    // Незаказанная прокрутка альтернативного экрана (t1464). onScroll xterm срабатывает и при смене буфера, поэтому — сама прокрутка буфера.
+    /** @type {NodeJS.Timeout | null} */
+    this.joltTimer = null;
+    this.joltCalm = 0;
+    const bs = /** @type {any} */ (this.term)._core._bufferService;
+    const scroll = bs.scroll.bind(bs);
+    bs.scroll = (/** @type {any} */ a, /** @type {any} */ b) => { scroll(a, b); this.onAltScroll(); };
 
     // Консоль из node-pty (conpty.dll + OpenConsole): одна версия на любой Windows. На вопрос DA1 при запуске отвечает answerDa1.
     this.da1Tail = '';
@@ -779,6 +817,28 @@ class Session {
         }
       });
     });
+  }
+
+  /** Буфер прокрутился. Альтернативный экран целиком, вкладка агента — перерисовать (t1464). Область прокрутки (DECSTBM) — прокрутка программы. */
+  onAltScroll() {
+    const b = /** @type {any} */ (this.term)._core.buffer;
+    if (this.term.buffer.active.type !== 'alternate' || !this.agent || b.scrollTop !== 0 || b.scrollBottom !== this.term.rows - 1) return;
+    if (Date.now() < this.joltCalm) return;
+    if (this.joltTimer) clearTimeout(this.joltTimer);
+    this.joltTimer = setTimeout(() => this.jolt(), JOLT_QUIET_MS);
+  }
+
+  /** Ширина pty на столбец меньше и обратно: программа рисует кадр заново. Копия экрана и окна размер не меняют. */
+  jolt() {
+    this.joltTimer = null;
+    if (this.ptyExited || this.cols < 3) return;
+    this.joltCalm = Date.now() + JOLT_STEP_MS + JOLT_CALM_MS;
+    log(`терминал ${this.sid}: альтернативный экран сдвинут не программой — перерисовка`);
+    try { this.pty.resize(this.cols - 1, this.rows); } catch { return; }
+    setTimeout(() => {
+      this.joltCalm = Date.now() + JOLT_CALM_MS;
+      if (!this.ptyExited) try { this.pty.resize(this.cols, this.rows); } catch {}
+    }, JOLT_STEP_MS);
   }
 
   /** @param {number} cols @param {number} rows */
@@ -1324,7 +1384,7 @@ function onHook(source, e, tabKey) {
   if (source === 'claude' && meta.kind === 'claude' && UUID.test(sessionId) && meta.claudeSessionId !== sessionId) newClaudeId(s, sessionId, event);
   s.hook = { event, at: new Date().toISOString(), sessionId, source, ...permOf(event, e) };
   broadcast({ ev: 'hook', sid: s.sid, hook: s.hook });
-  const state = HOOK_STATE[event];
+  const state = event === 'Notification' ? (NOTIFY_WAIT.includes(String(e.notification_type || '')) ? 'waiting' : '') : HOOK_STATE[event];
   if (state) {
     s.settleUntil = state === 'working' ? 0 : Date.now() + SETTLE_MS;
     s.setState(state, 'hook');
@@ -1450,7 +1510,7 @@ function writeHooksSettings(port) {
   };
   /** @type {Record<string, any[]>} */
   const hooks = {};
-  for (const ev of HOOK_EVENTS) hooks[ev] = [ev === 'PermissionRequest' ? { matcher: '*', hooks: [hook] } : { hooks: [hook] }];
+  for (const ev of HOOK_EVENTS) hooks[ev] = [ev === 'PermissionRequest' ? { matcher: '*', hooks: [hook] } : ev === 'Notification' ? { matcher: NOTIFY_WAIT.join('|'), hooks: [hook] } : { hooks: [hook] }];
   const fwd = (/** @type {string} */ p) => platform.shellArg(process.platform, p);
   // Строка состояния: обёртка пишет лимиты в файл и показывает строку пользователя из ~/.claude/settings.json (t41).
   const statusLine = { type: 'command', command: `${nodeCommand()} ${fwd(STATUSLINE)} ${fwd(RATE_LIMITS_FILE)}` };
@@ -1691,7 +1751,8 @@ function startPipe(port) {
     process.exit(0);
   });
 }
-hookServer.listen(0, '127.0.0.1', () => startPipe(/** @type {import('net').AddressInfo} */ (hookServer.address()).port));
-
-// Авария в одной команде не должна закрыть все терминалы с агентами.
+// Авария в одной команде не должна закрыть все терминалы с агентами. Обработчик запуска (startFail) больше не нужен.
+process.removeListener('uncaughtException', startFail);
 process.on('uncaughtException', (e) => log(`необработанная ошибка: ${e.stack || e}`));
+
+hookServer.listen(0, '127.0.0.1', () => startPipe(/** @type {import('net').AddressInfo} */ (hookServer.address()).port));

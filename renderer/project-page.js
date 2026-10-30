@@ -1635,11 +1635,13 @@
   //   host.bridge — window.kermach, term.close в нём убирает и вкладку из полосы (t705); host.pages — addTab, removeTab, setTab, show, isActive, addButton, removeButton (вкладка-страница в общей полосе и пункт меню «+», t220).
   //   host.call(cmd, ...args) — своя главная часть (поле main в plugin.json, t256), ответ или { error };
   //   host.on(event, cb) — её события ctx.send; подписки снимаются, когда плагин выключили.
+  // Это host встроенного плагина. Свой плагин (папка пользователя) — в Web Worker, loadOwn ниже (t1289): у него log, project, terminals,
+  // onTerminals, call, on и show — строка текста или кнопка; ни bridge, ни pages, ни openTab, ни DOM. Его главная часть — только с галочкой (t1384).
   /** Адрес кода плагина → его имя: по нему ошибка в коде плагина попадает в журнал с именем. @type {Map<string, string>} */
   const pluginUrls = new Map();
   /** Сколько первый запрос терминалов ждёт код плагинов (t277): код с диска грузится за десятки мс. */
   const PLUGINS_WAIT_MS = 500;
-  /** Подключённые плагины: id → { setup, stop, on }; setup запоминается, чтобы включить плагин снова без повторной загрузки кода. @type {Map<string, { setup: any, stop: (() => void) | null, on: boolean }>} */
+  /** Подключённые плагины: id → { setup, stop, on, worker }; setup запоминается, чтобы включить плагин снова без повторной загрузки кода; worker — свой плагин в Worker (t1289). @type {Map<string, { setup: any, stop: (() => void) | null, on: boolean, worker?: boolean }>} */
   const plugins = new Map();
   /** Включён ли плагин по последним настройкам: id → да/нет (нет записи — как в plugin.json, t220: "enabled": false — выключен). @type {Map<string, boolean>} */
   const want = new Map();
@@ -1665,6 +1667,109 @@
     document.body.appendChild(s);
     return /** @type {Promise<null>} */ (r);
   };
+  /** Сколько строк show может держать в окне один свой плагин (М2 ревью 2710b). */
+  const SHOW_MAX = 20;
+  /** Адрес blob: для Worker своих плагинов — один на окно, создаётся при первом своём плагине (t1400). @type {string} */
+  let ownWorkerUrl = '';
+  /**
+   * Код своего плагина (own, папка пользователя) — в Web Worker plugin-worker.js, не тегом <script> (t1289): он не видит window.kermach
+   * и не пишет в терминалы. Наружу — только то, что окно делает за него здесь: строка в журнале, список терминалов, своя главная часть
+   * (call, on; сама она грузится только с галочкой «главная часть» в «Настройках», t1384, main\plugin-bridge.js)
+   * и строки текста или кнопки в нижней строке, правой панели и низу левой панели (show). Каждое сообщение Worker проверяется: он чужой код.
+   * @param {{ id: string, url: string }} pl @returns {Promise<null>}
+   */
+  const loadOwn = (pl) => new Promise((done) => {
+    const id = pl.id;
+    // Worker из blob:, не из файла (t1400): такой Worker живёт под CSP окна (index.html), и import() плагина по сети и .json с диска отказан.
+    // Worker из file:// своей политики не имеет — import() грузил любой адрес. Внутри blob — одна строка: подключить plugin-worker.js.
+    // Окно открыто со своей схемы kermach-app (t1404, main\app-scheme.js): 'self' — только её файлы, import(file://…) с диска тоже отказан.
+    if (!ownWorkerUrl) ownWorkerUrl = URL.createObjectURL(new Blob([`importScripts(${JSON.stringify(new URL('plugin-worker.js', location.href).href)});`], { type: 'text/javascript' }));
+    const wk = new Worker(ownWorkerUrl);
+    /** Строки плагина в местах окна: ключ → элемент. @type {Map<string, HTMLElement>} */
+    const shown = new Map();
+    /** host текущего включения; null — плагин выключен, его просьбы не выполняются. @type {any} */
+    let host = null;
+    const places = /** @type {Record<string, string>} */ ({ bottom: 'bottom', right: 'right', side: 'sideFoot' });
+    /** Строка о пределе SHOW_MAX уже в журнале. */
+    let showFull = false;
+    /** Строка «загружен» ждёт первого удачного setup. */
+    let loadedLater = false;
+    const send = (/** @type {any} */ m) => { try { wk.postMessage(m); } catch (e) { t.log(`плагин ${id}: не отправлено в Worker: ${e}`); } };
+    const sendTerms = () => { if (host) send({ t: 'terms', list: host.terminals() }); };
+    const fail = (/** @type {string} */ why) => { pluginFailed.add(id); t.log(`плагин ${id}: ${why}`); done(null); };
+    wk.onerror = (ev) => { ev.preventDefault(); fail(`ошибка в коде: ${ev.message} (строка ${ev.lineno})`); };
+    wk.onmessage = (ev) => {
+      const d = ev.data && typeof ev.data === 'object' ? ev.data : {};
+      if (d.t === 'failed') fail('не загрузился');
+      else if (d.t === 'log') t.log(`плагин ${id}: ${String(d.m).slice(0, 2000)}`);
+      else if (d.t === 'started') {
+        // «включён» — только когда setup в Worker отработал (М1 ревью 2710b): startPlugin своему плагину эту строку не пишет.
+        const entry = plugins.get(id);
+        // «загружен» — после первого удачного setup: у Worker загрузка и setup раздельны, а упавшему плагину этой строки не положено.
+        if (d.ok === true && loadedLater) { loadedLater = false; if (!pluginFailed.has(id)) t.log(`плагин ${id}: загружен`); }
+        if (d.ok === true) t.log(`плагин ${id}: включён`);
+        else if (entry && entry.on) { entry.on = false; entry.stop = null; host = null; pluginFailed.add(id); t.log(`плагин ${id}: не включён — ошибка при запуске`); }
+      }
+      else if (d.t === 'ready') {
+        if (d.setup !== true && !pluginFailed.has(id)) t.log(`плагин ${id}: загружен`);
+        loadedLater = d.setup === true;
+        if (d.setup === true) {
+          const entry = plugins.get(id) || { setup: null, stop: null, on: false };
+          plugins.set(id, entry);
+          entry.worker = true;
+          entry.setup = (/** @type {any} */ h) => {
+            host = h;
+            h.onTerminals(sendTerms);
+            send({ t: 'start' });
+            sendTerms();
+            return () => {
+              host = null;
+              send({ t: 'stop' });
+              for (const el of shown.values()) el.remove();
+              shown.clear();
+              showFull = false;
+            };
+          };
+          if (want.get(id) !== false) startPlugin(id);
+        } else t.log(`плагин ${id}: kermachPlugin не вызван — не запущен`);
+        done(null);
+      } else if (!host) {
+        if (d.t === 'call') send({ t: 'reply', n: d.n, value: { error: I18n.t('page.pluginOff', 'плагин выключен') } });
+      } else if (d.t === 'call' && typeof d.cmd === 'string' && Array.isArray(d.args)) {
+        const n = d.n;
+        Promise.resolve(host.call(d.cmd, ...d.args)).then((v) => send({ t: 'reply', n, value: v }), (e) => send({ t: 'reply', n, value: { error: String(e) } }));
+      } else if (d.t === 'on' && typeof d.event === 'string') {
+        host.on(d.event, (/** @type {any} */ payload) => send({ t: 'event', event: d.event, payload }));
+      } else if (d.t === 'show' && typeof d.key === 'string' && Object.hasOwn(places, d.place)) {
+        const box = $(places[d.place]);
+        let el = shown.get(d.key);
+        if (!d.text) { if (el) el.remove(); shown.delete(d.key); }
+        else {
+          if (!el && shown.size >= SHOW_MAX) {
+            // Число строк одного плагина ограничено (М2 ревью 2710b): плагин в цикле с новыми ключами не забьёт окно.
+            if (!showFull) { showFull = true; t.log(`плагин ${id}: больше ${SHOW_MAX} строк в окне — новые не показаны`); }
+            return;
+          }
+          if (!el || el.parentElement !== box) {
+            if (el) el.remove();
+            el = document.createElement('div');
+            el.dataset.plugin = id;
+            el.dataset.key = d.key.slice(0, 64);
+            el.style.padding = '2px 8px';
+            box.appendChild(el);
+            shown.set(d.key, el);
+          }
+          el.textContent = String(d.text).slice(0, 500);
+          const key = d.key;
+          el.onclick = d.button === true ? () => send({ t: 'click', key }) : null;
+          el.style.cursor = d.button === true ? 'pointer' : '';
+          box.hidden = false;
+        }
+        for (const b of [$('bottom'), $('right'), $('sideFoot')]) b.hidden = ![...b.children].some((c) => !(/** @type {HTMLElement} */ (c)).hidden);
+      }
+    };
+    send({ t: 'load', url: pl.url, project: { id: p.id, name: p.name, path: p.path, color: p.color, icon: p.icon } });
+  });
   w.kermachPlugin = (/** @type {(host: any) => void} */ setup) => {
     const s = /** @type {HTMLScriptElement | null} */ (document.currentScript);
     const id = s && s.dataset.plugin;
@@ -1723,7 +1828,8 @@
     try {
       const stop = entry.setup(makeHost(id));
       entry.stop = typeof stop === 'function' ? stop : null;
-      t.log(`плагин ${id}: включён`);
+      // Свой плагин в Worker (t1289) пишет «включён» сам, по ответу started: setup здесь только отправил start.
+      if (!entry.worker) t.log(`плагин ${id}: включён`);
     } catch (e) { entry.on = false; pluginFailed.add(id); t.log(`плагин ${id}: ошибка при запуске: ${/** @type {any} */ (e).stack || e}`); }
   };
   /** Остановить плагин на лету: его функция остановки убирает своё из окна, подписки на терминалы снимаются здесь. @param {string} id */
@@ -1746,7 +1852,7 @@
       if (!(s.plugins && s.plugins[id] === true)) continue;
       ownLater.delete(id);
       want.set(id, true);
-      loadPlugin(pl);
+      loadOwn(pl);
     }
     for (const id of plugins.keys()) {
       const on = s.plugins && typeof s.plugins[id] === 'boolean' ? s.plugins[id] : defaultOn.get(id) !== false;
@@ -1766,7 +1872,7 @@
       defaultOn.set(pl.id, pl.defaultOn !== false);
       pluginUrls.set(pl.url, pl.id);
       if (pl.own && pl.enabled === false) { ownLater.set(pl.id, pl); t.log(`плагин ${pl.id}: свой, выключен — код не загружен`); continue; }
-      loads.push(loadPlugin(pl));
+      loads.push(pl.own ? loadOwn(pl) : loadPlugin(pl));
     }
     return Promise.all(loads);
   }).catch((/** @type {any} */ e) => t.log(`список плагинов не получен: ${e}`));

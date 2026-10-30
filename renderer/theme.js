@@ -67,7 +67,7 @@ try {
       delete document.documentElement.dataset.theme;
     }
     // Тема интерфейса (main\ui-themes.js, t506): data-ui — для renderer\ui.css, data-mode — светлый или тёмный вид.
-    // color-scheme окна — только у новых тем: у «Темы Ростислава» полосы прокрутки и поля как раньше.
+    // color-scheme окна — только у новых тем: у «Темы разработчика» полосы прокрутки и поля как раньше.
     const root = document.documentElement;
     for (const v of varsSet) st.removeProperty(v);
     varsSet = [];
@@ -75,7 +75,7 @@ try {
     const ui = (meta && meta.ui) || 'termius';
     root.dataset.ui = ui;
     root.dataset.mode = meta && meta.kind === 'light' ? 'light' : 'dark';
-    if (ui === 'rostyslav') st.removeProperty('color-scheme'); else st.colorScheme = root.dataset.mode;
+    st.colorScheme = root.dataset.mode;
     if (before !== was) for (const cb of subs) { try { cb(); } catch {} }
   }
 
@@ -97,7 +97,7 @@ try {
     terminal: () => (look ? look.terminal : null),
     /** Цвет окна темы по имени поля (muted, accent…) или '' — темы нет. @param {string} name */
     color: (name) => (look && look.window[name]) || '',
-    /** Тема интерфейса: kermach, termius, rostyslav, studio, deck, glass (macOS). */
+    /** Тема интерфейса: kermach, termius, studio, deck, glass (macOS). */
     ui: () => (meta && meta.ui) || 'termius',
     /** Светлый или тёмный вид действующей темы: light или dark. */
     mode: () => (meta && meta.kind === 'light' ? 'light' : 'dark'),

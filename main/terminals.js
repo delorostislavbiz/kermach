@@ -241,7 +241,7 @@ function launch(kind, resume, hooksSettings, ag, codexHook, bypass, name) {
     // Имя для других сессий (ListAgents, SendMessage, t1211): без флага Claude даёт безликое claude-1c.
     const pre = [...p.pre, ...hooksSettings ? ['--settings', hooksSettings] : [], ...name ? ['--name', name] : []];
     // Агент — и при --resume: без --agent продолженный разговор теряет модель агента (проба t259, q4-summary.txt).
-    // permissionMode файла агента при --agent не действует (t249) — его передаёт флаг; нет поля в файле — нет флага, режим Ростислава.
+    // permissionMode файла агента при --agent не действует (t249) — его передаёт флаг; нет поля в файле — нет флага, режим пользователя.
     // Без вопросов о разрешениях (t851) — флаг ставит только ядро: по пункту меню «+» или настройке проекта, не по аргументам плагина.
     // Флаг как в Орке; --permission-mode bypassPermissions ведёт себя так же (spikes\t851-bypass\probe-claude.txt). Режим агента тогда не ставится: два флага прав спорили бы.
     const agArgs = ag ? ['--agent', ag.name, ...(ag.mode && !bypass ? ['--permission-mode', ag.mode] : [])] : [];
@@ -260,9 +260,11 @@ function launch(kind, resume, hooksSettings, ag, codexHook, bypass, name) {
     // Гасить его нельзя — он общий для всех Codex. С --no-daemon сервер живёт внутри вкладки и закрывается с ней (ОТЧЁТ-t05-codex-server.md).
     // Уведомления Codex — OSC 9 в вывод вкладки, всегда, даже когда окно в фокусе: по ним демон знает «готов» и «требует ответа» (t26).
     // Значения проходят два слоя cmd (codex.cmd) — без кавычек и пробелов.
-    const notify = ['-c', 'tui.notifications=true', '-c', 'tui.notification_method=osc9', '-c', 'tui.notification_condition=always'];
+    const notify = ['-c', 'tui.notifications=true', '-c', 'tui.notification_method=osc9', '-c', 'tui.notification_condition=always',
+      // Плашка «Update available» при каждом запуске вкладки засоряет экран (t1381, d519); ~/.codex/config.toml не трогаем.
+      '-c', 'check_for_update_on_startup=false'];
     // Хук SessionStart (t777): по нему демон узнаёт номер разговора свежей вкладки и новый номер после /clear. В значениях кавычки, пробелы и <> —
-    // .cmd от npm запускается мимо cmd.exe (cmd-shim.unwrap), как подсказка Claude. Первый codex.cmd в PATH — своя обёртка (у Ростислава
+    // .cmd от npm запускается мимо cmd.exe (cmd-shim.unwrap), как подсказка Claude. Первый codex.cmd в PATH — своя обёртка (у пользователя
     // ~/.local/bin/codex.cmd зовёт npm-овский через call): тогда обёртка npm дальше по PATH. Нет её — без хука: номер найдёт демон по журналу (codexRollout).
     const direct = codexHook && codexHook.length ? codexDirect(found) : null;
     const p = direct || found;
@@ -789,7 +791,7 @@ async function runningConversation(d, id) {
 /**
  * Вкладки проекта из файла без живого терминала — запустить заново, по одной. Новый терминал встаёт в файле на место старого.
  * Claude без разговора на диске (в нём не написали ни одного сообщения, или Claude стёр старый разговор) — новый разговор
- * в этой же вкладке, во вкладке строка «прежний разговор не найден, начат новый» (t165, решение Ростислава 04.10 — «Б»).
+ * в этой же вкладке, во вкладке строка «прежний разговор не найден, начат новый» (t165, решение пользователя 04.10 — «Б»).
  * Прежний номер остаётся в main.log: если разговор на самом деле был, его можно продолжить руками (claude --resume).
  * @param {Ctx} c @param {import('../daemon/client').DaemonClient} d @param {{ id: string, path: string }} p @param {number} cols @param {number} rows
  */
@@ -939,7 +941,7 @@ async function openTabHeld(c, p, kind, o, ex0, cols, rows, wc, human, follow, mo
   if (!r.c) return { error: r.error || 'нет связи с демоном' };
   const d = r.c;
   const k = lookOf(kind);
-  // Разговор уже идёт во вкладке любого проекта — второй процесс испортил бы его журнал (решение Ростислава 14.10, t767).
+  // Разговор уже идёт во вкладке любого проекта — второй процесс испортил бы его журнал (решение пользователя 14.10, t767).
   // Или его запускает сейчас revive другого окна (t787): номер занят в launching до create.
   /** @type {{ title: string, project: string, sid: string } | null} */
   let held = null;
@@ -1143,6 +1145,32 @@ async function attachTo(c, wc, sid, cols, rows) {
 }
 
 /**
+ * Причина из daemon.log для строки «демон не запустился» (t1456): последняя строка «упал: …» в хвосте журнала (не старше 5 минут), целиком
+ * (daemon.js, need и uncaughtException), и путь к журналу. Без слов — строка идёт в {err} перевода term.daemonFail.
+ */
+function daemonCause() {
+  const file = path.join(require('../daemon/protocol').DATA_DIR, 'logs', 'daemon.log');
+  let why = '';
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const st = fs.fstatSync(fd);
+      const size = Date.now() - st.mtimeMs < 5 * 60000 ? st.size : 0;
+      const buf = Buffer.alloc(Math.min(size, 8192));
+      fs.readSync(fd, buf, 0, buf.length, size - buf.length);
+      // Последняя «упал:» в хвосте, а не последняя строка: после неё в журнал могли дописать ещё (t1459). Строка целиком —
+      // в «модуль node-pty не загрузился — …» имя модуля стоит до тире.
+      const lines = buf.toString('utf8').trim().split('\n');
+      for (let i = lines.length - 1; i >= 0 && !why; i--) {
+        const at = lines[i].indexOf('] упал: ');
+        if (at >= 0) why = lines[i].slice(at + 8);
+      }
+    } finally { fs.closeSync(fd); }
+  } catch {}
+  return `${why ? ` — ${why.trim()}` : ''}\n${file}`;
+}
+
+/**
  * Демон для вызова из окна: ошибка — строкой, окно её покажет.
  * После обрыва связи запрос к старому клиенту не получил бы ответа никогда — поэтому проверка client.
  * Связи нет — окно просит демона заново (link.ensure): найти живого или поднять нового (t125).
@@ -1154,7 +1182,7 @@ async function daemon() {
   try {
     await c.daemon.catch((err) => { if (!c.link) throw err; });
     if (!client && c.link) await c.link.ensure();
-  } catch (err) { return { error: i18n.t('term.daemonFail', 'Демон терминалов не запустился: {err}', { err }) }; }
+  } catch (err) { return { error: i18n.t('term.daemonFail', 'Демон терминалов не запустился: {err}', { err: `${err}${daemonCause()}` }) }; }
   return client ? { c: client } : { error: i18n.t('term.daemonLost', 'связь с демоном терминалов потеряна — перезапустите окно') };
 }
 

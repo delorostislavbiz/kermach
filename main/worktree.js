@@ -88,9 +88,25 @@ async function extras(dir) {
 }
 
 /**
+ * Вложенные git без единого коммита (t1405): `git add -A` на них падает «does not have a commit checked out» (пробы оставляют такие, d540).
+ * Их в снимок не берём; вызывающий называет папки в выводе. Вложенный git с коммитом git добавляет сам (как ссылку).
+ * @param {string} dir @returns {Promise<string[]>} пути от корня проекта, с прямыми косыми, без хвостовой косой
+ */
+async function emptyNested(dir) {
+  const r = await git(['ls-files', '--others', '--exclude-standard', '-z'], dir);
+  if (r.code !== 0) return [];
+  const res = [];
+  for (const f of r.out.split('\0').filter((x) => x.endsWith('/'))) {
+    const rel = f.slice(0, -1);
+    if (isGit(path.join(dir, rel)) && (await git(['rev-parse', '--verify', '--quiet', 'HEAD'], path.join(dir, rel))).code !== 0) res.push(rel);
+  }
+  return res;
+}
+
+/**
  * Дерево рабочей папки со всеми правками (изменённые, новые, удалённые; .gitignore соблюдается) через свой временный индекс:
  * настоящий .git\index, ветка и файлы не меняются — как снимок точки (plugins\git\points.js). @param {string} dir
- * @returns {Promise<{ tree: string, headTree: string } | { error: string }>}
+ * @returns {Promise<{ tree: string, headTree: string, nested: string[] } | { error: string }>}
  */
 async function workTree(dir) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kermach-wt-'));
@@ -98,29 +114,32 @@ async function workTree(dir) {
   try {
     const head = await git(['rev-parse', 'HEAD^{tree}'], dir);
     if (head.code !== 0) return { error: 'в проекте нет ни одного коммита' };
-    for (const a of [['read-tree', 'HEAD'], ['add', '-A']]) {
+    const nested = await emptyNested(dir);
+    const skip = nested.map((n) => `:(exclude,literal)${n}`);
+    for (const a of [['read-tree', 'HEAD'], ['add', '-A', ...(skip.length ? ['--', '.', ...skip] : [])]]) {
       const r = await git(a, dir, env);
       if (r.code !== 0) return { error: `git ${a[0]}: ${r.err.trim().split('\n').pop()}` };
     }
     const w = await git(['write-tree'], dir, env);
     if (w.code !== 0) return { error: `git write-tree: ${w.err.trim().split('\n').pop()}` };
-    return { tree: w.out.trim(), headTree: head.out.trim() };
+    return { tree: w.out.trim(), headTree: head.out.trim(), nested };
   } finally {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* временная папка */ }
   }
 }
 
 /**
- * От чего делать копию (t1172, ответ Ростислава 2а): несохранённые правки человека попадают в копию без его коммита.
+ * От чего делать копию (t1172, ответ пользователя 2а): несохранённые правки человека попадают в копию без его коммита.
  * Есть правки — коммит-снимок рабочей папки поверх HEAD (commit-tree: ветка и индекс проекта не меняются); история включена
  * (есть точки) — сперва точка возврата «Перед копией <имя>». Правок нет — HEAD.
  * @param {string} dir @param {string} name
- * @returns {Promise<{ base: string, changed: number } | { error: string }>}
+ * @returns {Promise<{ base: string, changed: number, nested: string[] } | { error: string }>}
  */
 async function baseOf(dir, name) {
   const w = await workTree(dir);
   if ('error' in w) return w;
-  if (w.tree === w.headTree) return { base: 'HEAD', changed: 0 };
+  const nested = w.nested || [];
+  if (w.tree === w.headTree) return { base: 'HEAD', changed: 0, nested };
   const pts = await git(['for-each-ref', '--count=1', '--format=%(refname)', 'refs/kermach/points/'], dir);
   if (pts.code === 0 && pts.out.trim()) {
     try { await require('../plugins/git/points.js').snapshot(dir, { label: `Перед копией ${name}` }); } catch { /* точка — запас, копия важнее */ }
@@ -129,7 +148,7 @@ async function baseOf(dir, name) {
   const who = { GIT_AUTHOR_NAME: 'Kermach', GIT_AUTHOR_EMAIL: 'copy@kermach.local', GIT_COMMITTER_NAME: 'Kermach', GIT_COMMITTER_EMAIL: 'copy@kermach.local' };
   const c = await git(['-c', 'commit.gpgsign=false', 'commit-tree', w.tree, '-p', 'HEAD', '-m', `Kermach: несохранённые правки проекта перед копией ${name}`], dir, who);
   if (c.code !== 0) return { error: `git commit-tree: ${c.err.trim().split('\n').pop()}` };
-  return { base: c.out.trim(), changed: n.out.split('\n').filter(Boolean).length };
+  return { base: c.out.trim(), changed: n.out.split('\n').filter(Boolean).length, nested };
 }
 
 /**
@@ -138,7 +157,7 @@ async function baseOf(dir, name) {
  * Файлы вне git — асинхронно (fs.promises), окна не замирают: только настройки (SETTINGS), каждый до 5 МБ, всего до 20 МБ (t1065).
  * @param {string} dir папка проекта
  * @param {{ now?: Date, log?: (m: string) => void, name?: string }} [opt] name — своё имя копии и ветки (kermach copy new имя)
- * @returns {Promise<{ path: string, branch: string, copied: string[], skipped: string[], changed: number } | { error: string }>}
+ * @returns {Promise<{ path: string, branch: string, copied: string[], skipped: string[], changed: number, nested: string[] } | { error: string }>}
  */
 async function create(dir, opt = {}) {
   if (!isGit(dir)) return { error: 'не git-проект' };
@@ -154,6 +173,7 @@ async function create(dir, opt = {}) {
   const add = await git(['worktree', 'add', '-b', branch, t.dir, from.base], dir);
   if (add.code !== 0) return { error: (add.err.trim().split('\n').pop() || 'git worktree add не удался') };
   const log = opt.log || (() => {});
+  if (from.nested.length) log(`пропущены вложенные git без коммитов (в копию не попадают): ${from.nested.join(', ')}`);
   const all = await extras(dir);
   const skipped = all.filter((f) => !isSettings(f));
   /** @type {{ f: string, size: number }[]} */
@@ -177,7 +197,7 @@ async function create(dir, opt = {}) {
       copied.push(f);
     } catch { skipped.push(f); }
   }
-  return { path: t.dir, branch, copied, skipped, changed: from.changed };
+  return { path: t.dir, branch, copied, skipped, changed: from.changed, nested: from.nested };
 }
 
 /** Удаление без следования по ссылкам: ссылка (symlink, junction — lstat видит и её) снимается сама, цель не трогается. @param {string} p */
@@ -384,7 +404,7 @@ async function conflictLines(main, tree, f) {
 }
 
 /**
- * Вливает копию в проект (t1173, ГИТ-устройство.md (в), этап 9; ответ Ростислава 3).
+ * Вливает копию в проект (t1173, ГИТ-устройство.md (в), этап 9; ответ пользователя 3).
  * 1) В копии нет несохранённого — иначе отказ. 2) merge-tree --write-tree: слияние без касания папок и индекса. 3) Конфликт — ничего не меняем,
  * отдаём файлы и строки. 4) Правки человека в проекте, которые отличаются от итога слияния в тех же файлах, — отказ со списком.
  * Файл, где у человека то же, что в итоге (копия несёт коммит Kermach с его правками, baseOf, d366), правкой не считается:
