@@ -226,6 +226,23 @@ function insideReal(file, root) {
   } catch { return false; }
 }
 
+/** Номер проекта по рабочей папке разговора: самый глубокий проект, внутри которого она лежит (list — по убыванию длины пути).
+ *  Без обращений к диску; одинаковые папки считаются один раз (t1468). @param {{ id: string, root: string }[]} list @returns {(cwd: string) => string | null} */
+function projectOwner(list) {
+  /** @type {Map<string, string | null>} */
+  const seen = new Map();
+  return (cwd) => {
+    if (!cwd) return null;
+    const had = seen.get(cwd);
+    if (had !== undefined) return had;
+    const c = path.resolve(cwd).toLowerCase();
+    let id = null;
+    for (const p of list) if (c === p.root || c.startsWith(p.root + path.sep)) { id = p.id; break; }
+    seen.set(cwd, id);
+    return id;
+  };
+}
+
 /** @param {any} ctx */
 module.exports = (ctx) => {
   users.add(ctx);
@@ -234,7 +251,7 @@ module.exports = (ctx) => {
   let liveNow = { tabs: new Map(), outside: new Map() };
   /** Проекты из списка «Проекты»: путь → номер; файл перечитывается, когда изменился. */
   let projAt = -1;
-  /** @type {{ id: string, path: string }[]} */
+  /** @type {{ id: string, path: string, root: string }[]} */
   let projs = [];
   /** Первая строка последнего ответа агента: «агент:номер» → { u: updatedAt, text } (t1116). @type {Map<string, { u: string, text: string }>} */
   const lastCache = new Map();
@@ -259,22 +276,11 @@ module.exports = (ctx) => {
         projAt = t;
         const j = JSON.parse(fs.readFileSync(file, 'utf8'));
         projs = (Array.isArray(j.projects) ? j.projects : []).filter((/** @type {any} */ p) => p && p.id && p.path)
-          .map((/** @type {any} */ p) => ({ id: String(p.id), path: String(p.path) }))
+          .map((/** @type {any} */ p) => ({ id: String(p.id), path: String(p.path), root: path.resolve(String(p.path)).toLowerCase().replace(/[\\/]+$/, '') }))
           .sort((/** @type {any} */ a, /** @type {any} */ b) => b.path.length - a.path.length);
       }
     } catch { projs = []; }
     return projs;
-  }
-
-  /** Номер проекта по рабочей папке разговора: самый глубокий проект, внутри которого она лежит. @param {string} cwd */
-  function projectOf(cwd) {
-    if (!cwd) return null;
-    const c = path.resolve(cwd).toLowerCase();
-    for (const p of projects()) {
-      const r = path.resolve(p.path).toLowerCase().replace(/[\\/]+$/, '');
-      if (c === r || c.startsWith(r + path.sep)) return p.id;
-    }
-    return null;
   }
 
   /** Порог «брошен» из настроек плагина, дней. */
@@ -289,6 +295,8 @@ module.exports = (ctx) => {
     const now = await running();
     const days = staleDays();
     const at = Date.now();
+    // Список проектов — один раз за проход (t1468): stat projects.json на каждую запись тормозил ввод в главном процессе.
+    const projectOf = projectOwner(projects());
     for (const it of r.items) {
       it.projectId = projectOf(it.cwd);
       it.live = live.liveOf(it, now.tabs, now.outside);
@@ -567,3 +575,4 @@ module.exports = (ctx) => {
 module.exports.stateOf = stateOf;
 module.exports.cardStateOf = cardStateOf;
 module.exports.hides = hides;
+module.exports.projectOwner = projectOwner;
