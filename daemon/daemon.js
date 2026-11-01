@@ -370,6 +370,16 @@ class Session {
     // Последнее событие хука: { event, at, sessionId, source }. Не в desc — в sessions.json не пишется: после перезапуска оно уже неправда.
     /** @type {{ event: string, at: string, sessionId: string, source: string } | null} */
     this.hook = null;
+    // Последняя команда агенту (UserPromptSubmit) и начало его ответа (Stop), t1469: { text, at }, до 300 знаков, секреты скрыты.
+    // Не в desc — в sessions.json не пишется: команды и ответы живут только в памяти демона, после перезапуска пусто до следующей команды.
+    /** @type {{ text: string, at: string } | null} */
+    this.prompt = null;
+    // ask (t1483) — вопрос текстом в конце ответа (askOf), если ответ кончается «?».
+    /** @type {{ text: string, at: string, ask?: string } | null} */
+    this.reply = null;
+    // «Не смотрел» (t1470): агент закончил (done), а окно проекта эту вкладку после того на экране не открывало. Снимает команда seen и новый ход.
+    // Не в desc — в sessions.json не пишется: переживает перезапуск окна, после перезапуска демона false.
+    this.unseen = false;
     // Состояние агента (t13): код из STATES или '' — состояния нет (обычный терминал, агент до первого вопроса).
     // Не в desc — в sessions.json не пишется: после перезапуска демона вкладка запускается заново, прежнее состояние уже неправда.
     // Не в meta — update принимает meta целиком, окно со старой meta затёрло бы состояние (карта t83).
@@ -436,13 +446,15 @@ class Session {
   }
 
   info() {
-    return { ...this.desc, pid: this.pty.pid, cols: this.cols, rows: this.rows, attached: this.subs.size, hook: this.hook, state: this.state, stateAt: this.stateAt };
+    return { ...this.desc, pid: this.pty.pid, cols: this.cols, rows: this.rows, attached: this.subs.size, hook: this.hook, state: this.state, stateAt: this.stateAt,
+      prompt: this.prompt, reply: this.reply, unseen: this.unseen };
   }
 
   /** Агент ли во вкладке и какой: claude, codex или id из каталога (вид agent:<id>, t334). Вид читается каждый раз: meta меняет update. */
   get agent() {
     const k = String((this.desc.meta && this.desc.meta.kind) || '');
-    if (k === 'claude' || k === 'codex') return k;
+    // Claude на кредитах (t1357): метки от хуков claude -p и от обёртки; разбор заголовка и темы — только у 'claude'.
+    if (k === 'claude' || k === 'codex' || k === 'credits') return k;
     return k.startsWith('agent:') ? k.slice(6) : '';
   }
 
@@ -470,7 +482,9 @@ class Session {
     this.state = state;
     this.stateBy = by;
     this.stateAt = new Date(now).toISOString();
-    broadcast({ ev: 'state', sid: this.sid, state, by, at: this.stateAt, ...(loud ? { loud: true } : {}) });
+    if (state === 'done') this.unseen = true;
+    else if (state === 'working') this.unseen = false;
+    broadcast({ ev: 'state', sid: this.sid, state, by, at: this.stateAt, unseen: this.unseen, ...(loud ? { loud: true } : {}) });
   }
 
   /**
@@ -951,7 +965,7 @@ class Session {
     } else this.term.dispose();
     // Состояние «завершён» или «ошибка» — в самом событии: терминала после него в списке уже нет. Обычный терминал — всегда завершён.
     // «Ошибка» — только у Claude и Codex: коды выхода других агентов (Ctrl+C и т. п.) не проверены, ложное «оборвался» хуже (t334).
-    const known = this.agent === 'claude' || this.agent === 'codex';
+    const known = this.agent === 'claude' || this.agent === 'codex' || this.agent === 'credits';
     broadcast({ ev: 'exit', sid: this.sid, code, state: known && code !== 0 && !this.killed ? 'error' : 'exited' });
     // При остановке демона описания остаются: по ним вкладки можно вернуть после перезагрузки.
     if (!shuttingDown) saveSessions();
@@ -995,7 +1009,7 @@ function writeSessions() {
   }
 }
 
-const NEEDS_SESSION = new Set(['attach', 'detach', 'read', 'write', 'resize', 'update', 'kill']);
+const NEEDS_SESSION = new Set(['attach', 'detach', 'read', 'write', 'resize', 'update', 'kill', 'seen']);
 
 /** Ключ канала из hello совпал (t275). Сверка как у приёмника хуков. @param {any} key */
 function keyOk(key) {
@@ -1095,6 +1109,10 @@ function handle(c, msg) {
     }
     case 'kill':
       s.terminate();
+      return c.reply(id);
+    case 'seen':
+      // Окно открыло вкладку на экране (t1470): «не смотрел» снят. Рассылка — только при смене.
+      if (s.unseen) { s.unseen = false; broadcast({ ev: 'seen', sid: s.sid }); }
       return c.reply(id);
     // Флаги хука Codex, проверенные у самого Codex (t797): окно присылает программу Codex мимо обёртки .cmd и папку вкладки.
     case 'codexHook': {
@@ -1306,10 +1324,77 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function permOf(event, e) {
   if (event !== 'PermissionRequest') return {};
   const inp = e.tool_input && typeof e.tool_input === 'object' ? e.tool_input : {};
-  const raw = inp.command || inp.file_path || inp.path || inp.url || inp.pattern || inp.description || '';
+  // AskUserQuestion (t1483): what — текст первого вопроса, его дашборд пишет «Задал вопрос: …».
+  const q = Array.isArray(inp.questions) && inp.questions[0] && typeof inp.questions[0].question === 'string' ? inp.questions[0].question : '';
+  const raw = q || inp.command || inp.file_path || inp.path || inp.url || inp.pattern || inp.description || '';
   const line = (s, n) => String(s || '').replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
   // Строка уходит во вкладку оркестратора и в уведомление Windows (t1135): секреты скрыть до обрезки, чтобы не остался обрезок ключа.
   return { tool: line(e.tool_name, 60), what: line(hideSecrets(hideCmdSecrets(String(raw))), 160) };
+}
+
+const TALK_MAX = 300;
+const TRANSCRIPT_TAIL = 64 * 1024;
+
+/**
+ * Команда агенту и начало ответа (t1469): UserPromptSubmit — prompt, Stop — last_assistant_message (Codex; у Claude Code поле есть не во всех версиях),
+ * без него — последний ответ из хвоста transcript_path. Одной строкой, секреты скрыты до обрезки 300 знаков. Другие события и пустой текст — null.
+ * @param {string} event @param {any} e @returns {{ key: 'prompt' | 'reply', text: string, ask?: string } | null}
+ */
+function talkOf(event, e) {
+  let key, raw;
+  if (event === 'UserPromptSubmit') { key = 'prompt'; raw = e.prompt; }
+  else if (event === 'Stop') { key = 'reply'; raw = e.last_assistant_message || lastReply(e.transcript_path); }
+  else return null;
+  if (typeof raw !== 'string') return null;
+  const one = (/** @type {string} */ s) => hideSecrets(hideCmdSecrets(s)).replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const text = one(raw).slice(0, TALK_MAX);
+  if (!text) return null;
+  const ask = key === 'reply' ? askOf(raw) : '';
+  return /** @type {const} */ ({ key, text, ...(ask ? { ask: one(ask).slice(-TALK_MAX) } : {}) });
+}
+
+/**
+ * Вопрос текстом в конце ответа (t1483): хуки Claude и Codex не отличают «закончил» от «закончил вопросом человеку»
+ * (ответ «…Так оставить или взять другой вариант?» и Stop). Признак — «?» в конце ответа;
+ * вопрос — последний абзац, с последней фразы перед «?». Нет — ''. @param {string} raw
+ */
+function askOf(raw) {
+  const s = raw.trim();
+  if (!/\?[\s»"'`)*_]*$/.test(s)) return '';
+  const para = s.split(/\n\s*\n/).pop() || s;
+  const m = /(?:^|[.!?:]\s|\n)([^.!?\n][^\n]*\?[\s»"'`)*_]*)$/.exec(para);
+  return (m ? m[1] : para).trim();
+}
+
+/**
+ * Последний ответ Claude Code из журнала разговора: строки type assistant с частями text, с конца, не больше 64 КБ хвоста. Не прочли — ''.
+ * @param {any} file
+ */
+function lastReply(file) {
+  if (typeof file !== 'string' || !file.endsWith('.jsonl')) return '';
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const n = Math.min(size, TRANSCRIPT_TAIL);
+    const buf = Buffer.alloc(n);
+    fs.readSync(fd, buf, 0, n, size - n);
+    const rows = buf.toString('utf8').split('\n');
+    // Первая строка хвоста обычно обрезана — JSON.parse её отбросит.
+    for (let i = rows.length - 1; i >= 0; i--) {
+      let r;
+      try { r = JSON.parse(rows[i]); } catch { continue; }
+      if (r.type === 'user' && r.message && typeof r.message.content === 'string') break;
+      if (r.type !== 'assistant' || !r.message || !Array.isArray(r.message.content)) continue;
+      const text = r.message.content.filter((p) => p && p.type === 'text').map((p) => p.text).join(' ').trim();
+      if (text) return text;
+    }
+  } catch {
+    // Журнала нет или он занят — ответа нет.
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+  }
+  return '';
 }
 
 /**
@@ -1382,8 +1467,13 @@ function onHook(source, e, tabKey) {
     return log(`приёмник: claude ${event} — чужой номер разговора ${sessionId}${e.agent_id ? ` (agent_id ${e.agent_id})` : ''}, у вкладки ${s.sid} ${meta.claudeSessionId}, состояние ${s.state || 'нет'}; отброшено`);
   }
   if (source === 'claude' && meta.kind === 'claude' && UUID.test(sessionId) && meta.claudeSessionId !== sessionId) newClaudeId(s, sessionId, event);
-  s.hook = { event, at: new Date().toISOString(), sessionId, source, ...permOf(event, e) };
-  broadcast({ ev: 'hook', sid: s.sid, hook: s.hook });
+  // Notification «permission_prompt» приходит через ~6 с после PermissionRequest (t1483, spikes\t1483-ask\cause.txt): вкладка ещё ждёт того же ответа,
+  // поэтому что просят (tool, what) остаётся, иначе дашборд потеряет текст вопроса и имя инструмента.
+  const same = event === 'Notification' && s.state === 'waiting' && s.hook && s.hook.event === 'PermissionRequest';
+  s.hook = same ? s.hook : { event, at: new Date().toISOString(), sessionId, source, ...permOf(event, e) };
+  const said = talkOf(event, e);
+  if (said) s[said.key] = { text: said.text, at: s.hook.at, ...(said.ask ? { ask: said.ask } : {}) };
+  broadcast({ ev: 'hook', sid: s.sid, hook: s.hook, ...(said ? { [said.key]: s[said.key] } : {}) });
   const state = event === 'Notification' ? (NOTIFY_WAIT.includes(String(e.notification_type || '')) ? 'waiting' : '') : HOOK_STATE[event];
   if (state) {
     s.settleUntil = state === 'working' ? 0 : Date.now() + SETTLE_MS;

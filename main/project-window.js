@@ -139,10 +139,34 @@ function open(c, p, opt = {}) {
 /** Проект окна, из которого пришёл вызов; не окно проекта — null. @param {import('electron').WebContents} wc */
 const projectOf = (wc) => byContents.get(wc.id) || null;
 
+/**
+ * Показать вкладку в окне проекта (t1472, щелчок по агенту в «Дашборде»): term:show, как у ctx.openTab.
+ * Окно только что открыто — страница подписывается на term:show после первых await (project-page.js), поэтому ждём,
+ * пока она нарисует панель этой вкладки ([data-sid]), не дольше SHOW_WAIT_MS; не дождались — шлём всё равно (страница запомнит wantShow).
+ * @param {string} id номер проекта @param {string} sid
+ */
+function showTab(id, sid) {
+  const w = windowFor(id);
+  if (!w) return false;
+  const wc = w.webContents;
+  const send = () => { if (!wc.isDestroyed()) wc.send('term:show', { sid }); };
+  const sel = JSON.stringify(`[data-sid="${sid.replace(/["\\]/g, '')}"]`);
+  const t0 = Date.now();
+  const tick = () => {
+    if (wc.isDestroyed()) return;
+    if (Date.now() - t0 > SHOW_WAIT_MS) return send();
+    if (wc.isLoading() || !wc.getURL()) return void setTimeout(tick, 200);
+    wc.executeJavaScript(`!!document.querySelector(${sel})`).then((ok) => (ok ? send() : setTimeout(tick, 200)), () => setTimeout(tick, 200));
+  };
+  tick();
+  return true;
+}
+const SHOW_WAIT_MS = 15000;
+
 /** Открытое окно проекта по его номеру; нет — null. @param {string} id */
 function windowFor(id) {
   const w = windows.get(id);
   return w && !w.isDestroyed() ? w : null;
 }
 
-module.exports = { open, projectOf, windowFor };
+module.exports = { open, projectOf, windowFor, showTab };

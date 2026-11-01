@@ -1,144 +1,133 @@
 // @ts-check
-// Страница окна «Дашборд» (t1402): рисует карту из узлов main\dashboard-window.js. Узлы — по эллипсу вокруг центра, ветка — кривая в цвет проекта.
-// Щелчок по узлу — окно проекта. Данные приходят событием dashboard:changed; страница сама файлов не читает.
+// Страница окна «Дашборд» (t1472, ТЗ-дашборд-полосы.md, МАКЕТ-дашборд.html): сводка сверху, полосы по состоянию сверху вниз, в полосе — сетка карточек.
+// Узлы приходят из main\dashboard-window.js уже по полосам и в порядке (collect.order): страница только рисует, файлов не читает.
+// Щелчок по карточке — окно проекта, по агенту — его вкладка в окне проекта. Свёрнутые полосы помнит localStorage окна.
 (function () {
   const w = /** @type {any} */ (window);
   const D = w.dashboard;
   const I18n = w.I18n;
   const t = (/** @type {string} */ k, /** @type {string} */ ru, /** @type {any} */ v) => (I18n ? I18n.t(`dashboard.${k}`, ru, v) : ru.replace(/\{(\w+)\}/g, (/** @type {string} */ m, /** @type {string} */ x) => (v && x in v ? String(v[x]) : m)));
   const $ = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.getElementById(id));
-  const NODE_W = 250, NODE_H = 190;
-  /** Наименьший читаемый масштаб карты (t1415): мельче — прокрутка. */
-  const MIN_SCALE = 0.55, PAD = 12;
+  const SHUT_KEY = 'dashboard.shut';
   /** @type {any[]} */
   let nodes = [];
 
+  const LANES = ['wait', 'work', 'done', 'quiet'];
+  /** Названия полос и сводки — ключи dashboard.lane.*, dashboard.sum.* (t1480: русский текст только внутри t). */
+  const LANE_NAME = /** @type {Record<string, () => string>} */ ({ wait: () => t('lane.wait', 'Ждёт тебя'), work: () => t('lane.work', 'Работает'), done: () => t('lane.done', 'Закончил, ты ещё не смотрел'), quiet: () => t('lane.quiet', 'Тихо') });
+  const SUM = /** @type {Record<string, (n: number) => string>} */ ({ wait: (n) => t('sum.wait', 'Ждёт тебя: {n}', { n }), work: (n) => t('sum.work', 'Работает: {n}', { n }), done: (n) => t('sum.done', 'Закончил: {n}', { n }), quiet: (n) => t('sum.quiet', 'Тихо: {n}', { n }) });
+  /** Состояние вкладки → цвет точки (класс). */
+  const DOT = /** @type {Record<string, string>} */ ({ waiting: 'wait', error: 'err', working: 'work', done: 'done' });
+  const STATES = /** @type {Record<string, () => string>} */ ({ working: () => t('st.working', 'работает'), waiting: () => t('st.waiting', 'ждёт'), done: () => t('st.done', 'закончил'), error: () => t('st.error', 'ошибка'), exited: () => t('st.exited', 'завершён') });
+  const LANE_ST = /** @type {Record<string, () => string>} */ ({ wait: () => t('lst.wait', 'ждёт'), work: () => t('lst.work', 'работает'), done: () => t('lst.done', 'закончил'), quiet: () => t('lst.quiet', 'тихо') });
+
   const esc = (/** @type {string} */ s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] || c);
-  const STATES = /** @type {Record<string, string>} */ ({ working: 'работает', waiting: 'ждёт ответа', done: 'готов', error: 'ошибка', exited: 'завершён' });
   const kindName = (/** @type {string} */ k) => (k === 'claude' ? 'Claude' : k === 'codex' ? 'Codex' : k.startsWith('agent:') ? k.slice(6) : k);
   const pad = (/** @type {number} */ n) => String(n).padStart(2, '0');
+  const hm = (/** @type {number} */ ms) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   /** «сегодня 14:05», «вчера 09:10» или «27.10.2026». @param {number} ms */
   function dateOf(ms) {
     const d = new Date(ms), now = new Date();
     const day = (/** @type {Date} */ x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
     const diff = Math.round((day(now) - day(d)) / 86400000);
-    const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    if (diff === 0) return t('today', 'сегодня {hm}', { hm });
-    if (diff === 1) return t('yesterday', 'вчера {hm}', { hm });
+    if (diff === 0) return t('today', 'сегодня {hm}', { hm: hm(ms) });
+    if (diff === 1) return t('yesterday', 'вчера {hm}', { hm: hm(ms) });
+    if (diff > 1 && diff <= 30) return t('daysAgo', '{n} дн. назад', { n: diff });
     return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
+  }
+  /** Сколько длится состояние: «3 мин», «1 ч 05 мин», «2 дн.». @param {number} since */
+  function lasts(since) {
+    const m = Math.max(0, Math.floor((Date.now() - since) / 60000));
+    if (m < 60) return t('min', '{n} мин', { n: m });
+    if (m < 1440) return t('hours', '{h} ч {m} мин', { h: Math.floor(m / 60), m: pad(m % 60) });
+    return t('days', '{n} дн.', { n: Math.floor(m / 1440) });
   }
   /** Источники из collect.js — русские слова; файлы и git не переводятся. */
   const SRC = /** @type {Record<string, string>} */ ({ 'Роадмап': 'roadmap', 'Дела': 'tasks', 'вкладка': 'tab', 'открыт в Kermach': 'opened' });
-  const src = (/** @type {string} */ s) => ` <span class="src">· ${esc(SRC[s] ? t(`src.${SRC[s]}`, s) : s)}</span>`;
+  const srcName = (/** @type {string} */ s) => (SRC[s] ? t(`src.${SRC[s]}`, s) : s);
+  const src = (/** @type {string} */ s) => ` <span class="src">· ${esc(srcName(s))}</span>`;
+  const laneName = (/** @type {string} */ id) => (LANE_NAME[id] ? LANE_NAME[id]() : id);
 
-  /** Разметка узла. @param {any} n */
-  function body(n) {
-    const out = [`<div class="nm">${esc(n.name)}</div>`];
+  /** @returns {Set<string>} */
+  function shutOf() {
+    try { const a = JSON.parse(localStorage.getItem(SHUT_KEY) || '[]'); return new Set(Array.isArray(a) ? a.map(String) : []); } catch { return new Set(); }
+  }
+  /** @param {Set<string>} s */
+  function saveShut(s) { try { localStorage.setItem(SHUT_KEY, JSON.stringify([...s])); } catch {} }
+
+  /** Карточка — одна на все полосы (t1483: «Тихо» тоже полными, закреплённый проект всегда виден целиком). @param {any} n */
+  function full(n) {
+    const out = [];
+    const st = n.since ? ` <span class="t">· ${esc(lasts(n.since))}</span>` : '';
+    out.push(`<div class="head"><span class="nm">${esc(n.name)}</span><span class="state ${esc(n.lane)}"><span class="dot"></span>${esc(LANE_ST[n.lane] ? LANE_ST[n.lane]() : n.lane)}${st}</span></div>`);
     if (!n.ok) out.push(`<div class="row k">${esc(t('noDir', 'папка не отвечает'))}</div>`);
-    if (!n.gray) {
-      if (n.phase) out.push(`<div class="row"><span class="k">${esc(t('phase', 'Фаза:'))}</span> ${esc(n.phase.text)}${src(n.phase.src)}</div>`);
-      if (n.pct) out.push(`<div class="row"><span class="k">${esc(t('pct', 'Готово:'))}</span> ${n.pct.value}% (${n.pct.done}/${n.pct.total})${src(n.pct.src)}</div><div class="bar"><i style="width:${Math.max(0, Math.min(100, n.pct.value))}%"></i></div>`);
-      out.push(`<div class="row"><span class="k">${esc(t('now', 'Сейчас:'))}</span> ${n.now ? `${esc(n.now.text)}${src(n.now.src)}` : esc(t('noData', 'нет данных'))}</div>`);
+    if (n.perm) out.push(`<div class="ask"><span class="k">${esc(t('perm', 'Просит разрешения:'))}</span> ${esc(n.perm.tool)}${n.perm.what ? ` · <code>${esc(n.perm.what)}</code>` : ''}</div>`);
+    else if (n.ask) out.push(`<div class="ask"><span class="k">${esc(t('ask', 'Задал вопрос'))}</span>${n.question ? ` <q>${esc(n.question)}</q>` : ''}</div>`);
+    // t1507: что идёт в «Роадмапе» — карта ждёт ответа (вопрос) или карты в работе.
+    if (n.road && n.road.asking.length) {
+      const a = n.road.asking[0];
+      out.push(`<div class="ask road"><span class="k">${esc(t('road.ask', 'Роадмап: карта ждёт ответа'))}</span> ${esc(a.id)}${a.title ? ` · ${esc(a.title)}` : ''}${n.road.asking.length > 1 ? ` ${esc(t('road.more', '(+{n})', { n: n.road.asking.length - 1 }))}` : ''}</div>`);
     }
-    const ag = n.agents.length
-      ? n.agents.map((/** @type {any} */ a) => `${esc(kindName(a.kind))}${a.state ? ` <span class="st-${esc(a.state)}">${esc(t(`st.${a.state}`, STATES[a.state] || a.state))}</span>` : ''}`).join(', ')
-      : esc(t('noAgents', 'нет'));
-    out.push(`<div class="row"><span class="k">${esc(t('agents', 'Агенты ({n}):', { n: n.agents.length }))}</span> ${ag}${n.bg ? ` <span class="src">· ${esc(t('bg', 'в фоне {n}', { n: n.bg }))}</span>` : ''}</div>`);
-    out.push(`<div class="row"><span class="k">${esc(t('last', 'последняя работа:'))}</span> ${n.last ? `${esc(dateOf(n.last.at))}${src(n.last.src)}` : esc(t('never', 'нет данных'))}</div>`);
+    if (n.road && n.road.working.length) {
+      const w0 = n.road.working;
+      out.push(w0.length === 1
+        ? `<div class="row road"><span class="k">${esc(t('road.one', 'Роадмап в работе:'))}</span> ${esc(w0[0].id)}${w0[0].title ? ` · ${esc(w0[0].title)}` : ''}</div>`
+        : `<div class="row road"><span class="k">${esc(t('road.many', 'Роадмап: {n} карт в работе', { n: w0.length }))}</span> ${esc(w0.map((/** @type {any} */ x) => x.id).join(', '))}</div>`);
+    }
+    if (n.prompt) out.push(`<div class="said"><span class="k">${esc(t('said', 'Ты написал в {hm}:', { hm: hm(n.prompt.at) }))}</span> <q>${esc(n.prompt.text)}</q></div>`);
+    if (n.reply) out.push(`<div class="reply">${esc(n.reply.text)}</div>`);
+    out.push(`<div class="row"><span class="k">${esc(t('now', 'Сейчас:'))}</span> ${n.now ? `${esc(n.now.text)}${src(n.now.src)}` : esc(t('noData', 'нет данных'))}</div>`);
+    if (n.phase || n.pct) {
+      const pct = n.pct ? Math.max(0, Math.min(100, n.pct.value)) : 0;
+      out.push(`<div class="prog"><span class="ph">${n.phase ? esc(n.phase.text) : esc(t('pct', 'Готово:'))}</span>`
+        + (n.pct ? `<span class="track"><i style="width:${pct}%"></i></span><b>${pct}%</b> <span class="src">${n.pct.done}/${n.pct.total} · ${esc(srcName(n.pct.src))}</span>` : src(n.phase.src)) + '</div>');
+    }
+    const ag = n.agents.map((/** @type {any} */ a) => `<span class="ag ${DOT[a.state] || 'quiet'}" tabindex="0" data-sid="${esc(a.sid)}" title="${esc(a.title)}"><span class="dot"></span>${esc(kindName(a.kind))} <span class="s">${esc(a.state ? (STATES[a.state] ? STATES[a.state]() : a.state) : t('st.idle', 'тихо'))}</span></span>`);
+    if (n.bg) ag.push(`<span class="ag quiet bg"><span class="s">${esc(t('bgMore', '+{n} в фоне', { n: n.bg }))}</span></span>`);
+    if (ag.length) out.push(`<div class="agents">${ag.join('')}</div>`);
+    out.push(`<div class="foot"><span>${esc(t('last', 'последняя работа:'))} ${n.last ? esc(dateOf(n.last.at)) : esc(t('never', 'нет данных'))}</span><span>${n.last ? esc(srcName(n.last.src)) : ''}</span></div>`);
     return out.join('');
   }
 
   function render() {
-    const map = $('map');
-    const scroll = $('scroll');
-    for (const el of [...map.querySelectorAll('.node, .center, #empty')]) el.remove();
-    const n = nodes.length;
-    const center = document.createElement('div');
-    center.className = 'center';
-    center.textContent = t('center', 'Поточні проекти');
-    map.appendChild(center);
-    const els = nodes.map((p) => {
-      const el = document.createElement('div');
-      el.className = `node${p.gray ? ' gray' : ''}`;
-      el.dataset.id = p.id;
-      el.style.setProperty('--c', p.color || 'var(--accent)');
-      el.title = p.path;
-      el.innerHTML = body(p);
-      el.onclick = () => D.project(p.id);
-      map.appendChild(el);
-      return el;
-    });
-    // t1415: эллипс в пропорциях окна, самый маленький, при котором узлы не налезают друг на друга и на центр; fit() потом сжимает карту в окно.
-    const sw = Math.max(1, scroll.clientWidth), sh = Math.max(1, scroll.clientHeight);
-    const box = (/** @type {HTMLElement} */ el, /** @type {number} */ x, /** @type {number} */ y) => ({ l: x - el.offsetWidth / 2 - 6, t: y - el.offsetHeight / 2 - 6, r: x + el.offsetWidth / 2 + 6, b: y + el.offsetHeight / 2 + 6 });
-    const hit = (/** @type {any} */ a, /** @type {any} */ b) => a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b;
-    /** @param {number} W @param {number} H */
-    const spots = (W, H) => {
-      const cx = W / 2, cy = H / 2;
-      const rx = Math.max(0, W / 2 - NODE_W / 2 - 16), ry = Math.max(0, H / 2 - NODE_H / 2 - 10);
-      // Первый — справа сверху, дальше по часовой стрелке.
-      return els.map((_, i) => { const a = -Math.PI / 2 + (2 * Math.PI * (i + 0.5)) / n; return { x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) }; });
-    };
-    let W = Math.max(sw, NODE_W * 2 + 360), H = Math.max(sh, NODE_H * 2 + 120);
-    if (n) {
-      const k0 = Math.min(W / sw, H / sh);
-      for (let k = 0.3; k < 6; k += 0.05) {
-        const w = Math.max(NODE_W * 2 + 120, sw * k), h = Math.max(NODE_H * 2 + 60, sh * k);
-        const pts = spots(w, h);
-        const bx = pts.map((q, i) => box(els[i], q.x, q.y));
-        const c = box(center, w / 2, h / 2);
-        if (!bx.some((x, i) => hit(x, c) || bx.some((y, j) => j > i && hit(x, y)))) { W = w; H = h; break; }
-        if (k > k0 + 4) break;
+    const sum = $('sum'), bands = $('bands');
+    const keep = $('scroll').scrollTop;
+    const shut = shutOf();
+    sum.innerHTML = '';
+    bands.innerHTML = '';
+    if (!nodes.length) {
+      bands.innerHTML = `<div id="empty">${esc(t('none', 'Закреплённых проектов нет — закрепите проект в окне «Проекты»'))}</div>`;
+      return;
+    }
+    for (const lane of LANES) {
+      const list = nodes.filter((n) => n.lane === lane);
+      if (!list.length) continue;
+      const chip = document.createElement('span');
+      chip.className = `chip ${lane}`;
+      chip.dataset.go = lane;
+      chip.innerHTML = `<span class="dot"></span>${esc(SUM[lane] ? SUM[lane](list.length) : `${lane}: ${list.length}`)}`;
+      sum.appendChild(chip);
+      const sec = document.createElement('section');
+      sec.id = `band-${lane}`;
+      sec.className = `${lane}${shut.has(lane) ? ' shut' : ''}`;
+      sec.dataset.lane = lane;
+      sec.innerHTML = `<h2 tabindex="0"><span class="tw">▼</span><span class="dot"></span>${esc(laneName(lane))} <span class="n">${list.length}</span></h2>`;
+      const grid = document.createElement('div');
+      grid.className = 'grid';
+      for (const n of list) {
+        const el = document.createElement('div');
+        el.className = 'card';
+        el.tabIndex = 0;
+        el.dataset.id = n.id;
+        el.style.setProperty('--p', n.color || 'var(--accent)');
+        el.title = n.path;
+        el.innerHTML = full(n);
+        grid.appendChild(el);
       }
+      sec.appendChild(grid);
+      bands.appendChild(sec);
     }
-    map.style.width = `${W}px`;
-    map.style.height = `${H}px`;
-    const svg = $('links');
-    svg.setAttribute('width', String(W));
-    svg.setAttribute('height', String(H));
-    const cx = W / 2, cy = H / 2;
-    center.style.left = `${cx}px`;
-    center.style.top = `${cy}px`;
-    const paths = [];
-    for (const [i, q] of spots(W, H).entries()) {
-      const p = nodes[i], el = els[i];
-      el.style.left = `${q.x}px`;
-      el.style.top = `${q.y}px`;
-      const mx = (cx + q.x) / 2;
-      const col = p.gray ? 'rgba(128,128,128,.45)' : esc(p.color || '#888');
-      paths.push(`<path d="M${cx},${cy} C${mx},${cy} ${mx},${q.y} ${q.x},${q.y}" fill="none" stroke="${col}" stroke-width="${p.gray ? 1.5 : 2.5}" opacity=".85"/>`);
-    }
-    svg.innerHTML = paths.join('');
-    if (!n) {
-      const e = document.createElement('div');
-      e.id = 'empty';
-      e.textContent = t('none', 'Закреплённых проектов нет — закрепите проект в окне «Проекты»');
-      map.appendChild(e);
-    }
-    fit(W, H);
-  }
-
-  /** Масштаб по рамке всех узлов и центра (t1415): карта целиком в окне, сдвиг на левый верхний край рамки. @param {number} W @param {number} H */
-  function fit(W, H) {
-    const map = $('map'), stage = $('stage'), scroll = $('scroll');
-    let x0 = 0, y0 = 0, x1 = W, y1 = H;
-    const els = /** @type {HTMLElement[]} */ ([...map.querySelectorAll('.node, .center')]);
-    if (els.length) {
-      x0 = y0 = Infinity; x1 = y1 = -Infinity;
-      for (const el of els) {
-        // left/top — центр элемента (translate -50%).
-        const l = el.offsetLeft - el.offsetWidth / 2, tp = el.offsetTop - el.offsetHeight / 2;
-        x0 = Math.min(x0, l); y0 = Math.min(y0, tp);
-        x1 = Math.max(x1, l + el.offsetWidth); y1 = Math.max(y1, tp + el.offsetHeight);
-      }
-      x0 -= PAD; y0 -= PAD; x1 += PAD; y1 += PAD;
-    }
-    const bw = x1 - x0, bh = y1 - y0;
-    const s = Math.max(MIN_SCALE, Math.min(1, scroll.clientWidth / bw, scroll.clientHeight / bh));
-    map.style.transform = `scale(${s}) translate(${-x0}px, ${-y0}px)`;
-    stage.style.width = `${Math.floor(bw * s)}px`;
-    stage.style.height = `${Math.floor(bh * s)}px`;
-    map.dataset.scale = String(s);
+    $('scroll').scrollTop = keep;
   }
 
   /** @param {any} all */
@@ -148,14 +137,42 @@
     render();
   }
 
+  /** @param {HTMLElement} el */
+  function act(el) {
+    const ag = /** @type {HTMLElement | null} */ (el.closest('.ag[data-sid]'));
+    const card = /** @type {HTMLElement | null} */ (el.closest('.card'));
+    if (ag && card && ag.dataset.sid) return void D.tab(card.dataset.id, ag.dataset.sid);
+    if (card) return void D.project(card.dataset.id);
+    const h = el.closest('section > h2');
+    if (h) {
+      const sec = /** @type {HTMLElement} */ (h.parentElement);
+      const shut = shutOf();
+      const lane = String(sec.dataset.lane);
+      if (sec.classList.toggle('shut')) shut.add(lane); else shut.delete(lane);
+      saveShut(shut);
+      return;
+    }
+    const chip = /** @type {HTMLElement | null} */ (el.closest('[data-go]'));
+    if (chip) { const sec = document.getElementById(`band-${chip.dataset.go}`); if (sec) sec.scrollIntoView({ block: 'start' }); }
+  }
+
   document.addEventListener('click', (e) => {
     const el = /** @type {HTMLElement} */ (e.target);
     if (el.closest('#min')) return D.win('min');
     if (el.closest('#max')) return D.win('max');
     if (el.closest('#close')) return D.win('close');
+    act(el);
   });
-  window.addEventListener('resize', render);
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const el = /** @type {HTMLElement} */ (e.target);
+    if (!el.closest('#scroll')) return;
+    e.preventDefault();
+    act(el);
+  });
   if (I18n && I18n.onChange) I18n.onChange(render);
+  // Давность «12 мин» растёт и без новых данных.
+  setInterval(() => { if (!document.hidden) render(); }, 60000);
   D.onChanged(take);
   D.list().then(take);
 })();

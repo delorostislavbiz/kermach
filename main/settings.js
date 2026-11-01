@@ -370,6 +370,8 @@ function register(c) {
   require('./i18n').init(c);
   // Раскладка окна проекта (t397): tabs\<id>.layout.json.
   require('./layout').register(c);
+  // Telegram (t1496): токен и группа — в telegram.json, не в settings.json. Окно «Настройки» зовёт его через settings:set с полем telegramOp.
+  require('./telegram').init(c.dataDir, c.log);
   // Новое окно берёт масштаб, как только страница загрузилась: настройка уже есть, окно её ещё не знает.
   app.on('web-contents-created', (_e, w) => {
     w.on('dom-ready', () => { if (w.getType() === 'window') w.setZoomFactor(cur.uiZoom / 100); });
@@ -380,7 +382,12 @@ function register(c) {
     if (e.sender.getType() === 'window') e.sender.setZoomFactor(cur.uiZoom / 100);
     return get();
   });
-  ipcMain.handle('settings:set', (e, patch) => (sender.allowed(e, 'settings:set') ? set(patch) : sender.refused()));
+  // telegramOp (t1496) — действие раздела «Telegram»: токен уходит в telegram.js и шифруется, в set() и settings.json не попадает.
+  ipcMain.handle('settings:set', (e, patch) => {
+    if (!sender.allowed(e, 'settings:set')) return sender.refused();
+    if (patch && typeof patch === 'object' && patch.telegramOp) return require('./telegram').op(patch.telegramOp);
+    return set(patch);
+  });
   // Поля «Папка новых проектов» и «Папка Входящих» (t1286): системный выбор папки, отмена — ''.
   ipcMain.handle('settings:pickDir', async (e, key) => {
     if (!sender.allowed(e, 'settings:pickDir')) return sender.refused();

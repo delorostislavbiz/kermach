@@ -1,9 +1,11 @@
 // @ts-check
-// Окно «Дашборд» (t1402, ИДЕЯ-дашборд.md): карта закреплённых проектов вокруг «Поточні проекти». Одно окно на программу, как «Дела».
+// Окно «Дашборд» (t1402, полосы — t1472, ТЗ-дашборд-полосы.md): закреплённые проекты по полосам состояния. Одно окно на программу, как «Дела».
 // Открывается кнопкой «Дашборд» окна «Проекты» (dashboard:open). Узел проекта — фаза, процент, что делается сейчас, агенты из демона,
-// последняя работа; что откуда взято — plugins\dashboard\collect.js. Щелчок по узлу открывает окно проекта (ctx.openProject), больше ничего.
+// последняя работа; что откуда взято — plugins\dashboard\collect.js. Щелчок по карточке открывает окно проекта (ctx.openProject),
+// по агенту — окно проекта на его вкладке (dashboard:tab → project-window.showTab).
 // Пока окно открыто, данные собираются раз в POLL_MS; файлы проекта читаются, только когда сменилось их время (collect.js).
 // Агенты — список вкладок демона от того же клиента, что у окна «Проекты» (link.onClient); его события только просят пересобрать раньше.
+// Узлы приходят окну уже по полосам (t1471, collect.order): полоса, сколько в ней, разрешение, вопрос, команда, начало ответа, агенты с номером вкладки.
 const { BrowserWindow, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
@@ -25,7 +27,8 @@ const POLL_MS = 5000;
 const MIN_MS = 3000;
 
 /** @typedef {{ dataDir: string, log: (m: string) => void, daemon: Promise<import('../daemon/client').DaemonClient>, data?: import('./projects').ProjectsData,
- *   openProject?: (p: import('./projects').Project) => void, link?: { onClient: (fn: (d: import('../daemon/client').DaemonClient) => void) => void } }} Ctx */
+ *   openProject?: (p: import('./projects').Project) => void, showTab?: (id: string, sid: string) => void, link?: { onClient: (fn: (d: import('../daemon/client').DaemonClient) => void) => void },
+ *   isOpen?: (id: string) => boolean }} Ctx */
 /** @type {Ctx | null} */
 let ctx = null;
 /** @type {BrowserWindow | null} */
@@ -45,6 +48,13 @@ function dataOf() {
   return c.data || projects.load(c.dataDir, { log: c.log });
 }
 
+/** Команда или ответ вкладки (t1469): { text, at } с временем в мс или null. @param {any} x @returns {import('../plugins/dashboard/collect').Talk | null} */
+function talkOf(x) {
+  if (!x || typeof x.text !== 'string' || !x.text) return null;
+  const at = typeof x.at === 'number' ? x.at : Date.parse(x.at || '') || 0;
+  return typeof x.ask === 'string' && x.ask ? { text: x.text, at, ask: x.ask } : { text: x.text, at };
+}
+
 /** Живые вкладки демона по номеру проекта. @returns {Promise<Map<string, import('../plugins/dashboard/collect').Tab[]>>} */
 async function tabsByProject() {
   /** @type {Map<string, import('../plugins/dashboard/collect').Tab[]>} */
@@ -60,7 +70,12 @@ async function tabsByProject() {
       if (!agent) kind = catalog.runningIn(s.sid) || 'shell';
       const at = Date.parse(s.stateAt || '') || Date.parse(s.createdAt || '') || 0;
       const list = out.get(id) || [];
-      list.push({ kind, title: shownTitle(s), state: String(s.state || ''), at, hidden: !!(s.meta && s.meta.hidden) });
+      // AskUserQuestion приходит как PermissionRequest (t1483): это вопрос, а не разрешение — текст вопроса в question.
+      const req = s.hook && s.hook.event === 'PermissionRequest' && s.hook.tool ? { tool: String(s.hook.tool), what: String(s.hook.what || '') } : null;
+      const perm = req && req.tool !== 'AskUserQuestion' ? req : null;
+      const question = req && !perm ? req.what : '';
+      list.push({ sid: String(s.sid || ''), kind, title: shownTitle(s), state: String(s.state || ''), at, hidden: !!(s.meta && s.meta.hidden),
+        unseen: !!s.unseen, perm, question, prompt: talkOf(s.prompt), reply: talkOf(s.reply) });
       out.set(id, list);
     }
   } catch (e) { log(`список вкладок не получен: ${e}`); }
@@ -72,7 +87,10 @@ async function listAll() {
   lastAt = Date.now();
   const d = dataOf();
   const tabs = await tabsByProject();
-  const nodes = d.projects.filter((p) => p.pinned).map((p) => collect.nodeOf(p, tabs.get(p.id) || [], alive.ok(p.path)));
+  // Окно проекта открыто (t1507) — тот же список окон, что у звуков и уведомлений (project-window.windowFor); проверки подставляют isOpen.
+  const c = /** @type {Ctx} */ (ctx);
+  const isOpen = c.isOpen || ((/** @type {string} */ id) => { const w = require('./project-window').windowFor(id); return !!w && !w.isDestroyed(); });
+  const nodes = collect.order(d.projects.filter((p) => p.pinned).map((p) => collect.nodeOf(p, tabs.get(p.id) || [], alive.ok(p.path), isOpen(p.id))));
   return { nodes, daemon: !!client, at: lastAt };
 }
 
@@ -144,7 +162,8 @@ function register(c) {
   /** @param {import('../daemon/client').DaemonClient} d */
   const wire = (d) => {
     client = d;
-    for (const ev of ['created', 'exit', 'updated', 'state']) d.on(ev, soon);
+    // hook — новая команда, ответ или просьба о разрешении (t1469), seen — вкладку открыли (t1470): карточка меняется и без смены состояния.
+    for (const ev of ['created', 'exit', 'updated', 'state', 'hook', 'seen']) d.on(ev, soon);
     d.on('close', () => { if (client === d) client = null; soon(); });
     soon();
   };
@@ -174,6 +193,21 @@ function register(c) {
     projects.remember(c.dataDir, d, p.path);
     log(`открываю проект ${p.path}`);
     if (c.openProject) c.openProject(p);
+    return { ok: true };
+  });
+  // Щелчок по агенту (t1472): окно проекта и в нём его вкладка. Вкладка — только живая видимая вкладка агента этого проекта у демона.
+  ipcMain.handle('dashboard:tab', async (e, id, sid) => {
+    if (!fromWindow(e, 'dashboard:tab')) return { error: 'вызов не из окна «Дашборд»' };
+    const d = dataOf();
+    const p = d.projects.find((x) => x.id === id && x.pinned);
+    if (!p) { log(`щелчок по агенту ${String(id).slice(0, 80)}: такого закреплённого проекта нет`); return { error: 'нет такого проекта' }; }
+    const tab = typeof sid === 'string' ? ((await tabsByProject()).get(p.id) || []).find((t) => t.sid === sid && !t.hidden) : null;
+    if (!tab) { log(`щелчок по агенту ${String(sid).slice(0, 80)} в ${p.path}: такой вкладки нет`); return { error: 'нет такой вкладки' }; }
+    if (!fs.existsSync(p.path)) { log(`щелчок по агенту в ${p.path}: нет папки`); return { error: 'нет папки проекта' }; }
+    projects.remember(c.dataDir, d, p.path);
+    log(`открываю вкладку ${sid} проекта ${p.path}`);
+    if (c.openProject) c.openProject(p);
+    (c.showTab || require('./project-window').showTab)(p.id, sid);
     return { ok: true };
   });
 }

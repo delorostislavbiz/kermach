@@ -119,8 +119,20 @@ function limitsParts(data, now) {
         title: `${titleOf(I18n.t('limits.5Chasov', '5 часов'), five)}\n${titleOf(I18n.t('limits.nedelya2', 'неделя'), week)}` + (mon ? `\n${titleOf(I18n.t('limits.30Dney', '30 дней'), mon)}` : '') + (gone(five) || gone(week) || gone(mon) ? where : '') });
     }
   }
+  // Кредиты API (t1358): сумма из ответов Claude по вкладкам на кредитах за месяц, а не баланс Anthropic. Нет ключа — нет и поля credits.
+  const cr = data && /** @type {any} */ (data).credits;
+  if (cr && typeof cr.month === 'number') {
+    out.push({ key: 'credits', label: I18n.t('limits.credits', 'Кредиты'), used: null,
+      note: I18n.t('limits.creditsMonth', 'за месяц потрачено {v1} во вкладках Kermach', { v1: limitsUsd(cr.month) }), tail: '',
+      title: I18n.t('limits.creditsTitle', 'Сумма цен ходов вкладок «Claude Agent · кредиты» с {v1}: {v2} ходов. Это не баланс Anthropic — остаток и расход других программ видны в Console', { v1: limitsClock(cr.from, now), v2: cr.turns }) });
+  }
   return out;
 }
+
+/** Console Anthropic: расход и остаток кредитов (руководство «Кредиты API», t1359). */
+const LIMITS_CONSOLE = 'https://platform.claude.com/settings/billing';
+/** Сумма в долларах: «$1,18», мелочь — «$0,004». @param {number} n */
+const limitsUsd = (n) => `$${(n >= 0.1 || n === 0 ? n.toFixed(2) : n.toFixed(3)).replace('.', ',')}`;
 
 /** Текст куска без цвета — для проверки и журнала. @param {LimitsPart} p */
 const limitsText = (p) => (p.used === null && p.note ? I18n.t('limits.note', '{label}: {note}{tail}', { label: p.label, note: p.note, tail: p.tail })
@@ -158,6 +170,15 @@ function limitsSetup(host) {
         bar.appendChild(fill);
         s.append(bar,I18n.t('limits.ispolzovano2', '{label}: использовано ', { label: p.label }), v, p.tail);
       }
+      // Ссылка на Console (t1358): там остаток кредитов, которого программа не знает. Открывает браузер системы, как ссылка из терминала.
+      if (p.key === 'credits') {
+        const a = document.createElement('a');
+        a.href = '#';
+        a.textContent = I18n.t('limits.console', 'Console');
+        a.style.cssText = 'margin-left:6px;color:inherit;text-decoration:underline';
+        a.onclick = (e) => { e.preventDefault(); const k = /** @type {any} */ (window).kermach; if (k && k.openLink) Promise.resolve(k.openLink(LIMITS_CONSOLE)).catch(() => {}); };
+        s.append(' · ', a);
+      }
       bar.appendChild(s);
     }
   };
@@ -182,5 +203,5 @@ function limitsSetup(host) {
   return () => { clearInterval(timer); if (offTheme) offTheme(); if (offLang) offLang(); bar.remove(); };
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { limitsParts, limitsText, limitsIn, limitsClock, limitsColor, LIMITS_STALE_MS };
+if (typeof module === 'object' && module.exports) module.exports = { limitsParts, limitsText, limitsIn, limitsClock, limitsColor, limitsUsd, LIMITS_STALE_MS, LIMITS_CONSOLE };
 if (typeof kermachPlugin === 'function') kermachPlugin(limitsSetup);

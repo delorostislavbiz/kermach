@@ -59,6 +59,20 @@
   /** Вывод, пришедший раньше вкладки: снимок экрана приходит событием term:data до ответа на create и attach. @type {Map<string, string[]>} */
   const pending = new Map();
   let active = '';
+  // Вкладка с пометкой «Главная» (t1485): её номер держит плагин «Роадмап» (запись orch), окно рисует значок и ставит пометку из меню вкладки.
+  let mainSid = '';
+  /** Сопутствующие сессии (t1486): номер вкладки → тема; значок ◇ после имени. @type {Map<string, string>} */
+  let comps = new Map();
+  /** Сопутствующие, чьи строки ждут главную (t1514): у ◇ пометка «некому сообщить». @type {Set<string>} */
+  let compHeld = new Set();
+  // Вкладка, о которой окно последней сообщило демону «открыли» (t1470).
+  let seenSid = '';
+  /** Открытая вкладка агента — демону «посмотрел» (t1470). Окно свёрнуто или без фокуса — не смотрел. */
+  function markSeen() {
+    const x = tabs.get(active);
+    if (x && !x.page && document.hasFocus()) t.term.seen(active);
+  }
+  window.addEventListener('focus', () => markSeen());
   /**
    * Раскладка середины окна (t397, layout.js). null — «Одна», как до t397: видна одна вкладка, active.
    * Иначе kind — вид раскладки, fr — доли, parts — sid вкладки в каждой части ('' — часть пустая, в ней список вкладок),
@@ -534,6 +548,8 @@
 
   /** Боковая панель и полоса вкладок — по таблице tabs. Строка слева: плитка .tile (тинт — .strip с прозрачностью, t656), имя, метка. */
   function render() {
+    // Вкладку открыли на экране (t1470) — демон снимает у неё «не смотрел». Один раз на смену вкладки; закончил на открытой — markSeen.
+    if (active !== seenSid) { seenSid = active; markSeen(); }
     // Раскладка (t397): вкладки из её файла, что уже пришли, — по частям; место частей; пришедшим — подгонка и фокус.
     const put = restoreStep();
     paint();
@@ -556,12 +572,16 @@
     // Вкладка сайта (t172): вторая строка — адрес страницы без https://, а не метка состояния.
     // Claude без вопросов о разрешениях (t851): молния после имени — в списке слева и на вкладке полосы, слово — в подсказке.
     const by = (/** @type {Tab} */ x) => (x.bypass ? `<span class="by" title="${esc(I18n.t('page.claudeBypass', 'Claude без вопросов о разрешениях'))}" style="display:inline-flex;vertical-align:-2px;margin-left:4px">${svg('bolt', '#ECA855', 12)}</span>` : '');
+    // t1485: звезда после имени у главной вкладки — в списке слева и на полосе, слово «Главная» — в подсказке.
+    const mk = (/** @type {Tab} */ x) => (x.sid === mainSid ? `<span class="mainmark" title="${esc(I18n.t('page.mainTab', 'Главная: сюда приходят сообщения о картах «Роадмапа»'))}" style="margin-left:4px;color:#ECA855">★</span>` : '')
+      + (comps.has(x.sid) ? `<span class="compmark" title="${esc(`${I18n.t('page.companionTab', 'Сопутствующая сессия')}: ${comps.get(x.sid)}`)}" style="margin-left:4px;color:#9B7BEA">◇</span>` : '')
+      + (compHeld.has(x.sid) ? `<span class="compheld" title="${esc(I18n.t('page.companionHeld', 'Некому сообщить: главная не получила строку этой сессии. Она уйдёт в новую главную, когда её отметят'))}" style="margin-left:3px;color:#E0A040">⚠</span>` : '');
     const addr = (/** @type {Tab} */ x) => `<div class="st url" title="${esc(x.url || '')}">${esc((x.url || '').replace(/^https?:\/\//i, ''))}</div>`;
     $('list').innerHTML = list.map((x) => { const k = stateOf(x); return `<div class="term${x.page ? ' site' : ''}${cls(x, k)}" data-sid="${esc(x.sid)}">
       <div class="tile"><div class="strip" style="background:${x.color}"></div>${svg(x.icon, x.color, 18)}</div>
-      <div class="text"><div class="n">${esc(x.title)}${by(x)}</div>${x.page ? addr(x) : x.connecting ? `<div class="st">${I18n.t('page.podklyuchaetsya', 'подключается…')}</div>` : st(x, k)}</div></div>`; }).join('');
+      <div class="text"><div class="n">${esc(x.title)}${by(x)}${mk(x)}</div>${x.page ? addr(x) : x.connecting ? `<div class="st">${I18n.t('page.podklyuchaetsya', 'подключается…')}</div>` : st(x, k)}</div></div>`; }).join('');
     $('tabs').innerHTML = list.map((x) => { const k = stateOf(x); return `<div class="tab${cls(x, k)}" data-sid="${esc(x.sid)}" style="--c:${x.color}"${k ? ` data-state="${k}" title="${hint(x, k)}"` : ''}>
-      <div class="tt"><b style="background:${x.color}"></b>${svg(x.icon, x.color, 14)}</div><span>${esc(x.title)}</span>${by(x)}${k ? glyph(k) : ''}<span class="x" data-close title="${I18n.t('common.close', 'Закрыть')}">${svg('close', (window.Theme && Theme.color('muted')) || '#8D91A5', 12, 2)}</span><i style="background:${x.color}"></i></div>`; }).join('');
+      <div class="tt"><b style="background:${x.color}"></b>${svg(x.icon, x.color, 14)}</div><span>${esc(x.title)}</span>${by(x)}${mk(x)}${k ? glyph(k) : ''}<span class="x" data-close title="${I18n.t('common.close', 'Закрыть')}">${svg('close', (window.Theme && Theme.color('muted')) || '#8D91A5', 12, 2)}</span><i style="background:${x.color}"></i></div>`; }).join('');
     // Шапка карточки терминала (Д-9): точка цвета, имя, «· состояние». Видна только в новом виде (ui-kermach-project.css).
     for (const x of list) {
       if (x.page || !x.pane) continue;
@@ -756,7 +776,7 @@
     // Вкладка сайта: без вопроса, демона она не касается.
     // Вкладка плагина может не согласиться (t220: документ с несохранёнными правками — вопрос): close возвращает false или обещание с false.
     if (tab.page) { const ok = await tab.page.close(); if (ok === false) return; dropTab(tab.sid); return; }
-    if (tab.alive && (tab.kind === 'claude' || tab.kind === 'codex' || tab.kind.startsWith('agent:'))) {
+    if (tab.alive && (tab.kind === 'claude' || tab.kind === 'codex' || tab.kind === 'credits' || tab.kind.startsWith('agent:'))) {
       const ok = await D.confirm({
         title: I18n.t('page.zakrytTerminal', 'Закрыть терминал'),
         text: I18n.t('page.zakrytEscheRabotaetI', 'Закрыть «{title}»? {v2} ещё работает и остановится.', { title: tab.title, v2: tab.kind === 'claude' ? 'Claude' : tab.kind === 'codex' ? 'Codex' : tab.title }),
@@ -793,9 +813,9 @@
 
   // kermach tab list / tab close (t1052): канал plugins\browser\cli.js зовёт их через executeJavaScript окна.
   /** Живой Claude, Codex или агент плагина — у кнопки на нём вопрос (closeTab). @param {Tab} x */
-  const liveAgent = (x) => x.alive && (x.kind === 'claude' || x.kind === 'codex' || x.kind.startsWith('agent:'));
+  const liveAgent = (x) => x.alive && (x.kind === 'claude' || x.kind === 'codex' || x.kind === 'credits' || x.kind.startsWith('agent:'));
   /** Агент по виду — у скрытой вкладки (t1099) есть только вид из списка демона. @param {string} k */
-  const agentKind = (k) => k === 'claude' || k === 'codex' || k.startsWith('agent:');
+  const agentKind = (k) => k === 'claude' || k === 'codex' || k === 'credits' || k.startsWith('agent:');
   // Скрытые вкладки (t1059) окно не рисует, но CLI их видит и закрывает (t1099): иначе фоновую карту не перезапустить без кнопки «показать».
   w.KermachTermTabs = () => [...ordered().filter((x) => !x.sid.startsWith('-'))
     .map((x) => ({ sid: x.sid, kind: x.page ? x.kind : x.kind === 'shell' ? 'terminal' : x.kind, title: x.title, alive: !!x.alive, page: !!x.page, agent: !x.page && liveAgent(x), hidden: false })),
@@ -879,8 +899,11 @@
       return;
     }
     const onlyPage = tab.sid.startsWith('-');
+    // t1485: «Главная вкладка» — у живой вкладки агента; пометку держит плагин «Роадмап», выключен он — пункта нет.
+    const canMain = !onlyPage && tab.alive && tab.kind !== 'shell' && roadmapOn();
     const pick = await D.menu(x, y, [
       ...(onlyPage ? [] : [{ id: 'look', label: I18n.t('page.cvetIZnachok', 'Цвет и значок'), icon: 'palette' }, { id: 'rename', label: I18n.t('common.rename', 'Переименовать'), icon: 'pen', kbd: 'F2' }, '-']),
+      ...(canMain ? [tab.sid === mainSid ? { id: 'unmain', label: I18n.t('page.unmainTab', 'Снять пометку «Главная»'), icon: 'close' } : { id: 'main', label: I18n.t('page.setMainTab', 'Главная вкладка: сюда сообщения о картах'), icon: 'check' }] : []),
       // d307: живую вкладку — в список «в фоне»: терминал работает, на полосе не мешает. Вернуть — «показать» в том списке.
       ...(onlyPage || !tab.alive || !t.term.hide ? [] : [{ id: 'hide', label: I18n.t('page.hideTab', 'Спрятать в фон'), icon: 'down' }]),
       { id: 'close', label: I18n.t('page.zakrytTerminal', 'Закрыть терминал'), icon: 'trash', danger: true, kbd: kbdClose() },
@@ -893,8 +916,47 @@
       } else if (pick === 'rename') await renameTab(tab);
       else if (pick === 'close') await closeTab(tab);
       else if (pick === 'hide') { const r = await t.term.hide(tab.sid); if (r && r.error) t.log(`вкладка не спрятана: ${r.error}`); }
+      else if (pick === 'main' || pick === 'unmain') {
+        const r = await t.plugin.call('roadmap', 'mainSet', pick === 'main' ? tab.sid : '').catch((/** @type {any} */ e) => ({ error: String(e && e.message || e) }));
+        if (r && r.error) t.log(`пометка «Главная» не поставлена: ${r.error}`);
+        else { mainSid = r && typeof r.sid === 'string' ? r.sid : ''; render(); }
+      }
     } finally { refocus(); }
   }
+  /** Плагин «Роадмап» загружен в окне (t1485): только тогда есть кому держать пометку «Главная». */
+  const roadmapOn = () => !!document.querySelector('[data-plugin="roadmap"]');
+  // Пометку меняют и без окна: kermach roadmap start, сверка после перезапуска вкладки, закрытая главная — плагин шлёт событие main.
+  try {
+    t.plugin.on('roadmap', 'main', (/** @type {any} */ p) => { const s = p && typeof p.sid === 'string' ? p.sid : ''; if (s !== mainSid) { mainSid = s; render(); } });
+  } catch { /* старый мост без событий плагинов */ }
+  /** Список сопутствующих из ответа плагина (t1486): перерисовать, если поменялся. @param {any} p */
+  const compsSet = (p) => {
+    const m = new Map((p && Array.isArray(p.list) ? p.list : []).filter((/** @type {any} */ c) => c && typeof c.sid === 'string').map((/** @type {any} */ c) => [c.sid, String(c.topic || '')]));
+    // t1514: строки сопутствующей, не дошедшие до главной, — пометка «некому сообщить» у ◇.
+    const h = new Set((p && Array.isArray(p.list) ? p.list : []).filter((/** @type {any} */ c) => c && typeof c.sid === 'string' && Number(c.held) > 0).map((/** @type {any} */ c) => c.sid));
+    if ([...h].join('|') !== [...compHeld].join('|')) { compHeld = h; render(); }
+    if ([...m].join('|') !== [...comps].join('|')) { comps = m; render(); }
+    // Тема — имя вкладки как ручное, один раз (named): иначе Claude сменит его на тему разговора.
+    for (const c of (p && Array.isArray(p.list) ? p.list : [])) {
+      const tab = c && !c.named && typeof c.sid === 'string' ? tabs.get(c.sid) : null;
+      if (!tab || tab.page || !c.topic || naming.has(c.sid)) continue;
+      naming.add(c.sid);
+      update(tab, { title: String(c.topic) })
+        .then(() => t.plugin.call('roadmap', 'companionNamed', c.sid))
+        .catch(() => {})
+        .finally(() => naming.delete(c.sid));
+    }
+  };
+  const naming = new Set();
+  try { t.plugin.on('roadmap', 'companions', compsSet); } catch { /* старый мост без событий плагинов */ }
+  /** Пометка «Главная» при открытии окна (t1485). Плагина нет или он выключен — пометки нет. */
+  const mainAsk = () => {
+    Promise.resolve(t.plugin.call('roadmap', 'mainGet')).then((/** @type {any} */ r) => {
+      const s = r && !r.error && typeof r.sid === 'string' ? r.sid : '';
+      if (s !== mainSid) { mainSid = s; render(); }
+    }, () => {});
+    Promise.resolve(t.plugin.call('roadmap', 'companions')).then((/** @type {any} */ r) => { if (r && !r.error) compsSet(r); }, () => {});
+  };
 
   for (const id of ['list', 'tabs']) {
     $(id).addEventListener('contextmenu', (ev) => {
@@ -1173,6 +1235,7 @@
     const e = Math.max(4, parseFloat(getComputedStyle(document.body).paddingRight) || 0);
     menu.style.left = `${Math.max(e, Math.min(r.left, window.innerWidth - menu.offsetWidth - e))}px`;
     plus.classList.toggle('open', at === plus);
+    { const ce = document.getElementById('addCompanion'); if (ce) ce.hidden = !roadmapOn(); }
     refreshAgents();
   };
   plus.onclick = (ev) => { ev.stopPropagation(); if (menu.classList.contains('open') && menuAt === plus) closeMenu(); else openMenu(); };
@@ -1201,8 +1264,51 @@
     $('addClaude').after(el);
     wireItem(el, () => create('claude', undefined, false, true, true));
   }
+  // «Claude Agent · кредиты» (t1357) — под Claude: вкладка на API-кредитах, только когда ключ задан («Настройки» → «Кредиты API»).
+  // Есть ли ключ — при каждом открытии меню (refreshAgents).
+  {
+    const el = document.createElement('div');
+    el.className = 'item';
+    el.id = 'addCredits';
+    el.dataset.icon = 'bot';
+    el.dataset.color = '#20A98C';
+    el.dataset.i18n = 'page.credits';
+    el.textContent = I18n.t('page.credits', 'Claude Agent · кредиты');
+    el.hidden = true;
+    $('addClaudeBypass').after(el);
+    wireItem(el, () => create('credits'));
+  }
   wireItem($('addCodex'), () => create('codex'));
   wireItem($('addShell'), () => create('shell'));
+  // «Сопутствующая сессия…» (t1486) — под Терминалом: тема — окошком, агент — коротким меню; вкладку открывает плагин «Роадмап».
+  // Пункт виден, только когда плагин загружен (openMenu).
+  {
+    const el = document.createElement('div');
+    el.className = 'item';
+    el.id = 'addCompanion';
+    el.dataset.icon = 'message';
+    el.dataset.color = '#9B7BEA';
+    el.dataset.i18n = 'page.companion';
+    el.textContent = I18n.t('page.companion', 'Сопутствующая сессия…');
+    el.hidden = true;
+    $('addShell').after(el);
+    wireItem(el, () => { companionAsk().catch((/** @type {any} */ e) => t.log(`сопутствующая сессия не открылась: ${e}`)); });
+  }
+  /** Тема и агент сопутствующей сессии, потом вызов плагина (t1486). */
+  async function companionAsk() {
+    const topic = await D.rename({ title: I18n.t('page.companionTopic', 'Тема сопутствующей сессии'), value: '', max: 64, icon: 'message', color: '#9B7BEA' });
+    if (!topic) { refocus(); return; }
+    const r0 = plus.getBoundingClientRect();
+    const ag = await D.menu(r0.left, r0.bottom + 4, [
+      { id: 'main', label: I18n.t('page.companionMainAgent', 'Агент главной сессии'), icon: 'star' },
+      { id: 'claude', label: 'Claude', icon: 'bot' },
+      { id: 'codex', label: 'Codex', icon: 'terminal' },
+    ]);
+    if (!ag) { refocus(); return; }
+    const r = await t.plugin.call('roadmap', 'companion', topic, ag === 'main' ? '' : String(ag)).catch((/** @type {any} */ e) => ({ error: String(e && e.message || e) }));
+    if (r && r.error) t.log(`сопутствующая сессия не открылась: ${r.error}`);
+    refocus();
+  }
   // «Агенты…» (d177): окошко каталога агентов — включить, подключить новых, — не уходя в «Настройки».
   wireItem($('addAgentsDlg'), () => { Dialogs.agents(t).catch((/** @type {any} */ e) => t.log(`окошко «Агенты» не открылось: ${e}`)); });
   // «Браузер» в полосе вкладок (Д-7) — тот же пункт меню «+», что ставит плагин браузера (addButton('addBrowser')); нет пункта — нет и кнопки.
@@ -1253,6 +1359,7 @@
     if (agentsBusy) { agentsAgain = true; return; }
     agentsBusy = true;
     try {
+      if (t.apiKey) { const k = await t.apiKey.get(); $('addCredits').hidden = !(k && k.has); }
       const all = await t.agents.list();
       const want = Array.isArray(all) ? all.filter((a) => a.found && a.enabled && !a.builtin) : [];
       const have = [...menu.querySelectorAll('.item[data-agent]')];
@@ -1439,6 +1546,8 @@
         if (closing.has(s.sid)) continue;
         const had = tabs.get(s.sid);
         if (had) {
+          // Агент закончил во вкладке, на которую смотрят (t1470): «не смотрел» не нужен.
+          if (had.sid === active && s.state === 'done' && had.state !== 'done') markSeen();
           had.title = s.title; had.color = colorOf(s.color); had.icon = s.icon; had.state = String(s.state || ''); had.connecting = !!s.connecting; had.runs = String(s.runs || ''); had.pics = !!s.pics; had.claudeSessionId = s.claudeSessionId; had.codexSessionId = s.codexSessionId; had.bypass = !!s.bypass;
           // Агента узнали в терминале уже после выбора вкладки (t406, ревью): выбрана позже нынешнего получателя — получатель теперь она.
           if (isAgent(had) && lastAgent !== had.sid && recent.lastIndexOf(had.sid) > recent.lastIndexOf(lastAgent)) lastAgent = had.sid;
@@ -1926,6 +2035,7 @@
   } else await sync();
   listed = true;
   render();
+  mainAsk();
   // Вкладки из файла раскладки, которые так и не пришли (закрыты, не запустились), части не держат: через 5 с — пустые части со списком.
   // Ключи их не пропадают (t398): в файл пишутся дальше, пока человек сам не поставит в часть другую вкладку.
   restoreUntil = Date.now() + 5000;

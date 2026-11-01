@@ -46,6 +46,7 @@ Passwörter, Schlüssel und Tokens schreibe weder ins Board noch in die Übersic
 
 Vor einer Phase („Wir beginnen die Arbeit", „Wir beginnen Phase f<N>"): prüfe das Board und `SESSION-now.md`. Alle Karten der Phase haben „Wie prüfen", Entwürfe (`draft: да`) gibt es nicht. Nenne die Karten „Mensch nötig" und sag, was genau der Mensch tun muss: Zugang geben, entscheiden, bezahlen. Den Start behindern sie nicht: die Welle überspringt sie, und die von ihnen abhängigen Karten warten innerhalb der Welle.
 Die Prüfung ist bestanden — starte die Welle selbst: `kermach roadmap wave f<N>`. Stört etwas anderes — eine volle Karte hat kein „Wie prüfen", eine Karte verletzt eine Vereinbarung — nicht starten, sag dem Menschen, was zu tun ist. Der Befehl antwortete «нечего запускать» (nichts zu starten) — sag dem Menschen ebenfalls, was zu tun ist.
+Vor jeder Welle wähle Modell und Aufwand für die Phasenkarten «в очереди» (in der Warteschlange) — die Regeln stehen in der Tab-Aufgabe, Absatz „Modelle vor einer Welle"; Karten mit `pick: человек` nicht anfassen.
 
 Während die Phase läuft:
 - ein Agent hat gefragt — der Mensch antwortet in dessen Tab. Man fragt dich „was fragt t<N>?" — lies die Karte und rate; die Antwort geht trotzdem an den Agenten;
@@ -56,6 +57,22 @@ Während die Phase läuft:
 - mehr als 15–20 Schritte oder eine lange Prüfung nötig — lege eine Karte in der passenden Phase an (`kermach roadmap new t …`). Eine Idee für später — eine Karte in den „Eingang". Laufende Karten nicht anfassen;
 - du hast eine Karte in einer laufenden Phase angelegt und sie ist nicht „Mensch nötig" — starte sie selbst: `kermach roadmap run t<N> --bg`. Eine Welle nimmt die Kartenliste beim Start, eine neue Karte sieht sie nicht;
 - auf der Live-Website oder dem Server ist etwas kaputt — zuerst zurück zur letzten funktionierenden Version (die Zeile «Откат:» in der Karte, die das geändert hat), dann Analyse mit einer Karte. Such die Ursache nicht auf dem Live-System, solange es kaputt ist.
+
+**Hängende Karten.** Das Programm schreibt dir eine Zeile „[Роадмап] встали t<N> (Grund), …": der Tab wurde geschlossen oder der Agentenprozess hat sich beendet, der Bildschirm ändert sich länger als die Schwelle nicht, ein Fehler wiederholt sich im Kreis, ein Abo-Limit, oder eine Wellenkarte wartet auf eine Abhängigkeit, die selbst hängt. Das Programm hält den Agenten nicht an, du entscheidest. Regel: keine hängende Karte bleibt ohne Handlung oder Nachricht an den Menschen. Du hast gehandelt, wenn die Karte wieder „в работе" ist, in der Karte eine Antwort steht oder du dem Menschen geschrieben hast. Sonst kommt nach 10 Minuten eine Erinnerung.
+Selbst beheben:
+- der Tab ist abgestürzt oder der Agentenprozess hat sich beendet, die Arbeit nicht fertig — neu starten: `kermach roadmap run t<N> --bg`. Das ist kein Subagent, sondern der Agent der Karte selbst: Neustart ist auch in einer „Neuen Sitzung" erlaubt;
+- der Mensch hat den Tab geschlossen (die Zeile sagt «закрыл человек») — nicht neu starten: er hat die Karte vielleicht absichtlich angehalten. Frag ihn in einer Zeile, ob neu starten;
+- der Agent ist verstummt — schreib in seinen Tab „weiter" und was auf der Karte noch zu tun ist;
+- der Agent wartet auf eine Antwort, und sie steht in der Karte, der Übersicht oder dem Journal — gib sie weiter: `kermach roadmap answer t<N> --from session "…"`;
+- der Prüfer hat Anmerkungen zurückgegeben — der Kartenagent muss sie bekommen: starte die Karte neu, wenn sie hängt;
+- zweiter Fehlschlag der Karte — setz im Kopf ein stärkeres Modell (`model:`) und starte neu;
+- Abo-Limit — warte die Rücksetzzeit aus der Zeile ab und starte die Karte neu.
+Dem Menschen schreiben:
+- Geschmack, Geld oder Zugang wird gebraucht;
+- drei Fehlschläge einer Karte;
+- Unumkehrbares oder die Live-Seite;
+- zum Abschluss müsste der Agent über die Dateien der Karte hinausgehen oder eine Absprache brechen;
+- der Grund ist unklar.
 
 Der Mensch bittet um eine neue Phase (Fortsetzung, Wartung, Vorfall) — lege sie mit dem Befehl `kermach roadmap new f "Name" --goal "Ziel"` an. Ergänze in der Phasendatei die Fertig-Kriterien, zeige dem Menschen Ziel und Kriterien, warte auf „ja". Schlage selbst keine neuen Phasen vor: das Ende der Roadmap ist das Ende der Arbeit. Eine Wartungsphase — für einen Zeitraum oder eine Reihe von Aufgaben („Wartung, November"), damit sie sich abnehmen lässt.
 

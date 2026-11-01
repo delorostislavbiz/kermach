@@ -573,6 +573,8 @@ function roadmapSetup(host) {
   let hideDone = false;
   /** Настройка «в фоне» (t1060): из state, меняет галочка в строке предела. */
   let bgOn = false;
+  // Агент главной сессии (t1485): настройка mainAgent главной части, по умолчанию claude.
+  let mainAg = 'claude';
   let stopped = false;
   /** Последняя доска от главной части. @type {any} */
   let last = null;
@@ -963,7 +965,10 @@ function roadmapSetup(host) {
         + `<span>${esc(T('lim.cap', 'Сессий одновременно: занято {used} из', { used: b.slots.used }))}</span><select data-do="lim">${opts}</select>`
         // «В фоне» (t1060): агенты карт — в скрытых вкладках, у карты «Показать», готовая закрывается сама, экран — в .kermach/runs/<карта>-<время>.log.
         + `<label class="bgx" title="${esc(T('bg.title', 'Агент карты запускается в скрытой вкладке: в полосе её нет, у карты кнопка «Показать». Карта стала «готово» — вкладка закрывается сама, экран остаётся в .kermach/runs/<карта>-<время>.log'))}">`
-        + `<input type="checkbox" data-do="bg"${bgOn ? ' checked' : ''}><span>${esc(T('bg.cap', 'в фоне'))}</span></label></div>`;
+        + `<input type="checkbox" data-do="bg"${bgOn ? ' checked' : ''}><span>${esc(T('bg.cap', 'в фоне'))}</span></label>`
+        // «Агент главной сессии» (t1485): на нём kermach roadmap start и кнопка «Новая главная сессия» открывают главную вкладку.
+        + `<label class="bgx" title="${esc(T('mainAgent.title', 'На каком агенте открывается главная сессия: kermach roadmap start и кнопка «Новая главная сессия». Сообщения о картах идут во вкладку с пометкой «Главная» — её можно переставить из меню вкладки'))}">`
+        + `<span>${esc(T('mainAgent.cap', 'главная:'))}</span><select data-do="magent">${(lists.AGENTS || ['claude', 'codex']).map((/** @type {string} */ a) => `<option value="${esc(a)}"${a === mainAg ? ' selected' : ''}>${esc(a)}</option>`).join('')}</select></label></div>`;
     }
     // Список «В фоне» (t1073): кто в скрытых вкладках, в каком состоянии, сколько идёт. Число скрытых — кнопка «в фоне: N» у «+» (t1061), здесь не повторяем.
     if (Array.isArray(b.bg) && b.phases.length) html += bgHtml(b.bg);
@@ -1191,7 +1196,7 @@ function roadmapSetup(host) {
     const text = (/** @type {{ key: string, mono?: boolean, hint?: string }} */ f) => `<div class="f" data-f="${f.key}">${lab(f.key)}<div class="v">`
       + `<textarea data-k="${f.key}" rows="1" spellcheck="false"${f.mono ? ' class="mono"' : ''}${f.hint ? ` data-hint="${f.key}"` : ''}></textarea>${ext(f.key)}</div></div>`;
     return `<div class="ctop"><div class="cbar"><span class="back" data-act="back"></span><span class="crumb"></span><span class="grow"></span><span class="saved"></span>`
-      + `<span class="cbtns"><button type="button" class="btn" data-act="prompt"></button><button type="button" class="btn" data-act="show" hidden></button><button type="button" class="btn" data-act="run"></button><button type="button" class="btn pri" data-act="save"></button></span></div>`
+      + `<span class="cbtns"><button type="button" class="btn" data-act="prompt"></button><button type="button" class="btn" data-act="show" hidden></button><button type="button" class="btn" data-act="run"></button><button type="button" class="btn" data-act="credits" hidden></button><button type="button" class="btn pri" data-act="save"></button></span></div>`
       + '<div class="notes"></div></div>'
       + '<div class="box cbox"><div class="chead"><span class="num"></span><span class="ttl"></span></div>'
       + '<div class="pills"><label class="pill st"><span class="si"></span><select data-k="status"></select></label><span class="pill wait" hidden></span>'
@@ -1215,6 +1220,7 @@ function roadmapSetup(host) {
     q('[data-act="prompt"]').textContent = T('prompt', 'Показать промпт');
     q('[data-act="prompt"]').title = T('promptTitle', 'Текст, который получит агент: общие правила, паспорт проекта, шаблон вида работы, карта и свежие заметки. Собирается из файлов, только чтение');
     q('[data-act="run"]').textContent = T('run', 'Запустить');
+    q('[data-act="credits"]').textContent = T('runCredits', 'Запустить на кредитах');
     q('[data-act="show"]').textContent = T('show', 'Показать');
     q('[data-act="show"]').title = T('showTitle', 'Агент карты работает в фоне: показать его вкладку в верхней полосе');
     q('[data-act="save"]').textContent = T('save', 'Сохранить');
@@ -1364,6 +1370,13 @@ function roadmapSetup(host) {
     const sh = /** @type {HTMLButtonElement} */ (cardEl.querySelector('[data-act="show"]'));
     if (sh) sh.hidden = !(c && c.run && !c.run.gone && c.run.hidden);
     b.title = why || T('runTitle', 'Открыть вкладку агента из карты в папке проекта. Первое сообщение — промпт карты, как в «Показать промпт»');
+    // «Запустить на кредитах» (t1358): только при сохранённом ключе «Кредиты API» (credits доски) и только у Claude — обёртка вкладки запускает claude.
+    const cr = /** @type {HTMLButtonElement} */ (cardEl.querySelector('[data-act="credits"]'));
+    if (cr) {
+      cr.hidden = b.hidden || !(last && last.credits) || (getV('agent') || 'claude') !== 'claude';
+      cr.disabled = !!why;
+      cr.title = why || T('runCreditsTitle', 'Как «Запустить», но вкладка «Claude Agent · кредиты»: платят API-кредиты, модель и потолок — из «Настройки» → «Кредиты API»');
+    }
   };
 
   /**
@@ -2815,13 +2828,14 @@ function roadmapSetup(host) {
     paintCard(last && last.cards ? last.cards.find((/** @type {any} */ x) => x.id === id) : null);
     paintNotes();
   };
-  const launch = async () => {
+  /** @param {boolean} [credits] t1358: вкладка на кредитах API */
+  const launch = async (credits) => {
     if (!cur || runBlock()) return;
     const id = cur.id;
     cur.starting = true;
     cur.notes.run = null;
     paintNotes();
-    const r = await api('run', id);
+    const r = await api('run', id, ...(credits ? [{ credits: true }] : []));
     if (!cur || cur.id !== id) return;
     cur.starting = false;
     if (!r || r.error || !r.session) {
@@ -2893,6 +2907,7 @@ function roadmapSetup(host) {
     if (act && act.dataset.act === 'save') { save(); return; }
     if (act && act.dataset.act === 'prompt') { showPrompt(); return; }
     if (act && act.dataset.act === 'run') { launch(); return; }
+    if (act && act.dataset.act === 'credits') { launch(true); return; }
     if (act && act.dataset.act === 'show') { showRun(); return; }
     if (act && act.dataset.act === 'unpick') { unpick(); return; }
     if (act && act.dataset.act === 'answer') { answerCard(); return; }
@@ -3203,6 +3218,8 @@ function roadmapSetup(host) {
     if (s) { api('setState', { maxRuns: Number(s.value) }); limDone(); }
     const g = /** @type {HTMLInputElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('input[data-do="bg"]'));
     if (g) { bgOn = g.checked; api('setState', { bg: bgOn }); }
+    const ma = /** @type {HTMLSelectElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('select[data-do="magent"]'));
+    if (ma) { mainAg = ma.value; api('setState', { mainAgent: mainAg }); }
   });
   // Список предела открыт (t722): событие доски её не перерисовывает — иначе список закрылся бы и сбросил фокус. Приём t711 «Входящих»:
   // отложенное рисуем, когда фокус ушёл со списка, но не посреди щелчка.
@@ -3332,6 +3349,7 @@ function roadmapSetup(host) {
     if (stopped || !s || s.error) return;
     hideDone = !!s.hideDone;
     if (bgOn !== !!s.bg) { bgOn = !!s.bg; if (open) draw(); }
+    if (typeof s.mainAgent === 'string' && s.mainAgent !== mainAg) { mainAg = s.mainAgent; if (open) draw(); }
     if (s.open) setOpen(true, false);
   });
   const offLang = w.I18n ? w.I18n.onChange(() => { labels(); if (open) draw(); if (cur) { cardLabels(); refreshCard(); } if (pv) paintPrompt(); paintPassport(); paintPhase(); paintInbox(); if (dc) decsFrame(); }) : null;

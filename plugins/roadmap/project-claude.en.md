@@ -46,6 +46,7 @@ Do not write passwords, keys and tokens into the board, the overview or the log 
 
 Before a phase ("Let's start work", "Let's start phase f<N>"): check the board and `SESSION-now.md`. All cards of the phase have "How to check", there are no drafts (`draft: да`). Name the "human needed" cards and say what exactly the human has to do: give access, decide, pay. They do not block the start: the wave will skip them, and the cards depending on them will wait inside the wave.
 The check passed — start the wave yourself: `kermach roadmap wave f<N>`. Something else is in the way — a full card has no "How to check", a card breaks an agreement — do not start, tell the human what to do. The command answered «нечего запускать» (nothing to run) — tell the human what to do as well.
+Before every wave choose the model and effort for the phase cards «в очереди» (queued) — the rules are in the tab task, paragraph "Models before a wave"; do not touch cards with `pick: человек`.
 
 While the phase is running:
 - an agent asked — the human answers in its tab. You were asked "what is t<N> asking?" — read the card and advise; the answer still goes to the agent;
@@ -56,6 +57,22 @@ While the phase is running:
 - more than 15–20 steps or a long check is needed — create a card in the right phase (`kermach roadmap new t …`). An idea for later — a card in the "Inbox". Do not touch running cards;
 - you created a card in a running phase and it is not "human needed" — start it yourself: `kermach roadmap run t<N> --bg`. A wave takes the list of cards at its start, it will not see a new card;
 - something broke on the live site or server — first roll back to the last working version (the line «Откат:» in the card that made the change), then investigate with a card. Do not look for the cause on the live system while it is broken.
+
+**Stuck cards.** The program writes you a line "[Роадмап] встали t<N> (reason), …": the tab was closed or the agent process exited, the screen has not changed for longer than the threshold, one error repeats in a loop, a subscription limit, or a wave card waits for a dependency that is stuck itself. The program does not stop the agent; you decide. Rule: no stuck card is left without an action or a message to the human. You took a step when the card is "в работе" again, the card has an answer, or you wrote to the human. Otherwise a reminder comes in 10 minutes.
+You fix it yourself:
+- the tab crashed or the agent process exited and the work is not finished — restart it: `kermach roadmap run t<N> --bg`. This is not a subagent but the card's own agent: restarting is allowed in a "New session" too;
+- the human closed the tab (the line says «закрыл человек») — do not restart: they may have stopped the card on purpose. Ask them in one line whether to restart;
+- the agent went quiet — write "continue" in its tab and what is left to do on the card;
+- the agent waits for an answer and the answer is in the card, the overview or the log — pass it on: `kermach roadmap answer t<N> --from session "…"`;
+- the reviewer returned remarks — the card agent must get them: restart the card if it is stuck;
+- the card failed a second time — set a stronger model in its header (`model:`) and restart;
+- subscription limit — wait for the reset time from the line and restart the card.
+You write to the human:
+- taste, money or access is needed;
+- one card failed three times;
+- something irreversible or the live site;
+- to finish, the agent would have to go beyond the card's files or break an agreement;
+- the reason is unclear.
 
 The human asks for a new phase (continuation, support, incident) — create it with the command `kermach roadmap new f "Name" --goal "goal"`. Add done criteria to the phase file, show the human the goal and criteria, wait for "yes". Do not propose new phases yourself: the end of the roadmap is the end of the work. A support phase — for a period or a set of tasks ("Support, November"), so that it can be accepted.
 

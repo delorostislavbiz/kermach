@@ -89,6 +89,8 @@ const bridge = {
     reorder: (sids) => ipcRenderer.invoke('term:reorder', { sids }),
     // Скрытую вкладку (t1059) — на полосу: кнопка «в фоне» (t1061).
     unhide: (sid) => ipcRenderer.invoke('term:unhide', { sid }),
+    // Вкладку открыли на экране (t1470): демон снимает «не смотрел».
+    seen: (sid) => ipcRenderer.send('term:seen', { sid }),
     // И обратно — «Спрятать в фон» в меню вкладки (d307); onHide — вкладку спрятали (меню или плагин): окно снимает её с полосы.
     hide: (sid) => ipcRenderer.invoke('term:hide', { sid }),
     onHide: (cb) => ipcRenderer.on('term:hide', (_e, m) => cb(m.sid)),
@@ -186,6 +188,13 @@ const bridge = {
     version: () => ipcRenderer.sendSync('settings:version'),
     // Отвечает функцией снятия подписки (t218): «Браузер» подписывается при каждом включении и снимает подписку при выключении.
     onChanged: (cb) => { const f = (_e, s) => cb(s); ipcRenderer.on('settings:changed', f); return () => ipcRenderer.removeListener('settings:changed', f); },
+  },
+  // Ключ API Anthropic для вкладки на кредитах (main\api-key.js, t1356): get — { mode, has, masked, cmd, budget, model }, без ключа;
+  // save — { key } | { cmd } | { budget, model } | { clear: true }, ответ — то же или { error }; check — { ok, error?, cost? }.
+  apiKey: {
+    get: () => ipcRenderer.invoke('apikey:get'),
+    save: (patch) => ipcRenderer.invoke('apikey:save', patch),
+    check: () => ipcRenderer.invoke('apikey:check'),
   },
   // Агенты из системы (main\agents.js, t183): [{ id, title, found, enabled, builtin }] — весь каталог, поиск при каждом вызове.
   // В меню «+» — found && enabled && !builtin; запуск — term.create('agent:<id>'). Включили или выключили — settings.onChanged (поле agents).

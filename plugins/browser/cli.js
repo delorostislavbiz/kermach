@@ -662,6 +662,8 @@ async function handle(q) {
   if (q.cmd === 'roadmap-answer') return roadmapAnswer(q, id);
   // kermach roadmap start и wave (t1423) — вкладка главной сессии и волна фазы, тем же каналом.
   if (q.cmd === 'roadmap-start' || q.cmd === 'roadmap-wave') return roadmapOrch(q, id);
+  // kermach companion и kermach main (t1486–t1488) — подкоманды плагина «Роадмап», тот же канал и та же сверка доски.
+  if (q.cmd === 'roadmap-cli') return roadmapCli(q, id);
   // kermach tab list / close (t1052) — вкладки терминалов окна, тоже без «Браузера».
   if (q.cmd === 'tab-list' || q.cmd === 'tab-close') return termTab(q, id);
   // kermach tab buffer (t1231) — экран вкладки в окне против текста демона.
@@ -712,7 +714,8 @@ async function roadmapRun(q, id) {
     if (tl && Array.isArray(tl.tabs) && tl.tabs.some((/** @type {any} */ t) => t && t.sid === q.from)) from = q.from;
     else /** @type {Ctx} */ (ctx).log(`roadmap run ${ref}: вкладка-источник ${q.from} не из проекта — сообщения карты пойдут уведомлением`);
   }
-  const opt = { ...(q.bg === true ? { bg: true } : {}), ...(from ? { from } : {}) };
+  // t1358: --credits — вкладка на API-кредитах; «Роадмап» сам проверит ключ и агента.
+  const opt = { ...(q.bg === true ? { bg: true } : {}), ...(from ? { from } : {}), ...(q.credits === true && !one ? { credits: true } : {}) };
   const bridge = require('../../main/plugin-bridge');
   const r = one ? await bridge.callFor(id, 'roadmap', 'runOne', [refs, phase, opt])
     : await bridge.callFor(id, 'roadmap', 'run', [ref, opt]);
@@ -780,6 +783,44 @@ async function roadmapOrch(q, id) {
   if (!r || 'error' in r) return fail(r && r.closed ? 3 : 4, r ? `${String(r.error)}${r.skipped && r.skipped.length ? `; пропущены: ${skip(r.skipped)}` : ''}` : 'нет ответа');
   const w = r.wave || {};
   return { ok: true, project, letter: str(w.letter), ids: str((w.items || []).map((/** @type {any} */ it) => it.id).join(', ')), skipped: str(skip(w.skipped)), cut: str((r.cut || []).join(', ')) };
+}
+
+/**
+ * kermach companion «тема» и kermach main (t1486–t1488): команда cli плагина «Роадмап» с подкомандой sub и аргументами a.
+ * Доска — проекта подписи терминала, как у roadmapRun. from — вкладка, откуда позвали: только живая вкладка этого проекта, иначе пусто.
+ * Ответ плагина — поля вывода как есть (строки до 2000 знаков); отказ — его код и текст.
+ * @param {any} q @param {string} id номер проекта
+ */
+async function roadmapCli(q, id) {
+  const sub = typeof q.sub === 'string' && /^[a-z-]{1,20}$/.test(q.sub) ? q.sub : '';
+  if (!sub) return fail(1, 'нужна подкоманда');
+  const host = hostOf(id);
+  const p = host ? /** @type {any} */ (projectOf(host)) : null;
+  if (!p) return fail(3, 'окно проекта закрыто — откройте проект в Kermach и повторите');
+  if (typeof q.board !== 'string' || !q.board || !p.path || !samePath(q.board, p.path)) {
+    /** @type {Ctx} */ (ctx).log(`kermach ${sub}: отказ — доска не в проекте терминала (${clean(p.path).slice(0, 300)})`);
+    return { ...fail(2, `нет доступа: доска ${clean(q.board).slice(0, 300)} не в проекте этого терминала «${clean(p.name).slice(0, 200)}» (${clean(p.path).slice(0, 300)})`), signed: true };
+  }
+  let from = '';
+  if (typeof q.from === 'string' && /^[\w.:-]{1,80}$/.test(q.from)) {
+    const tl = await Promise.resolve(require('../../main/terminals').projectTabs(id)).catch(() => null);
+    if (tl && Array.isArray(tl.tabs) && tl.tabs.some((/** @type {any} */ t) => t && t.sid === q.from)) from = q.from;
+  }
+  /** @type {Record<string, string>} */
+  const a = {};
+  if (q.a && typeof q.a === 'object') for (const [k, v] of Object.entries(q.a)) if (/^[a-z]{1,20}$/.test(k) && (typeof v === 'string' || typeof v === 'boolean')) a[k] = typeof v === 'string' ? v.slice(0, 20000) : v ? '1' : '';
+  const r = await require('../../main/plugin-bridge').callFor(id, 'roadmap', 'cli', [sub, a, from]);
+  if (!r || 'error' in r) return fail(r && r.closed ? 3 : r && Number.isInteger(r.code) ? r.code : 4, r ? String(r.error) : 'нет ответа');
+  /** Строка ответа без управляющих знаков. @param {unknown} v */
+  const str = (v) => clean(v).slice(0, 2000);
+  /** @type {Record<string, any>} */
+  const out = { ok: true, project: clean(p.name).slice(0, 200) };
+  for (const [k, v] of Object.entries(r)) {
+    if (!/^[a-zA-Z]{1,20}$/.test(k) || k === 'ok') continue;
+    out[k] = Array.isArray(v) ? v.slice(0, 200).map((x) => (x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([kk, vv]) => [kk, str(vv)])) : str(x)))
+      : typeof v === 'boolean' || typeof v === 'number' ? v : str(v);
+  }
+  return out;
 }
 
 /**

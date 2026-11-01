@@ -38,8 +38,8 @@ const plugins = require('./plugins');
 
 /**
  * @typedef {import('./projects').Project} Project
- * @typedef {{ handle?: (cmd: string, ...args: any[]) => any, stop?: () => void }} Api
- * @typedef {{ id: string, dir: string, file: string, defaultOn: boolean, own: boolean, project: Project, api: Api | null, error: string, offs: (() => void)[] }} Inst
+ * @typedef {{ handle?: (cmd: string, ...args: any[]) => any, stop?: (why?: string) => void }} Api
+ * @typedef {{ id: string, dir: string, file: string, defaultOn: boolean, own: boolean, project: Project, api: Api | null, error: string, offs: (() => void)[], closing?: boolean }} Inst
  * api — что вернула фабрика; error — почему главной части нет (не загрузилась): запоминается до закрытия окна, а не повторяется каждым вызовом.
  * offs — отписки ctx.onState: снимаются при остановке экземпляра, даже если плагин сам не отписался.
  * own — плагин пользователя (t855): главная часть грузится только с галочкой settings.pluginMain (t1384).
@@ -69,7 +69,9 @@ function stopInst(key, why) {
   insts.delete(key);
   for (const off of inst.offs.splice(0)) off();
   if (inst.api && inst.api.stop) {
-    try { inst.api.stop(); } catch (e) { log(`плагин ${inst.id}: ошибка в stop(): ${e instanceof Error ? e.stack : e}`); }
+    // t1532: во время stop() уведомление ещё можно послать (предупреждение «слежение остановится»), после — нет.
+    inst.closing = true;
+    try { inst.api.stop(why); } catch (e) { log(`плагин ${inst.id}: ошибка в stop(): ${e instanceof Error ? e.stack : e}`); } finally { inst.closing = false; }
     log(`плагин ${inst.id}: главная часть остановлена — ${why} (${inst.project.path})`);
   }
   forget(inst.id, inst.dir);
@@ -178,7 +180,7 @@ function instOf(pl, p) {
      * @param {{ sid: string, state: string, text: string }} o
      */
     notify: (o) => {
-      if (insts.get(key) !== inst || !o || typeof o.sid !== 'string') return;
+      if ((insts.get(key) !== inst && !inst.closing) || !o || typeof o.sid !== 'string') return;
       const pn = projectNow(p);
       require('./notify').show({ sid: o.sid, state: String(o.state), project: pn.path, name: pn.name, tab: String(o.text || '').slice(0, 200), hidden: true, on: settings.get().notify !== false },
         `${o.sid} ${pl.id}`, log);

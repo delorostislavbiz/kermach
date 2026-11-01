@@ -10,6 +10,8 @@ const KINDS = /** @type {const} */ ({
   claude: { title: 'Claude', color: '#2091F6', icon: 'bot' },
   codex: { title: 'Codex', color: '#ECA855', icon: 'cpu' },
   shell: { title: 'Терминал', color: '#8D91A5', icon: 'terminal' },
+  // Claude на кредитах API (t1357): имя без «Claude Code» — так требуют правила Anthropic для сторонних программ (ТЗ).
+  credits: { title: 'Claude Agent · кредиты', color: '#20A98C', icon: 'bot' },
 });
 
 /**
@@ -28,7 +30,7 @@ function lookOf(kind) {
 /** Вид вкладки по терминалу демона. Старые терминалы без цвета и значка получают их по виду. Агента нет в каталоге — «Терминал». @param {any} s */
 function kindOf(s) {
   const k = s.meta && s.meta.kind;
-  return k === 'claude' || k === 'codex' || agentOf(k) ? k : 'shell';
+  return k === 'claude' || k === 'codex' || k === 'credits' || agentOf(k) ? k : 'shell';
 }
 
 /** Заголовок, который Claude пишет до первого вопроса, — не тема: вкладки остаются «Claude», «Claude 2». */
