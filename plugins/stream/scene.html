@@ -44,6 +44,15 @@ canvas{display:block;image-rendering:pixelated}
 .ctl button:hover{border-color:var(--cy)}
 .ctl button.on{border-color:var(--yl);color:var(--yl)}
 .note{color:var(--dim);font-size:clamp(6px,.62vw,10px)}
+[hidden]{display:none!important}
+#pick{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.4em;background:var(--bg);font-size:clamp(10px,1.1vw,18px);text-align:center;padding:0 16px}
+#pick .pt{color:var(--cy)}#plist{display:flex;flex-direction:column;gap:.8em;max-height:70vh;overflow:auto}
+#plist button,#pback{font:inherit;color:var(--tx);background:none;border:3px solid #2c3c6c;padding:.7em 1.4em;cursor:pointer;text-decoration:none}
+#plist button:hover,#pback:hover{border-color:var(--cy);color:var(--cy)}
+#sw{position:fixed;left:50%;top:2.2vh;transform:translateX(-50%);display:flex;flex-wrap:wrap;gap:.5em;align-items:center;justify-content:center;max-width:60vw;font-size:clamp(7px,.72vw,12px);background:rgba(5,6,20,.92);border:3px solid #2a4a7e;padding:.6em .8em;z-index:5}
+#sw .st{color:var(--dim)}
+#sw button{font:inherit;color:var(--tx);background:none;border:3px solid #2c3c6c;padding:.5em .8em;cursor:pointer}
+#sw button:hover{border-color:var(--cy);color:var(--cy)}#sw button.on{border-color:var(--yl);color:var(--yl)}
 #banner{position:fixed;left:50%;top:17%;transform:translateX(-50%);font-size:clamp(14px,2.4vw,44px);letter-spacing:2px;white-space:nowrap;opacity:0;pointer-events:none;padding:.5em 1em}
 #banner.show{animation:ban 2.6s steps(26) forwards}
 #banner.ok{color:var(--gr);text-shadow:4px 4px 0 #000,0 0 14px var(--gr)}
@@ -73,6 +82,8 @@ canvas{display:block;image-rendering:pixelated}
 <div class="hud br"><div class="term"><div class="hd">▌ <span data-i="log"></span></div><div id="log"></div></div></div>
 
 <div id="banner"></div>
+<div id="pick" hidden><div class="pt" data-i="pick"></div><div id="plist"></div><div id="pmsg" class="dim"></div><a id="pback" href="./" hidden data-i="back"></a></div>
+<div id="sw" hidden><span class="st" data-i="sw"></span><span id="swl"></span></div>
 
 <script>
 'use strict';
@@ -88,26 +99,28 @@ ru:{title:'Орбитальная верфь',sub:'ОРБИТАЛЬНАЯ ВЕР
  bStart:'ФАЗА {p} · СТАРТ',bRej:'ВОЗВРАТ НА ДОРАБОТКУ',bPass:'ПРОВЕРКА ПРОЙДЕНА · {c}',bAcc:'ФАЗА {p} ПРИНЯТА',bWait:'АГЕНТ ЖДЁТ ЧЕЛОВЕКА',
  lStart:'фаза {p} «{n}» запущена · карт: {k}',lLaunch:'{c} в работе · {a}',lTest:'проверяющий смотрит {c}',lRej:'проверяющий вернул {c}',lPass:'{c} готово ✓',lAcc:'фаза {p} принята · {k} из {k}',
  lWait:'{c} ждёт ответа человека',lAns:'ответ человека → {c}',lQueue:'{c} в очереди',lPause:'{c} на паузе',lAdd:'новая карта {c} «{n}»',lDel:'{c} убрана с доски',lAgent:'{c}: агент {a}',lPhase:'новая фаза {p} «{n}»',lHello:'доска проекта: фаз {p}, карт {k}',
- wOk:'ОК!',wQA:'КОНТРОЛЬ'},
+ wOk:'ОК!',wQA:'КОНТРОЛЬ',pick:'ВЫБЕРИТЕ ПРОЕКТ',pnone:'НЕТ ПРОЕКТОВ С ДОСКОЙ',missing:'ПРОЕКТ НЕ НАЙДЕН',back:'К ВЫБОРУ ПРОЕКТА',sw:'ПРОЕКТ:'},
 uk:{title:'Орбітальна верф',sub:'ОРБІТАЛЬНА ВЕРФ',insp:'ПЕРЕВІРЯЛЬНИК',live:'В ЕФІРІ',log:'ЖУРНАЛ АГЕНТІВ',
  phase:'ФАЗА',done:'ГОТОВО',busy:'В РОБОТІ',waitN:'ЧЕКАЮТЬ',rej:'ПОВЕРНЕНЬ',more:'ЩЕ {n}',none:'НА ДОШЦІ НЕМАЄ ФАЗ',conn:'НЕМАЄ ЗВ’ЯЗКУ З KERMACH',
  bStart:'ФАЗА {p} · СТАРТ',bRej:'ПОВЕРНЕНО НА ДООПРАЦЮВАННЯ',bPass:'ПЕРЕВІРКУ ПРОЙДЕНО · {c}',bAcc:'ФАЗУ {p} ПРИЙНЯТО',bWait:'АГЕНТ ЧЕКАЄ НА ЛЮДИНУ',
  lStart:'фазу {p} «{n}» запущено · карток: {k}',lLaunch:'{c} в роботі · {a}',lTest:'перевіряльник дивиться {c}',lRej:'перевіряльник повернув {c}',lPass:'{c} готово ✓',lAcc:'фазу {p} прийнято · {k} з {k}',
  lWait:'{c} чекає на відповідь людини',lAns:'відповідь людини → {c}',lQueue:'{c} у черзі',lPause:'{c} на паузі',lAdd:'нова картка {c} «{n}»',lDel:'{c} прибрано з дошки',lAgent:'{c}: агент {a}',lPhase:'нова фаза {p} «{n}»',lHello:'дошка проєкту: фаз {p}, карток {k}',
- wOk:'ОК!',wQA:'КОНТРОЛЬ'},
+ wOk:'ОК!',wQA:'КОНТРОЛЬ',pick:'ОБЕРІТЬ ПРОЄКТ',pnone:'НЕМАЄ ПРОЄКТІВ З ДОШКОЮ',missing:'ПРОЄКТ НЕ ЗНАЙДЕНО',back:'ДО ВИБОРУ ПРОЄКТУ',sw:'ПРОЄКТ:'},
 en:{title:'Orbital Shipyard',sub:'ORBITAL SHIPYARD',insp:'REVIEWER',live:'LIVE',log:'AGENT LOG',
  phase:'PHASE',done:'DONE',busy:'IN PROGRESS',waitN:'WAITING',rej:'RETURNS',more:'{n} MORE',none:'NO PHASES ON THE BOARD',conn:'NO CONNECTION TO KERMACH',
  bStart:'PHASE {p} · START',bRej:'SENT BACK FOR REWORK',bPass:'REVIEW PASSED · {c}',bAcc:'PHASE {p} ACCEPTED',bWait:'AGENT WAITS FOR HUMAN',
  lStart:'phase {p} “{n}” started · cards: {k}',lLaunch:'{c} in progress · {a}',lTest:'reviewer checks {c}',lRej:'reviewer sent back {c}',lPass:'{c} done ✓',lAcc:'phase {p} accepted · {k} of {k}',
  lWait:'{c} waits for a human answer',lAns:'human answer → {c}',lQueue:'{c} queued',lPause:'{c} paused',lAdd:'new card {c} “{n}”',lDel:'{c} removed from the board',lAgent:'{c}: agent {a}',lPhase:'new phase {p} “{n}”',lHello:'project board: phases {p}, cards {k}',
- wOk:'OK!',wQA:'QA'},
+ wOk:'OK!',wQA:'QA',pick:'CHOOSE A PROJECT',pnone:'NO PROJECTS WITH A BOARD',missing:'PROJECT NOT FOUND',back:'BACK TO PROJECTS',sw:'PROJECT:'},
 de:{title:'Orbitalwerft',sub:'ORBITALWERFT',insp:'PRÜFER',live:'LIVE',log:'AGENTEN-PROTOKOLL',
  phase:'PHASE',done:'FERTIG',busy:'IN ARBEIT',waitN:'WARTEN',rej:'RÜCKGABEN',more:'NOCH {n}',none:'KEINE PHASEN AUF DEM BOARD',conn:'KEINE VERBINDUNG ZU KERMACH',
  bStart:'PHASE {p} · START',bRej:'ZURÜCK ZUR NACHARBEIT',bPass:'PRÜFUNG BESTANDEN · {c}',bAcc:'PHASE {p} ABGENOMMEN',bWait:'AGENT WARTET AUF MENSCH',
  lStart:'Phase {p} „{n}“ gestartet · Karten: {k}',lLaunch:'{c} in Arbeit · {a}',lTest:'Prüfer sieht sich {c} an',lRej:'Prüfer gab {c} zurück',lPass:'{c} fertig ✓',lAcc:'Phase {p} abgenommen · {k} von {k}',
  lWait:'{c} wartet auf Antwort des Menschen',lAns:'Antwort des Menschen → {c}',lQueue:'{c} in der Warteschlange',lPause:'{c} pausiert',lAdd:'neue Karte {c} „{n}“',lDel:'{c} vom Board entfernt',lAgent:'{c}: Agent {a}',lPhase:'neue Phase {p} „{n}“',lHello:'Projekt-Board: Phasen {p}, Karten {k}',
- wOk:'OK!',wQA:'PRÜFER'}};
+ wOk:'OK!',wQA:'PRÜFER',pick:'PROJEKT WÄHLEN',pnone:'KEINE PROJEKTE MIT BOARD',missing:'PROJEKT NICHT GEFUNDEN',back:'ZUR PROJEKTWAHL',sw:'PROJEKT:'}};
 let LANG=String('__KERMACH_LANG__');if(!I18N[LANG])LANG='ru';
+// Проект сцены — его подставляет сервер: номер — сцена проекта, '' — страница выбора, '!' — проекта нет в списке.
+let PROJ=String('__KERMACH_PROJECT__');
 const tr=()=>I18N[LANG];
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function L(k,o){return String(tr()[k]).replace(/\{(\w+)\}/g,(m,n)=>o&&o[n]!=null?o[n]:m)}
@@ -543,14 +556,56 @@ function hud(){clockEl.textContent=clock(T);connEl.textContent=online?'':tr().co
 addEventListener('keydown',e=>{if(e.key==='c'||e.key==='C'||e.key==='с'||e.key==='С'){cam.auto=!cam.auto;cam.hold=0}});
 
 // ---------- события Kermach
-function connect(){const es=new EventSource('events');
+// Последний выбранный проект — в localStorage браузера (OBS и окно помнят своё); хранилище может бросать — сцена работает и без него.
+const LAST='kermach-stream-project';
+function saveLast(id){try{localStorage.setItem(LAST,id)}catch{/* хранилище недоступно */}}
+function readLast(){try{return String(localStorage.getItem(LAST)||'')}catch{return ''}}
+let es=null;
+function connect(){saveLast(PROJ);es=new EventSource('events?project='+encodeURIComponent(PROJ));
   es.onopen=()=>{online=true};
   es.addEventListener('board',e=>{online=true;try{applyBoard(JSON.parse(e.data))}catch(err){console.warn('scene board',err)}});
   es.addEventListener('change',e=>{try{onChange(JSON.parse(e.data))}catch(err){console.warn('scene change',err)}});
   es.onerror=()=>{online=false}}// EventSource переподключается сам (retry: 2000 от сервера)
 
 // ---------- цикл
-applyStatic();connect();
+// Страница выбора: список имён, щелчок ставит ?project=<номер> в адрес — после перезагрузки и в OBS тот же проект.
+// На сцене проекта списка нет: его не запрашиваем.
+const pickEl=document.getElementById('pick');
+function showPick(){pickEl.hidden=false;document.querySelectorAll('.hud,#wrap,.vig').forEach(e=>e.hidden=true);
+  const msg=document.getElementById('pmsg'),list=document.getElementById('plist');
+  if(PROJ==='!'){msg.textContent=tr().missing;document.querySelector('#pick .pt').hidden=true;document.getElementById('pback').hidden=false;return}
+  fetch('projects',{cache:'no-store'}).then(r=>r.json()).then(ps=>{
+    list.innerHTML='';if(!ps.length){msg.textContent=tr().pnone;return}
+    for(const p of ps){const b=document.createElement('button');b.textContent=p.name;b.dataset.id=p.id;
+      b.onclick=()=>{saveLast(p.id);location.search='?project='+encodeURIComponent(p.id)};list.appendChild(b)}
+  }).catch(()=>{msg.textContent=tr().conn})}
+/** Сменить проект на месте: ?project в адрес без перезагрузки, сцена с нуля, /events нового проекта. */
+function switchTo(id){if(!id||id===PROJ)return;PROJ=id;
+  try{history.replaceState(null,'','?project='+encodeURIComponent(id))}catch{/* адрес не меняется — сцена всё равно сменится */}
+  if(es)es.close();es=null;
+  sectors=[];robots=[];parts=[];pops=[];waves=[];timers=[];logs=[];layoutKey='';board=null;online=false;returns=0;extra=0;renderLog(false);
+  cam.x=cam.tx=OV.x;cam.y=cam.ty=OV.y;cam.z=cam.tz=OV.z;cam.hold=0;cam.follow=null;
+  pickEl.hidden=true;document.querySelectorAll('.hud,#wrap,.vig').forEach(e=>e.hidden=false);
+  connect()}
+// Переключатель на сцене: появляется от движения мыши, через 3 с без движения прячется, и список снимается со страницы.
+// Без мыши (OBS) его нет ни на экране, ни в тексте страницы: /projects запрашивается только после движения.
+const swEl=document.getElementById('sw'),swl=document.getElementById('swl');let swT=0,swReq=0;
+function swHide(){swEl.hidden=true;swl.innerHTML='';swReq++}
+function swShow(){clearTimeout(swT);swT=setTimeout(swHide,3000);if(!pickEl.hidden||!swEl.hidden)return;
+  const n=++swReq;fetch('projects',{cache:'no-store'}).then(r=>r.json()).then(ps=>{if(n!==swReq||ps.length<2)return;
+    swl.innerHTML='';for(const p of ps){const b=document.createElement('button');b.textContent=p.name;b.dataset.id=p.id;if(p.id===PROJ)b.className='on';
+      b.onclick=()=>{switchTo(p.id);swHide()};swl.appendChild(b)}
+    swEl.hidden=false}).catch(()=>{})}
+addEventListener('mousemove',swShow);
+// «К выбору проекта» — человек сам просит выбор: последний выбранный забываем, иначе адрес без ?project увёл бы обратно.
+document.getElementById('pback').addEventListener('click',()=>{try{localStorage.removeItem(LAST)}catch{/* хранилище недоступно */}});
+applyStatic();
+// Адрес без ?project и без проекта от сервера — сначала последний выбранный, если он ещё в списке; нет — выбор (t1596).
+if(PROJ==='!')showPick();
+else if(PROJ)connect();
+else{const last=readLast();
+  if(!last)showPick();
+  else fetch('projects',{cache:'no-store'}).then(r=>r.json()).then(ps=>{if(ps.some(p=>p.id===last))switchTo(last);else showPick()}).catch(()=>showPick())}
 let last=performance.now(),hudT=0;
 function frame(now){const rdt=Math.max(0,Math.min(0.05,(now-last)/1000));last=now;const dt=rdt;T+=dt;
   update(dt);updCam(rdt);draw();compose();hudT-=rdt;if(hudT<=0){hud();hudT=0.15}

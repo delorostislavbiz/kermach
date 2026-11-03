@@ -7,6 +7,8 @@
 // Текста карт, промптов, путей и полей вроде model, files здесь нет: snapshot берёт только эти поля.
 // GET / — сама сцена (scene.html рядом, t1590): язык Kermach подставляется в страницу, данные она берёт только из /events.
 // Порт — settings.port (по умолчанию 47821); занят — следующие 9, потом любой свободный. Адрес — строкой в журнале.
+// Выбор проекта (t1596): GET /projects — проекты Kermach с доской (только номер и имя); ?project=<номер> у /, /board.json,
+//   /events — доска этого проекта; номера нет в списке — 404. Один сервер на все окна с плагином (hub ниже).
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -101,50 +103,142 @@ function diff(a, b) {
   return out;
 }
 
+/** Номер проекта из пути — как projectId в main\projects.js: sha1 пути в нижнем регистре, 12 знаков. @param {string} dir */
+const idOf = (dir) => require('crypto').createHash('sha1').update(path.resolve(dir).toLowerCase()).digest('hex').slice(0, 12);
+
+/** @typedef {{ id: string, name: string, path: string }} StreamProject */
+
 /**
- * Сервер сцены для папки проекта. Его же запускает проба без Electron.
+ * Проекты Kermach с доской (.kermach\roadmap) — только чтением projects.json из папки данных Kermach (t1596).
+ * projects.load здесь не зовём: он может переписать файл (перевести версию, отложить испорченный). Файл не читается — пустой список.
+ * Версия 1 (только path) — номер и имя из пути, как fromV1 в projects.js.
+ * @param {string} kermachDir @returns {StreamProject[]}
+ */
+function readProjects(kermachDir) {
+  /** @type {any} */
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(path.join(kermachDir, 'projects.json'), 'utf8')); } catch { return []; }
+  /** @type {StreamProject[]} */
+  const out = [];
+  for (const p of (raw && Array.isArray(raw.projects) ? raw.projects : [])) {
+    if (!p || typeof p.path !== 'string' || !p.path) continue;
+    const id = raw.v === 2 && typeof p.id === 'string' && p.id ? p.id : idOf(p.path);
+    if (out.some((x) => x.id === id)) continue;
+    let has = false;
+    try { has = fs.statSync(path.join(p.path, '.kermach', 'roadmap')).isDirectory(); } catch { /* нет доски */ }
+    if (has) out.push({ id, name: typeof p.name === 'string' && p.name ? p.name : path.basename(p.path) || id, path: p.path });
+  }
+  return out;
+}
+
+/**
+ * Сервер сцены. Его же запускает проба без Electron.
+ * project — папка «своего» проекта (старый вызов t1589, t1590): без ?project в адресе отдаются его доска и сцена.
+ * list — все проекты, из которых можно выбрать (t1596); нет list — выбор только из своего проекта.
+ * home — номер проекта для адреса без ?project, когда своего нет или он закрыт (главная часть: проект первого живого окна).
+ * Адрес без ?project: проект в списке один — сразу его сцена (старый адрес из OBS не ломается); больше одного — страница выбора.
+ * ?project=<номер> — доска только проекта из списка; номера нет в списке — 404 (путь из запроса не берётся никогда).
  * lang — язык сцены (поле lang настроек Kermach) или функция, которая его отдаёт; setLang меняет его на ходу.
- * @param {{ project: string, port?: number, lang?: string | (() => string), log?: (m: string) => void }} o
+ * @param {{ project?: string, id?: string, name?: string, list?: () => StreamProject[], home?: () => string, port?: number, lang?: string | (() => string), log?: (m: string) => void }} o
  * @returns {Promise<{ port: number, url: string, close: () => void, setLang: (l: string) => void }>}
  */
 async function serve(o) {
   const log = o.log || (() => {});
-  let snap = snapshot(o.project);
+  /** @type {StreamProject | null} */
+  const own = o.project ? { id: o.id || idOf(o.project), name: o.name || path.basename(path.resolve(o.project)), path: o.project } : null;
   let lang = typeof o.lang === 'string' ? o.lang : '';
   const langNow = () => (typeof o.lang === 'function' ? o.lang() : lang);
-  /** @type {Set<http.ServerResponse>} */
-  const clients = new Set();
-  const send = (/** @type {http.ServerResponse} */ res, /** @type {string} */ ev, /** @type {any} */ data) => {
-    try { res.write(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`); } catch { clients.delete(res); }
+  let cache = { at: 0, /** @type {StreamProject[]} */ list: [] };
+  /** Список проектов: свой и из list, без повторов. Читается не чаще раза в 2 с. */
+  const projects = () => {
+    if (Date.now() - cache.at < 2000) return cache.list;
+    /** @type {StreamProject[]} */
+    let more = [];
+    try { more = o.list ? o.list() : []; } catch (e) { log(`список проектов не прочитан: ${e instanceof Error ? e.message : e}`); }
+    const list = own ? [own, ...more.filter((p) => p.id !== own.id)] : more.slice();
+    cache = { at: Date.now(), list };
+    return list;
   };
+  /** Проект по номеру из запроса: только точное совпадение со списком. @param {string} id */
+  const find = (id) => projects().find((p) => p.id === id) || null;
+  /** Проект для адреса без ?project: в списке один — он; иначе свой или home; null — показать выбор. @param {boolean} page */
+  const fallback = (page) => {
+    const list = projects();
+    if (list.length === 1) return list[0];
+    if (page && list.length > 1) return null;
+    if (own) return own;
+    const h = o.home ? o.home() : '';
+    return (h && find(h)) || list[0] || null;
+  };
+
+  /** Доски по номеру проекта: снимок, слежение и подписчики /events. @type {Map<string, { p: StreamProject, snap: StreamBoard, clients: Set<http.ServerResponse>, w: { close: () => void } }>} */
+  const boards = new Map();
+  const send = (/** @type {http.ServerResponse} */ res, /** @type {string} */ ev, /** @type {any} */ data) => {
+    try { res.write(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* закрыт — уберёт close */ }
+  };
+  /** @param {StreamProject} p */
+  const boardOf = (p) => {
+    const had = boards.get(p.id);
+    if (had) return had;
+    const b = { p, snap: snapshot(p.path), clients: /** @type {Set<http.ServerResponse>} */ (new Set()), w: { close() {} } };
+    b.w = board.watch(p.path, () => {
+      let next;
+      try { next = snapshot(p.path); } catch (e) { log(`доска не прочитана: ${e instanceof Error ? e.message : e}`); return; }
+      const ch = diff(b.snap, next);
+      b.snap = next;
+      if (!ch.length) return;
+      for (const c of b.clients) { send(c, 'change', { at: next.at, changes: ch }); send(c, 'board', next); }
+    }, { log, pin: () => pins.get(p.path) || [] });
+    boards.set(p.id, b);
+    return b;
+  };
+  /** Чужую доску без подписчиков больше не держим: слежение стоит денег. @param {string} id */
+  const release = (id) => {
+    const b = boards.get(id);
+    if (!b || b.clients.size || (own && own.id === id)) return;
+    b.w.close();
+    boards.delete(id);
+    pins.delete(b.p.path);
+  };
+  if (own) boardOf(own);
+
   const server = http.createServer((req, res) => {
-    const url = String(req.url || '/').split('?')[0];
+    const u = new URL(String(req.url || '/'), 'http://x');
+    const url = u.pathname;
+    const want = u.searchParams.has('project') ? String(u.searchParams.get('project') || '') : null;
     const head = { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' };
+    const json = (/** @type {any} */ v) => { res.writeHead(200, { ...head, 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(v)); };
     if (req.method !== 'GET') { res.writeHead(405, head); res.end(); return; }
+    if (url === '/projects') { json(projects().map((p) => ({ id: clean(p.id, 16), name: clean(p.name, 80) }))); return; }
+    /** Проект запроса: есть ?project — только из списка; нет — запасной. */
+    const pr = want !== null ? find(want) : fallback(url === '/' || url === '/index.html');
     if (url === '/' || url === '/index.html') {
+      // В страницу уходит только номер проекта из списка: '' — выбор, '!' — проект не найден.
+      const mode = want !== null ? (pr ? pr.id : '!') : pr ? pr.id : '';
       let page;
-      try { page = scenePage(langNow()); } catch (e) { log(`сцена не прочитана: ${e instanceof Error ? e.message : e}`); res.writeHead(500, head); res.end(); return; }
+      try { page = scenePage(langNow()).replace('__KERMACH_PROJECT__', mode.replace(/[^0-9a-z!]/gi, '')); } catch (e) { log(`сцена не прочитана: ${e instanceof Error ? e.message : e}`); res.writeHead(500, head); res.end(); return; }
       res.writeHead(200, { ...head, 'Content-Type': 'text/html; charset=utf-8' });
       res.end(page);
       return;
     }
+    if (url !== '/board.json' && url !== '/events') { res.writeHead(404, head); res.end(); return; }
+    if (!pr) { res.writeHead(404, head); res.end(); return; }
+    let b;
+    try { b = boardOf(pr); } catch (e) { log(`доска не прочитана: ${e instanceof Error ? e.message : e}`); res.writeHead(500, head); res.end(); return; }
     if (url === '/board.json') {
-      res.writeHead(200, { ...head, 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify(snap));
+      const snap = b.snap;
+      release(pr.id);
+      json(snap);
       return;
     }
-    if (url === '/events') {
-      res.writeHead(200, { ...head, 'Content-Type': 'text/event-stream; charset=utf-8', Connection: 'keep-alive' });
-      res.write('retry: 2000\n\n');
-      clients.add(res);
-      send(res, 'board', snap);
-      req.on('close', () => clients.delete(res));
-      return;
-    }
-    res.writeHead(404, head);
-    res.end();
+    res.writeHead(200, { ...head, 'Content-Type': 'text/event-stream; charset=utf-8', Connection: 'keep-alive' });
+    res.write('retry: 2000\n\n');
+    b.clients.add(res);
+    send(res, 'board', b.snap);
+    const bb = b;
+    req.on('close', () => { bb.clients.delete(res); release(pr.id); });
   });
-  const want = typeof o.port === 'number' && Number.isInteger(o.port) && o.port > 0 && o.port < 65536 ? o.port : PORT;
+  const wantPort = typeof o.port === 'number' && Number.isInteger(o.port) && o.port > 0 && o.port < 65536 ? o.port : PORT;
   const listen = (/** @type {number} */ p) => new Promise((ok, no) => {
     const onErr = (/** @type {any} */ e) => { server.off('listening', onOk); no(e); };
     const onOk = () => { server.off('error', onErr); ok(undefined); };
@@ -153,64 +247,94 @@ async function serve(o) {
     server.listen(p, HOST);
   });
   let port = 0;
-  for (let i = 0; i <= TRIES && !port; i++) {
-    const p = i < TRIES ? want + i : 0;
-    if (p > 65535) continue;
-    try { await listen(p); port = /** @type {any} */ (server.address()).port; } catch (e) {
-      const code = /** @type {any} */ (e).code;
-      if (code !== 'EADDRINUSE' && code !== 'EACCES') throw e;
-      if (i === 0) log(`порт ${want} занят — беру запасной`);
+  try {
+    for (let i = 0; i <= TRIES && !port; i++) {
+      const p = i < TRIES ? wantPort + i : 0;
+      if (p > 65535) continue;
+      try { await listen(p); port = /** @type {any} */ (server.address()).port; } catch (e) {
+        const code = /** @type {any} */ (e).code;
+        if (code !== 'EADDRINUSE' && code !== 'EACCES') throw e;
+        if (i === 0) log(`порт ${wantPort} занят — беру запасной`);
+      }
     }
+  } catch (e) {
+    for (const b of boards.values()) b.w.close();
+    throw e;
   }
-  const ping = setInterval(() => { for (const c of clients) { try { c.write(': ping\n\n'); } catch { clients.delete(c); } } }, 15000);
-  const w = board.watch(o.project, () => {
-    let next;
-    try { next = snapshot(o.project); } catch (e) { log(`доска не прочитана: ${e instanceof Error ? e.message : e}`); return; }
-    const ch = diff(snap, next);
-    snap = next;
-    if (!ch.length) return;
-    for (const c of clients) { send(c, 'change', { at: next.at, changes: ch }); send(c, 'board', next); }
-  }, { log, pin: () => pins.get(o.project) || [] });
+  const ping = setInterval(() => { for (const b of boards.values()) for (const c of b.clients) { try { c.write(': ping\n\n'); } catch { b.clients.delete(c); } } }, 15000);
   const url = `http://${HOST}:${port}/`;
   return {
     port, url,
     setLang(l) { lang = String(l || ''); },
     close() {
       clearInterval(ping);
-      w.close();
-      for (const c of clients) { try { c.end(); } catch { /* уже закрыт */ } }
-      clients.clear();
+      for (const b of boards.values()) {
+        b.w.close();
+        for (const c of b.clients) { try { c.end(); } catch { /* уже закрыт */ } }
+        b.clients.clear();
+        pins.delete(b.p.path);
+      }
+      boards.clear();
       server.close();
     },
   };
 }
 
+/**
+ * Один сервер на все окна (t1596). Главная часть каждого окна — свой экземпляр, но модуль main.js у них общий (кэш require
+ * в главном процессе), поэтому общий и сервер: первое окно с плагином поднимает его, второе и следующие только записываются
+ * в users и получают тот же адрес. Адрес без ?project — проект первого живого окна; выбор — все проекты Kermach с доской.
+ * Закрылось окно — оно уходит из users; последнее — сервер закрывается.
+ * @type {{ run: Promise<{ port: number, url: string, close: () => void, setLang: (l: string) => void }>, users: any[] } | null}
+ */
+let hub = null;
+
 /** @param {any} ctx */
 module.exports = (ctx) => {
-  /** @type {Promise<{ port: number, url: string, close: () => void, setLang: (l: string) => void }> | null} */
-  let run = null;
-  let stopped = false;
+  let on = false;
+  const me = { ctx, lang: '' };
+  // Папка данных плагина — <данные Kermach>\plugins-data\stream (plugin-bridge.js), значит данные Kermach — на два уровня выше.
+  const kermachDir = path.dirname(path.dirname(String(ctx.dataDir || '')));
   return {
-    /** start(lang) — запустить сервер; lang — язык окна Kermach (поле lang настроек), сцена говорит на нём. @param {string} cmd @param {any} [l] */
+    /** start(lang) — запустить сервер или записаться в общий; lang — язык окна Kermach, сцена говорит на языке последнего окна. @param {string} cmd @param {any} [l] */
     handle(cmd, l) {
       if (cmd !== 'start') throw new Error(`нет команды ${cmd}`);
-      if (run) run.then((r) => r.setLang(l), () => {});
-      if (!run) {
+      me.lang = String(l || '');
+      if (!hub) {
         const s = ctx.settings.get();
-        const p = serve({ project: ctx.project.path, port: s && s.port, lang: String(l || ''), log: ctx.log }).then((r) => {
-          if (stopped) r.close();
-          else ctx.log(`сцена стрима: доска проекта ${ctx.project.name} на ${r.url} (порт ${r.port})`);
-          return r;
-        });
-        run = p;
-        p.catch((e) => { ctx.log(`сцена стрима не запущена: ${e instanceof Error ? e.message : e}`); if (run === p) run = null; });
+        /** @type {any[]} */
+        const users = [];
+        const h = {
+          users,
+          run: serve({
+            list: () => readProjects(kermachDir),
+            home: () => (users[0] ? users[0].ctx.project.id : ''),
+            port: s && s.port,
+            lang: me.lang,
+            log: ctx.log,
+          }),
+        };
+        hub = h;
+        h.run.catch((e) => { ctx.log(`сцена стрима не запущена: ${e instanceof Error ? e.message : e}`); if (hub === h) hub = null; });
       }
-      return run.then((r) => ({ url: r.url, port: r.port }));
+      const h = hub;
+      if (!on) { on = true; h.users.push(me); }
+      return h.run.then((r) => {
+        r.setLang(me.lang);
+        if (!on) return { url: r.url, port: r.port };
+        ctx.log(`сцена стрима: проект ${ctx.project.name} — ${r.url}?project=${ctx.project.id}, выбор проекта — ${r.url} (порт ${r.port}, окон с плагином: ${h.users.length})`);
+        return { url: r.url, port: r.port };
+      }, (e) => { if (on) { on = false; h.users.splice(h.users.indexOf(me), 1); } throw e; });
     },
     stop() {
-      stopped = true;
-      if (run) run.then((r) => r.close(), () => {});
-      run = null;
+      if (!on || !hub) { on = false; return; }
+      on = false;
+      const h = hub;
+      const i = h.users.indexOf(me);
+      if (i >= 0) h.users.splice(i, 1);
+      if (h.users.length) return;
+      hub = null;
+      h.run.then((r) => r.close(), () => {});
     },
   };
 };
@@ -218,3 +342,5 @@ module.exports.serve = serve;
 module.exports.snapshot = snapshot;
 module.exports.diff = diff;
 module.exports.langOf = langOf;
+module.exports.readProjects = readProjects;
+module.exports.idOf = idOf;
