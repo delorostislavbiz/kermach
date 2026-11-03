@@ -157,6 +157,48 @@ function off() {
   removeEventListener('keydown', onKey, true);
 }
 
+// Номера пометок (t1474) у элементов: окно шлёт весь список [{ n, selector }] через тег webview (send), пустой — убрать.
+// Слой — закрытый shadow root без мыши: страница внутренности не достаёт, щелчки идут сквозь. Место — по селектору заново
+// на прокрутку, размер окна и раз в полсекунды (страница могла сдвинуть элемент). Элемента нет — номера нет.
+let badges = null;
+let badgeList = [];
+let badgeTimer = 0;
+function drawBadges() {
+  if (!badges) return;
+  for (const [i, m] of badgeList.entries()) {
+    const d = badges.items[i];
+    let el = null;
+    try { el = document.querySelector(m.selector); } catch {}
+    const r = el ? el.getBoundingClientRect() : null;
+    if (!r || (!r.width && !r.height)) { d.style.display = 'none'; continue; }
+    Object.assign(d.style, { display: 'block', left: `${Math.max(0, r.x - 9)}px`, top: `${Math.max(0, r.y - 9)}px` });
+  }
+}
+function setBadges(_e, list) {
+  badgeList = Array.isArray(list) ? list.filter((m) => m && typeof m.selector === 'string' && Number.isInteger(m.n)).slice(0, 100) : [];
+  if (badges) { badges.host.remove(); badges = null; }
+  if (badgeTimer) { clearInterval(badgeTimer); badgeTimer = 0; removeEventListener('scroll', drawBadges, true); removeEventListener('resize', drawBadges); }
+  if (!badgeList.length) return;
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483646;pointer-events:none';
+  const root = host.attachShadow({ mode: 'closed' });
+  const items = badgeList.map((m) => {
+    const d = document.createElement('div');
+    d.textContent = String(m.n);
+    d.style.cssText = 'position:fixed;display:none;min-width:18px;height:18px;padding:0 4px;box-sizing:border-box;border-radius:9px;background:#21B568;color:#fff;'
+      + 'font:bold 11px/18px Arial,sans-serif;text-align:center;box-shadow:0 0 0 2px #fff;pointer-events:none';
+    root.appendChild(d);
+    return d;
+  });
+  document.documentElement.appendChild(host);
+  badges = { host, items };
+  addEventListener('scroll', drawBadges, true);
+  addEventListener('resize', drawBadges);
+  badgeTimer = setInterval(drawBadges, 500);
+  drawBadges();
+}
+ipcRenderer.on('browser:marks-show', setBadges);
+
 // Человек щёлкнул в странице (t1236): окно гасит строку «Агент: …». Только настоящая мышь — el.click() агента (cli.js) не isTrusted.
 addEventListener('mousedown', (e) => { if (e.isTrusted && !armed) ipcRenderer.sendToHost('browser:human'); }, true);
 ipcRenderer.on('browser:pick-arm', on);

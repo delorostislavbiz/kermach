@@ -237,6 +237,31 @@
     return first ? first.sid : '';
   }
 
+  /** Строка ввода агента на экране (t1474): «>» Claude Code, «❯» и «›» Codex — в начале ряда или в рамке поля ввода. */
+  const READY_RE = /^\s*[│┃|]?\s*[>❯›](\s|$)/;
+  /** Вопрос о доверии папке при запуске: вставка ответила бы на него — ждём, пока человек ответит сам. */
+  const TRUST_RE = /trust (this|the) folder|do you trust|доверя/i;
+  /**
+   * Агент в новой вкладке готов принять вставку (t1474): вкладка жива, это агент (pics), на экране строка ввода и экран не меняется 1,5 с.
+   * Не дождались за ms — false. Экран — из xterm окна (KermachTermBuffer), к демону лишних запросов нет.
+   * @param {string} sid @param {number} [ms]
+   */
+  async function agentReady(sid, ms = 120000) {
+    let last = '', same = 0;
+    for (const end = Date.now() + ms; Date.now() < end;) {
+      await new Promise((r) => setTimeout(r, 500));
+      const x = tabs.get(sid);
+      if (!x || closing.has(sid) || (x.x && !x.alive)) return false;
+      if (!x.x || !isAgent(x)) continue;
+      const b = /** @type {any} */ (await w.KermachTermBuffer(sid));
+      if (!b || !b.ok) continue;
+      const text = b.lines.map((/** @type {any} */ l) => l.text).join('\n');
+      if (text === last) same++; else { same = 0; last = text; }
+      if (same >= 3 && !TRUST_RE.test(text) && b.lines.some((/** @type {any} */ l) => READY_RE.test(l.text))) return true;
+    }
+    return false;
+  }
+
   /**
    * Вкладки по порядку полосы (t133): терминалы по порядку открытия, вкладки сайта — каждая на своё место pos.
    * Место — номер в полосе, а не сосед: терминал, запущенный заново при открытии окна, получает новый sid, но стоит там же.
@@ -2010,6 +2035,20 @@
           const x = tabs.get(sid);
           if (!x || !x.x || !x.alive) return false;
           return !!(await t.term.paste(sid, String(text), 'text').catch(() => false));
+        },
+        /** Пометки (t1474): открытые в окне живые агенты, понимающие картинки (pics), по порядку полосы — меню «Отправить агенту». */
+        agents: () => ordered().filter((x) => !x.page && !!x.x && x.alive && isAgent(x)).map((x) => ({ sid: x.sid, title: x.title })),
+        /**
+         * Пометки (t1474): «Новый Claude Code» / «Новый Codex» — открыть вкладку агента и дождаться, когда он готов принять ввод.
+         * Вставка во время запуска теряется (Орка 1.4.241), поэтому ответ — sid только после agentReady; не дождались — ''.
+         * @param {string} kind
+         */
+        newAgent: async (kind) => {
+          if (kind !== 'claude' && kind !== 'codex') return '';
+          const r = await create(kind, {}, false, true);
+          const sid = r && !r.error && r.session ? String(r.session.sid) : '';
+          if (!sid) return '';
+          return (await agentReady(sid)) ? sid : '';
         },
         /** Список вкладок изменился: агент открылся, закрылся, вышел. @param {() => void} cb */
         onChange: (cb) => watchers.push({ id: 'browser', cb }),

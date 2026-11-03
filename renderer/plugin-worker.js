@@ -67,7 +67,15 @@
   const start = () => {
     if (!setup || on) return;
     on = true;
-    try { const s = setup(host()); stop = typeof s === 'function' ? s : null; } catch (e) { on = false; log(`ошибка при запуске: ${/** @type {any} */ (e).stack || e}`); }
+    try { const s = setup(host()); stop = typeof s === 'function' ? s : null; } catch (e) {
+      on = false;
+      log(`ошибка при запуске: ${/** @type {any} */ (e).stack || e}`);
+      // Упавший setup успел подписаться (t1583): колбэки снять — событий он не получает, повторный запуск их не удваивает.
+      stop = null;
+      termCbs = [];
+      events = new Map();
+      clicks = new Map();
+    }
     post({ t: 'started', ok: on });
   };
   const halt = () => {

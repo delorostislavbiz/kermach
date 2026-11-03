@@ -572,7 +572,7 @@ function register(c, of) {
       const stop = () => { const w = picking.get(g.id); if (w && w.done === done) { picking.delete(g.id); done({ cancelled: true }); } };
       /** @param {any} ev */
       const nav = (ev) => { if (ev.isMainFrame && !ev.isSameDocument) stop(); };
-      /** @param {{ text?: string, cancelled?: true, error?: string }} r */
+      /** @param {{ text?: string, short?: string, selector?: string, rect?: any, cancelled?: true, error?: string }} r */
       const done = (r) => { g.removeListener('destroyed', stop); g.removeListener('did-start-navigation', nav); resolve(r); };
       picking.set(g.id, { host: e.sender.id, done });
       g.on('destroyed', stop);
@@ -599,7 +599,8 @@ function register(c, of) {
         disp = grab.monitorOf(s.scaleFactor, s.size);
       }
     } catch { /* дисплея нет — в «Экран» только страница */ }
-    w.done({ text: grab.format(d, disp) });
+    // Пометки (t1474): место элемента — поле «Что поменять» рядом с ним, short и selector — строка списка и номер на странице.
+    w.done({ text: grab.format(d, disp), short: grab.short(d), selector: d.target.selector, rect: d.target.rectViewport });
   });
 }
 

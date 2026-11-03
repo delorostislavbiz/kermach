@@ -159,8 +159,8 @@ function instOf(pl, p) {
     },
     /** Смена состояния вкладки проекта (t276); ответ — отписка. @param {(m: any) => void} cb */
     onState: (cb) => {
-      if (typeof cb !== 'function' || insts.get(key) !== inst) return () => {};
-      const off = require('./terminals').onState(p.id, (/** @type {any} */ m) => { if (insts.get(key) === inst) cb(m); });
+      if (typeof cb !== 'function' || insts.get(key) !== inst || inst.error) return () => {};
+      const off = require('./terminals').onState(p.id, (/** @type {any} */ m) => { if (insts.get(key) === inst && !inst.error) cb(m); });
       inst.offs.push(off);
       return () => { off(); const i = inst.offs.indexOf(off); if (i >= 0) inst.offs.splice(i, 1); };
     },
@@ -198,6 +198,8 @@ function instOf(pl, p) {
   } catch (e) {
     inst.error = `главная часть не подключилась: ${errText(e)}`;
     c.log(`плагин ${pl.id}: ${inst.error}${e instanceof Error && e.stack ? `\n${e.stack}` : ''}`);
+    // Фабрика успела подписаться на onState и упала (t1583): подписки снять — события упавшему плагину не идут.
+    for (const off of inst.offs.splice(0)) { try { off(); } catch { /* отписка не должна мешать */ } }
     forget(pl.id, pl.dir);
   }
   return inst;

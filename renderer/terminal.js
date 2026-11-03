@@ -414,8 +414,11 @@ function createTerminal(pane, io, fontSize = 17) {
   const proposed = () => {
     const core = /** @type {any} */ (term)._core;
     // Подгонка из колбэка keepCursor могла прийти после закрытия вкладки: xterm уже разобран, отрисовщика нет (t207-views).
-    if (!core._renderService || !core._renderService.dimensions) return null;
-    const own = core._renderService.dimensions.css.cell;
+    // В xterm 6 dimensions — геттер this._renderer.value.dimensions: после dispose value пуст, и само чтение бросает (t1586).
+    if (term.element === undefined || !core._renderService || !core._renderService._renderer || !core._renderService._renderer.value) return null;
+    const dims = core._renderService.dimensions;
+    if (!dims) return null;
+    const own = dims.css.cell;
     const px = term.options.fontSize;
     if (webgl && own.width && own.height) glCell[px] = { width: own.width, height: own.height };
     const cell = glCell[px] || own;

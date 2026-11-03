@@ -82,6 +82,17 @@ function readCredits(dataDir, now = Date.now()) {
 }
 
 /**
+ * Остаток ближайшего начисления (t1521) по расчёту плагина «Кредиты»: { nearest: { left, amount, expires, days } } или пусто.
+ * @param {string} dataDir @param {number} [now]
+ */
+function grantLeft(dataDir, now = Date.now()) {
+  try {
+    const n = require('../credits/main').balanceNow(dataDir, now).nearest;
+    return n ? { nearest: { left: n.left, amount: n.amount, expires: n.expires, days: n.days } } : {};
+  } catch { return {}; }
+}
+
+/**
  * Фабрика моста: экземпляр на окно проекта. ctx.dataDir — <данные>\plugins-data\limits (plugin-bridge.js), а файлы лимитов
  * лежат в самой папке данных — на два уровня выше.
  * @param {{ dataDir: string }} ctx
@@ -92,11 +103,12 @@ function make(ctx) {
     /** @param {string} cmd */
     handle(cmd) {
       // credits (t1358) — только при сохранённом ключе «Кредиты API»: без ключа строки расхода нет.
-      if (cmd === 'get') return { claude: claudeLimits.read(dataDir), codex: readCodex(dataDir), now: Date.now(), ...(creditsKey() ? { credits: readCredits(dataDir) } : {}) };
+      // t1521: остаток ближайшего начисления — тот же расчёт, что у панели «Кредиты» (credits\main.js, balanceNow); require ленивый: плагина может не быть.
+      if (cmd === 'get') return { claude: claudeLimits.read(dataDir), codex: readCodex(dataDir), now: Date.now(), ...(creditsKey() ? { credits: { ...readCredits(dataDir), ...grantLeft(dataDir) } } : {}) };
       return { error: `нет команды ${cmd}` };
     },
     stop() {},
   };
 }
 
-module.exports = Object.assign(make, { readCodex, readCredits, CREDITS_JOURNAL });
+module.exports = Object.assign(make, { readCodex, readCredits, grantLeft, CREDITS_JOURNAL });

@@ -43,7 +43,8 @@ function parse(text) {
     out.kind = head.kind || 'сделать'; out.depends = head.depends || ''; out.hint = [head.model, head.effort].filter(Boolean).join(' ');
     const body = text.slice(fm[0].length);
     out.title = (body.match(/^# (.*)$/m) || [, ''])[1];
-    const field = (name) => { const m = body.match(new RegExp('^' + name + ':\\s*([\\s\\S]*?)(?=\\n(?:Что сделать|Зачем|Файлы|Как проверить|Особые указания|Что сделано|Доказательство):|\\n\\n|\\n#|$)', 'm')); return m ? m[1].trim() : ''; };
+    // t1580: конец поля — (?![\s\S]), не «$»: с флагом m «$» — конец первой строки, поле обрезалось (и в sec ниже)
+    const field = (name) => { const m = body.match(new RegExp('^' + name + ':\\s*([\\s\\S]*?)(?=\\n(?:Что сделать|Зачем|Файлы|Как проверить|Особые указания|Что сделано|Доказательство):|\\n\\n|\\n#|(?![\\s\\S]))', 'm')); return m ? m[1].trim() : ''; };
     out.what = field('Что сделать'); out.why = field('Зачем'); out.files = field('Файлы'); out.verify = field('Как проверить'); out.notes = field('Особые указания');
     return out;
   }
@@ -60,7 +61,7 @@ function parse(text) {
   const nw = text.match(/^# Бриф\s*(t\d+)[^:\n]*:\s*(.*)$/m);
   if (nw) {
     out.title = nw[2];
-    const sec = (name) => { const m = text.match(new RegExp('^## ' + name + '[^\\n]*\\n([\\s\\S]*?)(?=\\n## |$)', 'm')); return m ? m[1].trim() : ''; };
+    const sec = (name) => { const m = text.match(new RegExp('^## ' + name + '[^\\n]*\\n([\\s\\S]*?)(?=\\n## |(?![\\s\\S]))', 'm')); return m ? m[1].trim() : ''; };
     out.what = sec('Карточка') || sec('Твои карточки'); out.files = sec('Зона') || sec('Зона файлов') || sec('Зона и запреты'); out.verify = sec('verify по пунктам') || sec('Проверки'); out.notes = sec('Уже решено');
     return out;
   }

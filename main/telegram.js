@@ -37,11 +37,11 @@ let tokenMem = '';
 /**
  * @typedef {{ mid: number, project: string, name: string, card: string, irrev: boolean, at: number }} Sent
  * @typedef {{ enc: string, last4: string, code: string, chat: { id: number, title: string } | null, owner: { id: number, user: string, name: string } | null,
- *   dupMin: number, offset: number, checked: number, sent: Sent[] }} Store
+ *   dupMin: number, offset: number, checked: number, sent: Sent[], prevCode: string }} Store
  */
 
 /** @returns {Store} */
-const empty = () => ({ enc: '', last4: '', code: '', chat: null, owner: null, dupMin: DUP_DEF, offset: 0, checked: 0, sent: [] });
+const empty = () => ({ enc: '', last4: '', code: '', chat: null, owner: null, dupMin: DUP_DEF, offset: 0, checked: 0, sent: [], prevCode: '' });
 
 /** @param {any} v @param {number} d */
 const dupOf = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 && n <= DUP_MAX ? n : d; };
@@ -53,6 +53,7 @@ function clean(r) {
   if (typeof o.enc === 'string' && /^[A-Za-z0-9+/=]{20,20000}$/.test(o.enc)) {
     s.enc = o.enc; s.last4 = typeof o.last4 === 'string' && /^[\w-]{0,4}$/.test(o.last4) ? o.last4 : '';
     s.code = typeof o.code === 'string' && /^\d{6}$/.test(o.code) ? o.code : '';
+    s.prevCode = typeof o.prevCode === 'string' && /^\d{6}$/.test(o.prevCode) ? o.prevCode : '';
   }
   if (o.chat && Number.isSafeInteger(o.chat.id)) s.chat = { id: o.chat.id, title: String(o.chat.title || '').slice(0, 200) };
   if (o.owner && Number.isSafeInteger(o.owner.id)) s.owner = { id: o.owner.id, user: String(o.owner.user || '').slice(0, 100), name: String(o.owner.name || '').slice(0, 200) };
@@ -95,7 +96,7 @@ function scrub(m) {
 function info(s = read()) {
   return {
     has: !!s.enc, masked: s.enc ? `••••${s.last4}` : '', chat: s.chat ? s.chat.title || String(s.chat.id) : '',
-    owner: s.owner ? (s.owner.user ? `@${s.owner.user}` : s.owner.name || String(s.owner.id)) : '', code: s.enc && !(s.chat && s.owner) ? s.code : '', dupMin: s.dupMin, dupDef: DUP_DEF, checked: s.checked,
+    owner: s.owner ? (s.owner.user ? `@${s.owner.user}` : s.owner.name || String(s.owner.id)) : '', code: s.enc && !(s.chat && s.owner) ? s.code : '', codeChanged: !!(s.enc && !(s.chat && s.owner) && s.prevCode), dupMin: s.dupMin, dupDef: DUP_DEF, checked: s.checked,
     win: process.platform === 'win32',
   };
 }
@@ -191,7 +192,7 @@ const whoOf = (f) => ({ id: Number(f.id), user: String(f.username || ''), name: 
 async function updates(tk) {
   const s = read();
   /** @type {any[]} */
-  const list = await api('getUpdates', { offset: s.offset || undefined, timeout: 0, allowed_updates: ['message'] }, tk);
+  const list = await api('getUpdates', { offset: s.offset || undefined, timeout: 0, allowed_updates: ['message', 'edited_message'] }, tk);
   const arr = Array.isArray(list) ? list : [];
   if (arr.length) {
     const s2 = read();
@@ -216,7 +217,7 @@ async function save(patch) {
     if (!/^\d{5,}:[\w-]{20,200}$/.test(tk)) return { error: 'Это не похоже на токен бота: он выглядит как 123456789:AAE… (выдаёт @BotFather)' };
     try { s.enc = await protect(tk); } catch (e) { return { error: `Токен не зашифрован: ${scrub(e)}` }; }
     tokenMem = tk;
-    s.last4 = tk.slice(-4).replace(/[^\w-]/g, ''); s.code = newCode(); s.chat = null; s.owner = null; s.offset = 0; s.checked = 0; s.sent = [];
+    s.last4 = tk.slice(-4).replace(/[^\w-]/g, ''); s.prevCode = s.code || s.prevCode; s.code = newCode(); s.chat = null; s.owner = null; s.offset = 0; s.checked = 0; s.sent = [];
   }
   if (pt.dupMin !== undefined) {
     const n = Number(pt.dupMin);
@@ -239,16 +240,20 @@ async function check() {
   if (ensureCode(s)) write(clean(s));
   try {
     const me = await api('getMe');
-    const ups = await updates();
     s = read();
-    const msgs = ups.map((u) => u && u.message).filter((m) => m && m.chat && m.from && !m.from.is_bot);
+    // t1578: группа уже настроена — обновления не забираем: в них ответы владельца на карты, их разбирает poll().
+    const ups = s.chat && s.owner ? [] : await updates();
+    if (ups.length) s = read();
+    const msgs = ups.map((u) => u && (u.message || u.edited_message)).filter((m) => m && m.chat && m.from && !m.from.is_bot);
     if (!(s.chat && s.owner)) {
       const code = s.code;
       const has = (/** @type {any} */ x) => !!code && new RegExp(`(?<!\\d)${code}(?!\\d)`).test(String(x.text || x.caption || ''));
       const isGroup = (/** @type {any} */ x) => x.chat.type === 'group' || x.chat.type === 'supergroup';
       const m = msgs.find((x) => isGroup(x) && has(x));
+      const hasOld = (/** @type {any} */ x) => !!s.prevCode && new RegExp(`(?<!\\d)${s.prevCode}(?!\\d)`).test(String(x.text || x.caption || ''));
       const bot = `@${me && me.username ? me.username : '…'}`;
       if (!m) {
+        if (msgs.some((x) => hasOld(x))) return { ok: false, error: tr('telegram.codeChanged', 'Код сменился: в группе стоит старый код {old}, он больше не действует. Новый код — {c}. Напишите его в группе (лучше «Ответить» на сообщение бота) и нажмите «Проверить» ещё раз', { old: s.prevCode, c: code }) };
         const dm = msgs.some((x) => !isGroup(x) && has(x));
         if (dm) log('telegram: «Проверить» — код пришёл в личку боту, а не в группу: владелец не назначен');
         return { ok: false, error: dm
@@ -257,11 +262,15 @@ async function check() {
       }
       s.chat = { id: Number(m.chat.id), title: String(m.chat.title || m.chat.id) };
       s.owner = whoOf(m.from);
-      s.code = '';
+      s.code = ''; s.prevCode = '';
     }
     const ow = s.owner ? (s.owner.user ? `@${s.owner.user}` : s.owner.name) : '';
     await api('sendMessage', { chat_id: s.chat.id, text: `Kermach: проверка связи. Сообщения о вставших картах будут приходить сюда. Ответы принимаю только от ${ow} и только ответом (reply) на сообщение о карте.` });
-    s.checked = Date.now();
+    // t1578: пока ждали Telegram, poll() и send() могли сдвинуть offset и дописать sent — пишем поверх свежего файла только своё.
+    const s2 = read();
+    if (s2.enc !== s.enc) return { ok: false, error: 'Настройки Telegram сменились во время проверки — нажмите «Проверить» ещё раз' };
+    s2.chat = s.chat; s2.owner = s.owner; s2.code = s.code; s2.prevCode = s.prevCode; s2.checked = Date.now();
+    s = s2;
     write(clean(s));
     log(`telegram: «Проверить» — пробное сообщение ушло в группу «${s.chat.title}», владелец ${ow} (id ${s.owner && s.owner.id})`);
     return { ok: true, ...info(s) };
@@ -281,10 +290,13 @@ const irreversible = (q) => /необратим|незворотн|irreversib|(?
  * meta.card — карта, на чьё сообщение ждём ответ; irrev — вопрос «необратимое / прод».
  * @param {{ project: string, name: string, card: string, text: string, irrev?: boolean }} m
  */
+/** Текст на языке программы (src/main/i18n.js); под обычным node без Electron — русский. */
+function tr(key, ru, vars) { try { return require('./i18n').t(key, ru, vars); } catch { return ru.replace(/\{(\w+)\}/g, (m, k) => (vars && k in vars ? String(vars[k]) : m)); } }
+const replyHint = () => tr('telegram.replyHint', '\n\nЧтобы ответить, нажмите «Ответить» на это сообщение.');
 async function send(m) {
   const s = read();
   if (!(s.enc && s.chat && s.owner)) return { ok: false, error: 'не настроено' };
-  const text = `[${m.name}] ${m.text}`.slice(0, 4000);
+  const text = `[${m.name}] ${m.text}`.slice(0, 3900) + replyHint();
   try {
     const r = await api('sendMessage', { chat_id: s.chat.id, text });
     const mid = Number(r && r.message_id);
@@ -395,6 +407,7 @@ function newCodeOp() {
   const s = read();
   if (!s.enc) return { error: 'Токен бота не задан' };
   if (s.chat && s.owner) return info(s);
+  s.prevCode = s.code || s.prevCode;
   s.code = newCode();
   try { write(clean(s)); } catch (e) { return { error: `telegram.json не записан: ${scrub(e)}` }; }
   log('telegram: новый код для группы');

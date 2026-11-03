@@ -244,7 +244,7 @@ function parse(argv) {
   if (argv[0] === 'roadmap') return { roadmap: roadmapArgs(argv.slice(1)) };
   if (argv[0] === 'tab') return { tabCmd: tabArgs(argv.slice(1)) };
   if (argv[0] === 'sessions') return { sessions: sessionsArgs(argv.slice(1)) };
-  if (argv[0] !== 'browser') die(`нет такой команды: ${argv[0]}. Есть девять: kermach browser, kermach roadmap, kermach tasks, kermach tab, kermach sessions, kermach copy, kermach companion, kermach main и kermach code (справка — kermach browser --help, kermach roadmap --help, kermach tasks --help, kermach tab --help, kermach sessions --help, kermach copy --help, kermach companion --help, kermach main --help, kermach code --help)`, 1);
+  if (argv[0] !== 'browser') die(`нет такой команды: ${argv[0]}. Есть одиннадцать: kermach browser, kermach roadmap, kermach tasks, kermach tab, kermach sessions, kermach copy, kermach companion, kermach main, kermach code, kermach credits и kermach batch (справка — kermach browser --help, kermach roadmap --help, kermach tasks --help, kermach tab --help, kermach sessions --help, kermach copy --help, kermach companion --help, kermach main --help, kermach code --help, kermach credits --help, kermach batch --help)`, 1);
   const rest = argv.slice(1);
   if (!rest.length || rest.includes('--help') || rest.includes('-h') || rest[0] === 'help') return { help: true };
   const cmd = rest[0];
@@ -1311,6 +1311,10 @@ async function main() {
   if (process.argv[2] === 'code') return require(require('path').join(__dirname, '..', '..', 'plugins', 'roadmap', 'codemap', 'cli.js')).main(process.argv.slice(3));
   // t1157: kermach tasks — дела проекта в файлах .kermach\tasks, без окна; разбор и справка — в plugins\tasks\cli.js.
   if (process.argv[2] === 'tasks') return require(require('path').join(__dirname, '..', '..', 'plugins', 'tasks', 'cli.js')).main(process.argv.slice(3));
+  // t1369: kermach batch — пачки запросов (Message Batches API) без окна, над мостом «Кредитов»; разбор и справка — в plugins/credits/batch-cli.js.
+  if (process.argv[2] === 'batch') return require(require('path').join(__dirname, '..', '..', 'plugins', 'credits', 'batch-cli.js')).main(process.argv.slice(3));
+  // t1517: kermach credits — задания на кредитах в файлах .kermach\credits, без окна и без «Роадмапа»; разбор и справка — в plugins\credits\cli.js.
+  if (process.argv[2] === 'credits') return require(require('path').join(__dirname, '..', '..', 'plugins', 'credits', 'cli.js')).main(process.argv.slice(3));
   // t1172: kermach copy — копии проекта, без окна; ядро — main\worktree.js.
   // t1431: kermach diag cpu [секунд] — профиль процессора главного процесса программы, тем же каналом, что kermach tab.
   if (process.argv[2] === 'diag') {
@@ -1353,7 +1357,7 @@ async function main() {
     return;
   }
   // Общая справка — все команды (t931, kermach tab — t1052, kermach sessions — t809); справка kermach code — из её cli.js, он при загрузке берёт только fs и path.
-  if ('help' in o) { process.stdout.write(`${'all' in o ? `${HELP}\n\n${ROADMAP_HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'tasks', 'cli.js')).HELP}\n\n${TAB_HELP}\n\n${SESSIONS_HELP}\n\n${COPY_HELP}\n\n${COMPANION_HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'roadmap', 'codemap', 'cli.js')).HELP}` : HELP}\n`); return; }
+  if ('help' in o) { process.stdout.write(`${'all' in o ? `${HELP}\n\n${ROADMAP_HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'tasks', 'cli.js')).HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'credits', 'cli.js')).HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'credits', 'batch-cli.js')).HELP}\n\n${TAB_HELP}\n\n${SESSIONS_HELP}\n\n${COPY_HELP}\n\n${COMPANION_HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'roadmap', 'codemap', 'cli.js')).HELP}` : HELP}\n`); return; }
   if (!ENV('BROWSER_PIPE') || !ENV('BROWSER_AUTH')) {
     die('нет доступа: команда работает только в терминале Kermach. Терминал открыт до обновления программы — откройте новую вкладку.', 2);
   }

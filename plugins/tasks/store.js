@@ -144,7 +144,10 @@ function nextNum(dir, all) {
 /** Запись через временный файл и переименование: читающий не видит полфайла. @param {string} file @param {string} text */
 function save(file, text) {
   const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`);
-  try { fs.writeFileSync(tmp, text, 'utf8'); fs.renameSync(tmp, file); } catch {
+  // Временный не записался (кончилось место) — старый файл не трогаем и бросаем ошибку (t1573): прямая запись обрезала бы его.
+  try { fs.writeFileSync(tmp, text, 'utf8'); } catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
+  // Переименование не прошло (файл держит другая программа) — пишем прямо: место есть, временный записан целиком.
+  try { fs.renameSync(tmp, file); } catch {
     try { fs.unlinkSync(tmp); } catch {}
     fs.writeFileSync(file, text, 'utf8');
   }
@@ -475,25 +478,37 @@ function backup(project, keep = 21) {
   return to;
 }
 
-/** Разделы проекта по порядку: sections.md, строки «- s1 Название». @param {string} project */
-function sections(project) {
-  try {
-    return fs.readFileSync(path.join(root(project), 'sections.md'), 'utf8').split(/\r?\n/)
-      .map((l) => /^\s*-\s+(s\d+)\s+(.+?)\s*$/.exec(l)).filter(Boolean).map((m) => ({ id: /** @type {RegExpExecArray} */ (m)[1], name: /** @type {RegExpExecArray} */ (m)[2] }));
-  } catch { return []; }
+/** Текст sections.md; файла нет — ''. Другая ошибка чтения (занят, нет прав) бросается, если strict. @param {string} file @param {boolean} [strict] */
+function sectionsText(file, strict) {
+  try { return fs.readFileSync(file, 'utf8'); } catch (e) {
+    if (strict && /** @type {any} */ (e).code !== 'ENOENT') throw e;
+    return '';
+  }
 }
 
-/** Раздел по имени; нет — дописываем строку в sections.md. @param {string} project @param {string} name @returns {string} sN */
+/** Строки «- s1 Название» → разделы. @param {string} text */
+const sectionsOfText = (text) => text.split(/\r?\n/)
+  .map((l) => /^\s*-\s+(s\d+)\s+(.+?)\s*$/.exec(l)).filter(Boolean).map((m) => ({ id: /** @type {RegExpExecArray} */ (m)[1], name: /** @type {RegExpExecArray} */ (m)[2] }));
+
+/** Разделы проекта по порядку: sections.md, строки «- s1 Название». Для показа: не прочитан — пусто. @param {string} project */
+function sections(project) {
+  return sectionsOfText(sectionsText(path.join(root(project), 'sections.md')));
+}
+
+/**
+ * Раздел по имени; нет — дописываем строку в sections.md. Файл не прочитан (занят, нет прав) — ошибка, а не новый
+ * список из одной строки поверх старого; запись — через временный файл (t1573).
+ * @param {string} project @param {string} name @returns {string} sN
+ */
 function sectionOf(project, name) {
   const n = name.replace(/\s+/g, ' ').trim();
-  const have = sections(project);
+  const file = path.join(ensureRoot(project), 'sections.md');
+  const text = sectionsText(file, true);
+  const have = sectionsOfText(text);
   const hit = have.find((s) => norm(s.name) === norm(n));
   if (hit) return hit.id;
   const id = `s${Math.max(0, ...have.map((s) => +s.id.slice(1))) + 1}`;
-  const file = path.join(ensureRoot(project), 'sections.md');
-  let text = '';
-  try { text = fs.readFileSync(file, 'utf8'); } catch { /* нет файла — первый раздел */ }
-  fs.writeFileSync(file, `${text && !text.endsWith('\n') ? `${text}\n` : text}- ${id} ${n}\n`, 'utf8');
+  save(file, `${text && !text.endsWith('\n') ? `${text}\n` : text}- ${id} ${n}\n`);
   return id;
 }
 

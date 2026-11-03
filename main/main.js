@@ -83,6 +83,8 @@ singleInstance.acquire({ dataDir: DATA_DIR, project: asked ? path.resolve(asked)
 /** @param {string} asked папка из --project; пусто — окно «Проекты» */
 function start(asked) {
   const t0 = Date.now();
+  // Ловушка зависания при запуске (t1585): первые 2 минуты профиль главного потока, если он стоит дольше 3 с.
+  require('./hang-watch').start({ dataDir: DATA_DIR, log });
   // macOS: из Dock или Finder программа получает короткий PATH, без Homebrew и ~/.local/bin — claude не нашёлся бы.
   // До демона: он и вкладки наследуют окружение программы.
   if (MAC) {
@@ -104,6 +106,18 @@ function start(asked) {
   settings.register({ dataDir: DATA_DIR, log });
   // Ключ API для вкладки на кредитах (t1356): раздел «Кредиты API» в «Настройках».
   require('./api-key').register({ dataDir: DATA_DIR, log });
+  // Начисления кредитов API (t1521): тот же раздел «Кредиты API»; хранилище и расчёт остатка — plugins\credits\main.js.
+  // op: list — { grants, nearest, uncovered, suggest }; add — { amount, expires, from? }; remove — дата, когда сгорает. Ошибка — { error }.
+  ipcMain.handle('credits:grants', (e, op, arg) => {
+    if (!sender.allowed(e, 'credits:grants')) return sender.refused();
+    try {
+      const cr = require('../plugins/credits/main');
+      if (op === 'add') cr.addGrant(DATA_DIR, arg || {});
+      else if (op === 'remove') cr.removeGrant(DATA_DIR, String(arg || ''));
+      else if (op !== 'list') return { error: `нет действия ${op}` };
+      return { ...cr.balanceNow(DATA_DIR), suggest: cr.suggestGrant(DATA_DIR) };
+    } catch (err) { return { error: err instanceof Error ? err.message : String(err) }; }
+  });
   // Windows: ID уведомлений в реестре и постоянный CLSID (t712) — до первого уведомления. ID процесса и окон не меняется.
   notify.register({ log });
   // Агенты из системы (t183): список для настроек и меню «+»; включены ли — по настройкам.

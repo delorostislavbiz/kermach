@@ -114,14 +114,19 @@ function helper() {
  */
 async function save(patch) {
   const pt = patch && typeof patch === 'object' ? patch : {};
-  const s = read();
-  if (pt.clear === true) { s.mode = ''; s.enc = ''; s.last4 = ''; s.cmd = ''; }
+  // Шифрование идёт 1–2 с: снимок файла берётся после него, иначе запись затёрла бы потолок или модель, сохранённые в это время (t1577).
+  let enc = '';
   if (typeof pt.key === 'string' && pt.key.trim()) {
     const key = pt.key.trim();
     if (process.platform !== 'win32') return { error: 'Хранение ключа пока только на Windows' };
     if (key.length > 2000 || /\s/.test(key)) return { error: 'Это не похоже на ключ: пробелы или слишком длинный' };
-    try { s.enc = await protect(key); } catch (e) { return { error: `Ключ не зашифрован: ${e instanceof Error ? e.message : e}` }; }
-    s.mode = 'key'; s.last4 = key.slice(-4).replace(/[^\w-]/g, ''); s.cmd = '';
+    try { enc = await protect(key); } catch (e) { return { error: `Ключ не зашифрован: ${e instanceof Error ? e.message : e}` }; }
+  }
+  const s = read();
+  if (pt.clear === true) { s.mode = ''; s.enc = ''; s.last4 = ''; s.cmd = ''; }
+  if (enc) {
+    const key = /** @type {string} */ (pt.key).trim();
+    s.enc = enc; s.mode = 'key'; s.last4 = key.slice(-4).replace(/[^\w-]/g, ''); s.cmd = '';
   } else if (typeof pt.cmd === 'string') {
     const cmd = pt.cmd.trim();
     if (cmd.length > 1000) return { error: 'Команда длиннее 1000 знаков' };

@@ -123,7 +123,9 @@ function limitsParts(data, now) {
   const cr = data && /** @type {any} */ (data).credits;
   if (cr && typeof cr.month === 'number') {
     out.push({ key: 'credits', label: I18n.t('limits.credits', 'Кредиты'), used: null,
-      note: I18n.t('limits.creditsMonth', 'за месяц потрачено {v1} во вкладках Kermach', { v1: limitsUsd(cr.month) }), tail: '',
+      note: I18n.t('limits.creditsMonth', 'за месяц потрачено {v1} во вкладках Kermach', { v1: limitsUsd(cr.month) }),
+      // t1521: остаток ближайшего начисления — тот же расчёт, что у панели «Кредиты».
+      tail: cr.nearest && typeof cr.nearest.left === 'number' ? I18n.t('limits.creditsLeft', 'осталось {v1} до {v2}', { v1: limitsUsd(cr.nearest.left), v2: String(cr.nearest.expires || '').slice(5).split('-').reverse().join('.') }) : '',
       title: I18n.t('limits.creditsTitle', 'Сумма цен ходов вкладок «Claude Agent · кредиты» с {v1}: {v2} ходов. Это не баланс Anthropic — остаток и расход других программ видны в Console', { v1: limitsClock(cr.from, now), v2: cr.turns }) });
   }
   return out;

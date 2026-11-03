@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'">
+<title>Kermach</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#05040d;--cy:#5ef2ff;--mg:#ff4fd8;--yl:#ffd23f;--rd:#ff3b5c;--gr:#7dffa1;--tx:#d8e6ff;--dim:#7a89b6}
+html,body{margin:0;height:100%;background:var(--bg);overflow:hidden;color:var(--tx);font-family:'Press Start 2P',monospace}
+#wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+canvas{display:block;image-rendering:pixelated}
+.vig{pointer-events:none;position:fixed;inset:0;background:radial-gradient(ellipse at center,transparent 68%,rgba(0,0,0,.4))}
+.hud{position:fixed;font-size:clamp(8px,.85vw,15px);line-height:1.9;text-shadow:2px 2px 0 #000;pointer-events:none}
+.tl{left:2vw;top:2.2vh}.tr{right:2vw;top:2.2vh;text-align:right}
+.br{right:2vw;bottom:2.4vh;width:min(46vw,700px)}.bl{left:2vw;bottom:2.4vh;pointer-events:auto}
+.brand{color:var(--cy);letter-spacing:1px}.dim{color:var(--dim)}
+.ph{color:var(--yl);margin-top:.4em}
+.cells{display:flex;gap:5px;margin:.5em 0}
+.cells i{width:1.7em;height:1.2em;display:block;border:3px solid #2c3c6c;box-sizing:border-box}
+.cells i.done{background:var(--c);border-color:var(--c)}
+.cells i.work{border-color:#fff;animation:bl 1s steps(2) infinite}
+.cells i.wait{border-color:var(--yl);background:rgba(255,210,63,.35);animation:bl .5s steps(2) infinite}
+.cells i.test{border-color:var(--mg);background:rgba(255,79,216,.35)}
+.cells i.queue{border-color:#3a5a9a;border-style:dashed}
+@keyframes bl{50%{opacity:.35}}
+.legend i{display:inline-block;width:.9em;height:.9em;margin:0 .4em 0 1em;vertical-align:-1px}
+.legend i:first-child{margin-left:0}
+.rec{color:var(--rd);animation:bl 1.2s steps(2) infinite}
+.ebar{display:flex;gap:3px;justify-content:flex-end;margin-top:.3em}
+.ebar i{width:.7em;height:1.1em;background:#1a2340;display:block}
+.ebar i.on{background:var(--cy)}
+.term{background:rgba(5,6,20,.9);border:3px solid #2a4a7e;padding:.7em .9em}
+.term .hd{color:var(--dim);border-bottom:3px solid #1c2c52;margin-bottom:.4em;padding-bottom:.2em}
+.term div.l{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.term div.l.new{animation:nl .8s steps(4)}
+@keyframes nl{0%{background:rgba(94,242,255,.35)}100%{background:transparent}}
+.term .t{color:#56679a}.term b{color:#fff;font-weight:normal}
+.term .bad{color:var(--rd)}.term .ok{color:var(--gr)}.term .ask{color:var(--yl)}.term .qa{color:var(--mg)}.term .big{color:var(--cy)}
+.term .cm{color:#8090c0}
+.ctl button{font:inherit;font-size:clamp(7px,.72vw,12px);color:var(--tx);background:rgba(10,14,36,.9);border:3px solid #2b4a80;padding:.6em .8em;margin:0 .3em .5em 0;cursor:pointer}
+.ctl button:hover{border-color:var(--cy)}
+.ctl button.on{border-color:var(--yl);color:var(--yl)}
+.note{color:var(--dim);font-size:clamp(6px,.62vw,10px)}
+#banner{position:fixed;left:50%;top:17%;transform:translateX(-50%);font-size:clamp(14px,2.4vw,44px);letter-spacing:2px;white-space:nowrap;opacity:0;pointer-events:none;padding:.5em 1em}
+#banner.show{animation:ban 2.6s steps(26) forwards}
+#banner.ok{color:var(--gr);text-shadow:4px 4px 0 #000,0 0 14px var(--gr)}
+#banner.bad{color:var(--rd);text-shadow:4px 4px 0 #000,0 0 14px var(--rd)}
+#banner.ask{color:var(--yl);text-shadow:4px 4px 0 #000,0 0 14px var(--yl)}
+#banner.big{color:#fff;text-shadow:4px 4px 0 #000,-3px 0 0 var(--cy),3px 0 0 var(--mg);font-size:clamp(18px,3.4vw,60px)}
+@keyframes ban{0%{opacity:0;transform:translateX(-50%) scale(1.8)}8%{opacity:1;transform:translateX(-50%) scale(1)}11%{opacity:.2}14%{opacity:1}86%{opacity:1}100%{opacity:0}}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="view"></canvas></div>
+<div class="vig"></div>
+
+<div class="hud tl">
+  <div class="brand">KERMACH <span class="dim">· <span data-i="sub"></span></span></div>
+  <div id="phase" class="ph"></div>
+  <div id="cells" class="cells"></div>
+  <div id="stats" class="dim"></div>
+  <div class="legend dim"><i style="background:#ff8a5c"></i>CLAUDE<i style="background:#3ddc97"></i>CODEX<i style="background:#dfe6ff"></i><span data-i="insp"></span></div>
+</div>
+
+<div class="hud tr">
+  <div><span class="rec">●</span> <span data-i="live"></span> <span id="clock">00:00</span></div>
+  <div id="conn" class="dim"></div>
+</div>
+
+<div class="hud br"><div class="term"><div class="hd">▌ <span data-i="log"></span></div><div id="log"></div></div></div>
+
+<div id="banner"></div>
+
+<script>
+'use strict';
+// Сцена «Орбитальная верфь» (t1590). Данные — только события плагина stream (main.js рядом): /events даёт board (снимок доски)
+// и change (что изменилось). Своих чтений доски у сцены нет. Фаза — сектор, карта — блок, агент карты — робот
+// (claude — дрон, codex — краб), «на проверке» — проверяющий (белый шар), «ждёт ответа» — робот с «?»,
+// возврат (с проверки или из «готово» обратно в работу) — тряска и красный баннер, «готово» — блок собран.
+// Что агент правит сейчас, Kermach наружу не отдаёт — шагов «правит файл» на сцене нет.
+// Язык — поле lang настроек Kermach: его подставляет сервер в строку ниже.
+const I18N={
+ru:{title:'Орбитальная верфь',sub:'ОРБИТАЛЬНАЯ ВЕРФЬ',insp:'ПРОВЕРЯЮЩИЙ',live:'В ЭФИРЕ',log:'ЖУРНАЛ АГЕНТОВ',
+ phase:'ФАЗА',done:'ГОТОВО',busy:'В РАБОТЕ',waitN:'ЖДУТ',rej:'ВОЗВРАТОВ',more:'ЕЩЁ {n}',none:'НА ДОСКЕ НЕТ ФАЗ',conn:'НЕТ СВЯЗИ С KERMACH',
+ bStart:'ФАЗА {p} · СТАРТ',bRej:'ВОЗВРАТ НА ДОРАБОТКУ',bPass:'ПРОВЕРКА ПРОЙДЕНА · {c}',bAcc:'ФАЗА {p} ПРИНЯТА',bWait:'АГЕНТ ЖДЁТ ЧЕЛОВЕКА',
+ lStart:'фаза {p} «{n}» запущена · карт: {k}',lLaunch:'{c} в работе · {a}',lTest:'проверяющий смотрит {c}',lRej:'проверяющий вернул {c}',lPass:'{c} готово ✓',lAcc:'фаза {p} принята · {k} из {k}',
+ lWait:'{c} ждёт ответа человека',lAns:'ответ человека → {c}',lQueue:'{c} в очереди',lPause:'{c} на паузе',lAdd:'новая карта {c} «{n}»',lDel:'{c} убрана с доски',lAgent:'{c}: агент {a}',lPhase:'новая фаза {p} «{n}»',lHello:'доска проекта: фаз {p}, карт {k}',
+ wOk:'ОК!',wQA:'КОНТРОЛЬ'},
+uk:{title:'Орбітальна верф',sub:'ОРБІТАЛЬНА ВЕРФ',insp:'ПЕРЕВІРЯЛЬНИК',live:'В ЕФІРІ',log:'ЖУРНАЛ АГЕНТІВ',
+ phase:'ФАЗА',done:'ГОТОВО',busy:'В РОБОТІ',waitN:'ЧЕКАЮТЬ',rej:'ПОВЕРНЕНЬ',more:'ЩЕ {n}',none:'НА ДОШЦІ НЕМАЄ ФАЗ',conn:'НЕМАЄ ЗВ’ЯЗКУ З KERMACH',
+ bStart:'ФАЗА {p} · СТАРТ',bRej:'ПОВЕРНЕНО НА ДООПРАЦЮВАННЯ',bPass:'ПЕРЕВІРКУ ПРОЙДЕНО · {c}',bAcc:'ФАЗУ {p} ПРИЙНЯТО',bWait:'АГЕНТ ЧЕКАЄ НА ЛЮДИНУ',
+ lStart:'фазу {p} «{n}» запущено · карток: {k}',lLaunch:'{c} в роботі · {a}',lTest:'перевіряльник дивиться {c}',lRej:'перевіряльник повернув {c}',lPass:'{c} готово ✓',lAcc:'фазу {p} прийнято · {k} з {k}',
+ lWait:'{c} чекає на відповідь людини',lAns:'відповідь людини → {c}',lQueue:'{c} у черзі',lPause:'{c} на паузі',lAdd:'нова картка {c} «{n}»',lDel:'{c} прибрано з дошки',lAgent:'{c}: агент {a}',lPhase:'нова фаза {p} «{n}»',lHello:'дошка проєкту: фаз {p}, карток {k}',
+ wOk:'ОК!',wQA:'КОНТРОЛЬ'},
+en:{title:'Orbital Shipyard',sub:'ORBITAL SHIPYARD',insp:'REVIEWER',live:'LIVE',log:'AGENT LOG',
+ phase:'PHASE',done:'DONE',busy:'IN PROGRESS',waitN:'WAITING',rej:'RETURNS',more:'{n} MORE',none:'NO PHASES ON THE BOARD',conn:'NO CONNECTION TO KERMACH',
+ bStart:'PHASE {p} · START',bRej:'SENT BACK FOR REWORK',bPass:'REVIEW PASSED · {c}',bAcc:'PHASE {p} ACCEPTED',bWait:'AGENT WAITS FOR HUMAN',
+ lStart:'phase {p} “{n}” started · cards: {k}',lLaunch:'{c} in progress · {a}',lTest:'reviewer checks {c}',lRej:'reviewer sent back {c}',lPass:'{c} done ✓',lAcc:'phase {p} accepted · {k} of {k}',
+ lWait:'{c} waits for a human answer',lAns:'human answer → {c}',lQueue:'{c} queued',lPause:'{c} paused',lAdd:'new card {c} “{n}”',lDel:'{c} removed from the board',lAgent:'{c}: agent {a}',lPhase:'new phase {p} “{n}”',lHello:'project board: phases {p}, cards {k}',
+ wOk:'OK!',wQA:'QA'},
+de:{title:'Orbitalwerft',sub:'ORBITALWERFT',insp:'PRÜFER',live:'LIVE',log:'AGENTEN-PROTOKOLL',
+ phase:'PHASE',done:'FERTIG',busy:'IN ARBEIT',waitN:'WARTEN',rej:'RÜCKGABEN',more:'NOCH {n}',none:'KEINE PHASEN AUF DEM BOARD',conn:'KEINE VERBINDUNG ZU KERMACH',
+ bStart:'PHASE {p} · START',bRej:'ZURÜCK ZUR NACHARBEIT',bPass:'PRÜFUNG BESTANDEN · {c}',bAcc:'PHASE {p} ABGENOMMEN',bWait:'AGENT WARTET AUF MENSCH',
+ lStart:'Phase {p} „{n}“ gestartet · Karten: {k}',lLaunch:'{c} in Arbeit · {a}',lTest:'Prüfer sieht sich {c} an',lRej:'Prüfer gab {c} zurück',lPass:'{c} fertig ✓',lAcc:'Phase {p} abgenommen · {k} von {k}',
+ lWait:'{c} wartet auf Antwort des Menschen',lAns:'Antwort des Menschen → {c}',lQueue:'{c} in der Warteschlange',lPause:'{c} pausiert',lAdd:'neue Karte {c} „{n}“',lDel:'{c} vom Board entfernt',lAgent:'{c}: Agent {a}',lPhase:'neue Phase {p} „{n}“',lHello:'Projekt-Board: Phasen {p}, Karten {k}',
+ wOk:'OK!',wQA:'PRÜFER'}};
+let LANG=String('__KERMACH_LANG__');if(!I18N[LANG])LANG='ru';
+const tr=()=>I18N[LANG];
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function L(k,o){return String(tr()[k]).replace(/\{(\w+)\}/g,(m,n)=>o&&o[n]!=null?o[n]:m)}
+const B=c=>`<b>T${esc(c.num)}</b>`;
+function applyStatic(){document.documentElement.lang=LANG;document.title=tr().title;document.querySelectorAll('[data-i]').forEach(e=>e.textContent=tr()[e.dataset.i])}
+// Мир 640x360: на экране 1920x1080 каждый пиксель ровно 3x3, на 1280x720 — 2x2.
+const W=640,H=360,BEAM_Y=204,HUBX=320,DOOR_L=278,DOOR_R=362,DOOR_Y=208;
+const view=document.getElementById('view'),V=view.getContext('2d');
+function mk(w,h){const c=document.createElement('canvas');c.width=w;c.height=h;return c}
+const BGC=mk(W,H),FGC=mk(W,H),SILC=mk(W,H),EMC=mk(W,H),GL1=mk(W/2,H/2),GL2=mk(W/4,H/4);
+const bgc=BGC.getContext('2d'),g=FGC.getContext('2d'),sil=SILC.getContext('2d'),em=EMC.getContext('2d'),gl1=GL1.getContext('2d'),gl2=GL2.getContext('2d');
+function hex(h){return [parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)]}
+function hash(x,y){const s=Math.sin(x*12.9898+y*78.233)*43758.5453;return s-Math.floor(s)}
+
+// ---------- пиксельный шрифт 3x5
+const FONT={A:'010101111101101',B:'110101110101110',C:'011100100100011',D:'110101101101110',E:'111100110100111',F:'111100110100100',G:'011100101101011',H:'101101111101101',I:'111010010010111',J:'001001001101010',K:'101101110101101',L:'100100100100111',M:'1000111011101011000110001',N:'110101101101101',O:'010101101101010',P:'110101110100100',Q:'010101101110011',R:'110101110101101',S:'011100010001110',T:'111010010010010',U:'101101101101111',V:'101101101101010',W:'1000110001101011010101010',X:'101101010101101',Y:'101101010010010',Z:'111001010100111',
+'0':'111101101101111','1':'010110010010111','2':'110001010100111','3':'110001010001110','4':'101101111001001','5':'111100110001110','6':'011100111101111','7':'111001010010010','8':'111101111101111','9':'111101111001110',
+'.':'000000000000010','/':'001001010100100','-':'000000111000000','+':'000010111010000','?':'110001010000010','!':'010010010000010','$':'011110010011110',':':'000010000010000','_':'000000000000111',' ':'000000000000000',
+'П':'111101101101101','Б':'111100110101110','Г':'111100100100100','Д':'011101101111101','И':'101101111111101','Л':'011101101101101',
+'У':'101101011001110','Я':'011101011101101','Ь':'100100110101110','Ч':'101101011001001','Ж':'1010110101011101010110101','Ш':'1010110101101011010111111','Щ':'1010110101101011111100001',
+'Э':'110001011001110','З':'110001010001110','Ф':'010111111010010','Ц':'101101101111001','Й':'010101111111101','Ї':'101010010010010',
+'Є':'011100110100011','Ґ':'001111100100100','Ä':'101010101111101','Ö':'101010101101010','Ü':'101000101101111'};
+// кириллица, похожая на латиницу, рисуется латинскими знаками
+const ALIAS={'А':'A','В':'B','Е':'E','Ё':'E','К':'K','М':'M','Н':'H','О':'O','Р':'P','С':'C','Т':'T','Х':'X','І':'I','Ы':'ЬI','Ю':'IO','Ъ':'Ь','’':''};
+// буквы без своего знака: похожая латинская или две буквы подряд (Ы = Ь+I)
+const up=s=>[...String(s).toUpperCase()].map(c=>FONT[c]?c:(ALIAS[c]||c)).join('');
+function txt(ctx,s,x,y,col,sc){sc=sc||1;ctx.fillStyle=col;s=up(s);x=Math.round(x);y=Math.round(y);
+  // ширина знака = длина/5: обычные 3, широкие (Ж Ш Щ M W) 5
+  let cx=0;for(const ch of s){const f=FONT[ch];if(!f){cx+=4;continue}const w=f.length/5;
+    for(let k=0;k<f.length;k++)if(f.charCodeAt(k)===49)ctx.fillRect(x+(cx+k%w)*sc,y+((k/w)|0)*sc,sc,sc);cx+=w+1}}
+const tw=(s,sc)=>([...up(s)].reduce((a,c)=>a+(FONT[c]?FONT[c].length/5:3)+1,0)-1)*(sc||2);
+// подписи в мире — по умолчанию в 2 раза крупнее; тёмную обводку даёт общий проход silhouette()
+function txtG(s,x,y,col,a,sc){sc=sc||2;txt(g,s,x,y,col,sc);em.globalAlpha=a==null?.5:a;txt(em,s,x,y,col,sc);em.globalAlpha=1}
+
+// ---------- рисование
+function R(c,x,y,w,h,col){c.fillStyle=col;c.fillRect(Math.round(x),Math.round(y),w,h)}
+function G(x,y,w,h,col,a){R(g,x,y,w,h,col);em.globalAlpha=a==null?1:a;R(em,x,y,w,h,col);em.globalAlpha=1}
+function outline2(x,y,w,h,col,a){G(x,y,w,2,col,a);G(x,y+h-2,w,2,col,a);G(x,y,2,h,col,a);G(x+w-2,y,2,h,col,a)}
+function lineP(x0,y0,x1,y1,fn){x0=Math.round(x0);y0=Math.round(y0);x1=Math.round(x1);y1=Math.round(y1);
+  const dx=Math.abs(x1-x0),sx=x0<x1?1:-1,dy=-Math.abs(y1-y0),sy=y0<y1?1:-1;let er=dx+dy,n=0;
+  for(;;){fn(x0,y0,n++);if(x0===x1&&y0===y1)break;const e2=2*er;if(e2>=dy){er+=dy;x0+=sx}if(e2<=dx){er+=dx;y0+=sy}if(n>900)break}}
+function disc(cx,cy,r,col,a,glow){for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++)if(dx*dx+dy*dy<=r*r+r){if(glow)G(cx+dx,cy+dy,1,1,col,a);else R(g,cx+dx,cy+dy,1,1,col)}}
+function ring(cx,cy,r,col,th){th=th||1;for(let dy=-r-1;dy<=r+1;dy++)for(let dx=-r-1;dx<=r+1;dx++){const d=Math.sqrt(dx*dx+dy*dy);if(d<=r+0.5&&d>r-th+0.5)R(g,cx+dx,cy+dy,1,1,col)}}
+// спрайт из строк: каждый символ — цвет из палитры, '.' — пусто
+function spr(rows,pal,x,y,flip,glow){const h=rows.length,w=rows[0].length,ox=Math.round(x)-(w>>1),oy=Math.round(y)-(h>>1);
+  for(let j=0;j<h;j++){const r=rows[j];for(let i=0;i<w;i++){const ch=r[flip?w-1-i:i];if(ch==='.')continue;const c=pal[ch];
+    g.fillStyle=c;g.fillRect(ox+i,oy+j,1,1);if(glow&&glow.indexOf(ch)>=0){em.fillStyle=c;em.fillRect(ox+i,oy+j,1,1)}}}
+  return [ox,oy]}
+
+// ---------- спрайты роботов
+const DRONE=[ // Claude — дрон-инженер, 15x11
+  '.....HHHHH.....',
+  '...HHOOOOOOD...',
+  '..HOOOOOOOOOD..',
+  '.HOOVVVVVVVOOD.',
+  '.OOVVVVVVVVVOD.',
+  '.OOVVVVVVVVVOD.',
+  '.OOOOOOOOOOOOD.',
+  'SSDOYOYOYOYODSS',
+  'S..DDDDDDDDD..S',
+  'S...T.....T...S',
+  '...TT.....TT...'];
+const DRONE_PAL={H:'#ffc3a0',O:'#ff8a5c',D:'#b8502c',V:'#0b0a2a',S:'#9aa4c8',T:'#6b7aa6',Y:'#ffe08a'};
+const CRAB=[ // Codex — робот-краб, 19x9
+  '......HHHHHHH......',
+  '....HHGGGGGGGGD....',
+  '...HGGVVVVVVVGGD...',
+  '..HGGVVVVVVVVVGGD..',
+  '..GGGVVVVVVVVVGGD..',
+  '..GGGGGGGGGGGGGGD..',
+  '..GYGGYGGYGGYGGGD..',
+  '...DDDDDDDDDDDDD...',
+  '....D.........D....'];
+const CRAB_PAL={H:'#9affd2',G:'#3ddc97',D:'#1f8a5e',V:'#0b0a2a',Y:'#d8fff0'};
+const EYE=[ // проверяющий, 13x12
+  '....WWWWW....',
+  '..WWHHWWWWW..',
+  '.WHHWWWWWWWS.',
+  '.WHWWWWWWWWS.',
+  'WWWWWEEEWWWWS',
+  'WWWWEEKEEWWWS',
+  'WWWWWEEEWWWWS',
+  'WWWWWWWWWWWWS',
+  '.WWWWWWWWWWS.',
+  '.SWWWWWWWWSS.',
+  '..SSWWWWSS...',
+  '....SSSSS....'];
+const EYE_PAL={W:'#dfe6ff',H:'#ffffff',S:'#8a94b8',E:'#ff3b5c',K:'#ffffff'};
+
+// ---------- фон: туманность, звёзды, планета (готовим один раз, без шумовой ряби — её портит сжатие видео)
+function makeNebula(){const w=W+100,h=H+80,c=mk(w,h),x=c.getContext('2d'),im=x.createImageData(w,h),d=im.data;
+  const bl=[[150,90,160,hex('#3b145f')],[540,150,200,hex('#123066')],[360,40,110,hex('#4d1152')],[60,330,150,hex('#0f2a55')],[680,380,160,hex('#2a0f4a')]];
+  for(let y=0;y<h;y++)for(let X=0;X<w;X++){let best=0,bc=null;
+    for(const q of bl){const k=Math.exp(-((X-q[0])**2+(y-q[1])**2)/(q[2]*q[2]));if(k>best){best=k;bc=q[3]}}
+    const k=best*(0.8+0.2*Math.sin(X*0.03+y*0.02)*Math.sin(X*0.011-y*0.027));
+    const lv=k>0.62?0.62:k>0.42?0.45:k>0.24?0.3:0;
+    if(lv){const i=(y*w+X)*4;d[i]=bc[0]*lv;d[i+1]=bc[1]*lv;d[i+2]=bc[2]*lv;d[i+3]=255}}
+  x.putImageData(im,0,0);return c}
+function makePlanet(){const PW=W+180,PH=140,c=mk(PW,PH),x=c.getContext('2d'),im=x.createImageData(PW,PH),d=im.data;
+  const cx=PW*0.42,cy=PH+440,Rr=520;
+  const pal=['#0a0920','#121035','#1b1950','#26266e','#33378e','#4249a8'].map(hex);
+  const a1=hex('#5ef2ff'),a2=hex('#2a6fd6'),a3=hex('#172f66'),city=hex('#ffcf6b');
+  for(let py=0;py<PH;py++)for(let px=0;px<PW;px++){const dx=px-cx,dy=py-cy,dd=Math.hypot(dx,dy);let col=null;
+    if(dd<Rr){let l=(-dx*0.75)/Rr+0.55;l+=0.08*Math.sin(px*0.02+py*0.35)+0.05*Math.sin(px*0.008-py*0.2+1.3);l-=(Rr-dd)/Rr*2.0;
+      const v=Math.max(0,Math.min(1,l));col=pal[Math.min(pal.length-1,Math.floor(v*pal.length))];
+      if(v<0.3&&hash(px>>1,py>>1)<0.02)col=city}
+    else if(dd<Rr+3)col=a1;else if(dd<Rr+6)col=a2;else if(dd<Rr+10)col=a3;
+    if(col){const i=(py*PW+px)*4;d[i]=col[0];d[i+1]=col[1];d[i+2]=col[2];d[i+3]=255}}
+  x.putImageData(im,0,0);return c}
+const NEB=makeNebula(),PLANET=makePlanet();
+const STARS=[];for(let i=0;i<150;i++)STARS.push({x:Math.random()*(W+100),y:Math.random()*(H+80),d:0.25+Math.random()*0.75,ph:Math.random()*6.28,
+  c:['#ffffff','#bfe8ff','#ffe9b0','#d6c2ff'][(Math.random()*4)|0],big:Math.random()<0.05});
+let shoot=null;
+
+// ---------- доска Kermach -> мир сцены
+const AGC={claude:'#ff8a5c',codex:'#3ddc97'};
+const COLS=['#5ef2ff','#ff4fd8','#ffd23f','#7dffa1','#ff8a5c','#9a8cff'];
+const X0=[95,185,375,465],BW=24,BH=16,STEP=28,SECW=80,MAXC=9;
+const ST={'в очереди':'queue','пауза':'pause','в работе':'build','ждёт ответа':'wait','на проверке':'test','на ревью':'test','готово':'done'};
+const BUSY=['launch','build','wait','test'];
+function agentOf(a){a=String(a||'');const t=/codex/i.test(a)?'codex':'claude';return {type:t,name:a?a.toUpperCase():t.toUpperCase(),col:AGC[t]}}
+const numOf=id=>String(id||'').replace(/^t/i,'');
+const nOf=id=>parseInt(String(id).replace(/\D/g,''),10)||0;
+
+let sectors=[],act=0,robots=[],parts=[],pops=[],waves=[],timers=[],T=0,hubFlare=0,logs=[],layoutKey='',extra=0,returns=0,board=null,online=false;
+function later(t,f){timers.push({t,f})}
+function rnd(){return Math.random()}
+
+/** Какие фазы на сцене: четыре места, вокруг первой незакрытой (две готовые слева, идущая и следующая справа). */
+function pickPhases(b){const ps=b.phases;if(ps.length<=4)return ps.slice();
+  let a=ps.findIndex(p=>p.status!=='готова');if(a<0)a=ps.length;
+  const s=Math.max(0,Math.min(a-2,ps.length-4));return ps.slice(s,s+4)}
+/** Карты фазы на сцене: не больше 9; лишние — сначала готовые с начала списка. */
+function pickCards(b,pid){let cs=b.cards.filter(c=>c.phase===pid).sort((x,y)=>nOf(x.id)-nOf(y.id));
+  while(cs.length>MAXC){const i=cs.findIndex(c=>c.status==='готово');cs.splice(i<0?0:i,1);extra++}return cs}
+function secState(p,cs){if(p.status==='готова')return 'done';if(p.status==='идёт'||cs.some(c=>c.status!=='в очереди'&&c.status!=='пауза'))return 'active';return 'future'}
+
+function build(b){robots=[];extra=0;const ps=pickPhases(b);
+  sectors=ps.map((p,pi)=>{const cs=pickCards(b,p.id);
+    const s={id:String(p.id).toUpperCase(),pid:p.id,name:p.title||p.id,col:COLS[nOf(p.id)%COLS.length],x0:X0[pi],state:secState(p,cs),flash:0,cards:[],after:0};
+    cs.forEach((k,i)=>{const col=i%3,row=(i/3)|0;
+      const c={sec:s,i,col,row,id:k.id,num:numOf(k.id),x:s.x0+col*STEP,y:row===0?BEAM_Y-18:row===1?BEAM_Y-36:BEAM_Y+12,w:BW,h:BH,
+        state:'queue',st:'',p:0,agent:agentOf(k.agent),rejected:false,robot:null,insp:null,flash:0,flashCol:'#fff',scan:0,wins:[]};
+      for(let wy=5;wy<=BH-5;wy+=5)for(let wx=3;wx<=BW-6;wx+=5)if(hash(nOf(c.id)*7+wx,wy)<0.7)c.wins.push([wx,wy,hash(wx,nOf(c.id))*6.28]);
+      s.cards.push(c);setCard(c,k.status,false,s.state==='future')});
+    return s});
+  pickAct()}
+function pickAct(){let a=sectors.findIndex(s=>s.state==='active');if(a<0)a=sectors.findIndex(s=>s.state==='future');if(a<0)a=sectors.length-1;act=Math.max(0,a)}
+function findCard(id){for(const s of sectors)for(const c of s.cards)if(c.id===id)return c;return null}
+function findSec(pid){return sectors.find(s=>s.pid===pid)||null}
+
+/** Снимок доски: другая раскладка — строим заново без анимации; та же — сверяем статусы (анимации уже дали события change). */
+function applyBoard(b){board=b;extra=0;const ps=pickPhases(b);
+  const key=ps.map(p=>p.id+':'+pickCards(b,p.id).map(c=>c.id).join(',')).join('|');extra=0;
+  if(key!==layoutKey){const first=!layoutKey;layoutKey=key;build(b);
+    if(first)log(L('lHello',{p:b.phases.length,k:b.cards.length}),'big');return}
+  for(const s of sectors){const p=b.phases.find(x=>x.id===s.pid);if(!p)continue;s.name=p.title||p.id;
+    const cs=b.cards.filter(c=>c.phase===s.pid);const ns=secState(p,cs);
+    if(ns!==s.state&&s.state!=='accepted'){if(ns==='done')accept(s);else if(ns==='active'&&s.state==='future')activate(s);else s.state=ns}
+    for(const c of s.cards){const k=b.cards.find(x=>x.id===c.id);if(!k)continue;
+      if(k.agent!==undefined){const ag=agentOf(k.agent);if(ag.name!==c.agent.name){c.agent=ag;if(c.robot){c.robot.state='home';c.robot=null}}}
+      setCard(c,k.status,false,s.state==='future')}}
+  pickAct()}
+
+/** Событие change: строка журнала и анимация. */
+function onChange(ev){for(const x of ev.changes||[]){const c=x.id?findCard(x.id):null,cb=`<b>T${esc(numOf(x.id))}</b>`;
+  if(x.kind==='card-status'){if(c){const s=c.sec;if(s.state==='future'&&x.to!=='в очереди'&&x.to!=='пауза')activate(s);setCard(c,x.to,true,false,x.from)}
+    else logStatus(cb,x.from,x.to)}
+  else if(x.kind==='card-added')log(L('lAdd',{c:cb,n:esc(x.title)}),'big');
+  else if(x.kind==='card-removed')log(L('lDel',{c:cb}),'cm');
+  else if(x.kind==='card-agent'){const ag=agentOf(x.to);log(L('lAgent',{c:cb,a:`<span style="color:${ag.col}">${esc(ag.name)}</span>`}));
+    if(c){c.agent=ag;if(c.robot){c.robot.state='home';c.robot=null;if(BUSY.includes(c.state)&&c.state!=='test')launch(c,c.state)}}}
+  else if(x.kind==='phase-added')log(L('lPhase',{p:`<b>${esc(String(x.id).toUpperCase())}</b>`,n:esc(x.title)}),'big');
+  else if(x.kind==='phase-changed'&&x.to==='готова'){const s=findSec(x.id);if(s&&s.state!=='accepted')accept(s);else if(!s)log(L('lAcc',{p:`<b>${esc(String(x.id).toUpperCase())}</b>`,k:'?'}),'big')}}}
+function logStatus(cb,from,to){const k={'в работе':(from==='на проверке'||from==='на ревью'||from==='готово')?'lRej':from==='ждёт ответа'?'lAns':'lLaunch','ждёт ответа':'lWait','на проверке':'lTest','на ревью':'lTest','готово':'lPass','в очереди':'lQueue','пауза':'lPause'}[to];
+  if(k)log(L(k,{c:cb,a:''}),k==='lRej'?'bad':k==='lWait'?'ask':k==='lTest'?'qa':k==='lPass'||k==='lAns'?'ok':'')}
+
+/** Карта в состояние статуса. anim — переход с анимацией, баннером и строкой журнала (событие change). */
+function setCard(c,status,anim,future,from){const st=ST[status]||'queue';if(c.st===st&&!anim)return;const was=c.st;c.st=st;
+  if(future&&st==='queue'){c.state='plan';dropRobots(c);return}
+  if(st==='queue'||st==='pause'){dropRobots(c);c.state='queue';if(anim)log(L(st==='pause'?'lPause':'lQueue',{c:B(c)}),'cm');return}
+  if(st==='done'){if(anim)pass(c);else{dropRobots(c);c.state='done';c.p=1}return}
+  if(st==='test'){if(c.robot){c.robot.state='home';c.robot=null}c.p=Math.max(c.p,0.95);if(anim)startTest(c);else{if(!c.insp)placeInsp(c);c.state='test'}return}
+  // build или wait: на карте робот агента
+  const back=was==='test'||was==='done'||(from&&(from==='на проверке'||from==='на ревью'||from==='готово'));
+  if(anim&&back)reject(c);else endInsp(c);
+  if(!c.robot){if(anim)launch(c,st,!back&&st==='build');else placeRobot(c,st)}
+  if(c.robot&&c.robot.state!=='fly'){c.robot.state=st==='wait'?'wait':'work';c.state=st}
+  else c.want=st;
+  if(st==='build'&&c.p<0.15)c.p=0.15;
+  if(anim&&st==='wait'){banner(L('bWait'),'ask');log(L('lWait',{c:B(c)}),'ask');if(c.robot)focus(c.robot.x,c.robot.y,2.8,4,3,c.robot)}
+  if(anim&&st==='build'&&was==='wait'&&!back){pops.push({x:c.x+c.w/2,y:c.y+c.h/2-3,s:tr().wOk,c:'#ffd23f',l:1.4});log(L('lAns',{c:B(c)}),'ok')}}
+function dropRobots(c){endInsp(c);if(c.robot){c.robot.state='home';c.robot=null}}
+function mkRobot(c,x,y,state){const a=c.agent;const r={type:a.type,ag:a,card:c,x,y,hx:x,hy:y,state,seed:Math.random()*10,face:1,lx:0,ly:0};robots.push(r);c.robot=r;return r}
+function placeRobot(c,st){const door=c.x>HUBX?[DOOR_R,DOOR_Y]:[DOOR_L,DOOR_Y];const r=mkRobot(c,door[0],door[1],st==='wait'?'wait':'work');
+  const [hx,hy]=hoverPos(c,r);r.x=hx;r.y=hy;c.state=st}
+function placeInsp(c){const ins={type:'insp',card:c,x:c.x+c.w+14,y:c.y+c.h/2-2,hx:HUBX,hy:150,state:'scan',seed:Math.random()*10,face:-1,scan:true};robots.push(ins);c.insp=ins}
+function launch(c,st,say){c.state='launch';c.want=st;const a=c.agent,door=c.x>HUBX?[DOOR_R,DOOR_Y]:[DOOR_L,DOOR_Y];
+  const r=mkRobot(c,door[0],door[1],'fly');spark(door[0],door[1],'#ffd23f',12,50);
+  if(say!==false)log(L('lLaunch',{c:B(c),a:`<span style="color:${a.col}">${esc(a.name)}</span>`}));
+  focus(r.x,r.y,2.2,2.6,1,r)}
+function startTest(c){c.state='test';endInsp(c);
+  const ins={type:'insp',card:c,x:HUBX,y:150,hx:HUBX,hy:150,state:'fly',seed:Math.random()*10,face:-1,scan:false};robots.push(ins);c.insp=ins;
+  log(L('lTest',{c:B(c)}),'qa');focus(c.x+c.w/2+6,c.y+c.h/2,2.6,3.4,2)}
+function endInsp(c){if(c.insp){c.insp.state='home';c.insp.scan=false;c.insp=null}}
+function reject(c){endInsp(c);c.rejected=true;returns++;c.flash=1;c.flashCol='#ff3b5c';debris(c);c.p=0.35;
+  cam.shake=1.2;banner(L('bRej'),'bad');log(L('lRej',{c:B(c)}),'bad');focus(c.x+c.w/2,c.y+c.h/2,3,3,4)}
+function pass(c){endInsp(c);c.state='done';c.p=1;c.flash=1;c.flashCol='#ffffff';
+  if(c.robot){c.robot.state='home';c.robot=null}
+  spark(c.x+c.w/2,c.y+c.h/2,c.sec.col,30,90);waves.push({a:c.x+c.w/2,b:HUBX,t:0,d:1,col:c.sec.col});
+  banner(L('bPass',{c:'T'+c.num}),'ok');log(L('lPass',{c:B(c)}),'ok');focus(c.x+c.w/2,c.y+c.h/2,2.4,2,2)}
+function accept(s){s.state='accepted';s.after=9;s.flash=1;hubFlare=1;cam.shake=1.6;const cx=s.x0+SECW/2;
+  for(const c of s.cards)dropRobots(c);
+  banner(L('bAcc',{p:s.id}),'big');log(L('lAcc',{p:`<b>${esc(s.id)}</b>`,k:s.cards.length}),'big');
+  focus(cx,BEAM_Y-12,1.6,3.6,5);waves.push({a:cx,b:HUBX,t:0,d:1.4,col:'#ffffff'});
+  for(let k=0;k<8;k++)later(k*0.3,()=>firework(cx+(Math.random()-.5)*90,BEAM_Y-50-Math.random()*50,s.col))}
+function activate(s){s.state='active';s.cards.forEach((c,i)=>{if(c.state==='plan')later(i*0.12,()=>{if(c.state==='plan')c.state='queue';spark(c.x+c.w/2,c.y+c.h/2,'#5ef2ff',6,30)})});
+  banner(L('bStart',{p:s.id}),'big');log(L('lStart',{p:`<b>${esc(s.id)}</b>`,n:esc(s.name),k:s.cards.length}),'big');
+  focus(s.x0+SECW/2,BEAM_Y,2,3,3);pickAct()}
+
+// Без выдуманных шагов: блок в работе медленно растёт (это вид стройки, не данные), проверка и «ждёт ответа» стоят до следующего события.
+function stepCard(c,dt){const r=c.robot;
+  if(c.state==='launch'){if(r&&r.state==='work'){c.state=c.want||'build';if(c.state==='wait')r.state='wait'}return}
+  if(c.state==='build'&&r&&r.state==='work')c.p=Math.min(0.9,c.p+dt*0.01)}
+function sim(dt){for(const s of sectors){if(s.state==='accepted'){s.after-=dt;if(s.after<=0)s.state='done'}for(const c of s.cards)stepCard(c,dt)}}
+// ---------- журнал и баннер
+const logEl=document.getElementById('log'),banEl=document.getElementById('banner');
+function clock(t){const s=Math.floor(t);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
+function log(html,cls){logs.push({t:clock(T),html,cls:cls||''});if(logs.length>40)logs.shift();renderLog(true)}
+function renderLog(fresh){const L=logs.slice(-7);logEl.innerHTML=L.map((l,i)=>`<div class="l ${fresh&&i===L.length-1?'new':''}"><span class="t">${l.t}</span> <span class="${l.cls}">${l.html}</span></div>`).join('')}
+function banner(text,kind){banEl.textContent=text;banEl.className='';void banEl.offsetWidth;banEl.className='show '+kind}
+
+// ---------- камера-режиссёр (увеличение только в целое число раз)
+const OV={x:320,y:180,z:1};
+const cam={x:OV.x,y:OV.y,z:1.0,tx:OV.x,ty:OV.y,tz:OV.z,hold:0,prio:0,follow:null,auto:true,shake:0,idle:0};
+function focus(x,y,z,dur,prio,follow){if(!cam.auto)return;if(cam.hold>0&&prio<cam.prio)return;
+  cam.tx=x;cam.ty=y;cam.tz=z;cam.hold=dur;cam.prio=prio;cam.follow=follow||null;cam.idle=0}
+function updCam(dt){
+  if(!cam.auto){cam.hold=0;cam.follow=null;cam.tx=OV.x;cam.ty=OV.y;cam.tz=OV.z}
+  else{cam.hold-=dt;
+    if(cam.hold<=0){cam.prio=0;cam.follow=null;cam.tx=OV.x;cam.ty=OV.y;cam.tz=OV.z;cam.idle+=dt;
+      if(cam.idle>5){const rs=robots.filter(r=>r.state==='work');if(rs.length){const r=rs[(Math.random()*rs.length)|0];focus(r.x,r.y,2.2,3.5,1,r)}}}}
+  if(cam.follow){cam.tx=cam.follow.x;cam.ty=cam.follow.y+4}
+  const k=Math.min(1,dt*2.4);cam.x+=(cam.tx-cam.x)*k;cam.y+=(cam.ty-cam.y)*k;cam.z+=(cam.tz-cam.z)*Math.min(1,dt*1.8);
+  cam.shake=Math.max(0,cam.shake-dt*2.5)}
+
+// ---------- частицы (2x2 — мелочь в 1 пиксель сжатие видео съедает)
+function spark(x,y,col,n,sp){for(let i=0;i<n;i++){const m=0.3+Math.random()*0.5;parts.push({x,y,vx:(Math.random()-.5)*sp,vy:(Math.random()-.75)*sp,l:m,m,c:col,gr:80,s:Math.random()<0.6?2:1})}}
+function firework(x,y,col){const cols=[col,'#ffffff','#ff4fd8','#5ef2ff','#ffd23f'];
+  for(let i=0;i<70;i++){const a=Math.random()*6.283,v=24+Math.random()*56,m=1+Math.random()*1.1;
+    parts.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,l:m,m,c:cols[(Math.random()*cols.length)|0],gr:18,s:Math.random()<0.3?3:2,drag:1.6})}}
+function debris(c){for(let i=0;i<40;i++){const m=0.6+Math.random()*0.8;
+  parts.push({x:c.x+Math.random()*c.w,y:c.y+Math.random()*c.h,vx:(Math.random()-.5)*80,vy:(Math.random()-.7)*66,l:m,m,c:Math.random()<0.5?'#ff3b5c':'#56617f',gr:55,s:Math.random()<0.5?3:2})}}
+// ---------- обновление объектов
+function hoverPos(c,r){const cx=c.x+c.w/2+Math.sin(T*0.9+r.seed)*5;return c.row<2?[cx,c.y-13]:[cx,c.y+c.h+13]}
+function update(dt){
+  for(let i=timers.length-1;i>=0;i--){timers[i].t-=dt;if(timers[i].t<=0){const f=timers[i].f;timers.splice(i,1);f()}}
+  sim(dt);
+  for(let i=robots.length-1;i>=0;i--){const r=robots[i];let tx,ty;
+    if(r.state==='home'){tx=r.hx;ty=r.hy}
+    else if(r.type==='insp'){tx=r.card.x+r.card.w+14;ty=r.card.y+r.card.h/2-2}
+    else[tx,ty]=hoverPos(r.card,r);
+    const k=Math.min(1,dt*2.6),ox=r.x;r.x+=(tx-r.x)*k;r.y+=(ty-r.y)*k;
+    const dist=Math.hypot(tx-r.x,ty-r.y);
+    if(dist>3)r.face=r.x>ox?1:-1;else if(r.card)r.face=(r.card.x+r.card.w/2)>=r.x?1:-1;
+    if(r.state==='fly'&&dist<2.5){if(r.type==='insp'){r.state='scan';r.scan=true}else r.state='work'}
+    if(r.state==='home'&&dist<2.5){spark(r.x,r.y,'#5ef2ff',8,30);robots.splice(i,1);continue}
+    if(dist>5&&Math.random()<0.6)parts.push({x:r.x-r.face*3+(Math.random()-.5)*2,y:r.y+7,vx:0,vy:8,l:0.35,m:0.35,c:r.type==='insp'?'#ff4fd8':'#ffb347',gr:0,s:2});
+    if(r.type!=='insp'&&r.card){const c=r.card,filled=Math.round(c.p*c.h),tri=v=>Math.abs(((v%2)+2)%2-1);
+      r.lx=c.x+2+Math.round(tri(T*1.3+r.seed)*(c.w-5));
+      r.ly=c.row<2?Math.max(c.y,c.y+c.h-filled-1):Math.min(c.y+c.h-1,c.y+filled);
+      if(r.state==='work'&&c.state==='build'&&Math.random()<dt*26)spark(r.lx,r.ly,Math.random()<0.5?'#ffd23f':'#ff8a3c',2,50)}}
+  for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.l-=dt;if(p.l<=0){parts.splice(i,1);continue}
+    if(p.drag){p.vx*=Math.max(0,1-p.drag*dt);p.vy*=Math.max(0,1-p.drag*dt)}p.vy+=p.gr*dt;p.x+=p.vx*dt;p.y+=p.vy*dt}
+  for(let i=pops.length-1;i>=0;i--){const q=pops[i];q.l-=dt;q.y-=10*dt;if(q.l<=0)pops.splice(i,1)}
+  for(let i=waves.length-1;i>=0;i--){const w=waves[i];w.t+=dt;if(w.t>=w.d){hubFlare=Math.max(hubFlare,0.6);waves.splice(i,1)}}
+  for(const s of sectors){s.flash=Math.max(0,s.flash-dt*0.8);for(const c of s.cards){c.flash=Math.max(0,c.flash-dt*1.6);c.scan=Math.max(0,c.scan-dt*1.5)}}
+  hubFlare=Math.max(0,hubFlare-dt*0.7);
+  if(!shoot&&Math.random()<dt*0.08)shoot={x:Math.random()*W,y:Math.random()*100,vx:-180-Math.random()*100,vy:50+Math.random()*40,l:0.8};
+  if(shoot){shoot.x+=shoot.vx*dt;shoot.y+=shoot.vy*dt;shoot.l-=dt;if(shoot.l<=0)shoot=null}}
+
+// ---------- сцена
+function drawBG(){bgc.fillStyle='#05040d';bgc.fillRect(0,0,W,H);
+  const ox=cam.x-OV.x,oy=cam.y-OV.y;
+  bgc.drawImage(NEB,Math.round(-50-ox*0.05),Math.round(-40-oy*0.05));
+  for(const s of STARS){const x=Math.round(s.x-50-ox*0.12*s.d),y=Math.round(s.y-40-oy*0.12*s.d);if(x<-4||y<-4||x>W+4||y>H+4)continue;
+    bgc.globalAlpha=Math.max(0.15,s.d*(0.6+0.4*Math.sin(T*1.5+s.ph)));bgc.fillStyle=s.c;
+    if(s.big){bgc.fillRect(x-2,y,6,2);bgc.fillRect(x,y-2,2,6)}else bgc.fillRect(x,y,2,2)}
+  bgc.globalAlpha=1;
+  if(shoot){for(let k=0;k<10;k++){bgc.globalAlpha=(1-k/10)*Math.min(1,shoot.l*2);bgc.fillStyle='#ffffff';bgc.fillRect(Math.round(shoot.x-shoot.vx*k*0.008),Math.round(shoot.y-shoot.vy*k*0.008),2,2)}bgc.globalAlpha=1}
+  bgc.drawImage(PLANET,Math.round(-80-ox*0.25),Math.round(H-PLANET.height+20-oy*0.2))}
+
+function drawPanels(x0,y0,n){ // солнечные панели: ячейки 7x5, зазор 2
+  for(let i=0;i<n;i++){const px=x0+i*26;R(g,px,y0,24,14,'#0d1534');R(g,px,y0,24,2,'#3a4a80');
+    for(let a=0;a<3;a++)for(let q=0;q<2;q++){const gx=px+1+a*8-(a>0?0:0),gy=y0+3+q*6;R(g,gx+1,gy,6,4,'#24448f');R(g,gx+1,gy,6,1,'#4d7ad8');
+      const glint=((T*50)%420)-60;if(Math.abs(gx-(x0>HUBX?glint+HUBX:HUBX-glint))<5)G(gx+1,gy,6,4,'#bfe8ff',0.35)}}}
+
+function drawHub(){const cx=HUBX,x0=275,x1=365,y0=160,y1=244;
+  // мачта и фермы панелей
+  R(g,cx-1,92,2,68,'#56617f');R(g,cx-4,112,8,2,'#56617f');R(g,cx-3,132,6,2,'#56617f');
+  if((T*1.2)%1<0.5)G(cx-2,88,4,4,'#ff3b5c',1);else R(g,cx-2,88,4,4,'#5a1020');
+  R(g,150,126,cx-150,2,'#4a5578');R(g,cx,126,490-cx,2,'#4a5578');
+  drawPanels(160,112,4);drawPanels(376,112,4);
+  // корпус
+  R(g,x0,y0,x1-x0,y1-y0,'#2b3452');
+  R(g,x0,y0,x1-x0,2,'#9aa8d6');R(g,x0,y0,2,y1-y0,'#5a6690');R(g,x1-2,y0,2,y1-y0,'#1a2036');R(g,x0,y1-2,x1-x0,2,'#151a2e');
+  R(g,x0+4,170,x1-x0-8,2,'#1e2540');R(g,x0+4,226,x1-x0-8,2,'#1e2540');
+  for(const [rx,ry] of [[x0+4,y0+4],[x1-6,y0+4],[x0+4,y1-6],[x1-6,y1-6]])R(g,rx,ry,2,2,'#8190bd');
+  for(let i=0;i<12;i++){const wx=x0+6+i*7;
+    if(Math.sin(T*0.5+i*1.7)>-0.6)G(wx,164,4,3,'#5ef2ff',0.6);else R(g,wx,164,4,3,'#13324a');
+    if(Math.sin(T*0.4+i*2.3)>-0.4)G(wx,232,4,3,'#ffd23f',0.5);else R(g,wx,232,4,3,'#3a3010')}
+  txtG('KERMACH',cx-tw('KERMACH')/2,175,'#5ef2ff',0.45);
+  // реактор
+  const busy=robots.filter(r=>r.state==='work').length,pulse=0.5+0.5*Math.sin(T*(3+busy*1.5));
+  disc(cx,208,13,'#141a2c');ring(cx,208,13,'#5a6690',2);ring(cx,208,10,'#222a44',1);
+  for(let a=0;a<8;a++){const an=a*0.785+T*0.6;R(g,cx+Math.round(Math.cos(an)*11)-1,208+Math.round(Math.sin(an)*11)-1,2,2,'#8190bd')}
+  const cr=4+Math.round(pulse*2+hubFlare*4);
+  disc(cx,208,cr+1,pulse>0.5?'#ff4fd8':'#5ef2ff',0.8+hubFlare*0.2,true);disc(cx,208,Math.max(1,cr-1),'#ffffff',1,true);
+  // шлюзы с жёлто-чёрной разметкой
+  for(const dx of [x0,x1-6]){R(g,dx,196,6,24,'#07061a');for(let k=0;k<24;k+=6)R(g,dx,196+k,6,3,'#c9a22e')}}
+
+function drawBeam(){const x0=80,x1=560,y=BEAM_Y;
+  R(g,x0,y,x1-x0,8,'#232a44');R(g,x0,y,x1-x0,2,'#7d8cbd');R(g,x0,y+6,x1-x0,2,'#151a2e');
+  for(let x=x0;x<x1;x+=8){R(g,x,y+2,2,4,'#4a5680');for(let k=0;k<4;k++)R(g,x+2+k,y+2+k,2,1,'#3b4670')}
+  const bl=(T%1)<0.5;G(x0-4,y+2,4,4,bl?'#ff3b5c':'#3a0f18',bl?1:0);G(x1,y+2,4,4,bl?'#3a0f18':'#7dffa1',bl?0:1);
+  for(const r of robots){if(r.type==='insp'||r.state!=='work'||!r.card)continue;const sx=r.card.x+r.card.w/2,tx=sx>HUBX?DOOR_R:DOOR_L;
+    for(let k=0;k<3;k++){const f=((T*0.7+r.seed+k/3)%1);G(sx+(tx-sx)*f,y+3,3,2,r.ag.col,0.9)}}
+  for(const w of waves){const f=w.t/w.d,x=w.a+(w.b-w.a)*f;for(let k=0;k<12;k++){const xx=x-(w.b>w.a?k:-k)*2;G(xx,y,2,2,w.col,1-k/12)}}}
+
+function drawBlock(c){const {x,y,w,h}=c,st=c.state,col=c.sec.col;
+  if(st==='plan'){for(let i=0;i<w;i+=4){R(g,x+i,y,2,2,'#3a5590');R(g,x+i,y+h-2,2,2,'#3a5590')}for(let j=0;j<h;j+=4){R(g,x,y+j,2,2,'#3a5590');R(g,x+w-2,y+j,2,2,'#3a5590')}return}
+  if(st==='queue'||st==='launch'){const a=st==='launch'?0.65+0.35*Math.sin(T*10):0.45+0.2*Math.sin(T*2+c.i),off=((T*12)|0);
+    for(let i=0;i<w;i+=2){if(((i+off)%8)<4)G(x+i,y,2,2,'#5ef2ff',a);if(((i+off+4)%8)<4)G(x+w-2-i,y+h-2,2,2,'#5ef2ff',a)}
+    for(let j=2;j<h-2;j+=2){if(((j+off)%8)<4)G(x+w-2,y+j,2,2,'#5ef2ff',a);if(((j+off+4)%8)<4)G(x,y+h-2-j,2,2,'#5ef2ff',a)}
+    for(const [bx,by,dx,dy] of [[x,y,1,1],[x+w-2,y,-1,1],[x,y+h-2,1,-1],[x+w-2,y+h-2,-1,-1]]){G(bx,by,2,2,'#dff8ff',a);G(bx+dx*2,by,2,2,'#dff8ff',a);G(bx,by+dy*2,2,2,'#dff8ff',a)}
+    return}
+  const filled=st==='done'?h:Math.round(c.p*h),down=c.row===2;
+  for(let j=0;j<filled;j++){const yy=down?y+j:y+h-1-j;R(g,x,yy,w,1,((j>>2)&1)?'#4a5574':'#58648a');R(g,x,yy,2,1,'#9aa8d6');R(g,x+w-2,yy,2,1,'#2a3250')}
+  if(filled<h){const uy=down?y+filled:y,uh=h-filled;outline2(x,uy,w,uh,st==='wait'?'#ffd23f':'#5ef2ff',st==='wait'?0.5+0.5*Math.sin(T*8):0.5)}
+  if(st==='build'&&c.robot&&c.robot.state==='work'&&filled<h){G(x+2,down?y+filled:y+h-1-filled,w-4,1,'#ffb347',0.9)}
+  if(st==='done'){R(g,x,y,w,2,'#aab8e6');G(x+2,y+2,w-4,2,col,0.6);R(g,x,y+h-2,w,2,'#262d48');
+    for(const [rx,ry] of [[x+2,y+h-4],[x+w-4,y+h-4]])R(g,rx,ry,2,1,'#9aa8d6');
+    for(const [wx,wy,ph] of c.wins)if(Math.sin(T*0.7+ph)>-0.85)G(x+wx,y+wy,3,2,col,0.75);else R(g,x+wx,y+wy,3,2,'#1a2036')}
+  if(st==='test'){const yy=y+((((T*9)%h)+h)%h|0);G(x-2,yy,w+4,2,'#ff4fd8',1)}
+  if(c.scan>0)outline2(x-3,y-3,w+6,h+6,'#5ef2ff',c.scan);
+  const fl=Math.max(c.flash,c.sec.flash*(0.6+0.4*Math.sin(T*14)));
+  if(fl>0){const fc=c.flash>=c.sec.flash*0.8?c.flashCol:'#ffffff';g.globalAlpha=fl*0.85;R(g,x,y,w,h,fc);g.globalAlpha=1;em.globalAlpha=fl;R(em,x-2,y-2,w+4,h+4,fc);em.globalAlpha=1}}
+
+function laser(x0,y0,x1,y1,c){lineP(x0,y0,x1,y1,(px,py)=>{if(Math.random()<0.9)G(px,py,2,1,c,0.9)});G(x1-2,y1-1,4,2,'#ffffff',1)}
+
+function drawRobot(r){const x=Math.round(r.x),y=Math.round(r.y+Math.sin(T*3+r.seed)*(r.state==='wait'?2.5:1.4)),f=r.face,moving=r.state==='fly'||r.state==='home';
+  if(r.type==='insp'){const [ox,oy]=spr(EYE,EYE_PAL,x,y,f<0,'EK');
+    R(g,ox+6,oy-4,1,4,'#8a94b8');if((T*3)%1<0.5)G(ox+5,oy-6,3,2,'#ff4fd8',1);
+    if(r.scan&&r.card){const c=r.card,sy=c.y+((((T*9)%c.h)+c.h)%c.h|0),st=(T*20)|0;
+      lineP(x-5,y,c.x,sy,(px,py,n)=>{if((n+st)%3===0)G(px,py,2,1,'#ff4fd8',0.5)});
+      lineP(x-5,y,c.x+c.w-1,sy,(px,py,n)=>{if((n+st)%3===0)G(px,py,2,1,'#ff4fd8',0.5)})}
+    txtG(tr().wQA,x-tw(tr().wQA,1)/2,oy-12,'#dfe6ff',0.4,1);return}
+  const work=r.state==='work'&&r.card&&r.card.state==='build',below=r.card.row===2;let ox,oy;
+  if(r.type==='claude'){
+    if(work)laser(x,below?y-7:y+6,r.lx,r.ly,'#ffe0a0');
+    [ox,oy]=spr(DRONE,DRONE_PAL,x,y,f<0);
+    G(ox+(f>0?9:4),oy+4,2,2,'#5ef2ff',1);
+    R(g,ox+7,oy-2,1,2,'#9aa4c8');const rw=((T*24)|0)%2?19:7;G(ox+7-((rw-1)>>1),oy-3,rw,1,'#e6ecff',0.3);
+    if(moving||work){const fl=1+(((T*20)|0)%2);G(ox+4,oy+11,2,fl,'#ffd23f',1);G(ox+9,oy+11,2,fl,'#ffd23f',1)}}
+  else{
+    [ox,oy]=spr(CRAB,CRAB_PAL,x,y,f<0);
+    G(ox+6+(((Math.round(T*6))%7)+7)%7,oy+3,2,2,'#ff4fd8',1);
+    const lf=((T*6)|0)%2;
+    for(const lx of [4,6,12,14]){const s=lx<9?-1:1;R(g,ox+lx,oy+9,1,1,'#6b7aa6');R(g,ox+lx+s*lf,oy+10,1,1,'#6b7aa6');R(g,ox+lx+s,oy+11,2,1,'#8a94b8')}
+    const tip=f>0?ox+21:ox-3;
+    R(g,f>0?ox+17:ox-2,oy+4,4,1,'#8a94b8');R(g,tip,oy+3,2,1,'#ffd23f');R(g,tip,oy+5,2,1,'#ffd23f');
+    if(work)laser(tip,oy+4,r.lx,r.ly,'#7dffc8');
+    if(moving){G(ox+5,oy+12,2,1,'#5ec8ff',1);G(ox+12,oy+12,2,1,'#5ec8ff',1)}}
+  const lab='T'+r.card.num,lw=tw(lab),ly=(below?y+15:oy-16)-(r.card.col===1?(below?-12:12):0),lx=x-(lw>>1);
+  LBL.push({lab,lw,lx,ly,x,y,oy,below,lead:r.card.col===1,col:r.ag.col,wait:r.state==='wait'})}
+// номера роботов: соседние не налезают — сдвигаем выше (или ниже) и тянем к роботу линию
+const LBL=[];
+function placeLabels(){const placed=[];LBL.sort((a,b)=>a.lx-b.lx);
+  for(const l of LBL){let n=0;
+    while(n<8&&placed.some(p=>l.lx<p.lx+p.lw+3&&p.lx<l.lx+l.lw+3&&Math.abs(p.ly-l.ly)<12)){l.ly+=l.below?12:-12;n++}
+    placed.push(l);const {x,y,oy,ly,below}=l;
+    if(l.lead||n)R(g,x,below?y+10:ly+10,1,below?ly-y-10:oy-ly-10,'rgba(122,137,182,0.7)');
+    txtG(l.lab,l.lx,ly,l.col,0.35);
+    if(l.wait&&(T*3)%1<0.6)txtG('?',x-4,ly-18,'#ffd23f',1,3)}
+  LBL.length=0}
+
+function draw(){g.clearRect(0,0,W,H);em.clearRect(0,0,W,H);drawBG();
+  drawHub();drawBeam();
+  for(const s of sectors){for(const c of s.cards)drawBlock(c);
+    const lc=s.state==='active'?((T*2)%1<0.6?s.col:'#2c3c6c'):s.state==='future'?'#2c3c6c':s.col;
+    const lx=s.x0+((SECW-tw(s.id))>>1);txt(g,s.id,lx,BEAM_Y+46,lc,2);if(s.state!=='future'){em.globalAlpha=0.35;txt(em,s.id,lx,BEAM_Y+46,lc,2);em.globalAlpha=1}}
+  for(const r of robots)drawRobot(r);placeLabels();
+  for(const p of parts){const a=Math.max(0,p.l/p.m);g.globalAlpha=a;em.globalAlpha=a;R(g,p.x,p.y,p.s,p.s,p.c);R(em,p.x,p.y,p.s,p.s,p.c)}
+  g.globalAlpha=1;em.globalAlpha=1;
+  for(const q of pops){const a=Math.min(1,q.l*1.5),w=tw(q.s,1),px=Math.round(q.x-w/2);
+    g.globalAlpha=a*0.85;R(g,px-2,q.y-2,w+4,9,'#05040d');g.globalAlpha=a;txtG(q.s,px,q.y,q.c,0.4*a,1);g.globalAlpha=1}}
+
+// тёмная обводка в 1 пиксель вокруг всего переднего плана: края не расплываются в видео
+function silhouette(){sil.globalCompositeOperation='source-over';sil.clearRect(0,0,W,H);
+  for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1]])sil.drawImage(FGC,dx,dy);
+  sil.globalCompositeOperation='source-in';sil.fillStyle='#03020a';sil.fillRect(0,0,W,H);sil.globalCompositeOperation='source-over'}
+
+let DPR=1,BASE=1;
+function resize(){DPR=window.devicePixelRatio||1;const sd=Math.min(innerWidth*DPR/W,innerHeight*DPR/H);BASE=sd>=1?Math.floor(sd+0.001):sd;
+  view.width=Math.round(W*BASE);view.height=Math.round(H*BASE);view.style.width=(view.width/DPR)+'px';view.style.height=(view.height/DPR)+'px'}
+addEventListener('resize',resize);resize();
+function compose(){const cw=view.width,ch=view.height;V.imageSmoothingEnabled=false;V.fillStyle='#05040d';V.fillRect(0,0,cw,ch);
+  V.drawImage(BGC,0,0,W,H,0,0,cw,ch);
+  const k=BASE>=1?Math.max(BASE,Math.round(BASE*cam.z)):BASE*cam.z,vw=cw/k,vh=ch/k,sh=cam.shake*3;
+  let sx=cam.x-vw/2+(Math.random()-.5)*sh,sy=cam.y-vh/2+(Math.random()-.5)*sh;
+  sx=Math.max(0,Math.min(W-vw,sx));sy=Math.max(0,Math.min(H-vh,sy));
+  sx=Math.round(sx*k)/k;sy=Math.round(sy*k)/k;
+  silhouette();
+  V.drawImage(SILC,sx,sy,vw,vh,0,0,cw,ch);V.drawImage(FGC,sx,sy,vw,vh,0,0,cw,ch);
+  gl1.clearRect(0,0,W/2,H/2);gl1.filter='blur(1.5px)';gl1.drawImage(EMC,sx,sy,vw,vh,0,0,W/2,H/2);gl1.filter='none';
+  gl2.clearRect(0,0,W/4,H/4);gl2.filter='blur(2px)';gl2.drawImage(EMC,sx,sy,vw,vh,0,0,W/4,H/4);gl2.filter='none';
+  V.save();V.globalCompositeOperation='lighter';V.imageSmoothingEnabled=true;
+  V.globalAlpha=0.45;V.drawImage(GL1,0,0,cw,ch);V.globalAlpha=0.25;V.drawImage(GL2,0,0,cw,ch);V.restore()}
+
+// ---------- шапка
+const phaseEl=document.getElementById('phase'),cellsEl=document.getElementById('cells'),statsEl=document.getElementById('stats'),
+  clockEl=document.getElementById('clock'),connEl=document.getElementById('conn');
+function hud(){clockEl.textContent=clock(T);connEl.textContent=online?'':tr().conn;
+  const s=sectors[act];
+  if(!s){phaseEl.textContent=board?tr().none:'';cellsEl.innerHTML='';statsEl.textContent='';return}
+  phaseEl.textContent=`${tr().phase} ${s.id} · ${String(s.name).toUpperCase()}`;
+  cellsEl.innerHTML=s.cards.map(c=>{const k=c.state==='done'?'done':c.state==='wait'?'wait':c.state==='test'?'test':(c.state==='build'||c.state==='launch')?'work':'queue';
+    return `<i class="${k}" style="--c:${s.col}"></i>`}).join('');
+  const done=s.cards.filter(c=>c.state==='done').length,busy=s.cards.filter(c=>['launch','build','test'].includes(c.state)).length,wait=s.cards.filter(c=>c.state==='wait').length;
+  statsEl.textContent=`${tr().done} ${done}/${s.cards.length} · ${tr().busy} ${busy} · ${tr().waitN} ${wait} · ${tr().rej} ${returns}`+(extra?' · '+L('more',{n:extra}):'')}
+
+// камера: C — авто или общий план (кнопок на сцене нет — их видно в эфире)
+addEventListener('keydown',e=>{if(e.key==='c'||e.key==='C'||e.key==='с'||e.key==='С'){cam.auto=!cam.auto;cam.hold=0}});
+
+// ---------- события Kermach
+function connect(){const es=new EventSource('events');
+  es.onopen=()=>{online=true};
+  es.addEventListener('board',e=>{online=true;try{applyBoard(JSON.parse(e.data))}catch(err){console.warn('scene board',err)}});
+  es.addEventListener('change',e=>{try{onChange(JSON.parse(e.data))}catch(err){console.warn('scene change',err)}});
+  es.onerror=()=>{online=false}}// EventSource переподключается сам (retry: 2000 от сервера)
+
+// ---------- цикл
+applyStatic();connect();
+let last=performance.now(),hudT=0;
+function frame(now){const rdt=Math.max(0,Math.min(0.05,(now-last)/1000));last=now;const dt=rdt;T+=dt;
+  update(dt);updCam(rdt);draw();compose();hudT-=rdt;if(hudT<=0){hud();hudT=0.15}
+  requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+window.__scene={t:()=>T,robots:()=>robots.map(r=>[r.type,r.state,Math.round(r.x),Math.round(r.y)]),logs:()=>logs.map(l=>l.html.replace(/<[^>]+>/g,'')),cards:()=>sectors.flatMap(s=>s.cards.map(c=>({id:c.id,state:c.state,robot:c.robot?c.robot.type+':'+c.robot.state:'',insp:!!c.insp}))),lang:()=>LANG,online:()=>online};
+</script>
+</body>
+</html>

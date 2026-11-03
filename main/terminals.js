@@ -339,6 +339,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}$/;
 const ALLOW_FLAGS = {
   claude: { '--model': MODEL_RE, '--effort': /^(low|medium|high|xhigh|max)$/, '--strict-mcp-config': null, '--disable-slash-commands': null, '--disallowedTools': /^Agent$/ },
+  // Вкладка на кредитах (t1478): модель, усилие и запрет субагентов карты идут обёртке daemon\credits-tab.js, она передаёт их claude -p.
+  // Модель карты важнее модели из «Кредиты API». Флаги лёгкого старта и mcp — нет: обёртка их не знает.
+  credits: { '--model': MODEL_RE, '--effort': /^(low|medium|high|xhigh|max)$/, '--disallowedTools': /^Agent$/ },
   codex: { '--model': MODEL_RE, '-m': MODEL_RE, '-c': /^model_reasoning_effort=(none|low|medium|high|xhigh|max)$/ },
   'agent:grok': { '--model': MODEL_RE, '-m': MODEL_RE, '--reasoning-effort': /^(low|medium|high|xhigh)$/, '--resume': UUID_RE },
   'agent:gemini': { '--model': MODEL_RE, '-m': MODEL_RE },
@@ -640,6 +643,9 @@ function launchWith(kind, resume, hooksSettings, x, prompt, ag, codexHook, bypas
   // Сообщение одним словом программа приняла бы за подкоманду (t1211): claude update, codex resume. С пробелом в конце это уже не имя
   // подкоманды, а текст (spikes\t1211-env\subcmd.txt). После флага агента (pf) слово — значение флага, его не трогаем; /init подкомандой не бывает.
   const msg = prompt && !pf && !prompt.startsWith('/') && !/\s/.test(prompt) ? `${prompt} ` : prompt;
+  // Карта «Роадмапа» на кредитах (t1553): плагин дал KERMACH_CARD — обёртке флаг --card, она запускает claude -p в режиме разрешений
+  // из настроек пользователя, как карту на подписке. Флаг ставит ядро после checkExtra: сам плагин его передать не может. revive повторяет x — флаг тоже.
+  if (kind === 'credits' && x && x.env && String(x.env.KERMACH_CARD || '').trim()) args = [...args, '--card'];
   const w = withExtra(how, [...args, ...mcpArgs, ...pf ? [pf] : []], msg);
   if ('error' in w) return w;
   return { file: w.file, args: w.args, meta: x ? { ...how.meta, extra: x } : how.meta, env };

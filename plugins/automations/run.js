@@ -233,12 +233,15 @@ function runAutomation({ dataDir, id, log }) {
   const name = (item && item.cfg && item.cfg.name) || id;
 
   return new Promise((resolve) => {
+    /** Запись файла прогона без исключения: сбой — строка в журнал. @param {string} what @param {() => void} fn */
+    const write = (what, fn) => { try { fn(); } catch (e) { log(`${id}: ${what} не записан в ${out}: ${e instanceof Error ? e.message : e}`); } };
     /** @param {number} exit @param {string} status @param {string} md @param {Record<string, any>} extra */
     const finish = (exit, status, md, extra) => {
-      fs.writeFileSync(path.join(out, 'ответ.md'), md);
+      // Каждая запись — в своём try (t1573): нет места или прав — итог всё равно пишется, замок снимается, ответ приходит.
+      write('ответ.md', () => fs.writeFileSync(path.join(out, 'ответ.md'), md));
       /** @type {import('./store').Result} */
       const res = { stamp, start: start.toISOString(), end: new Date().toISOString(), exit, status, ...extra };
-      store.writeAtomic(path.join(out, 'итог.json'), JSON.stringify(res, null, 2));
+      write('итог.json', () => store.writeAtomic(path.join(out, 'итог.json'), JSON.stringify(res, null, 2)));
       try { fs.unlinkSync(runningFile); } catch {}
       try { store.prune(dataDir, id); } catch (e) { log(`${id}: старые прогоны не удалены: ${e instanceof Error ? e.message : e}`); }
       log(`${id}: прогон ${stamp} — ${status}, код ${exit}${extra.cost !== undefined ? `, $${extra.cost}` : ''}`);
@@ -269,7 +272,7 @@ function runAutomation({ dataDir, id, log }) {
     const args = flags(cfg, { work, project: item.project });
     const cwd = item.project || work;
     const text = prompt(item.task, { work, project: item.project, writeProject: !!cfg.writeProject });
-    fs.writeFileSync(path.join(out, 'cmd.txt'), `${JSON.stringify([file, ...pre, ...args])}\ncwd: ${cwd}\n`);
+    write('cmd.txt', () => fs.writeFileSync(path.join(out, 'cmd.txt'), `${JSON.stringify([file, ...pre, ...args])}\ncwd: ${cwd}\n`));
     // Задание — через stdin: нет кириллицы и кавычек в командной строке, а claude не может поправить своё задание.
     const p = spawn(file, [...pre, ...args], { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env });
     let so = '';
@@ -283,8 +286,8 @@ function runAutomation({ dataDir, id, log }) {
     p.on('error', (e) => { se += `\nобёртка: claude не запустился — ${e.message}\n`; });
     p.on('close', (code) => {
       clearTimeout(timer);
-      fs.writeFileSync(path.join(out, 'вывод.json'), so);
-      if (se) fs.writeFileSync(path.join(out, 'err.txt'), se);
+      write('вывод.json', () => fs.writeFileSync(path.join(out, 'вывод.json'), so));
+      if (se) write('err.txt', () => fs.writeFileSync(path.join(out, 'err.txt'), se));
       /** @type {any} */
       let r = null;
       try { r = JSON.parse(so); } catch { /* нет json — итог из кода */ }

@@ -800,14 +800,17 @@
       <div class="sec dirs"><div class="stepper"><button class="pick achk"></button><span class="hint ares"></span></div></div>
       <div class="sec"><div class="cap abc"></div>
         <div class="stepper"><input class="num abud" type="number" min="0.01" step="0.5"><span class="hint abh"></span></div></div>
-      <div class="sec thm"><div class="stepper"><span class="cap amc" style="flex:none;margin:0"></span><select class="amod"></select></div></div></div>
+      <div class="sec thm"><div class="stepper"><span class="cap amc" style="flex:none;margin:0"></span><select class="amod"></select></div></div>
+      <div class="sec dirs grn"><div class="cap gnc"></div><div class="list glist"></div>
+        <div class="stepper"><input class="num gam" type="number" min="0.01" step="1"><input class="dir gfr" type="date"><input class="dir gex" type="date"><button class="pick gadd"></button></div>
+        <div class="dirh gh"></div><div class="dire ger" hidden></div></div></div>
       <div class="set-pane" data-p="tg" hidden>
       <div class="sec dirs tg"><div class="cap tkc"></div>
         <div class="stepper"><input class="dir tkey" type="password" spellcheck="false" autocomplete="off"><button class="pick tsv"></button><button class="pick tdel" hidden></button></div>
         <div class="dirh tst"></div><div class="dire ter" hidden></div>
         <div class="dirh tkh"></div></div>
       <div class="sec dirs"><div class="cap tgc"></div><div class="dirh tgv"></div>
-        <div class="stepper tgcw" hidden><span class="hint tgcode"></span><button class="pick tgnew"></button></div><div class="dirh tgh"></div></div>
+        <div class="stepper tgcw" hidden><span class="hint tgcode"></span><button class="pick tgnew"></button></div><div class="dirh tgh"></div><div class="dirh tgrh"></div><div class="dire tgcc" hidden></div></div>
       <div class="sec"><div class="cap tdc"></div>
         <div class="stepper"><input class="num tdup" type="number" min="1" step="1"><span class="hint tdh"></span></div></div>
       <div class="sec dirs"><div class="stepper"><button class="pick tchk"></button><span class="hint tres"></span></div></div></div>
@@ -836,10 +839,12 @@
       ['.ach', 'dialogs.apiCmdHint', 'Для менеджера паролей: Claude сам вызывает её и берёт ключ из её вывода. Ключ Kermach не хранит.', 'textContent'],
       ['.achk', 'dialogs.apiCheck', 'Проверить', 'textContent'], ['.abc', 'dialogs.apiBudget', 'Потолок на один запуск, $', 'textContent'],
       ['.amc', 'dialogs.apiModel', 'Модель по умолчанию', 'textContent'],
+      ['.gnc', 'dialogs.grants', 'Начисления', 'textContent'], ['.gadd', 'dialogs.grantAdd', 'Добавить', 'textContent'],
       ['.tkc', 'dialogs.tgToken', 'Токен бота', 'textContent'], ['.tsv', 'dialogs.apiSave', 'Сохранить', 'textContent'], ['.tdel', 'dialogs.apiDelete', 'Удалить', 'textContent'],
       ['.tkh', 'dialogs.tgTokenHint', 'Свой бот: создайте его у @BotFather в Telegram и вставьте токен сюда. Своего бота и группы у Kermach нет.', 'textContent'],
       ['.tgc', 'dialogs.tgChat', 'Группа', 'textContent'],
-      ['.tgh', 'dialogs.tgChatHint', 'Добавьте бота в свою группу и напишите в ней упоминание бота и код выше, например «@ваш_бот 123456», потом нажмите «Проверить». Кто прислал код, тот и владелец: ответы принимаются только от его аккаунта и только ответом (reply) на сообщение о карте. Личные сообщения боту и сообщения без кода владельца не назначают.', 'textContent'],
+      ['.tgh', 'dialogs.tgChatHint', 'Добавьте бота в свою группу и напишите в ней упоминание бота и код выше, например «@ваш_бот 123456», потом нажмите «Проверить». Кто прислал код, тот и владелец: ответы принимаются только от его аккаунта и только ответом (reply) на сообщение о карте. Личные сообщения боту и сообщения без кода владельца не назначают. После нового сохранения токена код меняется — отправьте в группу новый код.', 'textContent'],
+      ['.tgrh', 'dialogs.tgReplyHint', 'Чтобы ответить на вопрос карты из Telegram, нажмите «Ответить» (reply) на сообщение бота. Обычное сообщение в группе бот не видит.', 'textContent'],
       ['.tgnew', 'dialogs.tgNewCode', 'Новый код', 'textContent'],
       ['.tdc', 'dialogs.tgDup', 'Через сколько минут без ответа в Kermach сообщение уходит в Telegram', 'textContent'],
       ['.tchk', 'dialogs.apiCheck', 'Проверить', 'textContent'],
@@ -888,7 +893,8 @@
         ntf.checked = s.notify !== false;
         cps.checked = s.copySelect !== false;
         // Поле с ошибкой или в фокусе не перетираем: человек правит путь.
-        dlg.querySelectorAll('.dirs input.dir').forEach((x) => { const i = /** @type {HTMLInputElement} */ (x); if (document.activeElement !== i && i.dataset.bad !== '1') i.value = s[i.dataset.k || ''] || ''; });
+        // Только поля путей (data-k): ключ API, токен Telegram и даты начислений — не настройки, перерисовка их стирала (t1577).
+        dlg.querySelectorAll('.dirs input.dir[data-k]').forEach((x) => { const i = /** @type {HTMLInputElement} */ (x); if (document.activeElement !== i && i.dataset.bad !== '1') i.value = s[i.dataset.k || ''] || ''; });
         dlg.querySelectorAll('.plg input[data-id]').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); const on = s.plugins && s.plugins[i.dataset.id || '']; i.checked = typeof on === 'boolean' ? on : plgDefault.get(i.dataset.id || '') !== false; });
         dlg.querySelectorAll('.plg input[data-main]').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); i.checked = !!(s.pluginMain && s.pluginMain[i.dataset.main || ''] === true); });
         // Размеры видов браузера (t207) — только пока «Браузер» включён.
@@ -1120,6 +1126,36 @@
         return r;
       };
       Promise.resolve(t.apiKey && t.apiKey.get()).then(akPaint, () => {});
+      // Начисления кредитов (t1521): сумма, с какого дня, когда сгорает. Поля сразу заполнены предложением программы
+      // (та же сумма, месяц спустя). Остаток каждого — по журналу ходов, тратится сначала то, что сгорает раньше.
+      const gn = {
+        list: q('.glist'), am: /** @type {HTMLInputElement} */ (q('.gam')), fr: /** @type {HTMLInputElement} */ (q('.gfr')),
+        ex: /** @type {HTMLInputElement} */ (q('.gex')), er: q('.ger'),
+      };
+      tx(q('.gh'), 'dialogs.grantHint', 'Сумма, с какого дня и когда сгорает. Поля уже заполнены следующим начислением: та же сумма, месяц спустя. Тратится сначала то, что сгорает раньше.');
+      const gnPaint = (/** @type {any} */ r) => {
+        if (!r || r.error) { gn.er.textContent = String((r && r.error) || ''); gn.er.hidden = !gn.er.textContent; return; }
+        gn.er.hidden = true;
+        gn.list.textContent = '';
+        for (const g of r.grants || []) {
+          const row = document.createElement('div');
+          row.className = 'row';
+          const s = document.createElement('span');
+          s.className = 'sub';
+          s.textContent = I18n.t('dialogs.grantRow', '${a} · {f} → {e} · осталось ${l}', { a: g.amount, f: g.from || '…', e: g.expires, l: Math.round(g.left * 100) / 100 });
+          const del = document.createElement('button');
+          del.className = 'pick';
+          del.textContent = I18n.t('dialogs.apiDelete', 'Удалить');
+          del.onclick = async () => gnPaint(await t.apiKey.grants('remove', g.expires));
+          row.append(s, del);
+          gn.list.appendChild(row);
+        }
+        if (!(r.grants || []).length) { const s = document.createElement('span'); s.className = 'sub'; s.textContent = I18n.t('dialogs.grantNone', 'Начислений нет'); gn.list.appendChild(s); }
+        if (r.suggest && document.activeElement !== gn.am) { gn.am.value = String(r.suggest.amount); gn.fr.value = r.suggest.from || ''; gn.ex.value = r.suggest.expires; }
+      };
+      const gnAdd = async () => gnPaint(await t.apiKey.grants('add', { amount: gn.am.value, from: gn.fr.value || undefined, expires: gn.ex.value }));
+      q('.gadd').onclick = gnAdd;
+      if (t.apiKey && t.apiKey.grants) Promise.resolve(t.apiKey.grants('list')).then(gnPaint, () => {});
       q('.asv').onclick = () => { if (ak.key.value.trim()) akSave({ key: ak.key.value }); };
       ak.key.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); if (ak.key.value.trim()) akSave({ key: ak.key.value }); } });
       q('.acs').onclick = () => akSave({ cmd: ak.cmd.value });
@@ -1143,7 +1179,7 @@
       const tg = {
         key: /** @type {HTMLInputElement} */ (q('.tkey')), st: q('.tst'), er: q('.ter'), del: q('.tdel'), chat: q('.tgv'),
         dup: /** @type {HTMLInputElement} */ (q('.tdup')), chk: /** @type {HTMLButtonElement} */ (q('.tchk')), res: q('.tres'),
-        cw: q('.tgcw'), code: q('.tgcode'),
+        cw: q('.tgcw'), code: q('.tgcode'), cc: q('.tgcc'),
       };
       tx(q('.tdh'), 'dialogs.poUmolchaniyu', 'по умолчанию {v}', 'textContent', { v: 15 });
       /** @param {any} o */
@@ -1158,6 +1194,8 @@
         else retx(tg.chat, 'dialogs.tgChatNone', 'не найдена', 'textContent');
         // Код для группы (t1527): виден, пока группы и владельца нет; кто пришлёт его в группу, тот и владелец.
         tg.cw.hidden = !r.code;
+        tg.cc.hidden = !(r.code && r.codeChanged);
+        if (r.code && r.codeChanged) retx(tg.cc, 'dialogs.tgCodeChanged', 'Код сменился: прежний код в группе больше не действует. Новый код: {c}. Напишите его в группе (можно исправить прежнее сообщение) и нажмите «Проверить».', 'textContent', { c: r.code });
         if (r.code) retx(tg.code, 'dialogs.tgCode', 'Код для группы: {c}', 'textContent', { c: r.code });
         if (document.activeElement !== tg.dup) tg.dup.value = String(r.dupMin);
         tg.chk.disabled = !r.has;

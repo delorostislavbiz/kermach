@@ -38,13 +38,17 @@ try {
   let meta = null;
   /** Свои переменные темы интерфейса (look.vars: шрифты, поверхность, радиусы), поставленные прошлым apply — снимаются при смене (t506). @type {string[]} */
   let varsSet = [];
+  /** Прошлый ответ look() строкой; 'null' — темы не было (первое apply(null) подписчиков не зовёт). */
+  let lastJson = 'null';
   /** @type {Set<() => void>} */
   const subs = new Set();
 
   /** @param {any} next — { id, kind, window, terminal, list } или null */
   function apply(next) {
+    // Сравнение с прошлым ответом целиком (t1582): у схем «Тем» нет ui, meta всегда null — по нему выключение плагина не замечалось.
     const before = JSON.stringify(next);
-    const was = JSON.stringify(meta);
+    const was = lastJson;
+    lastJson = before;
     meta = next && next.ui ? next : null;
     look = next && next.window ? next : null;
     const st = document.documentElement.style;

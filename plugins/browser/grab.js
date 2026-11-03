@@ -19,9 +19,9 @@ const one = (/** @type {unknown} */ s) => String(s).replace(/\s+/g, ' ').trim();
 const cut = (s, n) => { const t = typeof s === 'string' ? s : ''; return t.length <= n ? t : `${t.slice(0, n)} (обрезано)`; };
 const isSecret = (/** @type {string} */ s) => { const l = s.toLowerCase(); return SECRET.some((p) => l.includes(p)); };
 const num = (/** @type {unknown} */ x) => (typeof x === 'number' && Number.isFinite(x) ? Math.round(x) : 0);
-/** Адрес без ?запроса и #якоря: там чаще всего токены. Только http, https и file. @param {unknown} u */
+/** Адрес без ?запроса, #якоря и логина:пароля@ (t1579): там чаще всего токены. Только http, https и file. @param {unknown} u */
 function cleanUrl(u) {
-  try { const x = new URL(cut(u, BUDGET.url)); if (!/^(https?|file):$/.test(x.protocol)) return ''; x.search = ''; x.hash = ''; return x.toString(); } catch { return ''; }
+  try { const x = new URL(cut(u, BUDGET.url)); if (!/^(https?|file):$/.test(x.protocol)) return ''; x.search = ''; x.hash = ''; x.username = ''; x.password = ''; return x.toString(); } catch { return ''; }
 }
 
 /**
@@ -119,4 +119,16 @@ function monitorOf(scale, size) {
   return { scale, width: side(size.width), height: side(size.height) };
 }
 
-module.exports = { CONTROL, sanitize, format, monitorOf };
+/**
+ * Коротко для строки списка пометок (t1474): тег, #id или первый класс, начало текста. Из уже вычищенного описания, без управляющих.
+ * @param {Grab} d
+ */
+function short(d) {
+  const t = d.target;
+  const a = t.attributes || {};
+  const id = a.id ? `#${one(a.id)}` : a.class ? `.${one(a.class).split(' ')[0]}` : '';
+  const text = one(t.textSnippet || t.ariaLabel || a.title || '');
+  return clean(`${one(t.tagName)}${id}${text ? ` «${text.length <= 40 ? text : `${text.slice(0, 40)}…`}»` : ''}`).slice(0, 120);
+}
+
+module.exports = { CONTROL, sanitize, format, monitorOf, short };

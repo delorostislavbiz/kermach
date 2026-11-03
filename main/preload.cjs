@@ -195,6 +195,8 @@ const bridge = {
     get: () => ipcRenderer.invoke('apikey:get'),
     save: (patch) => ipcRenderer.invoke('apikey:save', patch),
     check: () => ipcRenderer.invoke('apikey:check'),
+    // Начисления кредитов (t1521): op list | add | remove; ответ — { grants, nearest, suggest } или { error }.
+    grants: (op, arg) => ipcRenderer.invoke('credits:grants', op, arg),
   },
   // Агенты из системы (main\agents.js, t183): [{ id, title, found, enabled, builtin }] — весь каталог, поиск при каждом вызове.
   // В меню «+» — found && enabled && !builtin; запуск — term.create('agent:<id>'). Включили или выключили — settings.onChanged (поле agents).

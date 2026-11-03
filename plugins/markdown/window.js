@@ -255,7 +255,7 @@
     const projectDir = String(host.project.path || '');
     /** @typedef {{ sid: string, path: string, text: string, disk: string, eol: string, bom: boolean, view: 'view' | 'edit' | 'split', dirty: boolean, tab: any,
      *   pane: HTMLElement, ta: HTMLTextAreaElement, pv: HTMLElement, zoom: HTMLElement, stat: HTMLElement, save: HTMLButtonElement, note: HTMLElement, mixed: boolean,
-     *   savedPos: number, force: boolean, rid: number, ptimer: number, gone: boolean, plain: boolean }} Doc */
+     *   savedPos: number, force: boolean, rid: number, ptimer: number, gone: boolean, plain: boolean, sending?: string }} Doc */
     /** @type {Doc[]} */
     const docs = [];
     /** Подписки и функции, которые снимаются при остановке. @type {(() => void)[]} */
@@ -507,14 +507,18 @@
 
     /** Записать документ на диск. @param {Doc} d @returns {Promise<boolean>} */
     async function save(d) {
-      const r = await mdb.save(d.path, d.text, d.eol, d.bom);
+      // Сохранённым считается только отправленный текст: набранное, пока запись шла, остаётся несохранённым (t1575).
+      const sent = d.text;
+      d.sending = sent;
+      let r;
+      try { r = await mdb.save(d.path, sent, d.eol, d.bom); } finally { if (d.sending === sent) d.sending = undefined; }
       if (!r || !r.ok) {
         showNote(d, I18n.t('md.neSohranilos', 'Не сохранилось: {v1}', { v1: (r && r.error) || I18n.t('md.netOtveta', 'нет ответа') }), false);
         return false;
       }
-      d.disk = d.text;
+      d.disk = sent;
       d.gone = false;
-      d.dirty = false;
+      d.dirty = d.text !== sent;
       hideNote(d);
       paint(d);
       return true;
@@ -554,6 +558,8 @@
         showNote(d, I18n.t('md.faylNedostupenNaDiske', 'Файл недоступен на диске: {v1}', { v1: (r && r.error) || I18n.t('md.netOtveta', 'нет ответа') }), false);
         return;
       }
+      // Наша запись ещё без ответа, а слежение уже видит её на диске: своя, не чужая правка (t1575).
+      if (d.sending !== undefined && r.text === d.sending && r.eol === d.eol && r.bom === d.bom) return;
       if (r.text === d.disk && r.eol === d.eol && r.bom === d.bom) { if (d.gone) { d.gone = false; hideNote(d); paint(d); } return; }
       if (!d.dirty) { takeDisk(d, r); return; }
       d.disk = r.text;
