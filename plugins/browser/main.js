@@ -85,7 +85,7 @@ const editing = new Map();
  * @type {Views}
  */
 const VIEWS = { mobile: { width: 390, height: 844 }, tablet: { width: 820, height: 1180 }, custom: [] };
-/** Границы размера вида (t1146, слово Ростислава): меньше 200 и больше 4000 не сохраняются. */
+/** Границы размера вида (t1146, слово пользователя): меньше 200 и больше 4000 не сохраняются. */
 const VIEW_MIN = 200;
 const VIEW_MAX = 4000;
 /** Своих размеров (t1146): всего с «Мобильным» и «Планшетом» не больше 8. Имя — не длиннее 40 знаков. */
@@ -242,11 +242,11 @@ function clean(list) {
     if (Number.isInteger(t.pos) && t.pos >= 0 && t.pos <= LIMIT.pos) x.pos = t.pos;
     // Свой размер (t1146) — только пока он есть в списке; удалили — вкладка в «Компьютере».
     if (t.view === 'mobile' || t.view === 'tablet' || (typeof t.view === 'string' && CUSTOM_RE.test(t.view) && sizeOf(t.view))) x.view = t.view;
-    // Отметка «Агенту» (t382): Ростислав отдал вкладку агенту — после перезапуска окна она остаётся отданной.
+    // Отметка «Агенту» (t382): пользователь отдал вкладку агенту — после перезапуска окна она остаётся отданной.
     // «Только для меня» (t885): вкладка в своём хранилище; агенту не отдаётся, отметка «Агенту» с неё снимается.
     if (t.human === true) x.human = true;
     if (t.agent === true && !x.human) x.agent = true;
-    // Сайт, к которому привязана отметка, и «Все сайты» (решение Ростислава 09.10): без «Все сайты» агент действует только на этом сайте.
+    // Сайт, к которому привязана отметка, и «Все сайты» (решение пользователя 09.10): без «Все сайты» агент действует только на этом сайте.
     if (x.agent && typeof t.site === 'string' && /^[0-9a-z.:\[\]-]{1,253}$/i.test(t.site)) x.site = t.site.toLowerCase();
     if (x.agent && t.any === true) x.any = true;
     out.push(x);
@@ -572,7 +572,7 @@ function register(c, of) {
       const stop = () => { const w = picking.get(g.id); if (w && w.done === done) { picking.delete(g.id); done({ cancelled: true }); } };
       /** @param {any} ev */
       const nav = (ev) => { if (ev.isMainFrame && !ev.isSameDocument) stop(); };
-      /** @param {{ text?: string, cancelled?: true, error?: string }} r */
+      /** @param {{ text?: string, short?: string, selector?: string, rect?: any, cancelled?: true, error?: string }} r */
       const done = (r) => { g.removeListener('destroyed', stop); g.removeListener('did-start-navigation', nav); resolve(r); };
       picking.set(g.id, { host: e.sender.id, done });
       g.on('destroyed', stop);
@@ -599,7 +599,8 @@ function register(c, of) {
         disp = grab.monitorOf(s.scaleFactor, s.size);
       }
     } catch { /* дисплея нет — в «Экран» только страница */ }
-    w.done({ text: grab.format(d, disp) });
+    // Пометки (t1474): место элемента — поле «Что поменять» рядом с ним, short и selector — строка списка и номер на странице.
+    w.done({ text: grab.format(d, disp), short: grab.short(d), selector: d.target.selector, rect: d.target.rectViewport });
   });
 }
 

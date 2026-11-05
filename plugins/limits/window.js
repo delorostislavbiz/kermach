@@ -8,7 +8,7 @@
 // Окно, у которого сброс уже прошёл, а новых цифр нет (t409): у Орки — прежний процент и «Resets now»; у нас — «сброс был в 12:40»
 //   и откуда придут новые цифры. Прежний процент после сброса неверен, а «нет данных» читается как поломка.
 // Своё: слова и вид — по макету (design\TERMINALUS.dc.html, экран 2); «использовано» — как на claude.ai (t177), число — израсходованное;
-// неделю Fable и другие окна Codex не показываем (решение Ростислава по t54).
+// неделю Fable и другие окна Codex не показываем (решение пользователя по t54).
 // Строка обновляется раз в 30 с: файл Codex пишется раз в 5 минут, файл Claude — после каждого ответа модели.
 
 /** Старше этого — цифры показываются с временем записи: «(на 14:20)». */
@@ -96,7 +96,7 @@ function limitsParts(data, now) {
     const gone = (win) => (win && win.resets_at && win.resets_at * 1000 <= now
       ? I18n.t('limits.sbrosBylV', 'сброс был в {v1}', { v1: limitsClock(win.resets_at * 1000, now) }) : '');
     // Откуда придут новые цифры. Claude пишет их после ответа модели: во вкладке программы — обёртка строки состояния (t42),
-    // в отдельном терминале — строка состояния Ростислава (t410). Codex опрашивается раз в 5 минут (t43).
+    // в отдельном терминале — строка состояния пользователя (t410). Codex опрашивается раз в 5 минут (t43).
     const where = key === 'claude'
       ? I18n.t('limits.otkudaClaude', '\nновые цифры придут после следующего ответа Claude')
       : I18n.t('limits.otkudaCodex', '\nновые цифры придут при следующем опросе Codex');
@@ -119,8 +119,22 @@ function limitsParts(data, now) {
         title: `${titleOf(I18n.t('limits.5Chasov', '5 часов'), five)}\n${titleOf(I18n.t('limits.nedelya2', 'неделя'), week)}` + (mon ? `\n${titleOf(I18n.t('limits.30Dney', '30 дней'), mon)}` : '') + (gone(five) || gone(week) || gone(mon) ? where : '') });
     }
   }
+  // Кредиты API (t1358): сумма из ответов Claude по вкладкам на кредитах за месяц, а не баланс Anthropic. Нет ключа — нет и поля credits.
+  const cr = data && /** @type {any} */ (data).credits;
+  if (cr && typeof cr.month === 'number') {
+    out.push({ key: 'credits', label: I18n.t('limits.credits', 'Кредиты'), used: null,
+      note: I18n.t('limits.creditsMonth', 'за месяц потрачено {v1} во вкладках Kermach', { v1: limitsUsd(cr.month) }),
+      // t1521: остаток ближайшего начисления — тот же расчёт, что у панели «Кредиты».
+      tail: cr.nearest && typeof cr.nearest.left === 'number' ? I18n.t('limits.creditsLeft', 'осталось {v1} до {v2}', { v1: limitsUsd(cr.nearest.left), v2: String(cr.nearest.expires || '').slice(5).split('-').reverse().join('.') }) : '',
+      title: I18n.t('limits.creditsTitle', 'Сумма цен ходов вкладок «Claude Agent · кредиты» с {v1}: {v2} ходов. Это не баланс Anthropic — остаток и расход других программ видны в Console', { v1: limitsClock(cr.from, now), v2: cr.turns }) });
+  }
   return out;
 }
+
+/** Console Anthropic: расход и остаток кредитов (руководство «Кредиты API», t1359). */
+const LIMITS_CONSOLE = 'https://platform.claude.com/settings/billing';
+/** Сумма в долларах: «$1,18», мелочь — «$0,004». @param {number} n */
+const limitsUsd = (n) => `$${(n >= 0.1 || n === 0 ? n.toFixed(2) : n.toFixed(3)).replace('.', ',')}`;
 
 /** Текст куска без цвета — для проверки и журнала. @param {LimitsPart} p */
 const limitsText = (p) => (p.used === null && p.note ? I18n.t('limits.note', '{label}: {note}{tail}', { label: p.label, note: p.note, tail: p.tail })
@@ -158,6 +172,15 @@ function limitsSetup(host) {
         bar.appendChild(fill);
         s.append(bar,I18n.t('limits.ispolzovano2', '{label}: использовано ', { label: p.label }), v, p.tail);
       }
+      // Ссылка на Console (t1358): там остаток кредитов, которого программа не знает. Открывает браузер системы, как ссылка из терминала.
+      if (p.key === 'credits') {
+        const a = document.createElement('a');
+        a.href = '#';
+        a.textContent = I18n.t('limits.console', 'Console');
+        a.style.cssText = 'margin-left:6px;color:inherit;text-decoration:underline';
+        a.onclick = (e) => { e.preventDefault(); const k = /** @type {any} */ (window).kermach; if (k && k.openLink) Promise.resolve(k.openLink(LIMITS_CONSOLE)).catch(() => {}); };
+        s.append(' · ', a);
+      }
       bar.appendChild(s);
     }
   };
@@ -185,5 +208,5 @@ function limitsSetup(host) {
   return () => { clearInterval(timer); if (offTheme) offTheme(); if (offLang) offLang(); bar.remove(); };
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { limitsParts, limitsText, limitsIn, limitsClock, limitsColor, LIMITS_STALE_MS };
+if (typeof module === 'object' && module.exports) module.exports = { limitsParts, limitsText, limitsIn, limitsClock, limitsColor, limitsUsd, LIMITS_STALE_MS, LIMITS_CONSOLE };
 if (typeof kermachPlugin === 'function') kermachPlugin(limitsSetup);

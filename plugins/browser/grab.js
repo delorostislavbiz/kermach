@@ -3,7 +3,7 @@
 // Описание собирает preload гостя (guest-preload.cjs), но страница могла подменить что угодно в своём DOM — поэтому здесь,
 // в главном процессе, всё ещё раз обрезается и вычёркивается, как в Орке (функция bDr в ref\orca-out\main\index.js).
 // Бюджеты, белый список атрибутов и слова-секреты — как у Орки (ref\orca-out\shared\browser-grab-types.js).
-// Текст — вариант А образца t36 (spikes\t36-sample\format.js) плюс строка «Вид» (Ростислав 04.10, 14:22) и строка «Экран» (t166, 04.10, 20:42).
+// Текст — вариант А образца t36 (spikes\t36-sample\format.js) плюс строка «Вид» (пользователь 04.10, 14:22) и строка «Экран» (t166, 04.10, 20:42).
 
 const BUDGET = { text: 200, html: 4096, selector: 700, attr: 500, tag: 50, url: 4096, style: 200, json: 64 * 1024 };
 const SAFE_ATTRS = new Set(['id', 'class', 'name', 'type', 'role', 'href', 'src', 'alt', 'title', 'placeholder', 'for', 'action', 'method']);
@@ -19,9 +19,9 @@ const one = (/** @type {unknown} */ s) => String(s).replace(/\s+/g, ' ').trim();
 const cut = (s, n) => { const t = typeof s === 'string' ? s : ''; return t.length <= n ? t : `${t.slice(0, n)} (обрезано)`; };
 const isSecret = (/** @type {string} */ s) => { const l = s.toLowerCase(); return SECRET.some((p) => l.includes(p)); };
 const num = (/** @type {unknown} */ x) => (typeof x === 'number' && Number.isFinite(x) ? Math.round(x) : 0);
-/** Адрес без ?запроса и #якоря: там чаще всего токены. Только http, https и file. @param {unknown} u */
+/** Адрес без ?запроса, #якоря и логина:пароля@ (t1579): там чаще всего токены. Только http, https и file. @param {unknown} u */
 function cleanUrl(u) {
-  try { const x = new URL(cut(u, BUDGET.url)); if (!/^(https?|file):$/.test(x.protocol)) return ''; x.search = ''; x.hash = ''; return x.toString(); } catch { return ''; }
+  try { const x = new URL(cut(u, BUDGET.url)); if (!/^(https?|file):$/.test(x.protocol)) return ''; x.search = ''; x.hash = ''; x.username = ''; x.password = ''; return x.toString(); } catch { return ''; }
 }
 
 /**
@@ -110,7 +110,7 @@ function format(d, screen = null) {
 /**
  * Масштаб Windows и разрешение монитора для строки «Экран» из дисплея Electron (t166).
  * Electron отдаёт размер дисплея в логических пикселях, округлённых вверх: 2560 / 1,104 = 2318,5 → 2319,
- * и size × scaleFactor даёт 2561×1441 вместо 2560×1440 (монитор Ростислава, 110 %). Поэтому берём самое большое чётное
+ * и size × scaleFactor даёт 2561×1441 вместо 2560×1440 (монитор разработчика, 110 %). Поэтому берём самое большое чётное
  * число не больше size × scaleFactor, которое округляется вверх в тот же size: нечётной стороны у мониторов не бывает.
  * @param {number} scale @param {{ width: number, height: number }} size
  */
@@ -119,4 +119,16 @@ function monitorOf(scale, size) {
   return { scale, width: side(size.width), height: side(size.height) };
 }
 
-module.exports = { CONTROL, sanitize, format, monitorOf };
+/**
+ * Коротко для строки списка пометок (t1474): тег, #id или первый класс, начало текста. Из уже вычищенного описания, без управляющих.
+ * @param {Grab} d
+ */
+function short(d) {
+  const t = d.target;
+  const a = t.attributes || {};
+  const id = a.id ? `#${one(a.id)}` : a.class ? `.${one(a.class).split(' ')[0]}` : '';
+  const text = one(t.textSnippet || t.ariaLabel || a.title || '');
+  return clean(`${one(t.tagName)}${id}${text ? ` «${text.length <= 40 ? text : `${text.slice(0, 40)}…`}»` : ''}`).slice(0, 120);
+}
+
+module.exports = { CONTROL, sanitize, format, monitorOf, short };

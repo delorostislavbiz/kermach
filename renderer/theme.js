@@ -38,13 +38,17 @@ try {
   let meta = null;
   /** Свои переменные темы интерфейса (look.vars: шрифты, поверхность, радиусы), поставленные прошлым apply — снимаются при смене (t506). @type {string[]} */
   let varsSet = [];
+  /** Прошлый ответ look() строкой; 'null' — темы не было (первое apply(null) подписчиков не зовёт). */
+  let lastJson = 'null';
   /** @type {Set<() => void>} */
   const subs = new Set();
 
   /** @param {any} next — { id, kind, window, terminal, list } или null */
   function apply(next) {
+    // Сравнение с прошлым ответом целиком (t1582): у схем «Тем» нет ui, meta всегда null — по нему выключение плагина не замечалось.
     const before = JSON.stringify(next);
-    const was = JSON.stringify(meta);
+    const was = lastJson;
+    lastJson = before;
     meta = next && next.ui ? next : null;
     look = next && next.window ? next : null;
     const st = document.documentElement.style;
@@ -67,7 +71,7 @@ try {
       delete document.documentElement.dataset.theme;
     }
     // Тема интерфейса (main\ui-themes.js, t506): data-ui — для renderer\ui.css, data-mode — светлый или тёмный вид.
-    // color-scheme окна — только у новых тем: у «Темы Ростислава» полосы прокрутки и поля как раньше.
+    // color-scheme окна — только у новых тем: у «Темы разработчика» полосы прокрутки и поля как раньше.
     const root = document.documentElement;
     for (const v of varsSet) st.removeProperty(v);
     varsSet = [];
@@ -75,7 +79,7 @@ try {
     const ui = (meta && meta.ui) || 'termius';
     root.dataset.ui = ui;
     root.dataset.mode = meta && meta.kind === 'light' ? 'light' : 'dark';
-    if (ui === 'rostyslav') st.removeProperty('color-scheme'); else st.colorScheme = root.dataset.mode;
+    st.colorScheme = root.dataset.mode;
     if (before !== was) for (const cb of subs) { try { cb(); } catch {} }
   }
 
@@ -97,7 +101,7 @@ try {
     terminal: () => (look ? look.terminal : null),
     /** Цвет окна темы по имени поля (muted, accent…) или '' — темы нет. @param {string} name */
     color: (name) => (look && look.window[name]) || '',
-    /** Тема интерфейса: kermach, termius, rostyslav, studio, deck, glass (macOS). */
+    /** Тема интерфейса: kermach, termius, studio, deck, glass (macOS). */
     ui: () => (meta && meta.ui) || 'termius',
     /** Светлый или тёмный вид действующей темы: light или dark. */
     mode: () => (meta && meta.kind === 'light' ? 'light' : 'dark'),

@@ -42,7 +42,7 @@ const LIVE_MS = 2000;
 const STALE_DAYS = 3;
 
 /**
- * Состояние разговора, как его увидит Ростислав (t1115): 'live' «идёт сейчас», 'wait' «ждёт вас», 'next' «можно дальше», 'stale' «брошен»;
+ * Состояние разговора, как его увидит пользователь (t1115): 'live' «идёт сейчас», 'wait' «ждёт вас», 'next' «можно дальше», 'stale' «брошен»;
  * null — журнал ещё не прочитан. why у «ждёт вас»: 'question' вопрос в конце ответа, 'options' варианты на выбор, 'plan' план на одобрение,
  * 'permission' вкладка ждёт ответа (разрешение или вопрос; по журналу их не отличить — вызов инструмента пишется до вопроса «разрешить?»).
  * Идущий разговор «ждёт вас», если агент не работает, а последним он спросил; или вкладка Kermach в состоянии «ждёт».
@@ -65,7 +65,7 @@ function stateOf(it, l, days, now) {
 }
 
 /**
- * Разговор агента карты «Роадмапа» (t1142): его вопрос адресован оркестратору, а не Ростиславу. «Ждёт вас» остаётся, только если
+ * Разговор агента карты «Роадмапа» (t1142): его вопрос адресован оркестратору, а не пользователю. «Ждёт вас» остаётся, только если
  * карта сейчас «ждёт ответа» и извещение (t1126) некому было получить — у последнего запуска нет живой вкладки-источника.
  * Карта «готово» или «отменено», есть более новый разговор той же карты — 'gone' (в «Ждут меня» нет); карта не закрыта — «можно дальше».
  * Меняет только 'wait': идущий, брошенный и прочие — как у stateOf.
@@ -138,6 +138,58 @@ function saveMarks(ctx) {
   const tmp = `${marks.file}.tmp`;
   try { fs.writeFileSync(tmp, JSON.stringify(marks.m, null, 1)); fs.renameSync(tmp, marks.file); } catch (e) { ctx.log(`отметки «Ждут меня» не записаны: ${why(e)}`); }
 }
+/**
+ * Имена вкладок, переименованных руками (t1506): номер разговора (нижний регистр) → имя. Источник — файлы вкладок всех проектов
+ * (<данные>\tabs\*.json: titleManual '1' и claudeSessionId / codexSessionId / resumeId из extra). Вкладку закрыли — запись из файла уходит,
+ * а имя остаётся в tab-names.json плагина: «История» показывает его и для закрытого разговора. Переименовали ещё раз — новое имя заменяет старое.
+ * @type {{ file: string, m: Record<string, string>, at: string } | null}
+ */
+let names = null;
+/** @param {any} ctx @returns {Record<string, string>} */
+function tabNamesOf(ctx) {
+  const file = path.join(ctx.dataDir, 'tab-names.json');
+  if (!names || names.file !== file) {
+    /** @type {Record<string, string>} */
+    let m = {};
+    try { const j = JSON.parse(fs.readFileSync(file, 'utf8')); if (j && typeof j === 'object' && !Array.isArray(j)) m = j; } catch { /* нет файла — пусто */ }
+    names = { file, m, at: '' };
+  }
+  const dir = path.join(ctx.dataDir, '..', '..', 'tabs');
+  /** @type {string[]} */
+  let list = [];
+  try { list = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return names.m; }
+  // Отпечаток папки: имена и время файлов. Не изменился — файлы не перечитываются.
+  const stamp = list.map((f) => { try { return `${f}:${fs.statSync(path.join(dir, f)).mtimeMs}`; } catch { return f; } }).join('|');
+  if (stamp === names.at) return names.m;
+  names.at = stamp;
+  let changed = false;
+  for (const f of list) {
+    /** @type {any} */
+    let j = null;
+    try { j = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { continue; }
+    for (const t of (j && Array.isArray(j.tabs) ? j.tabs : [])) {
+      if (!t || t.titleManual !== '1' || typeof t.title !== 'string' || !t.title.trim()) continue;
+      let id = t.claudeSessionId || t.codexSessionId || '';
+      if (!id && t.extra) {
+        try {
+          const args = (JSON.parse(t.extra).args || []).map(String);
+          const i = args.findIndex((/** @type {string} */ a) => a === '--resume' || a === '--conversation');
+          if (i >= 0) id = args[i + 1] || '';
+        } catch { /* без номера */ }
+      }
+      if (typeof id !== 'string' || !id) continue;
+      const k = id.toLowerCase();
+      const v = t.title.trim();
+      if (names.m[k] !== v) { names.m[k] = v; changed = true; }
+    }
+  }
+  if (changed) {
+    const tmp = `${file}.tmp`;
+    try { fs.writeFileSync(tmp, JSON.stringify(names.m, null, 1)); fs.renameSync(tmp, file); } catch (e) { ctx.log(`имена вкладок не записаны: ${why(e)}`); }
+  }
+  return names.m;
+}
+
 /** Местная дата ГГГГ-ММ-ДД. @param {number} t */
 const dayOf = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 /** Отметка прячет разговор: журнал не дописан после неё, и это «сделано» или срок «отложить» не наступил. @param {any} mk @param {any} it @param {string} today */
@@ -226,6 +278,23 @@ function insideReal(file, root) {
   } catch { return false; }
 }
 
+/** Номер проекта по рабочей папке разговора: самый глубокий проект, внутри которого она лежит (list — по убыванию длины пути).
+ *  Без обращений к диску; одинаковые папки считаются один раз (t1468). @param {{ id: string, root: string }[]} list @returns {(cwd: string) => string | null} */
+function projectOwner(list) {
+  /** @type {Map<string, string | null>} */
+  const seen = new Map();
+  return (cwd) => {
+    if (!cwd) return null;
+    const had = seen.get(cwd);
+    if (had !== undefined) return had;
+    const c = path.resolve(cwd).toLowerCase();
+    let id = null;
+    for (const p of list) if (c === p.root || c.startsWith(p.root + path.sep)) { id = p.id; break; }
+    seen.set(cwd, id);
+    return id;
+  };
+}
+
 /** @param {any} ctx */
 module.exports = (ctx) => {
   users.add(ctx);
@@ -234,7 +303,7 @@ module.exports = (ctx) => {
   let liveNow = { tabs: new Map(), outside: new Map() };
   /** Проекты из списка «Проекты»: путь → номер; файл перечитывается, когда изменился. */
   let projAt = -1;
-  /** @type {{ id: string, path: string }[]} */
+  /** @type {{ id: string, path: string, root: string }[]} */
   let projs = [];
   /** Первая строка последнего ответа агента: «агент:номер» → { u: updatedAt, text } (t1116). @type {Map<string, { u: string, text: string }>} */
   const lastCache = new Map();
@@ -259,22 +328,11 @@ module.exports = (ctx) => {
         projAt = t;
         const j = JSON.parse(fs.readFileSync(file, 'utf8'));
         projs = (Array.isArray(j.projects) ? j.projects : []).filter((/** @type {any} */ p) => p && p.id && p.path)
-          .map((/** @type {any} */ p) => ({ id: String(p.id), path: String(p.path) }))
+          .map((/** @type {any} */ p) => ({ id: String(p.id), path: String(p.path), root: path.resolve(String(p.path)).toLowerCase().replace(/[\\/]+$/, '') }))
           .sort((/** @type {any} */ a, /** @type {any} */ b) => b.path.length - a.path.length);
       }
     } catch { projs = []; }
     return projs;
-  }
-
-  /** Номер проекта по рабочей папке разговора: самый глубокий проект, внутри которого она лежит. @param {string} cwd */
-  function projectOf(cwd) {
-    if (!cwd) return null;
-    const c = path.resolve(cwd).toLowerCase();
-    for (const p of projects()) {
-      const r = path.resolve(p.path).toLowerCase().replace(/[\\/]+$/, '');
-      if (c === r || c.startsWith(r + path.sep)) return p.id;
-    }
-    return null;
   }
 
   /** Порог «брошен» из настроек плагина, дней. */
@@ -289,7 +347,13 @@ module.exports = (ctx) => {
     const now = await running();
     const days = staleDays();
     const at = Date.now();
+    // Список проектов — один раз за проход (t1468): stat projects.json на каждую запись тормозил ввод в главном процессе.
+    const projectOf = projectOwner(projects());
+    const tabName = tabNamesOf(ctx);
     for (const it of r.items) {
+      // Вкладку переименовали руками — её имя главнее заголовка из журнала (t1506).
+      const tn = tabName[String(it.id || '').toLowerCase()];
+      if (tn) { it.title = tn; it.titleFrom = 'tab'; }
       it.projectId = projectOf(it.cwd);
       it.live = live.liveOf(it, now.tabs, now.outside);
       const st = stateOf(it, it.live, days, at);
@@ -446,7 +510,7 @@ module.exports = (ctx) => {
       for (const it of pins) it.pin = true;
       return { ...r, items: off ? rest : pins.concat(rest), next: off + r.items.length };
     },
-    search: async (a) => { if (a.fresh) stale(); return dress(await call(ctx, 'search', { q: String(a.q || '').slice(0, 300), scopePath: a.scope === 'all' ? '' : ctx.project.path, agent: a.agent, offset: a.offset })); },
+    search: async (a) => { if (a.fresh) stale(); return dress(await call(ctx, 'search', { q: String(a.q || '').slice(0, 300), scopePath: a.scope === 'all' ? '' : ctx.project.path, agent: a.agent, offset: a.offset, names: tabNamesOf(ctx) })); },
     async details(a) {
       const k = keyOf(a);
       if (!k) return { error: BAD_KEY };
@@ -567,3 +631,4 @@ module.exports = (ctx) => {
 module.exports.stateOf = stateOf;
 module.exports.cardStateOf = cardStateOf;
 module.exports.hides = hides;
+module.exports.projectOwner = projectOwner;

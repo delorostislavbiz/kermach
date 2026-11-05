@@ -13,10 +13,6 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
-const pty = require('node-pty');
-const { Terminal } = require('@xterm/headless');
-const { SerializeAddon } = require('@xterm/addon-serialize');
-const { Unicode11Addon } = require('@xterm/addon-unicode11');
 const { PROTOCOL_VERSION, PIPE, LEGACY_PIPE, DATA_DIR, KEY_FILE, lineReader, frame } = require('./protocol');
 const ownRoot = require('./own-root');
 const platform = require('./platform');
@@ -37,7 +33,9 @@ const HOOK_TOKEN = crypto.randomBytes(32).toString('hex');
 const PIPE_KEY = crypto.randomBytes(32).toString('hex');
 // Секунды. Без него Claude ждёт ответа http-хука до 600 с — зависший демон подвесил бы все вкладки.
 const HOOK_TIMEOUT = 5;
-const HOOK_EVENTS = ['UserPromptSubmit', 'PermissionRequest', 'Stop', 'StopFailure'];
+const HOOK_EVENTS = ['UserPromptSubmit', 'PermissionRequest', 'Notification', 'Stop', 'StopFailure'];
+// Notification (t1380): «требует ответа» только по этим notification_type — вопрос MCP-сервера и «разрешить?». idle_prompt и прочие — не вопрос.
+const NOTIFY_WAIT = ['elicitation_dialog', 'permission_prompt'];
 // Хуки Codex (t777, t1210): обёртка шлёт событие на /hook/codex. SessionStart — номер разговора, остальные — состояние вкладки, как у Claude.
 // Значение — имя события в ключе доверия и в хэше Codex (hooks/src/engine/discovery.rs). Interrupt у Codex нет: прерванный ход — по экрану (t648).
 const CODEX_HOOK = path.join(__dirname, 'codex-hook.js');
@@ -58,6 +56,31 @@ try {
 const log = (msg) => {
   try { fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} [${process.pid}] ${msg}\n`); } catch {}
 };
+
+// Необработанная ошибка (t1456) — в журнал: stderr демона никто не читает, daemon.log оставался пуст, окно ждало 10 с.
+// Строку «упал: …» окно показывает человеку (terminals.js, daemon). Только пока демон запускается: перед hookServer.listen
+// его сменяет обработчик, который лишь пишет в журнал (t116) — иначе ошибка одной команды погасила бы все терминалы.
+/** @param {any} err */
+function startFail(err) {
+  log(`необработанная ошибка: ${err && err.stack || err}`);
+  log(`упал: ${String(err && err.message || err).split('\n')[0]}`);
+  process.exit(1);
+}
+process.on('uncaughtException', startFail);
+
+// Модули с собственным кодом — после журнала (t1456): установщики 1.0.0 и 1.0.1 вышли без node_modules,
+// и require('node-pty') ронял демона раньше первой строки журнала.
+/** @template T @param {string} name @param {() => T} load @returns {T} */
+const need = (name, load) => {
+  try { return load(); } catch (e) {
+    log(`упал: модуль ${name} не загрузился — ${String(/** @type {any} */ (e) && /** @type {any} */ (e).message || e).split('\n')[0]}`);
+    process.exit(1);
+  }
+};
+const pty = need('node-pty', () => require('node-pty'));
+const { Terminal } = need('@xterm/headless', () => require('@xterm/headless'));
+const { SerializeAddon } = need('@xterm/addon-serialize', () => require('@xterm/addon-serialize'));
+const { Unicode11Addon } = need('@xterm/addon-unicode11', () => require('@xterm/addon-unicode11'));
 
 // Переменные запускающей сессии (Claude Code, Орка, сам Electron) в терминалы не попадают:
 // иначе claude внутри подключится к чужой сессии или сработают чужие хуки (журнал 17:09).
@@ -150,6 +173,14 @@ const SETTLE_MS = 1500;
 const LOUD_WORK_MS = 1500;
 // sessions.json — не чаще раза в SAVE_MS (t85): тема Claude меняется до 20 раз в секунду, и каждая смена переписывала файл.
 const SAVE_MS = 1000;
+// Посторонний процесс пишет прямо в консоль ConPTY (headless Chrome: «[…] N bytes written to file …png», t1464): альтернативный экран
+// прокручивается, а полноэкранный агент рисует только изменившиеся клетки — ввод ложится поверх чужого текста (d598).
+// Прокрутку всего альтернативного экрана во вкладке агента считаем незаказанной: через JOLT_QUIET_MS тишины ширина pty на столбец
+// меньше и через JOLT_STEP_MS обратно — программа рисует кадр заново, как после смены размера окна. JOLT_CALM_MS после — не смотрим:
+// ConPTY перерисовывает экран сам.
+const JOLT_QUIET_MS = 150;
+const JOLT_STEP_MS = 300;
+const JOLT_CALM_MS = 1000;
 // Дерево процессов терминала гасит taskkill (Session.terminate, t127). Полный путь: PATH у демона бывает урезан.
 const TASKKILL = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe');
 const TREE_KILL_MS = 5000;
@@ -339,6 +370,16 @@ class Session {
     // Последнее событие хука: { event, at, sessionId, source }. Не в desc — в sessions.json не пишется: после перезапуска оно уже неправда.
     /** @type {{ event: string, at: string, sessionId: string, source: string } | null} */
     this.hook = null;
+    // Последняя команда агенту (UserPromptSubmit) и начало его ответа (Stop), t1469: { text, at }, до 300 знаков, секреты скрыты.
+    // Не в desc — в sessions.json не пишется: команды и ответы живут только в памяти демона, после перезапуска пусто до следующей команды.
+    /** @type {{ text: string, at: string } | null} */
+    this.prompt = null;
+    // ask (t1483) — вопрос текстом в конце ответа (askOf), если ответ кончается «?».
+    /** @type {{ text: string, at: string, ask?: string } | null} */
+    this.reply = null;
+    // «Не смотрел» (t1470): агент закончил (done), а окно проекта эту вкладку после того на экране не открывало. Снимает команда seen и новый ход.
+    // Не в desc — в sessions.json не пишется: переживает перезапуск окна, после перезапуска демона false.
+    this.unseen = false;
     // Состояние агента (t13): код из STATES или '' — состояния нет (обычный терминал, агент до первого вопроса).
     // Не в desc — в sessions.json не пишется: после перезапуска демона вкладка запускается заново, прежнее состояние уже неправда.
     // Не в meta — update принимает meta целиком, окно со старой meta затёрло бы состояние (карта t83).
@@ -374,6 +415,13 @@ class Session {
     // Терминал закрыли командой kill — выход с любым кодом не ошибка.
     this.killed = false;
     this.term.parser.registerOscHandler(9, (d) => this.onOsc9(d));
+    // Незаказанная прокрутка альтернативного экрана (t1464). onScroll xterm срабатывает и при смене буфера, поэтому — сама прокрутка буфера.
+    /** @type {NodeJS.Timeout | null} */
+    this.joltTimer = null;
+    this.joltCalm = 0;
+    const bs = /** @type {any} */ (this.term)._core._bufferService;
+    const scroll = bs.scroll.bind(bs);
+    bs.scroll = (/** @type {any} */ a, /** @type {any} */ b) => { scroll(a, b); this.onAltScroll(); };
 
     // Консоль из node-pty (conpty.dll + OpenConsole): одна версия на любой Windows. На вопрос DA1 при запуске отвечает answerDa1.
     this.da1Tail = '';
@@ -398,13 +446,15 @@ class Session {
   }
 
   info() {
-    return { ...this.desc, pid: this.pty.pid, cols: this.cols, rows: this.rows, attached: this.subs.size, hook: this.hook, state: this.state, stateAt: this.stateAt };
+    return { ...this.desc, pid: this.pty.pid, cols: this.cols, rows: this.rows, attached: this.subs.size, hook: this.hook, state: this.state, stateAt: this.stateAt,
+      prompt: this.prompt, reply: this.reply, unseen: this.unseen };
   }
 
   /** Агент ли во вкладке и какой: claude, codex или id из каталога (вид agent:<id>, t334). Вид читается каждый раз: meta меняет update. */
   get agent() {
     const k = String((this.desc.meta && this.desc.meta.kind) || '');
-    if (k === 'claude' || k === 'codex') return k;
+    // Claude на кредитах (t1357): метки от хуков claude -p и от обёртки; разбор заголовка и темы — только у 'claude'.
+    if (k === 'claude' || k === 'codex' || k === 'credits') return k;
     return k.startsWith('agent:') ? k.slice(6) : '';
   }
 
@@ -432,7 +482,9 @@ class Session {
     this.state = state;
     this.stateBy = by;
     this.stateAt = new Date(now).toISOString();
-    broadcast({ ev: 'state', sid: this.sid, state, by, at: this.stateAt, ...(loud ? { loud: true } : {}) });
+    if (state === 'done') this.unseen = true;
+    else if (state === 'working') this.unseen = false;
+    broadcast({ ev: 'state', sid: this.sid, state, by, at: this.stateAt, unseen: this.unseen, ...(loud ? { loud: true } : {}) });
   }
 
   /**
@@ -781,6 +833,28 @@ class Session {
     });
   }
 
+  /** Буфер прокрутился. Альтернативный экран целиком, вкладка агента — перерисовать (t1464). Область прокрутки (DECSTBM) — прокрутка программы. */
+  onAltScroll() {
+    const b = /** @type {any} */ (this.term)._core.buffer;
+    if (this.term.buffer.active.type !== 'alternate' || !this.agent || b.scrollTop !== 0 || b.scrollBottom !== this.term.rows - 1) return;
+    if (Date.now() < this.joltCalm) return;
+    if (this.joltTimer) clearTimeout(this.joltTimer);
+    this.joltTimer = setTimeout(() => this.jolt(), JOLT_QUIET_MS);
+  }
+
+  /** Ширина pty на столбец меньше и обратно: программа рисует кадр заново. Копия экрана и окна размер не меняют. */
+  jolt() {
+    this.joltTimer = null;
+    if (this.ptyExited || this.cols < 3) return;
+    this.joltCalm = Date.now() + JOLT_STEP_MS + JOLT_CALM_MS;
+    log(`терминал ${this.sid}: альтернативный экран сдвинут не программой — перерисовка`);
+    try { this.pty.resize(this.cols - 1, this.rows); } catch { return; }
+    setTimeout(() => {
+      this.joltCalm = Date.now() + JOLT_CALM_MS;
+      if (!this.ptyExited) try { this.pty.resize(this.cols, this.rows); } catch {}
+    }, JOLT_STEP_MS);
+  }
+
   /** @param {number} cols @param {number} rows */
   resize(cols, rows) {
     cols = Math.max(2, Math.floor(cols));
@@ -891,7 +965,7 @@ class Session {
     } else this.term.dispose();
     // Состояние «завершён» или «ошибка» — в самом событии: терминала после него в списке уже нет. Обычный терминал — всегда завершён.
     // «Ошибка» — только у Claude и Codex: коды выхода других агентов (Ctrl+C и т. п.) не проверены, ложное «оборвался» хуже (t334).
-    const known = this.agent === 'claude' || this.agent === 'codex';
+    const known = this.agent === 'claude' || this.agent === 'codex' || this.agent === 'credits';
     broadcast({ ev: 'exit', sid: this.sid, code, state: known && code !== 0 && !this.killed ? 'error' : 'exited' });
     // При остановке демона описания остаются: по ним вкладки можно вернуть после перезагрузки.
     if (!shuttingDown) saveSessions();
@@ -935,7 +1009,7 @@ function writeSessions() {
   }
 }
 
-const NEEDS_SESSION = new Set(['attach', 'detach', 'read', 'write', 'resize', 'update', 'kill']);
+const NEEDS_SESSION = new Set(['attach', 'detach', 'read', 'write', 'resize', 'update', 'kill', 'seen']);
 
 /** Ключ канала из hello совпал (t275). Сверка как у приёмника хуков. @param {any} key */
 function keyOk(key) {
@@ -1035,6 +1109,10 @@ function handle(c, msg) {
     }
     case 'kill':
       s.terminate();
+      return c.reply(id);
+    case 'seen':
+      // Окно открыло вкладку на экране (t1470): «не смотрел» снят. Рассылка — только при смене.
+      if (s.unseen) { s.unseen = false; broadcast({ ev: 'seen', sid: s.sid }); }
       return c.reply(id);
     // Флаги хука Codex, проверенные у самого Codex (t797): окно присылает программу Codex мимо обёртки .cmd и папку вкладки.
     case 'codexHook': {
@@ -1246,10 +1324,77 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function permOf(event, e) {
   if (event !== 'PermissionRequest') return {};
   const inp = e.tool_input && typeof e.tool_input === 'object' ? e.tool_input : {};
-  const raw = inp.command || inp.file_path || inp.path || inp.url || inp.pattern || inp.description || '';
+  // AskUserQuestion (t1483): what — текст первого вопроса, его дашборд пишет «Задал вопрос: …».
+  const q = Array.isArray(inp.questions) && inp.questions[0] && typeof inp.questions[0].question === 'string' ? inp.questions[0].question : '';
+  const raw = q || inp.command || inp.file_path || inp.path || inp.url || inp.pattern || inp.description || '';
   const line = (s, n) => String(s || '').replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
   // Строка уходит во вкладку оркестратора и в уведомление Windows (t1135): секреты скрыть до обрезки, чтобы не остался обрезок ключа.
   return { tool: line(e.tool_name, 60), what: line(hideSecrets(hideCmdSecrets(String(raw))), 160) };
+}
+
+const TALK_MAX = 300;
+const TRANSCRIPT_TAIL = 64 * 1024;
+
+/**
+ * Команда агенту и начало ответа (t1469): UserPromptSubmit — prompt, Stop — last_assistant_message (Codex; у Claude Code поле есть не во всех версиях),
+ * без него — последний ответ из хвоста transcript_path. Одной строкой, секреты скрыты до обрезки 300 знаков. Другие события и пустой текст — null.
+ * @param {string} event @param {any} e @returns {{ key: 'prompt' | 'reply', text: string, ask?: string } | null}
+ */
+function talkOf(event, e) {
+  let key, raw;
+  if (event === 'UserPromptSubmit') { key = 'prompt'; raw = e.prompt; }
+  else if (event === 'Stop') { key = 'reply'; raw = e.last_assistant_message || lastReply(e.transcript_path); }
+  else return null;
+  if (typeof raw !== 'string') return null;
+  const one = (/** @type {string} */ s) => hideSecrets(hideCmdSecrets(s)).replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const text = one(raw).slice(0, TALK_MAX);
+  if (!text) return null;
+  const ask = key === 'reply' ? askOf(raw) : '';
+  return /** @type {const} */ ({ key, text, ...(ask ? { ask: one(ask).slice(-TALK_MAX) } : {}) });
+}
+
+/**
+ * Вопрос текстом в конце ответа (t1483): хуки Claude и Codex не отличают «закончил» от «закончил вопросом человеку»
+ * (ответ «…Так оставить или взять другой вариант?» и Stop). Признак — «?» в конце ответа;
+ * вопрос — последний абзац, с последней фразы перед «?». Нет — ''. @param {string} raw
+ */
+function askOf(raw) {
+  const s = raw.trim();
+  if (!/\?[\s»"'`)*_]*$/.test(s)) return '';
+  const para = s.split(/\n\s*\n/).pop() || s;
+  const m = /(?:^|[.!?:]\s|\n)([^.!?\n][^\n]*\?[\s»"'`)*_]*)$/.exec(para);
+  return (m ? m[1] : para).trim();
+}
+
+/**
+ * Последний ответ Claude Code из журнала разговора: строки type assistant с частями text, с конца, не больше 64 КБ хвоста. Не прочли — ''.
+ * @param {any} file
+ */
+function lastReply(file) {
+  if (typeof file !== 'string' || !file.endsWith('.jsonl')) return '';
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const n = Math.min(size, TRANSCRIPT_TAIL);
+    const buf = Buffer.alloc(n);
+    fs.readSync(fd, buf, 0, n, size - n);
+    const rows = buf.toString('utf8').split('\n');
+    // Первая строка хвоста обычно обрезана — JSON.parse её отбросит.
+    for (let i = rows.length - 1; i >= 0; i--) {
+      let r;
+      try { r = JSON.parse(rows[i]); } catch { continue; }
+      if (r.type === 'user' && r.message && typeof r.message.content === 'string') break;
+      if (r.type !== 'assistant' || !r.message || !Array.isArray(r.message.content)) continue;
+      const text = r.message.content.filter((p) => p && p.type === 'text').map((p) => p.text).join(' ').trim();
+      if (text) return text;
+    }
+  } catch {
+    // Журнала нет или он занят — ответа нет.
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+  }
+  return '';
 }
 
 /**
@@ -1322,9 +1467,14 @@ function onHook(source, e, tabKey) {
     return log(`приёмник: claude ${event} — чужой номер разговора ${sessionId}${e.agent_id ? ` (agent_id ${e.agent_id})` : ''}, у вкладки ${s.sid} ${meta.claudeSessionId}, состояние ${s.state || 'нет'}; отброшено`);
   }
   if (source === 'claude' && meta.kind === 'claude' && UUID.test(sessionId) && meta.claudeSessionId !== sessionId) newClaudeId(s, sessionId, event);
-  s.hook = { event, at: new Date().toISOString(), sessionId, source, ...permOf(event, e) };
-  broadcast({ ev: 'hook', sid: s.sid, hook: s.hook });
-  const state = HOOK_STATE[event];
+  // Notification «permission_prompt» приходит через ~6 с после PermissionRequest (t1483, spikes\t1483-ask\cause.txt): вкладка ещё ждёт того же ответа,
+  // поэтому что просят (tool, what) остаётся, иначе дашборд потеряет текст вопроса и имя инструмента.
+  const same = event === 'Notification' && s.state === 'waiting' && s.hook && s.hook.event === 'PermissionRequest';
+  s.hook = same ? s.hook : { event, at: new Date().toISOString(), sessionId, source, ...permOf(event, e) };
+  const said = talkOf(event, e);
+  if (said) s[said.key] = { text: said.text, at: s.hook.at, ...(said.ask ? { ask: said.ask } : {}) };
+  broadcast({ ev: 'hook', sid: s.sid, hook: s.hook, ...(said ? { [said.key]: s[said.key] } : {}) });
+  const state = event === 'Notification' ? (NOTIFY_WAIT.includes(String(e.notification_type || '')) ? 'waiting' : '') : HOOK_STATE[event];
   if (state) {
     s.settleUntil = state === 'working' ? 0 : Date.now() + SETTLE_MS;
     s.setState(state, 'hook');
@@ -1450,7 +1600,7 @@ function writeHooksSettings(port) {
   };
   /** @type {Record<string, any[]>} */
   const hooks = {};
-  for (const ev of HOOK_EVENTS) hooks[ev] = [ev === 'PermissionRequest' ? { matcher: '*', hooks: [hook] } : { hooks: [hook] }];
+  for (const ev of HOOK_EVENTS) hooks[ev] = [ev === 'PermissionRequest' ? { matcher: '*', hooks: [hook] } : ev === 'Notification' ? { matcher: NOTIFY_WAIT.join('|'), hooks: [hook] } : { hooks: [hook] }];
   const fwd = (/** @type {string} */ p) => platform.shellArg(process.platform, p);
   // Строка состояния: обёртка пишет лимиты в файл и показывает строку пользователя из ~/.claude/settings.json (t41).
   const statusLine = { type: 'command', command: `${nodeCommand()} ${fwd(STATUSLINE)} ${fwd(RATE_LIMITS_FILE)}` };
@@ -1693,7 +1843,8 @@ function startPipe(port) {
     process.exit(0);
   });
 }
-hookServer.listen(0, '127.0.0.1', () => startPipe(/** @type {import('net').AddressInfo} */ (hookServer.address()).port));
-
-// Авария в одной команде не должна закрыть все терминалы с агентами.
+// Авария в одной команде не должна закрыть все терминалы с агентами. Обработчик запуска (startFail) больше не нужен.
+process.removeListener('uncaughtException', startFail);
 process.on('uncaughtException', (e) => log(`необработанная ошибка: ${e.stack || e}`));
+
+hookServer.listen(0, '127.0.0.1', () => startPipe(/** @type {import('net').AddressInfo} */ (hookServer.address()).port));

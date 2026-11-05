@@ -21,7 +21,7 @@ const alive = require('../../main/dir-alive');
 const PAGE = path.join(__dirname, 'window.html');
 const PRELOAD = path.join(__dirname, 'preload.cjs');
 const KEY = Symbol.for('kermach.tasks');
-/** Папка «Входящих»: проект Kermach с этой папкой (решение Ростислава 20.10). */
+/** Папка «Входящих»: проект Kermach с этой папкой (решение пользователя 20.10). */
 const inboxDir = () => settings.get().inboxDir || path.join(settings.get().projectsBase || require('os').homedir(), '_дела');
 const POLL_MS = 2000;
 
@@ -348,7 +348,7 @@ function open(project, task, view) {
     return { ok: true, again: true };
   }
   win = new BrowserWindow({
-    width: 1100, height: 740, minWidth: 330, minHeight: 360, show: false, frame: false, backgroundColor: settings.background(),
+    width: 1100, height: 740, minWidth: 330, minHeight: 360, show: false, ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 11 } } : { frame: false }), backgroundColor: settings.background(),
     title: i18n.t('tasks.title', 'Kermach — Дела'),
     webPreferences: { preload: PRELOAD, contextIsolation: true, sandbox: true, nodeIntegration: false },
   });

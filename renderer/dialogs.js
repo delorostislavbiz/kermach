@@ -771,7 +771,7 @@
     // Тема (t723): один список — themeList; пункты и какие поля настроек они пишут — там же.
     // Разделы (t669, Д-19): слева список, справа заголовок и карточки выбранного раздела. При открытии — «Оформление».
     const SECTIONS = [['look', 'dialogs.secLook', 'Оформление'], ['gen', 'dialogs.secGeneral', 'Общие'], ['plg', 'dialogs.plaginy', 'Плагины'],
-      ['brw', 'dialogs.brauzer', 'Браузер'], ['agt', 'dialogs.agenty', 'Агенты']];
+      ['brw', 'dialogs.brauzer', 'Браузер'], ['agt', 'dialogs.agenty', 'Агенты'], ['api', 'dialogs.secApi', 'Кредиты API'], ['tg', 'dialogs.secTg', 'Telegram']];
     const body = `<div class="set-wrap"><div class="set-nav">${SECTIONS.map(([p]) => `<button data-p="${p}"></button>`).join('')}</div><div class="set-main"><div class="set-h"></div>
       <div class="set-pane" data-p="look">
       <div class="sec thm"><div class="stepper"><span class="cap tmt" style="flex:none;margin:0"></span><select class="tms"></select></div></div>
@@ -793,6 +793,30 @@
       <div class="sec cbp"><div class="cap cbt"></div><div class="seg">${['on', 'off'].map((a) => `<button data-bp="${a}"></button>`).join('')}</div><div class="uinote cbn"></div></div>
       <div class="sec agt"><div class="cap"></div><div class="list alist"><span class="sub wait"></span></div><div class="row"><button class="open"></button><span class="sub hint"></span></div></div>
       <div class="sec cxh"><div class="cap"></div><div class="row"><span class="sub hint st"></span><button class="re"></button></div></div></div>
+      <div class="set-pane" data-p="api" hidden>
+      <div class="sec dirs api"><div class="cap akc"></div>
+        <div class="stepper"><input class="dir akey" type="password" spellcheck="false" autocomplete="off"><button class="pick asv"></button><button class="pick adel" hidden></button></div>
+        <div class="dirh ast"></div><div class="dire aer" hidden></div>
+        <div class="dirs-gap"></div><div class="cap acc"></div>
+        <div class="stepper"><input class="dir acmd" type="text" spellcheck="false"><button class="pick acs"></button></div>
+        <div class="dirh ach"></div></div>
+      <div class="sec dirs"><div class="stepper"><button class="pick achk"></button><span class="hint ares"></span></div></div>
+      <div class="sec"><div class="cap abc"></div>
+        <div class="stepper"><input class="num abud" type="number" min="0.01" step="0.5"><span class="hint abh"></span></div></div>
+      <div class="sec thm"><div class="stepper"><span class="cap amc" style="flex:none;margin:0"></span><select class="amod"></select></div></div>
+      <div class="sec dirs grn"><div class="cap gnc"></div><div class="list glist"></div>
+        <div class="stepper"><input class="num gam" type="number" min="0.01" step="1"><input class="dir gfr" type="date"><input class="dir gex" type="date"><button class="pick gadd"></button></div>
+        <div class="dirh gh"></div><div class="dire ger" hidden></div></div></div>
+      <div class="set-pane" data-p="tg" hidden>
+      <div class="sec dirs tg"><div class="cap tkc"></div>
+        <div class="stepper"><input class="dir tkey" type="password" spellcheck="false" autocomplete="off"><button class="pick tsv"></button><button class="pick tdel" hidden></button></div>
+        <div class="dirh tst"></div><div class="dire ter" hidden></div>
+        <div class="dirh tkh"></div></div>
+      <div class="sec dirs"><div class="cap tgc"></div><div class="dirh tgv"></div>
+        <div class="stepper tgcw" hidden><span class="hint tgcode"></span><button class="pick tgnew"></button></div><div class="dirh tgh"></div><div class="dirh tgrh"></div><div class="dire tgcc" hidden></div></div>
+      <div class="sec"><div class="cap tdc"></div>
+        <div class="stepper"><input class="num tdup" type="number" min="1" step="1"><span class="hint tdh"></span></div></div>
+      <div class="sec dirs"><div class="stepper"><button class="pick tchk"></button><span class="hint tres"></span></div></div></div>
       </div></div>
       <div class="btns"><span class="ver set-off" style="margin-right:auto;align-self:center"></span><button class="reset"></button><button class="cancel ok"></button></div>`;
     /** Селектор, ключ, русский текст, свойство. @type {[string, string, string, string][]} */
@@ -818,6 +842,20 @@
       ['.agt .wait', 'dialogs.agentyIshchu', 'Ищу агентов…', 'textContent'],
       ['.cxh .cap', 'dialogs.codexHook', 'Codex', 'textContent'], ['.cxh .re', 'dialogs.codexHookRecheck', 'Проверить снова', 'textContent'],
       ['.reset', 'dialogs.sbrosit', 'Сбросить', 'textContent'], ['.cancel', 'common.close', 'Закрыть', 'textContent'],
+      ['.akc', 'dialogs.apiKey', 'Ключ API Anthropic', 'textContent'], ['.asv', 'dialogs.apiSave', 'Сохранить', 'textContent'], ['.acs', 'dialogs.apiSave', 'Сохранить', 'textContent'],
+      ['.adel', 'dialogs.apiDelete', 'Удалить', 'textContent'], ['.acc', 'dialogs.apiCmd', 'Или команда, которая выдаёт ключ', 'textContent'],
+      ['.ach', 'dialogs.apiCmdHint', 'Для менеджера паролей: Claude сам вызывает её и берёт ключ из её вывода. Ключ Kermach не хранит.', 'textContent'],
+      ['.achk', 'dialogs.apiCheck', 'Проверить', 'textContent'], ['.abc', 'dialogs.apiBudget', 'Потолок на один запуск, $', 'textContent'],
+      ['.amc', 'dialogs.apiModel', 'Модель по умолчанию', 'textContent'],
+      ['.gnc', 'dialogs.grants', 'Начисления', 'textContent'], ['.gadd', 'dialogs.grantAdd', 'Добавить', 'textContent'],
+      ['.tkc', 'dialogs.tgToken', 'Токен бота', 'textContent'], ['.tsv', 'dialogs.apiSave', 'Сохранить', 'textContent'], ['.tdel', 'dialogs.apiDelete', 'Удалить', 'textContent'],
+      ['.tkh', 'dialogs.tgTokenHint', 'Свой бот: создайте его у @BotFather в Telegram и вставьте токен сюда. Своего бота и группы у Kermach нет.', 'textContent'],
+      ['.tgc', 'dialogs.tgChat', 'Группа', 'textContent'],
+      ['.tgh', 'dialogs.tgChatHint', 'Добавьте бота в свою группу и напишите в ней упоминание бота и код выше, например «@ваш_бот 123456», потом нажмите «Проверить». Кто прислал код, тот и владелец: ответы принимаются только от его аккаунта и только ответом (reply) на сообщение о карте. Личные сообщения боту и сообщения без кода владельца не назначают. После нового сохранения токена код меняется — отправьте в группу новый код.', 'textContent'],
+      ['.tgrh', 'dialogs.tgReplyHint', 'Чтобы ответить на вопрос карты из Telegram, нажмите «Ответить» (reply) на сообщение бота. Обычное сообщение в группе бот не видит.', 'textContent'],
+      ['.tgnew', 'dialogs.tgNewCode', 'Новый код', 'textContent'],
+      ['.tdc', 'dialogs.tgDup', 'Через сколько минут без ответа в Kermach сообщение уходит в Telegram', 'textContent'],
+      ['.tchk', 'dialogs.apiCheck', 'Проверить', 'textContent'],
     ];
     /** @type {() => void} */
     let off = () => {};
@@ -865,8 +903,10 @@
         ntf.checked = s.notify !== false;
         cps.checked = s.copySelect !== false;
         // Поле с ошибкой или в фокусе не перетираем: человек правит путь.
-        dlg.querySelectorAll('.dirs input.dir').forEach((x) => { const i = /** @type {HTMLInputElement} */ (x); if (document.activeElement !== i && i.dataset.bad !== '1') i.value = s[i.dataset.k || ''] || ''; });
-        dlg.querySelectorAll('.plg input').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); const on = s.plugins && s.plugins[i.dataset.id || '']; i.checked = typeof on === 'boolean' ? on : plgDefault.get(i.dataset.id || '') !== false; });
+        // Только поля путей (data-k): ключ API, токен Telegram и даты начислений — не настройки, перерисовка их стирала (t1577).
+        dlg.querySelectorAll('.dirs input.dir[data-k]').forEach((x) => { const i = /** @type {HTMLInputElement} */ (x); if (document.activeElement !== i && i.dataset.bad !== '1') i.value = s[i.dataset.k || ''] || ''; });
+        dlg.querySelectorAll('.plg input[data-id]').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); const on = s.plugins && s.plugins[i.dataset.id || '']; i.checked = typeof on === 'boolean' ? on : plgDefault.get(i.dataset.id || '') !== false; });
+        dlg.querySelectorAll('.plg input[data-main]').forEach((c) => { const i = /** @type {HTMLInputElement} */ (c); i.checked = !!(s.pluginMain && s.pluginMain[i.dataset.main || ''] === true); });
         // Размеры видов браузера (t207) — только пока «Браузер» включён.
         dlg.querySelectorAll('.bvws').forEach((r) => { /** @type {HTMLElement} */ (r).style.display = s.plugins && s.plugins.browser === false ? 'none' : ''; });
         q('.set-off').hidden = !(s.plugins && s.plugins.browser === false);
@@ -891,10 +931,10 @@
       // Плагины (t182): у каждого выключатель; окна проектов включают и выключают плагин сразу, без перезагрузки.
       const plg = q('.plg');
       // «Браузер» встроен и в списке плагинов главного процесса его нет (t188): выключатель добавляется здесь, после Git и «Лимитов».
-      t.plugins.list().catch(() => []).then((/** @type {{ id: string, name: string, defaultOn?: boolean, own?: boolean, langs?: Record<string, string> }[]} */ list) => {
+      t.plugins.list().catch(() => []).then((/** @type {{ id: string, name: string, defaultOn?: boolean, own?: boolean, hasMain?: boolean, langs?: Record<string, string> }[]} */ list) => {
         for (const pl of Array.isArray(list) ? list : []) plgDefault.set(pl.id, pl.defaultOn !== false);
         const withLangs = (Array.isArray(list) ? list : []).filter((pl) => pl.langs && Object.keys(pl.langs).length);
-        list = [...(Array.isArray(list) ? list : []), { id: 'browser', name: 'Браузер' }];
+        list = [...(Array.isArray(list) ? list : []), { id: 'browser', name: I18n.t('browser.brauzer', 'Браузер') }];
         for (const pl of list) {
           // У плагина «Темы» выключателя нет (t723): его схемы — пункты списка «Тема», выбор схемы включает её сам.
           if (pl.id === 'themes') continue;
@@ -926,6 +966,20 @@
             warn.style.cssText = 'margin:-4px 0 6px 22px;font-size:11px';
             tx(warn, 'dialogs.pluginOwn', 'Свой плагин: у него те же права, что у программы — запускает команды и агентов, читает и меняет файлы. Включайте, только если доверяете автору.');
             plg.appendChild(warn);
+            // Главная часть своего плагина (main.js) — require в главном процессе со всеми правами: отдельная галочка, без неё не грузится (t1384).
+            if (pl.hasMain) {
+              const ml = document.createElement('label');
+              ml.className = 'chk pmain';
+              ml.style.cssText = 'margin:-2px 0 6px 22px';
+              const mc = document.createElement('input');
+              mc.type = 'checkbox';
+              mc.dataset.main = pl.id;
+              mc.addEventListener('change', () => change(t, { pluginMain: { [pl.id]: mc.checked } }));
+              const ms = document.createElement('span');
+              tx(ms, 'dialogs.pluginMain', 'Главная часть (main.js): разрешить ей работать с правами программы');
+              ml.append(mc, ms);
+              plg.appendChild(ml);
+            }
           }
           if (pl.id === 'browser') browserViews(t, plg, tx);
           if (pl.id === 'frame') frame = frameRow(t, lab, tx, (s) => (s.plugins && typeof s.plugins.frame === 'boolean' ? s.plugins.frame : plgDefault.get('frame') !== false));
@@ -935,7 +989,7 @@
         plg.hidden = false;
         if (cur) paint(cur);
       });
-      // Агенты из системы (t183): найденные — строками прямо в разделе (t1150, Ростислав 20.10: «установленных показывать сразу, а не прятать в окне»),
+      // Агенты из системы (t183): найденные — строками прямо в разделе (t1150, пользователь 20.10: «установленных показывать сразу, а не прятать в окне»),
       // весь каталог — окошком «Агенты» (t407): подключить нового и управлять найденным. Окошко одно за раз, поэтому «Настройки» закрываются;
       // после «Агентов» они заново не открываются. focus — id строки, которую окошко выделит, или 'new' — к неустановленным.
       const openAgents = (/** @type {string} */ focus) => { done(null); agents(t, focus); };
@@ -1051,6 +1105,138 @@
         inp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); inp.blur(); } });
         q(`.dirs .pick[data-k="${k}"]`).onclick = async () => { const p = await t.settings.pickDir(k); if (typeof p === 'string' && p) { inp.value = p; saveDir(k, p); } };
       }
+      // Кредиты API (t1356): ключ уходит в главный процесс и шифруется DPAPI, окно его больше не видит — только «••••abcd».
+      // Вместо ключа — команда, которая выдаёт ключ (менеджер паролей). Ошибка — строкой под полем, файл не меняется.
+      const ak = {
+        key: /** @type {HTMLInputElement} */ (q('.akey')), cmd: /** @type {HTMLInputElement} */ (q('.acmd')), st: q('.ast'), er: q('.aer'), del: q('.adel'),
+        chk: /** @type {HTMLButtonElement} */ (q('.achk')), res: q('.ares'), bud: /** @type {HTMLInputElement} */ (q('.abud')), mod: /** @type {HTMLSelectElement} */ (q('.amod')),
+      };
+      ak.mod.style.cssText = tms.style.cssText;
+      for (const m of ['', 'haiku', 'sonnet', 'opus']) {
+        const op = document.createElement('option');
+        op.value = m;
+        if (m) op.textContent = m[0].toUpperCase() + m.slice(1); else tx(op, 'dialogs.apiModelDef', 'Как у обычной вкладки');
+        ak.mod.appendChild(op);
+      }
+      tx(q('.abh'), 'dialogs.poUmolchaniyu', 'по умолчанию {v}', 'textContent', { v: 5 });
+      const akPaint = (/** @type {any} */ r) => {
+        if (!r || r.error) { ak.er.textContent = String((r && r.error) || ''); ak.er.hidden = !ak.er.textContent; return; }
+        ak.er.hidden = true;
+        ak.del.hidden = !r.has;
+        if (r.mode === 'key') retx(ak.st, 'dialogs.apiSaved', 'Ключ сохранён зашифрованным: {m}', 'textContent', { m: r.masked });
+        else if (r.mode === 'cmd') retx(ak.st, 'dialogs.apiByCmd', 'Ключ даёт команда ниже', 'textContent');
+        else retx(ak.st, 'dialogs.apiNone', 'Ключа нет. Ключ хранится в Связке ключей macOS: прочитать его может только ваш пользователь.', 'textContent');
+        if (document.activeElement !== ak.cmd) ak.cmd.value = r.cmd || '';
+        if (document.activeElement !== ak.bud) ak.bud.value = String(r.budget);
+        ak.mod.value = r.model || '';
+        ak.chk.disabled = !r.has;
+      };
+      const akSave = async (/** @type {any} */ patch) => {
+        const r = await t.apiKey.save(patch);
+        akPaint(r);
+        if (r && !r.error) { ak.key.value = ''; ak.res.textContent = ''; }
+        return r;
+      };
+      Promise.resolve(t.apiKey && t.apiKey.get()).then(akPaint, () => {});
+      // Начисления кредитов (t1521): сумма, с какого дня, когда сгорает. Поля сразу заполнены предложением программы
+      // (та же сумма, месяц спустя). Остаток каждого — по журналу ходов, тратится сначала то, что сгорает раньше.
+      const gn = {
+        list: q('.glist'), am: /** @type {HTMLInputElement} */ (q('.gam')), fr: /** @type {HTMLInputElement} */ (q('.gfr')),
+        ex: /** @type {HTMLInputElement} */ (q('.gex')), er: q('.ger'),
+      };
+      tx(q('.gh'), 'dialogs.grantHint', 'Сумма, с какого дня и когда сгорает. Поля уже заполнены следующим начислением: та же сумма, месяц спустя. Тратится сначала то, что сгорает раньше.');
+      const gnPaint = (/** @type {any} */ r) => {
+        if (!r || r.error) { gn.er.textContent = String((r && r.error) || ''); gn.er.hidden = !gn.er.textContent; return; }
+        gn.er.hidden = true;
+        gn.list.textContent = '';
+        for (const g of r.grants || []) {
+          const row = document.createElement('div');
+          row.className = 'row';
+          const s = document.createElement('span');
+          s.className = 'sub';
+          s.textContent = I18n.t('dialogs.grantRow', '${a} · {f} → {e} · осталось ${l}', { a: g.amount, f: g.from || '…', e: g.expires, l: Math.round(g.left * 100) / 100 });
+          const del = document.createElement('button');
+          del.className = 'pick';
+          del.textContent = I18n.t('dialogs.apiDelete', 'Удалить');
+          del.onclick = async () => gnPaint(await t.apiKey.grants('remove', g.expires));
+          row.append(s, del);
+          gn.list.appendChild(row);
+        }
+        if (!(r.grants || []).length) { const s = document.createElement('span'); s.className = 'sub'; s.textContent = I18n.t('dialogs.grantNone', 'Начислений нет'); gn.list.appendChild(s); }
+        if (r.suggest && document.activeElement !== gn.am) { gn.am.value = String(r.suggest.amount); gn.fr.value = r.suggest.from || ''; gn.ex.value = r.suggest.expires; }
+      };
+      const gnAdd = async () => gnPaint(await t.apiKey.grants('add', { amount: gn.am.value, from: gn.fr.value || undefined, expires: gn.ex.value }));
+      q('.gadd').onclick = gnAdd;
+      if (t.apiKey && t.apiKey.grants) Promise.resolve(t.apiKey.grants('list')).then(gnPaint, () => {});
+      q('.asv').onclick = () => { if (ak.key.value.trim()) akSave({ key: ak.key.value }); };
+      ak.key.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); if (ak.key.value.trim()) akSave({ key: ak.key.value }); } });
+      q('.acs').onclick = () => akSave({ cmd: ak.cmd.value });
+      ak.cmd.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); akSave({ cmd: ak.cmd.value }); } });
+      ak.del.onclick = () => akSave({ clear: true });
+      ak.bud.addEventListener('change', () => akSave({ budget: Number(ak.bud.value) }));
+      ak.mod.addEventListener('change', () => akSave({ model: ak.mod.value }));
+      ak.chk.onclick = async () => {
+        ak.chk.disabled = true;
+        retx(ak.res, 'dialogs.apiChecking', 'Проверяю: короткий запрос на Haiku…');
+        /** @type {any} */
+        let r;
+        try { r = await t.apiKey.check(); } catch (err) { r = { ok: false, error: /** @type {any} */ (err).message || err }; }
+        if (r && r.ok) retx(ak.res, 'dialogs.apiOk', 'Ключ работает');
+        else retx(ak.res, 'dialogs.apiFail', 'Ключ не работает: {err}', 'textContent', { err: String((r && r.error) || '?') });
+        ak.res.dataset.ok = r && r.ok ? '1' : '0';
+        ak.chk.disabled = false;
+      };
+      // Telegram (t1496): токен уходит в главный процесс через settings:set { telegramOp } и шифруется DPAPI; окно видит только «••••abcd».
+      // Группа и владелец находятся по «Проверить» — поле только показывает их. Ошибка — строкой под полем, файл не меняется.
+      const tg = {
+        key: /** @type {HTMLInputElement} */ (q('.tkey')), st: q('.tst'), er: q('.ter'), del: q('.tdel'), chat: q('.tgv'),
+        dup: /** @type {HTMLInputElement} */ (q('.tdup')), chk: /** @type {HTMLButtonElement} */ (q('.tchk')), res: q('.tres'),
+        cw: q('.tgcw'), code: q('.tgcode'), cc: q('.tgcc'),
+      };
+      tx(q('.tdh'), 'dialogs.poUmolchaniyu', 'по умолчанию {v}', 'textContent', { v: 15 });
+      /** @param {any} o */
+      const tgOp = (o) => window.kermach.settings.set({ telegramOp: o });
+      const tgPaint = (/** @type {any} */ r) => {
+        if (!r || r.error) { tg.er.textContent = String((r && r.error) || ''); tg.er.hidden = !tg.er.textContent; return; }
+        tg.er.hidden = true;
+        tg.del.hidden = !r.has;
+        if (r.has) retx(tg.st, 'dialogs.tgSaved', 'Токен сохранён зашифрованным: {m}', 'textContent', { m: r.masked });
+        else retx(tg.st, 'dialogs.tgNone', 'Токена нет. Он хранится в Связке ключей macOS: прочитать его может только ваш пользователь.', 'textContent');
+        if (r.chat) retx(tg.chat, 'dialogs.tgChatFound', '«{c}», владелец {o}', 'textContent', { c: r.chat, o: r.owner || '?' });
+        else retx(tg.chat, 'dialogs.tgChatNone', 'не найдена', 'textContent');
+        // Код для группы (t1527): виден, пока группы и владельца нет; кто пришлёт его в группу, тот и владелец.
+        tg.cw.hidden = !r.code;
+        tg.cc.hidden = !(r.code && r.codeChanged);
+        if (r.code && r.codeChanged) retx(tg.cc, 'dialogs.tgCodeChanged', 'Код сменился: прежний код в группе больше не действует. Новый код: {c}. Напишите его в группе (можно исправить прежнее сообщение) и нажмите «Проверить».', 'textContent', { c: r.code });
+        if (r.code) retx(tg.code, 'dialogs.tgCode', 'Код для группы: {c}', 'textContent', { c: r.code });
+        if (document.activeElement !== tg.dup) tg.dup.value = String(r.dupMin);
+        tg.chk.disabled = !r.has;
+      };
+      const tgSave = async (/** @type {any} */ o) => {
+        /** @type {any} */
+        let r;
+        try { r = await tgOp(o); } catch (err) { r = { error: String(/** @type {any} */ (err).message || err) }; }
+        tgPaint(r);
+        if (r && !r.error) { tg.key.value = ''; tg.res.textContent = ''; }
+        return r;
+      };
+      Promise.resolve(tgOp({ op: 'get' })).then(tgPaint, () => {});
+      q('.tsv').onclick = () => { if (tg.key.value.trim()) tgSave({ op: 'save', token: tg.key.value }); };
+      tg.key.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); if (tg.key.value.trim()) tgSave({ op: 'save', token: tg.key.value }); } });
+      tg.del.onclick = () => tgSave({ op: 'clear' });
+      q('.tgnew').onclick = () => tgSave({ op: 'code' });
+      tg.dup.addEventListener('change', () => tgSave({ op: 'save', dupMin: Number(tg.dup.value) }));
+      tg.chk.onclick = async () => {
+        tg.chk.disabled = true;
+        retx(tg.res, 'dialogs.tgChecking', 'Проверяю: ищу группу и шлю пробное сообщение…');
+        /** @type {any} */
+        let r;
+        try { r = await tgOp({ op: 'check' }); } catch (err) { r = { ok: false, error: /** @type {any} */ (err).message || err }; }
+        if (r && r.ok) { retx(tg.res, 'dialogs.tgOk', 'Пробное сообщение ушло в группу'); tgPaint(r); }
+        else retx(tg.res, 'dialogs.tgFail', 'Не вышло: {err}', 'textContent', { err: String((r && r.error) || '?') });
+        tg.res.dataset.ok = r && r.ok ? '1' : '0';
+        tg.chk.disabled = false;
+      };
       // Номер версии (t1264): из src\package.json через main, второго места с номером нет.
       { const v = window.kermach.settings.version && window.kermach.settings.version(); q('.ver').textContent = v ? `Kermach ${v}` : ''; }
       q('.reset').onclick = () => change(t, { uiZoom: 100, termFont: TERM_DEF, mdShift: 0, sound: true, notify: true, copySelect: true });

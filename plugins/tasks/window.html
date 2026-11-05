@@ -248,6 +248,9 @@
     main h1 { font-size: 17px; }
     .meta .due, .meta .tcard, .meta .tlab { display: none; }
   }
+  /* macOS: слева родные три кнопки окна, свои не нужны. Класс mac ставит page.js. */
+  .mac #title { padding-left: 84px; }
+  .mac #title .btns { display: none; }
 </style>
 <link rel="stylesheet" href="../../renderer/ui.css">
 </head>

@@ -1,15 +1,15 @@
 // @ts-check
 // Темы интерфейса (Тема Нагорняка): «Скло», «Студія», «Пульт» — каждая в светлом и тёмном виде.
-// «Тема Ростислава» — прежний вид программы: цвета theme.css и схемы плагина «Темы», здесь её нет.
+// «Тема разработчика» — прежний вид программы: цвета theme.css и схемы плагина «Темы», здесь её нет.
 // Ответ look() — в том же виде, что у плагина «Темы» ({ id, kind, window, terminal }), его красит renderer\theme.js;
 // сверх того ui (имя темы для ui.css) и vars — CSS-переменные, которых нет в окне схемы (шрифты, поверхность, радиусы).
 // Чистые функции: акцент системы и светлый/тёмный вид — параметрами.
 // Kermach (макет Claude Design, t651): kermach — Светлая и Тёмная по appearance, termius — Termius Dark, всегда тёмная.
-// termius — наследник «Темы Ростислава»: цвета theme.css и схемы плагина «Темы» (termius() ниже), сверх них — переменные макета.
+// termius — наследник «Темы разработчика»: цвета theme.css и схемы плагина «Темы» (termius() ниже), сверх них — переменные макета.
 // Таблица цветов — README макета, «Токены тем»; новые переменные: --card, --term, --line-strong, --off, --knob, --tint-a, --ok.
 
-/** Имена тем. rostyslav — прежний вид, в «Настройках» его нет (t651), сохранённое значение читается как termius (settings.js). */
-const UIS = ['kermach', 'termius', 'rostyslav', 'glass', 'studio', 'deck'];
+/** Имена тем. Неизвестное сохранённое значение (и прежний вид до t651) читается как тема по умолчанию (settings.js). */
+const UIS = ['kermach', 'termius', 'glass', 'studio', 'deck'];
 /** Тема по умолчанию (решение t643, вопрос 1): Termius Dark — нынешние цвета программы. */
 const DEFAULT_UI = 'termius';
 const APPEARANCES = ['system', 'light', 'dark'];
@@ -147,11 +147,11 @@ function shape(ui) {
 }
 
 /**
- * Вид темы для окна. null — «Тема Ростислава» (прежний путь: схемы плагина «Темы»).
+ * Вид темы для окна. null — «Тема разработчика» (прежний путь: схемы плагина «Темы»).
  * @param {{ ui: string, appearance: string, systemDark: boolean, sysAccent?: string }} o
  */
 function look(o) {
-  if (!UIS.includes(o.ui) || o.ui === 'rostyslav' || o.ui === 'termius') return null;
+  if (!UIS.includes(o.ui) || o.ui === 'termius') return null;
   const mode = o.appearance === 'light' ? 'light' : o.appearance === 'dark' ? 'dark' : o.systemDark ? 'dark' : 'light';
   const p = palette(o.ui, mode, o.sysAccent || '');
   return { id: `${o.ui}-${mode}`, ui: o.ui, kind: mode, window: p.window, terminal: p.terminal, vars: { ...shape(o.ui), ...p.vars }, list: [] };
@@ -159,7 +159,7 @@ function look(o) {
 
 /**
  * Вид Termius Dark (t651). scheme — схема плагина «Темы» ({ id, kind, window, terminal, list }) или null — плагина нет или он выключен.
- * Без схемы — null, как «Тема Ростислава» до t651 (проверка t185 ждёт null): окно берёт цвета theme.css,
+ * Без схемы — null, как «Тема разработчика» до t651 (проверка t185 ждёт null): окно берёт цвета theme.css,
  * переменные макета сверх них — renderer\ui-kermach.css, правило html[data-ui="termius"]:not([data-theme]).
  * Со схемой — её цвета; переменные макета выводятся из неё, ok — зелёный её терминала.
  * @param {any} scheme

@@ -137,6 +137,8 @@ function roadmapSetup(host) {
   const ICON = (/** @type {string} */ d, size = 14) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const I_BOARD = '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16M4 14h16M9 9v11"/>';
   const I_NEWCARD = '<path d="M12 5v14M5 12h14"/>';
+  /** «Новая главная сессия» (t1423, Д8): человек и плечи. */
+  const I_ORCH = '<circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7"/>';
   const I_FIND = '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>';
   const I_FULL = '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>';
   const I_SHRINK = '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>';
@@ -160,6 +162,9 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .rbtn[data-act="full"], #plugin-roadmap-panel .rbtn[data-act="newcard"] { cursor: pointer; }
     #plugin-roadmap-panel .rbtn[data-act="full"]:hover, #plugin-roadmap-panel .rbtn[data-act="newcard"]:not([aria-disabled="true"]):hover { background: var(--hover); color: var(--text); }
     #plugin-roadmap-panel .rbtn[data-act="newcard"][aria-disabled="true"] { cursor: default; }
+    #plugin-roadmap-panel .rbtn[data-act="orch"] { cursor: pointer; }
+    #plugin-roadmap-panel .rbtn[data-act="orch"]:not([aria-disabled="true"]):hover { background: var(--hover); color: var(--text); }
+    #plugin-roadmap-panel .rbtn[data-act="orch"][aria-disabled="true"] { cursor: default; }
     /* Во вкладке (t526): панель — всё место вкладки, без рамки фокуса. */
     .pane.page > #plugin-roadmap-panel { outline: 0; }
     #plugin-roadmap-panel .rbody { flex: 1; min-height: 0; overflow: auto; padding: 8px 8px 12px; display: flex; flex-direction: column; gap: 8px; }
@@ -199,6 +204,7 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .ph .n { flex: 1 1 0; }
     #plugin-roadmap-panel .ph .grow { display: none; }
     #plugin-roadmap-panel .ph .wbtns { display: flex; flex-wrap: wrap; gap: 4px; flex: 1 0 100%; min-width: 0; }
+    #plugin-roadmap-panel .ph .wbtns .wlabel { align-self: center; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
     #plugin-roadmap-panel .ph .wbtns button { height: 22px; padding: 0 8px; border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 4px; background: transparent; color: var(--text); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; }
     #plugin-roadmap-panel .ph .wbtns button:hover:not(:disabled) { background: var(--hover); }
     #plugin-roadmap-panel .ph .wbtns button:disabled { color: var(--muted); opacity: .55; cursor: default; }
@@ -211,6 +217,13 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .wave.run .wl .ws { color: var(--rm-info); }
     #plugin-roadmap-panel .wave.stopped { background: color-mix(in srgb, var(--rm-warn) 9%, transparent); }
     #plugin-roadmap-panel .wave.stopped .wl .ws { color: var(--rm-warn); }
+    #plugin-roadmap-panel .wave.cut { background: color-mix(in srgb, var(--rm-warn) 9%, transparent); }
+    #plugin-roadmap-panel .wave.cut .wl .ws { color: var(--rm-warn); white-space: normal; }
+    /* t1422: две кнопки прерванной волны — второй строкой, иначе узкая панель режет «сделано N из M». */
+    #plugin-roadmap-panel .wave.cut .wb { display: flex; justify-content: flex-end; gap: 6px; }
+    /* t1437: заголовок строки проверки роадмапа длинный — переносится, а не уходит за край панели. */
+    #plugin-roadmap-panel .wave.chk .wl { white-space: normal; }
+    #plugin-roadmap-panel .wave.chk .wl b { min-width: 0; overflow-wrap: anywhere; color: var(--rm-warn); }
     #plugin-roadmap-panel .wave .bar { margin: 0; }
     #plugin-roadmap-panel .wave .wx { color: var(--muted); font-size: 11.5px; line-height: 16px; overflow-wrap: anywhere; }
     #plugin-roadmap-panel .wave .wx.warn { color: var(--rm-warn); }
@@ -230,6 +243,11 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .bgr .bn { flex: 1 0 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     #plugin-roadmap-panel .bgr .bm { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
     #plugin-roadmap-panel .bgr .bs.wait { color: var(--rm-warn); }
+    #plugin-roadmap-panel .bgr .bs.ask { color: var(--rm-warn); font-weight: 600; }
+    #plugin-roadmap-panel .bgr .bs.ask::before { content: "? "; }
+    #plugin-roadmap-panel .bgr .bs.stuck { color: var(--rm-bad); }
+    #plugin-roadmap-panel .bgr .bs.stuck::before { content: "⚠ "; }
+    #plugin-roadmap-panel .bgr .bs.stuck::after { content: var(--rm-note, " — вопроса нет"); }
     #plugin-roadmap-panel .bgr .bs.error { color: var(--rm-bad); }
     #plugin-roadmap-panel .bgr .bs.done { color: var(--rm-ok); }
     #plugin-roadmap-panel .bgr .bt { color: var(--muted); }
@@ -254,6 +272,33 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .card .num { color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
     #plugin-roadmap-panel .card .tt { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     #plugin-roadmap-panel .card .meta { margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 11.5px; flex-shrink: 0; }
+    /* t1522: карты на кредитах — значок на строке, плашка в шапке, форма в карте, окно фазы. */
+    #plugin-roadmap-panel .crb { margin-left: 6px; padding: 0 6px; height: 18px; line-height: 16px; border: 1px solid color-mix(in srgb, var(--rm-info) 50%, transparent); border-radius: 9px; color: var(--rm-info); font-size: 11px; flex-shrink: 0; cursor: pointer; white-space: nowrap; }
+    #plugin-roadmap-panel .crb.run { color: var(--rm-ok); border-color: color-mix(in srgb, var(--rm-ok) 50%, transparent); }
+    #plugin-roadmap-panel .crb.bad { color: var(--rm-bad); border-color: color-mix(in srgb, var(--rm-bad) 50%, transparent); max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+    #plugin-roadmap-panel .rh .crbar { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; height: 22px; line-height: 20px; border: 1px solid color-mix(in srgb, var(--rm-info) 45%, transparent); border-radius: 11px; color: var(--rm-info); font-size: 11.5px; cursor: pointer; }
+    #plugin-roadmap-panel .crform { margin: 8px 0 0; padding: 10px; border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 6px; display: flex; flex-direction: column; gap: 8px; }
+    #plugin-roadmap-panel .crform .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    #plugin-roadmap-panel .crform label { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: 11.5px; }
+    #plugin-roadmap-panel .crform select, #plugin-roadmap-panel .crform input, #plugin-roadmap-panel .rcrd select, #plugin-roadmap-panel .rcrd input[type=text] { height: 24px; background: var(--bg, transparent); color: var(--text); border: 1px solid var(--line, rgba(141,145,165,.3)); border-radius: 4px; font: inherit; font-size: 12px; }
+    #plugin-roadmap-panel .crform input, #plugin-roadmap-panel .rcrd input[type=text] { width: 64px; padding: 0 6px; }
+    #plugin-roadmap-panel .crform .tx, #plugin-roadmap-panel .rcrd .tx { color: var(--muted); font-size: 11.5px; line-height: 16px; }
+    #plugin-roadmap-panel .crform .err, #plugin-roadmap-panel .rcrd .err { color: var(--rm-bad); font-size: 11.5px; }
+    #plugin-roadmap-panel .rcrd { flex: 1; min-height: 0; overflow: auto; padding: 8px 8px 12px; display: flex; flex-direction: column; gap: 10px; }
+    #plugin-roadmap-panel .rcrd .ttl { font-weight: 600; color: var(--text); }
+    #plugin-roadmap-panel .rcrd .tw { overflow-x: auto; }
+    #plugin-roadmap-panel .rcrd table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    #plugin-roadmap-panel .rcrd td, #plugin-roadmap-panel .rcrd th { padding: 4px 6px; border-bottom: 1px solid var(--line, rgba(141,145,165,.14)); text-align: left; vertical-align: middle; }
+    #plugin-roadmap-panel .rcrd th { color: var(--muted); font-weight: 500; font-size: 11px; }
+    #plugin-roadmap-panel .rcrd tr.off td { color: var(--muted); }
+    #plugin-roadmap-panel .rcrd .why { color: var(--rm-warn); font-size: 11px; }
+    #plugin-roadmap-panel .rcrd .dep { color: var(--muted); font-size: 11px; }
+    #plugin-roadmap-panel .rcrd .tiles { display: flex; flex-wrap: wrap; gap: 8px; }
+    #plugin-roadmap-panel .rcrd .tile { flex: 1 1 140px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 6px; }
+    #plugin-roadmap-panel .rcrd .tile .k { color: var(--muted); font-size: 11px; }
+    #plugin-roadmap-panel .rcrd .tile .v { font-weight: 600; font-size: 14px; margin-top: 2px; }
+    #plugin-roadmap-panel .rcrd .tile .s { color: var(--muted); font-size: 11px; margin-top: 2px; }
+    #plugin-roadmap-panel .rcrd .foot { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
     #plugin-roadmap-panel .card.done-row .tt { color: var(--text); }
     #plugin-roadmap-panel .si { width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; line-height: 1; }
     #plugin-roadmap-panel .si.muted { color: var(--muted); background: rgba(var(--muted-rgb, 141,145,165), .16); }
@@ -279,6 +324,7 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .cbar .back:hover { color: var(--text); background: var(--hover); }
     #plugin-roadmap-panel .cbar .crumb { color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
     #plugin-roadmap-panel .cbar .saved { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+    #plugin-roadmap-panel .cbar .plang { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11.5px; white-space: nowrap; }
     #plugin-roadmap-panel .cbar .grow { flex: 1 0 0; }
     /* Две кнопки переносятся вместе: «Сохранить» не уходит на строку одна. */
     #plugin-roadmap-panel .cbar .cbtns { display: flex; gap: 6px; margin-left: auto; }
@@ -322,6 +368,10 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .f .v { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
     #plugin-roadmap-panel .rcard .step { color: var(--muted); font-size: 11.5px; line-height: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     #plugin-roadmap-panel .rcard .step[hidden] { display: none; }
+    #plugin-roadmap-panel .rcard .ans { margin: 6px 0; padding: 6px 8px; border: 1px solid var(--rm-warn); border-radius: 6px; display: flex; flex-direction: column; gap: 4px; }
+    #plugin-roadmap-panel .rcard .ans[hidden] { display: none; }
+    #plugin-roadmap-panel .rcard .ans .anscap { color: var(--rm-warn); font-weight: 600; }
+    #plugin-roadmap-panel .rcard .ans .ansv { width: 100%; box-sizing: border-box; resize: vertical; }
     #plugin-roadmap-panel .rcard .ext { color: var(--rm-warn); font-size: 11.5px; line-height: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
     #plugin-roadmap-panel textarea, #plugin-roadmap-panel select { color-scheme: var(--scheme, dark); font: inherit; color: var(--text); }
     #plugin-roadmap-panel textarea { box-sizing: border-box; width: 100%; min-height: 30px; resize: none; overflow: hidden; padding: 6px 8px; line-height: 17px;
@@ -516,14 +566,21 @@ function roadmapSetup(host) {
   panel.id = 'plugin-roadmap-panel';
   panel.hidden = true;
   panel.innerHTML = `<div class="rh"><div class="t"><b></b><span></span></div>
-    <label class="hd"><input type="checkbox"><span></span></label>
+    <div class="crbar" hidden></div><label class="hd"><input type="checkbox"><span></span></label>
     <div class="rbtn" data-act="newcard" hidden>${ICON(I_NEWCARD)}</div><div class="rbtn" data-act="full"></div></div>
     <label class="rsearch">${ICON(I_FIND, 13)}<input type="text" spellcheck="false"></label><div class="rfound" hidden></div>
-    <div class="rbody"></div><div class="rcard" hidden></div><div class="rprompt" hidden></div><div class="rpass" hidden></div><div class="rphase" hidden></div><div class="rinbox" hidden></div><div class="rdecs" hidden></div>`;
+    <div class="rbody"></div><div class="rcard" hidden></div><div class="rprompt" hidden></div><div class="rpass" hidden></div><div class="rphase" hidden></div><div class="rcrd" hidden></div><div class="rinbox" hidden></div><div class="rdecs" hidden></div>`;
   // Под «Файлами», если они уже в колонке; список Git (appendChild) встаёт ниже.
   const files = host.right.querySelector('#plugin-files-panel');
   host.right.insertBefore(panel, files ? files.nextSibling : host.right.firstChild);
   const $ = (/** @type {string} */ s) => /** @type {HTMLElement} */ (panel.querySelector(s));
+  // t1423 (Д8): кнопка «Новая главная сессия» — перед «Новой картой»; видна, когда доска есть.
+  const orchBtn = document.createElement('div');
+  orchBtn.className = 'rbtn';
+  orchBtn.dataset.act = 'orch';
+  orchBtn.hidden = true;
+  orchBtn.innerHTML = ICON(I_ORCH);
+  $('[data-act="newcard"]').before(orchBtn);
   const body = $('.rbody');
   const cardEl = $('.rcard');
   const promptEl = $('.rprompt');
@@ -543,6 +600,8 @@ function roadmapSetup(host) {
   let hideDone = false;
   /** Настройка «в фоне» (t1060): из state, меняет галочка в строке предела. */
   let bgOn = false;
+  // Агент главной сессии (t1485): настройка mainAgent главной части, по умолчанию claude.
+  let mainAg = 'claude';
   let stopped = false;
   /** Последняя доска от главной части. @type {any} */
   let last = null;
@@ -551,6 +610,8 @@ function roadmapSetup(host) {
   // sid — вкладка из ответа compose, пока доска не прислала свою запись (t568); shown — заголовок вкладки в нарисованной строке «составляется…».
   /** «Новая карта» (t818): busy — вкладка открывается, note — строка над доской; timer её убирает. */
   const nc = { busy: false, /** @type {{ bad: boolean, text: string } | null} */ note: null, /** @type {any} */ timer: null };
+  /** «Новая главная сессия» (t1423): busy — вкладка открывается; строка над доской — та же nc.note. */
+  const oc = { busy: false };
   /** Последняя ошибка вызова: строка журнала не повторяется на каждую перерисовку. */
   let said = '';
   /** Фазы и строки «готово», которые человек раскрыл или свернул сам: id → раскрыта. Живёт до закрытия окна. @type {Map<string, boolean>} */
@@ -629,18 +690,25 @@ function roadmapSetup(host) {
     return m < 60 ? T('bgl.min', '{m} мин', { m }) : T('bgl.hour', '{h} ч {m} мин', { h: Math.floor(m / 60), m: m % 60 });
   };
   /** Слово состояния строки «В фоне»: st от главной части — work, wait, done, error, start. @param {string} st */
-  const bgWord = (st) => (st === 'work' ? T('bgl.work', 'работает') : st === 'wait' ? T('bgl.wait', 'ждёт ответа') : st === 'done' ? T('bgl.done', 'закончил')
+  const bgWord = (st) => (st === 'work' ? T('bgl.work', 'работает') : st === 'wait' ? T('bgl.wait', 'ждёт ответа') : st === 'ask' ? T('bgl.wait', 'ждёт ответа')
+    : st === 'stuck' ? T('bgl.wait', 'ждёт ответа') : st === 'done' ? T('bgl.done', 'закончил')
     : st === 'error' ? T('bgl.error', 'упал') : T('bgl.start', 'запускается'));
   /** Раздел «В фоне» (t1073): строка на скрытую вкладку, кнопки по номеру вкладки. @param {any[]} rows */
-  const bgHtml = (rows) => {
+  const bgHtml = (rows, revs = []) => {
     /** Усилие в карте записано по-русски — словом языка окна, как в поле карты. @param {any} r */
     const ame = (r) => { const e = r.effort && got(lists.EFFORT, r.effort); return [r.agent, r.model, e ? T(`eff.${e.key}`, r.effort) : r.effort].filter(Boolean).join(' '); };
     const head = `<div class="bgl-h" title="${esc(T('bgl.title', 'Агенты в скрытых вкладках проекта. Сколько их — на кнопке «в фоне: N» рядом с «+» над вкладками'))}">${esc(T('bgl.cap', 'В фоне'))}</div>`;
-    if (!rows.length) return `<div class="bgl">${head}<div class="bgl-e">${esc(T('bgl.empty', 'в фоне никого'))}</div></div>`;
-    return `<div class="bgl">${head}${rows.map((r) => `<div class="bgr" data-bgsid="${esc(r.sid)}">`
+    // Проверка роадмапа или фазы (t1571): claude -p без вкладки — строка без кнопок, уходит, когда круг кончился.
+    const rv = revs.map((/** @type {any} */ v) => `<div class="bgr rv" data-review="${esc(v.phase || 'roadmap')}">`
+      + `<span class="bn">${esc(v.kind === 'phase' ? T('bgl.revPhase', 'Проверка фазы {ph}', { ph: v.phase }) : T('bgl.revRoadmap', 'Проверка роадмапа'))}`
+      + ` · ${esc(T('bgl.revRound', 'круг {n} из {m}', { n: v.round, m: v.rounds }))} · ${esc(T('bgl.revSince', 'идёт с {t}', { t: when(Number(v.since) || 0) }))}</span>`
+      + `<span class="bm">${esc(T('bgl.revWho', 'claude {model}, только читает', { model: v.model }))}</span>`
+      + `<span class="bs work">${esc(bgWord('work'))}</span><span class="bt" data-since="${Number(v.since) || 0}">${esc(lasted(Number(v.since) || 0))}</span></div>`).join('');
+    if (!rows.length && !rv) return `<div class="bgl">${head}<div class="bgl-e">${esc(T('bgl.empty', 'в фоне никого'))}</div></div>`;
+    return `<div class="bgl">${head}${rv}${rows.map((r) => `<div class="bgr" data-bgsid="${esc(r.sid)}">`
       + `<span class="bn">${r.card ? `<b>${esc(r.card)}</b> ` : ''}${esc(r.title || r.sid)}</span>`
       + `<span class="bm" title="${esc(ame(r))}">${esc(ame(r))}</span>`
-      + `<span class="bs ${esc(r.st)}">${esc(bgWord(r.st))}</span><span class="bt" data-since="${Number(r.since) || 0}">${esc(lasted(Number(r.since) || 0))}</span>`
+      + `<span class="bs ${esc(r.st)}"${r.st === 'stuck' ? ` title="${esc(T('bgl.stuckTitle', 'Агент замолчал, а открытого «## Вопрос» в карте нет: похоже, застрял. Посмотрите вкладку — «Показать»'))}" style="--rm-note:${esc(JSON.stringify(` — ${T('bgl.noQuestion', 'вопроса нет')}`))}"` : r.st === 'ask' ? ` title="${esc(T('bgl.askTitle', 'Карта ждёт вашего ответа: откройте карту и ответьте в поле'))}"` : ''}>${esc(bgWord(r.st))}</span><span class="bt" data-since="${Number(r.since) || 0}">${esc(lasted(Number(r.since) || 0))}</span>`
       + `<button type="button" class="btn" data-bg="show">${esc(T('show', 'Показать'))}</button>`
       + `<button type="button" class="btn" data-bg="stop" title="${esc(T('bgl.stopTitle', 'Остановить агента и закрыть его вкладку, без вопроса — как kermach tab close --force'))}">${esc(T('bgl.stop', 'Остановить'))}</button></div>`).join('')}</div>`;
   };
@@ -656,6 +724,7 @@ function roadmapSetup(host) {
     findBox.title = T('find.title', 'Карты и записи — по номеру, заголовку и тексту. Ctrl+F — сюда, Esc — очистить');
     if (!foundEl.hidden) paintFound();
     $('[data-act="newcard"]').title = T('newcardTip', 'Новая карта — откроется вкладка Claude: агент спросит, что сделать, изучит проект и предложит карту');
+    orchBtn.title = T('orchTip', 'Новая главная сессия — откроется вкладка Claude: она прочитает журнал и доску, скажет, где мы и что дальше');
     paintFull();
     if (tab) host.pages.setTab(tab.sid, { title: tabTitle() });
   };
@@ -675,6 +744,20 @@ function roadmapSetup(host) {
   row.onmouseleave = paintRow;
 
   /** Строка карты; pick — строка доски, где карту можно выделить (t688). @param {any} c @param {Map<string, any>} byId @param {boolean} [pick] */
+  /** t1522: значок задания карты на кредитах; щелчок — задание в панели «Кредиты». @param {any} c */
+  const crBadge = (c) => {
+    const j = last && last.creditJobs ? last.creditJobs[c.id] : null;
+    if (!j) return '';
+    // Карту уже приняли или вернули в очередь — значок старого задания не нужен.
+    if (c.status === 'готово' && j.status === 'прошло' || c.status === 'в очереди' && !['в очереди', 'идёт'].includes(j.status)) return '';
+    const money = (/** @type {string} */ v) => `$${(Number(v) || 0).toFixed(2).replace('.', ',')}`;
+    const txt = j.status === 'в очереди' ? T('cr.queued', 'кредиты · в очереди')
+      : j.status === 'идёт' ? T('cr.going', 'кредиты · идёт · {cost}', { cost: money(j.cost) })
+        : j.status === 'не прошло' ? T('cr.failed', 'кредиты · не прошло: {why}', { why: String(j.result || '').slice(0, 80) })
+          : T('cr.passed', 'кредиты · прошло · {cost}', { cost: money(j.cost) });
+    const cls = j.status === 'идёт' ? ' run' : j.status === 'не прошло' ? ' bad' : '';
+    return `<span class="crb${cls}" data-crb="${esc(j.id)}" title="${esc(T('cr.badgeTitle', 'Задание {id} плагина «Кредиты» — открыть в панели', { id: j.id }))}">${esc(txt)}</span>`;
+  };
   const cardRow = (c, byId, pick = false) => {
     const m = got(RM_STATUS, c.status) || RM_STATUS['в очереди'];
     let meta = statusWord(c.status);
@@ -690,6 +773,7 @@ function roadmapSetup(host) {
     if (c.status === 'в очереди') {
       const wait = c.depends.filter((/** @type {string} */ d) => { const x = byId.get(d); return !x || x.status !== 'готово'; });
       if (wait.length) meta += ` · ${T('waits', 'ждёт {ids}', { ids: wait.join(', ') })}`;
+      else if (wi && wi.st === 'file') meta += ` · ${T('wave.file', 'ждёт файл: {id}', { id: wi.why })}`;
       else if (wi && wi.st === 'slot') meta += ` · ${T('wave.slot', 'ждёт места')}`;
     } else {
       if (c.agent) meta += ` · ${c.agent}`;
@@ -703,7 +787,7 @@ function roadmapSetup(host) {
     if (c.untold) { meta += ` · ⚠ ${T('untold', 'некому сообщить')}`; tone = ' warn'; }
     const on = pick && sel.ids.has(c.id) ? ' sel' : '';
     return `<div class="card${on}" data-id="${esc(c.id)}"><span class="si ${m.tone}">${esc(m.icon)}</span><span class="num">${esc(c.id)}</span>`
-      + `<span class="tt">${esc(c.title || c.id)}</span><span class="meta${tone}"${c.untold ? ` title="${esc(T('untoldTitle', 'Сообщение не дошло: {why}. Ушло уведомлением Windows', { why: c.untold }))}"` : ''}>${esc(meta)}</span></div>`;
+      + `<span class="tt">${esc(c.title || c.id)}</span>${crBadge(c)}<span class="meta${tone}"${c.untold ? ` title="${esc(T('untoldHint', 'Строка «[Роадмап]» об этой карте не дошла до вкладки, из которой её запустили ({why}), и ушла системным уведомлением. Откройте карту — пометка снимется; снимется и после следующего сообщения в ту вкладку', { why: c.untold }))}"` : ''}>${esc(meta)}</span></div>`;
   };
 
   /** Живая вкладка составления в этом окне (t568): номер — из доски (мешок главной части) или из ответа compose. @returns {any} */
@@ -741,11 +825,13 @@ function roadmapSetup(host) {
     if (phDone(f) || !cards.some((c) => c.status === 'в очереди')) return '';
     const b = (/** @type {string} */ mode, /** @type {string} */ text, /** @type {string} */ title, off = false) =>
       `<button type="button" data-wave="${mode}" data-ph="${esc(f.id)}" title="${esc(title)}"${off ? ' disabled' : ''}>${esc(text)}</button>`;
-    return `<span class="wbtns">${b('free', T('wave.free', 'Независимые'), T('wave.freeTitle', 'Запустить независимые: карты «в очереди», у которых все зависимости готовы'))}`
+    return `<span class="wbtns"><span class="wlabel">${esc(T('wave.label', 'Волна:'))}</span>${b('free', T('wave.free', 'Независимые'), T('wave.freeTitle', 'Запустить независимые: карты «в очереди», у которых все зависимости готовы'))}`
       + b('all', T('wave.all', 'Все'), T('wave.allTitle', 'Запустить все карты фазы «в очереди»: у кого зависимости не готовы — ждут и стартуют сами'))
       + b('sel', nsel ? T('wave.selN', 'Выделенные · {n}', { n: nsel }) : T('wave.sel', 'Выделенные'), T('wave.selTitle', 'Запустить выделенные карты. Выделить: Ctrl+щелчок, Shift+щелчок, рамка мышью; снять — Esc'), !nsel)
       // t703: пачка одним агентом — выделенные карты, а без выделения — карты фазы «в очереди», до 5.
       + b('one', T('wave.one', 'Одним агентом'), T('wave.oneTitle', 'Выполнить одним агентом: один промпт и одна вкладка на до 5 карт «в очереди» по порядку — выделенные, а без выделения карты фазы. Карта, которую агент не взял, после закрытия вкладки вернётся в очередь'))
+      // t1522: плагин «Кредиты» есть — карты фазы заданиями по порядку depends.
+      + (last && last.creditsBar ? `<span class="wlabel">·</span>${b('credits', T('cr.phase', 'Фазу на кредиты…'), T('cr.phaseTitle', 'Положить карты фазы «в очереди» на кредиты: каждая — отдельное задание «агент», по порядку зависимостей. Сначала окно — что уйдёт и сколько стоит'))}` : '')
       + '</span>';
   };
   /**
@@ -800,6 +886,8 @@ function roadmapSetup(host) {
     const WHY = { human: T('wave.why.human', 'нужен человек'), inbox: T('wave.why.inbox', 'во «Входящих»'), running: T('wave.why.running', 'уже запущена'),
       wave: T('wave.why.wave', 'уже в другой волне'), phase: T('wave.why.phase', 'не в этой фазе'), agent: T('wave.why.agent', 'другой агент'),
       draft: T('wave.why.draft', 'черновик') };
+    // Пропуски продолжения прерванной волны (t1422).
+    Object.assign(WHY, { changed: T('wave.why.changed', 'изменена после остановки'), gone: T('wave.why.gone', 'карты нет на доске') });
     return got(WHY, x.why) || x.why;
   };
   /** Строка волны в фазе (t687): буква и вид, «идёт · N из M» / «завершена» / «остановлена человеком · время», полоска, пропуски и закрытые вкладки. @param {any} wv */
@@ -821,10 +909,84 @@ function roadmapSetup(host) {
     if (closed.length) html += `<div class="wx warn">${esc(T('wave.closedList', 'вкладка закрыта, карта не готова: {ids}', { ids: closed.join(', ') }))}</div>`;
     return `${html}</div>`;
   };
+  /**
+   * Строка прерванной волны (t1422, Б2): окно закрыли, пока волна шла. Сама не продолжается — окно могли закрыть нарочно.
+   * Младше суток — «продолжить» (сверка с доской в main.js) и «убрать»; старше — «была прервана» и только «убрать» (Д9). @param {any} wv
+   */
+  const cutLine = (wv) => {
+    const st = wv.stale ? T('wave.cutOld', 'была прервана · {at}', { at: when(wv.closedAt) })
+      : T('wave.cut', 'прервана · сделано {done} из {all} · {at}', { done: wv.done, all: wv.all, at: when(wv.closedAt) });
+    const go = wv.stale ? ''
+      : `<button type="button" data-wave="resume" data-wid="${esc(wv.id)}" data-ph="${esc(wv.phase)}" title="${esc(T('wave.resumeTitle', 'Продолжить волну: готовые, отменённые и изменённые после остановки карты пропускаются, уже запущенные второй раз не запускаются'))}">▶ ${esc(T('wave.resume', 'продолжить'))}</button>`;
+    return `<div class="wave cut" data-wid="${esc(wv.id)}"><div class="wl"><b>${esc(T('wave.name', 'Волна {letter}', { letter: wv.letter }))}</b>`
+      + `<span class="ws">${esc(st)}</span></div><div class="wb">${go}`
+      + `<button type="button" data-wave="drop" data-wid="${esc(wv.id)}" title="${esc(T('wave.dropTitle', 'Убрать строку волны'))}">${esc(T('wave.drop', 'убрать'))}</button></div></div>`;
+  };
 
+  /** Одна ошибка проверки роадмапа (t1437) словами окна; код от board.checkBoard. @param {any} x */
+  const checkWhy = (x) => {
+    const v = { phase: x.phase, id: x.id, dep: x.dep || '', ring: Array.isArray(x.ring) ? [...x.ring, x.ring[0]].join(' → ') : '', n: x.n || 0, all: x.all || 0 };
+    /** @type {Record<string, string>} */
+    const W = { noReview: T('check.noReview', 'фаза {phase}: нет карты-ревью', v), noCriteria: T('check.noCriteria', 'фаза {phase}: нет признаков готовности', v),
+      noCheck: T('check.noCheck', '{id}: нет «Как проверить»', v), noFiles: T('check.noFiles', '{id}: нет «Файлы»', v),
+      reviewCrit: T('check.reviewCrit', '{id} (ревью): в «Как проверить» нет {n} из {all} признаков фазы', v),
+      dependsGone: T('check.dependsGone', '{id}: depends на {dep}, а такой карты нет', v), cycle: T('check.cycle', 'кольцо зависимостей: {ring}', v) };
+    return got(W, x.code) || String(x.reason || x.code);
+  };
+  /**
+   * Строка проверки роадмапа под фазой (t1437): ошибки списком. Волна не стартовала из-за них (why: wave) — «запускать всё равно» (решает человек) и «убрать»;
+   * проверка после построителя (compose) — только «убрать». Исправили карты — строку убирает сама главная часть. @param {any} e
+   */
+  const checkLine = (e) => {
+    const list = Array.isArray(e.list) ? e.list : [];
+    const head = e.why === 'wave' ? T('check.headWave', 'Волна не запущена: проверка роадмапа нашла ошибки ({n})', { n: list.length })
+      : T('check.head', 'Проверка роадмапа нашла ошибки ({n})', { n: list.length });
+    const go = e.why === 'wave'
+      ? `<button type="button" data-wave="force" data-ph="${esc(e.phase)}" title="${esc(T('check.forceTitle', 'Запустить волну с этими ошибками — то же, что было нажато, без проверки'))}">▶ ${esc(T('check.force', 'запускать всё равно'))}</button>` : '';
+    return `<div class="wave cut chk" data-chk="${esc(e.phase)}"><div class="wl"><b>${esc(head)}</b></div>`
+      + list.map((/** @type {any} */ x) => `<div class="wx warn">${esc(checkWhy(x))}</div>`).join('')
+      + `<div class="wb">${go}<button type="button" data-wave="checkDrop" data-ph="${esc(e.phase)}" title="${esc(T('check.dropTitle', 'Убрать строку проверки: ошибки останутся, волна снова проверит фазу'))}">${esc(T('wave.drop', 'убрать'))}</button></div></div>`;
+  };
+
+  /** t1522: плашка «Кредиты: $X · сгорают ДД.ММ · в очереди N» — когда есть начисление или задания. */
+  const paintCrBar = () => {
+    const el = $('.crbar');
+    const cb = last && !last.error ? last.creditsBar : null;
+    const n = cb && cb.nearest;
+    el.hidden = !cb || (!n && !cb.queued && !cb.going);
+    if (el.hidden) return;
+    const parts = [];
+    if (n) parts.push(T('cr.bar', 'Кредиты: {left} · сгорают {date}', { left: crMoney(n.left), date: crDate(n.expires) }));
+    else parts.push(T('cr.barNone', 'Кредиты: начислений нет'));
+    if (cb.queued) parts.push(T('cr.barQueue', 'в очереди {n}', { n: cb.queued }));
+    if (cb.going) parts.push(T('cr.barGoing', 'идёт {n}', { n: cb.going }));
+    el.textContent = parts.join(' · ');
+    el.title = T('cr.barTitle', 'Остаток ближайшего начисления и задания в очереди. Щелчок — панель «Кредиты»');
+  };
+  /** @param {any} v */
+  const crMoney = (v) => `$${(Number(v) || 0).toFixed(2).replace('.', ',')}`;
+  /** «2026-12-02» → «02.12». @param {string} d */
+  const crDate = (d) => { const m = /^(\d{4})-(\d\d)-(\d\d)/.exec(String(d || '')); return m ? `${m[3]}.${m[2]}` : String(d || ''); };
+  /** Панель «Кредиты» (плагин «Кредиты»): строка слева открывает её; id — выделить задание. @param {string} [id] */
+  const openCredits = (id) => {
+    const row = /** @type {HTMLElement | null} */ (document.querySelector('#plugin-credits'));
+    if (!row) { host.log('кредиты: плагина «Кредиты» нет в окне'); return; }
+    row.click();
+    if (!id) return;
+    let n = 0;
+    const pick = () => {
+      const r = /** @type {HTMLElement | null} */ (document.querySelector(`#plugin-credits-panel .cr-row[data-id="${id}"]`));
+      // Панель «Кредиты» выбирает задание щелчком по [data-act="select"]; уже выбранное второй щелчок снял бы.
+      const t = r && /** @type {HTMLElement | null} */ (r.querySelector('[data-act="select"]'));
+      if (r && t) { if (!r.classList.contains('sel')) t.click(); r.scrollIntoView({ block: 'nearest' }); return; }
+      if (++n < 20) setTimeout(pick, 100);
+    };
+    setTimeout(pick, 50);
+  };
   const draw = () => {
     if (stopped) return;
     const b = last;
+    paintCrBar();
     // Строка «составляется…» — только на пустом экране (t583); на доске shown пустой, и смена вкладки составления её не перерисовывает.
     const ct = b && !b.error && !b.exists ? composeTab() : null;
     comp.shown = ct ? `${ct.sid} ${ct.title}` : '';
@@ -836,6 +998,8 @@ function roadmapSetup(host) {
     // Поиск (t1100) — только когда доска есть: на пустом проекте и при ошибке чтения искать нечего.
     $('.rsearch').hidden = !(b && !b.error && b.exists);
     newcard.setAttribute('aria-disabled', String(nc.busy));
+    orchBtn.hidden = !(b && !b.error && b.exists);
+    orchBtn.setAttribute('aria-disabled', String(oc.busy));
     if (!b) { body.textContent = ''; return; }
     if (b.error) { body.innerHTML = `<div class="box errs"><div class="e">${esc(T('readFail', 'Доска не прочитана: {why}', { why: b.error }))}</div></div>`; return; }
     if (!b.exists) {
@@ -886,10 +1050,13 @@ function roadmapSetup(host) {
         + `<span>${esc(T('lim.cap', 'Сессий одновременно: занято {used} из', { used: b.slots.used }))}</span><select data-do="lim">${opts}</select>`
         // «В фоне» (t1060): агенты карт — в скрытых вкладках, у карты «Показать», готовая закрывается сама, экран — в .kermach/runs/<карта>-<время>.log.
         + `<label class="bgx" title="${esc(T('bg.title', 'Агент карты запускается в скрытой вкладке: в полосе её нет, у карты кнопка «Показать». Карта стала «готово» — вкладка закрывается сама, экран остаётся в .kermach/runs/<карта>-<время>.log'))}">`
-        + `<input type="checkbox" data-do="bg"${bgOn ? ' checked' : ''}><span>${esc(T('bg.cap', 'в фоне'))}</span></label></div>`;
+        + `<input type="checkbox" data-do="bg"${bgOn ? ' checked' : ''}><span>${esc(T('bg.cap', 'в фоне'))}</span></label>`
+        // «Агент главной сессии» (t1485): на нём kermach roadmap start и кнопка «Новая главная сессия» открывают главную вкладку.
+        + `<label class="bgx" title="${esc(T('mainAgent.title', 'На каком агенте открывается главная сессия: kermach roadmap start и кнопка «Новая главная сессия». Сообщения о картах идут во вкладку с пометкой «Главная» — её можно переставить из меню вкладки'))}">`
+        + `<span>${esc(T('mainAgent.cap', 'главная:'))}</span><select data-do="magent">${(lists.AGENTS || ['claude', 'codex']).map((/** @type {string} */ a) => `<option value="${esc(a)}"${a === mainAg ? ' selected' : ''}>${esc(a)}</option>`).join('')}</select></label></div>`;
     }
     // Список «В фоне» (t1073): кто в скрытых вкладках, в каком состоянии, сколько идёт. Число скрытых — кнопка «в фоне: N» у «+» (t1061), здесь не повторяем.
-    if (Array.isArray(b.bg) && b.phases.length) html += bgHtml(b.bg);
+    if (Array.isArray(b.bg) && b.phases.length) html += bgHtml(b.bg, Array.isArray(b.reviews) ? b.reviews : []);
     if (html.length > sessAt) html = `${html.slice(0, sessAt)}<div class="box sess">${html.slice(sessAt)}</div>`;
     wItems = new Map();
     for (const wv of Array.isArray(b.waves) ? b.waves : []) for (const it of wv.items) {
@@ -932,6 +1099,10 @@ function roadmapSetup(host) {
         + `${waveButtons(f, cards, nsel)}${reportButtons(f, b)}</div>`;
       if (waveNote && waveNote.phase === f.id) html += `<div class="wnote">${esc(waveNote.text)}</div>`;
       else if (b.reports && b.reports[f.id] && b.reports[f.id].sumSt) html += `<div class="wnote">${esc(sumWord(b.reports[f.id].sumSt))}</div>`;
+      // Прерванная волна (t1422) видна и в свёрнутой фазе: окно открыли — сразу видно, что волну можно продолжить.
+      for (const wv of Array.isArray(b.cut) ? b.cut : []) if (wv.phase === f.id) html += cutLine(wv);
+      // Проверка роадмапа (t1437) — и в свёрнутой фазе: волна из-за неё не стартовала.
+      for (const e of Array.isArray(b.checks) ? b.checks : []) if (e.phase === f.id) html += checkLine(e);
       if (!fopen) { html += '</div>'; continue; }
       if (cards.length) html += `<div class="bar"><i style="width:${Math.round((done.length / cards.length) * 100)}%"></i></div>`;
       if (hl && dot !== 'g' && f.healthWhy) html += `<div class="why">${esc([f.healthWhy, f.healthBy, f.healthAt].filter(Boolean).join(' · '))}</div>`;
@@ -1110,11 +1281,12 @@ function roadmapSetup(host) {
     const text = (/** @type {{ key: string, mono?: boolean, hint?: string }} */ f) => `<div class="f" data-f="${f.key}">${lab(f.key)}<div class="v">`
       + `<textarea data-k="${f.key}" rows="1" spellcheck="false"${f.mono ? ' class="mono"' : ''}${f.hint ? ` data-hint="${f.key}"` : ''}></textarea>${ext(f.key)}</div></div>`;
     return `<div class="ctop"><div class="cbar"><span class="back" data-act="back"></span><span class="crumb"></span><span class="grow"></span><span class="saved"></span>`
-      + `<span class="cbtns"><button type="button" class="btn" data-act="prompt"></button><button type="button" class="btn" data-act="show" hidden></button><button type="button" class="btn" data-act="run"></button><button type="button" class="btn pri" data-act="save"></button></span></div>`
-      + '<div class="notes"></div></div>'
+      + `<span class="cbtns"><button type="button" class="btn" data-act="prompt"></button><button type="button" class="btn" data-act="show" hidden></button><button type="button" class="btn" data-act="run"></button><button type="button" class="btn" data-act="credits" hidden></button><button type="button" class="btn" data-act="toCredits" hidden></button><button type="button" class="btn pri" data-act="save"></button></span></div>`
+      + '<div class="crform" hidden></div><div class="notes"></div></div>'
       + '<div class="box cbox"><div class="chead"><span class="num"></span><span class="ttl"></span></div>'
       + '<div class="pills"><label class="pill st"><span class="si"></span><select data-k="status"></select></label><span class="pill wait" hidden></span>'
       + `<span class="pill dep"></span><span class="pill rdep"></span></div>${ext('status')}`
+      + '<div class="ans" hidden><div class="anscap"></div><textarea class="ansv" rows="2" spellcheck="false"></textarea><div class="step"><button type="button" class="btn pri" data-act="answer"></button><span class="ansm"></span></div></div>'
       + RM_TEXT.map(text).join('')
       + `<div class="f" data-f="agent" data-also="model effort">${lab('ame')}<div class="v"><div class="sels"><select data-k="agent"></select><select data-k="model"></select><select data-k="effort"></select></div>`
       + `${ext('agent')}${ext('model')}${ext('effort')}`
@@ -1133,6 +1305,8 @@ function roadmapSetup(host) {
     q('[data-act="prompt"]').textContent = T('prompt', 'Показать промпт');
     q('[data-act="prompt"]').title = T('promptTitle', 'Текст, который получит агент: общие правила, паспорт проекта, шаблон вида работы, карта и свежие заметки. Собирается из файлов, только чтение');
     q('[data-act="run"]').textContent = T('run', 'Запустить');
+    q('[data-act="credits"]').textContent = T('runCredits', 'Запустить на кредитах');
+    q('[data-act="toCredits"]').textContent = T('cr.card', 'На кредиты');
     q('[data-act="show"]').textContent = T('show', 'Показать');
     q('[data-act="show"]').title = T('showTitle', 'Агент карты работает в фоне: показать его вкладку в верхней полосе');
     q('[data-act="save"]').textContent = T('save', 'Сохранить');
@@ -1173,6 +1347,15 @@ function roadmapSetup(host) {
     w.hidden = !(st === 'в очереди' && wait.length);
     w.textContent = T('waits', 'ждёт {ids}', { ids: wait.join(', ') });
     const link = (/** @type {string} */ id) => { const x = byId.get(id); return `<span class="dw"><span class="lnk" data-open="${esc(id)}">${esc(id)}</span>${x ? ` (${esc(statusWord(x.status))})` : ` (${esc(T('noCard', 'карты нет'))})`}</span>`; };
+    // t1375: ответ на вопрос карты «ждёт ответа» — та же команда answer плагина, что у kermach roadmap answer: раздел в карте и отпечаток для проверяющего.
+    const ans = q('.ans');
+    ans.hidden = !(c && c.status === 'ждёт ответа');
+    q('.anscap').textContent = T('ans.cap', 'Ответ на вопрос карты');
+    /** @type {HTMLTextAreaElement} */ (q('.ansv')).placeholder = T('ans.ph', 'Текст ответа — допишется в карту разделом «Ответ человека»');
+    const ab = /** @type {HTMLButtonElement} */ (q('[data-act="answer"]'));
+    ab.textContent = T('ans.btn', 'Ответить');
+    ab.disabled = !!cur.answering;
+    q('.ansm').textContent = cur.ansMsg || '';
     q('.pill.dep').innerHTML = `${esc(T('dependsOn', 'зависит от:'))} ${deps.length ? deps.map(link).join(', ') : '—'}`;
     const rev = b.cards.filter((/** @type {any} */ x) => x.depends.includes(cur && cur.id)).map((/** @type {any} */ x) => x.id);
     // Ступень следующего запуска (t832): её считает main.js той же функцией, что и запуск; окно только показывает c.next.
@@ -1273,6 +1456,62 @@ function roadmapSetup(host) {
     const sh = /** @type {HTMLButtonElement} */ (cardEl.querySelector('[data-act="show"]'));
     if (sh) sh.hidden = !(c && c.run && !c.run.gone && c.run.hidden);
     b.title = why || T('runTitle', 'Открыть вкладку агента из карты в папке проекта. Первое сообщение — промпт карты, как в «Показать промпт»');
+    // «Запустить на кредитах» (t1358): только при сохранённом ключе «Кредиты API» (credits доски) и только у Claude — обёртка вкладки запускает claude.
+    const cr = /** @type {HTMLButtonElement} */ (cardEl.querySelector('[data-act="credits"]'));
+    if (cr) {
+      cr.hidden = b.hidden || !(last && last.credits) || (getV('agent') || 'claude') !== 'claude';
+      cr.disabled = !!why;
+      cr.title = why || T('runCreditsTitle', 'Как «Запустить», но вкладка «Claude Agent · кредиты»: платят API-кредиты, модель и потолок — из «Настройки» → «Кредиты API»');
+    }
+    // t1522: «На кредиты» — карта «в очереди» агента claude, когда плагин «Кредиты» есть.
+    const tc = /** @type {HTMLButtonElement} */ (cardEl.querySelector('[data-act="toCredits"]'));
+    if (tc) {
+      const j = c && last.creditJobs ? last.creditJobs[c.id] : null;
+      const busy = !!j && ['в очереди', 'идёт'].includes(j.status);
+      tc.hidden = b.hidden || !(last && last.creditsBar) || (getV('agent') || 'claude') !== 'claude' || !c || c.status !== 'в очереди';
+      tc.disabled = busy;
+      tc.title = busy ? T('cr.cardBusy', 'Карта уже на кредитах: задание {id}', { id: j.id }) : T('cr.cardTitle', 'Положить карту в очередь плагина «Кредиты» заданием «агент»: работает claude на API-кредитах в своей копии проекта, без вкладки');
+      if (tc.hidden) /** @type {HTMLElement} */ (cardEl.querySelector('.crform')).hidden = true;
+    }
+  };
+  /** Модель и усилие для форм «На кредиты»: значение «модель|усилие». */
+  const crEffName = (/** @type {string} */ e) => ({ низкое: T('eff.low', 'низкое'), среднее: T('eff.mid', 'среднее'), высокое: T('eff.high', 'высокое') })[/** @type {'низкое'} */ (e)] || e;
+  const CR_PAIRS = [['sonnet', 'низкое'], ['sonnet', 'среднее'], ['sonnet', 'высокое'], ['opus', 'среднее'], ['opus', 'высокое'], ['haiku', 'низкое']];
+  /** @param {string} model @param {string} effort */
+  const crOptions = (model, effort) => {
+    const name = (/** @type {string} */ m) => m === 'opus' ? 'Opus 5.5' : m === 'haiku' ? 'Haiku 5.5' : 'Sonnet 5.5';
+    const has = CR_PAIRS.some(([m, e]) => m === model && e === effort);
+    const list = has ? CR_PAIRS : [[model, effort], ...CR_PAIRS];
+    return list.map(([m, e]) => `<option value="${esc(`${m}|${e}`)}"${m === model && e === effort ? ' selected' : ''}>${esc(`${name(m)} · ${crEffName(e)}`)}</option>`).join('');
+  };
+  /** Форма «Положить на кредиты» в карте: модель и усилие, потолок. */
+  const crFormOpen = () => {
+    if (!cur) return;
+    const f = /** @type {HTMLElement} */ (cardEl.querySelector('.crform'));
+    if (!f.hidden) { f.hidden = true; return; }
+    const big = /opus/i.test(getV('model') || '') || /высок|максим/.test(getV('effort') || '');
+    const m = big ? 'opus' : 'sonnet';
+    const e = big ? 'среднее' : 'низкое';
+    f.innerHTML = `<b>${esc(T('cr.formTitle', 'Положить на кредиты'))}</b>`
+      + `<div class="row"><label>${esc(T('cr.model', 'Модель и усилие'))}<select data-cr="me">${crOptions(m, e)}</select></label>`
+      + `<label>${esc(T('cr.budget', 'Потолок, $'))}<input type="text" data-cr="budget" value="${big ? '6' : '3'}" spellcheck="false"></label></div>`
+      + `<div class="tx">${esc(T('cr.formText', 'Карта уйдёт заданием вида «агент»: claude работает в своей копии проекта, правки переносит «Принять» в панели «Кредиты». После работы карту смотрит проверяющий, как сейчас.'))}</div>`
+      + `<div class="err" hidden></div><div class="row"><button type="button" class="btn pri" data-act="crGo">${esc(T('cr.go', 'Положить в очередь'))}</button><button type="button" class="btn" data-act="crNo">${esc(T('cr.cancel', 'Отмена'))}</button></div>`;
+    f.hidden = false;
+  };
+  const crFormGo = async () => {
+    if (!cur) return;
+    const f = /** @type {HTMLElement} */ (cardEl.querySelector('.crform'));
+    const [model, effort] = String(/** @type {HTMLSelectElement} */ (f.querySelector('[data-cr="me"]')).value).split('|');
+    const budget = String(/** @type {HTMLInputElement} */ (f.querySelector('[data-cr="budget"]')).value).trim();
+    const err = /** @type {HTMLElement} */ (f.querySelector('.err'));
+    const go = /** @type {HTMLButtonElement} */ (f.querySelector('[data-act="crGo"]'));
+    go.disabled = true;
+    const r = await api('creditsSend', cur.id, { model, effort, budget });
+    go.disabled = false;
+    if (r && r.error) { err.textContent = r.error; err.hidden = false; return; }
+    f.hidden = true;
+    host.log(`${cur.id}: на кредиты — задание ${r.id}`);
   };
 
   /**
@@ -1322,7 +1561,7 @@ function roadmapSetup(host) {
   const openCard = (id) => {
     const c = last && last.cards ? last.cards.find((/** @type {any} */ x) => x.id === id) : null;
     if (!c) return;
-    cur = { id, file: c.file, base: {}, ext: {}, notes: { clash: [], upd: [], err: '', gone: '', leave: null, run: null }, saved: '', busy: false, starting: false };
+    cur = { id, file: c.file, base: {}, ext: {}, notes: { clash: [], upd: [], err: '', gone: '', leave: null, run: null }, saved: '', busy: false, starting: false, answering: false, ansMsg: '' };
     // t1197 (d211): главная часть смотрит файл открытой карты каждый круг — правка видна сразу, а не через очередь опроса большой доски.
     api('focus', id);
     cardEl.innerHTML = cardHtml();
@@ -1447,9 +1686,14 @@ function roadmapSetup(host) {
    * Открытый паспорт — как карта (t512). base — текст разделов из файла, на котором стоит форма; ext — текст файла, разошедшийся с правкой человека.
    * notes — clash и upd (файл изменился снаружи), err (запись не принята), gone (файла нет или он с ошибкой), leave (уйти с несохранённым).
    * @type {null | { base: Record<string, string>, ext: Record<string, string>,
-   *   notes: { clash: string[], upd: string[], err: string, gone: string, leave: null | (() => void) }, saved: string, busy: boolean }}
+   *   notes: { clash: string[], upd: string[], err: string, gone: string, leave: null | (() => void) }, saved: string, busy: boolean,
+   *   lang: { want: string, busy: boolean, note: null | { kind: string, text: string } } }}
+   * lang (t1429) — смена языка доски: want — выбранный язык до подтверждения, note — итог или отказ.
    */
   let ps = null;
+  /** Языки доски (t1429). Запасное название — на самом языке, как в списке «Язык программы»; словарь интерфейса может его заменить. */
+  const BOARD_LANGS = ['ru', 'uk', 'en', 'de'];
+  const langName = (/** @type {string} */ c) => (c === 'ru' ? T('pl.ru', 'Русский') : c === 'uk' ? T('pl.uk', 'Українська') : c === 'en' ? T('pl.en', 'English') : c === 'de' ? T('pl.de', 'Deutsch') : c);
   /** Паспорт открыт с экрана промпта карты (t579): «назад» ведёт в промпт, а не к доске. */
   let psBack = false;
   const PASS_KEYS = RM_PASSPORT.map((s) => s.key);
@@ -1467,7 +1711,8 @@ function roadmapSetup(host) {
   const pdirty = (/** @type {string} */ k) => !!ps && !!pin(k) && pnv(pin(k).value) !== pnv(ps.base[k]);
   /** Каркас вида — один раз при открытии: ввод живёт в полях, перерисовка трогает только подписи и пометки. */
   const passHtml = () => '<div class="ctop"><div class="cbar"><span class="back" data-sact="back"></span><span class="ttl"></span><span class="pbadge"></span>'
-    + '<span class="grow"></span><span class="saved"></span><span class="cbtns"><button type="button" class="btn pri" data-sact="save"></button></span></div><div class="notes"></div></div>'
+    + `<span class="grow"></span><label class="plang"><span></span><select data-plang>${BOARD_LANGS.map((k) => `<option value="${k}">${esc(langName(k))}</option>`).join('')}</select></label><span class="saved"></span>`
+    + '<span class="cbtns"><button type="button" class="btn pri" data-sact="save"></button></span></div><div class="notes"></div></div>'
     + RM_PASSPORT.map((s, i) => `<div class="box psec" data-sec="${esc(s.key)}"><div class="phd"><span class="pn">${String(i + 1).padStart(2, '0')}</span>`
       + `<span class="pt" data-pt="${esc(s.key)}"></span><span class="pnote warn" hidden></span></div>`
       + `<textarea data-s="${esc(s.key)}" rows="1" spellcheck="false"${s.mono ? ' class="mono"' : ''}></textarea><div class="ext" hidden></div></div>`).join('');
@@ -1484,6 +1729,12 @@ function roadmapSetup(host) {
     sb.title = T('pe.saveTitle', 'Записать в passport.md разделы, которые вы поменяли. Остальные строки файла не меняются');
     sb.disabled = ps.busy || !any || !p;
     q('.cbar .saved').textContent = any ? '' : ps.saved;
+    // Язык доски (t1429): выбранный, но не подтверждённый язык держим в списке; иначе — язык из паспорта.
+    const pl = /** @type {HTMLSelectElement} */ (q('select[data-plang]'));
+    q('.plang > span').textContent = T('pl.cap', 'Язык доски');
+    pl.title = T('pl.title', 'На этом языке программа пишет в файлы доски статусы и подписи полей. Карты на любом из четырёх языков читаются всегда');
+    pl.value = ps.lang.want || (last && last.lang) || 'ru';
+    pl.disabled = ps.lang.busy || !p;
     // Пустой раздел — по тому, что сейчас в поле: очистили — сразу жёлтый, вписали — уже нет.
     for (const s of RM_PASSPORT) {
       const box = q(`[data-sec="${s.key}"]`);
@@ -1507,6 +1758,12 @@ function roadmapSetup(host) {
     const n = ps.notes;
     const acts = (/** @type {[string, string][]} */ list) => `<div class="acts">${list.map(([a, t]) => `<button type="button" class="btn" data-snote="${a}">${esc(t)}</button>`).join('')}</div>`;
     let html = '';
+    const L = ps.lang;
+    if (L.want) {
+      html += `<div class="note warn" data-n="lang">${esc(T('pl.ask', 'Сменить язык доски на «{lang}»? Программа перепишет статусы и подписи полей во всех файлах доски. Прежние файлы — в папку бэкапа рядом с папкой доски.', { lang: langName(L.want) }))}`
+        + acts([['langOk', L.busy ? T('pl.busy', 'Переписываю…') : T('pl.ok', 'Сменить язык')], ['langNo', T('pl.no', 'Не менять')]]) + '</div>';
+    }
+    if (L.note) html += `<div class="note ${L.note.kind}" data-n="langNote">${esc(L.note.text)}${acts([['langGot', T('gotIt', 'Понятно')]])}</div>`;
     if (n.gone) html += `<div class="note bad">${esc(n.gone)}</div>`;
     if (n.err) html += `<div class="note bad" data-n="err">${esc(n.err)}</div>`;
     if (n.clash.length) {
@@ -1547,7 +1804,7 @@ function roadmapSetup(host) {
   };
   const openPassport = () => {
     if (!last || !last.passport) return;
-    ps = { base: {}, ext: {}, notes: { clash: [], upd: [], err: '', gone: '', leave: null }, saved: '', busy: false };
+    ps = { base: {}, ext: {}, notes: { clash: [], upd: [], err: '', gone: '', leave: null }, saved: '', busy: false, lang: { want: '', busy: false, note: null } };
     passEl.innerHTML = passHtml();
     for (const k of PASS_KEYS) { ps.base[k] = secVal(last.passport, k); pin(k).value = ps.base[k]; }
     body.hidden = true;
@@ -1642,20 +1899,87 @@ function roadmapSetup(host) {
     else if (x === 'ok') n.upd = [];
     else if (x === 'drop') { const then = n.leave; n.leave = null; if (then) then(); return; }
     else if (x === 'stay') n.leave = null;
+    else if (x === 'langOk') { plang(); return; }
+    else if (x === 'langNo') { if (ps.lang.busy) return; ps.lang.want = ''; }
+    else if (x === 'langGot') ps.lang.note = null;
     paintPassport();
   });
+  /** Неподтверждённая смена языка не уходит в файлы: правки разделов сначала сохранить — смена перепишет и passport.md. */
+  const plangDirty = () => {
+    if (!ps || !PASS_KEYS.some(pdirty)) return false;
+    ps.lang.want = '';
+    ps.lang.note = { kind: 'warn', text: T('pl.dirty', 'Сначала сохраните правки паспорта: смена языка перепишет и его файл.') };
+    return true;
+  };
+  passEl.addEventListener('change', (ev) => {
+    const s = /** @type {HTMLElement} */ (ev.target).closest('select[data-plang]');
+    if (!ps || !s || ps.lang.busy) return;
+    const v = /** @type {HTMLSelectElement} */ (s).value;
+    ps.lang.note = null;
+    ps.lang.want = v === ((last && last.lang) || 'ru') ? '' : v;
+    if (ps.lang.want) plangDirty();
+    paintPassport();
+  });
+  /** «Сменить язык» (t1429): main.js переписывает слова формата во всех файлах доски; отказ — ни один файл не тронут. */
+  const plang = async () => {
+    if (!ps || ps.lang.busy || !ps.lang.want) return;
+    if (plangDirty()) { paintPassport(); return; }
+    ps.lang.busy = true;
+    paintPassport();
+    const r = await api('setLang', ps.lang.want);
+    if (!ps) return;
+    ps.lang.busy = false;
+    ps.lang.want = '';
+    if (!r || r.error) ps.lang.note = { kind: 'bad', text: T('pl.fail', 'Язык не сменён: {why}', { why: (r && r.error) || '?' }) };
+    else {
+      if (last) last.lang = r.lang === 'ru' ? '' : r.lang;
+      const skip = Array.isArray(r.skipped) && r.skipped.length
+        ? ` ${T('pl.skipped', 'Не тронуто: {files}.', { files: r.skipped.map((/** @type {any} */ x) => `${x.file} — ${x.reason}`).join('; ') })}` : '';
+      ps.lang.note = { kind: skip ? 'warn' : 'info', text: T('pl.done', 'Язык доски — {lang}. Переписано файлов: {n}. Прежние файлы — в {backup}.', { lang: langName(r.lang), n: r.changed.length, backup: r.backup }) + skip };
+    }
+    paintPassport();
+  };
 
   // ——— Фаза во всю панель (t513, экран 12): цель, признаки готовности, здоровье, прогресс, карты фазы ———
   /**
    * Открытая фаза. seen — что видно в виде, строкой: изменилась не от своей записи — пометка upd.
    * Признак пишется сразу щелчком, несохранённого нет. clash — признаки поменяли снаружи раньше, чем пришло событие: отметка не записана.
-   * @type {null | { id: string, file: string, seen: string, notes: { clash: boolean, upd: boolean, err: string, gone: string }, busy: boolean }}
+   * @type {null | { id: string, file: string, seen: string, notes: { clash: boolean, upd: boolean, err: string, gone: string }, busy: boolean, acc?: { busy: boolean, text: string, err: string } }}
    */
   let fz = null;
   /** Карта открыта из вида фазы: «назад» с карты ведёт в фазу. */
   let fzBack = '';
   /** @param {any} f */
   const fzSeen = (f) => JSON.stringify([f.title, f.goal, f.status, f.health, f.healthWhy, f.healthBy, f.healthAt, f.criteria]);
+  /**
+   * «Принять фазу» (t1394): все карты готовы, а фаза не готова — кнопка и неотмеченные признаки. Щелчок — текст kermach roadmap accept fN для главной сессии.
+   * Статус «готова» программа не ставит: его ставит человек или главная сессия после приёмки. @param {any} f @param {any[]} cards @param {any[]} done
+   */
+  const acceptBox = (f, cards, done) => {
+    if (!cards.length || done.length < cards.length || phDone(f)) return '';
+    const miss = f.criteria.filter((/** @type {any} */ c) => !c.done);
+    const a = fz && fz.acc;
+    let h = `<div class="box cbox acc"><div class="cap">${esc(T('fz.accCap', 'Все карты готовы — фазу можно принять'))}</div>`;
+    h += miss.length ? `<div class="tx">${esc(T('fz.accMiss', 'Не отмечены признаки:'))}</div>` + miss.map((/** @type {any} */ c) => `<div class="crit"><span class="si muted">·</span><span class="ct">${esc(c.text)}</span></div>`).join('')
+      : f.criteria.length ? `<div class="tx">${esc(T('fz.accAll', 'Все признаки отмечены — осталось поставить статус «готова».'))}</div>`
+        : `<div class="tx none">${esc(T('fz.accNoCrit', 'Признаков нет — по чему принимать, решает человек.'))}</div>`;
+    h += `<div class="acts"><button type="button" class="btn" data-zact="accept"${a && a.busy ? ' disabled' : ''} title="${esc(T('fz.accTitle', 'То же, что kermach roadmap accept {id}: факты фазы и инструкция главной сессии', { id: f.id }))}">${esc(T('fz.accept', 'Принять фазу'))}</button></div>`;
+    if (a && a.err) h += `<div class="note bad">${esc(a.err)}</div>`;
+    if (a && a.text) h += `<div class="tx">${esc(T('fz.accHow', 'Отдайте главной сессии команду kermach roadmap accept {id} или этот текст; статус «готова» ставится после приёмки.', { id: f.id }))}</div><pre class="acctx" style="white-space:pre-wrap;user-select:text;max-height:24em;overflow:auto">${esc(a.text)}</pre>`;
+    return h + '</div>';
+  };
+  const acceptClick = () => {
+    if (!fz || (fz.acc && fz.acc.busy)) return;
+    const z = fz, id = fz.id;
+    z.acc = { busy: true, text: '', err: '' };
+    paintPhase();
+    api('accept', id).then((/** @type {any} */ r) => {
+      if (fz !== z) return;
+      z.acc = r && typeof r.text === 'string' ? { busy: false, text: r.text, err: '' } : { busy: false, text: '', err: T('fz.accFail', 'Приёмка не собрана: {why}', { why: (r && r.error) || '?' }) };
+      if (!r || r.error) host.log(`приёмка ${id}: ${(r && r.error) || '?'}`);
+      paintPhase();
+    }, (/** @type {any} */ e) => { if (fz !== z) return; z.acc = { busy: false, text: '', err: String((e && e.message) || e) }; paintPhase(); });
+  };
   const fzPhase = () => { const id = fz && fz.id; return id && last && last.phases ? last.phases.find((/** @type {any} */ x) => x.id === id) : null; };
   const paintPhase = () => {
     if (!fz) return;
@@ -1698,6 +2022,7 @@ function roadmapSetup(host) {
         + row2(T('fz.progress', 'прогресс'), `<div class="prog"><div class="bar"><i style="width:${pct}%"></i></div>`
           + `<span>${esc(I18n.n('roadmap.fz.doneOf', cards.length, ['готово {done} из {n} карты', 'готово {done} из {n} карт', 'готово {done} из {n} карт'], { done: done.length }))}</span></div>`)
         + '</div>'
+        + acceptBox(f, cards, done)
         + `<div class="box cbox"><div class="cap">${esc(T('fz.cards', 'Карты'))}</div><div class="cards">`
         + (cards.length ? cards.map((/** @type {any} */ c) => cardRow(c, byId)).join('') : `<div class="none">${esc(T('noCards', 'В фазе пока нет карт'))}</div>`) + '</div></div>';
     }
@@ -1762,7 +2087,8 @@ function roadmapSetup(host) {
     const t = /** @type {HTMLElement} */ (ev.target);
     if (!fz) return;
     if (t.closest('[data-zact="back"]')) { closePhase(); return; }
-    const c = /** @type {HTMLElement | null} */ (t.closest('[data-crit]'));
+    if (t.closest('[data-zact="accept"]')) { acceptClick(); return; }
+    const c =/** @type {HTMLElement | null} */ (t.closest('[data-crit]'));
     if (c) { toggleCrit(Number(c.dataset.crit)); return; }
     if (t.closest('[data-znote="ok"]')) { fz.notes.upd = false; fz.notes.clash = false; paintPhase(); return; }
     const card = /** @type {HTMLElement | null} */ (t.closest('.card[data-id]'));
@@ -2597,6 +2923,28 @@ function roadmapSetup(host) {
   };
 
   /** «Запустить» (t515): вкладку открывает главная часть, окно её покажет само. Список и карта — с новым статусом сразу, до события слежения. */
+  /** Карты, чей ответ ещё пишется (ревью 2710b, М6): переживает закрытие и новое открытие карты, иначе второй щелчок пишет ответ дважды. @type {Set<string>} */
+  const answering = new Set();
+  /** Ответ человека (t1375): команда answer главной части пишет раздел в карту и отпечаток в answers.json; поле пустеет только после записи. */
+  const answerCard = async () => {
+    if (!cur || cur.answering || answering.has(cur.id)) return;
+    const id = cur.id;
+    const box = /** @type {HTMLTextAreaElement} */ (cardEl.querySelector('.ansv'));
+    const text = box.value;
+    if (!text.trim()) { cur.ansMsg = T('ans.empty', 'Напишите ответ'); paintCard(last && last.cards ? last.cards.find((/** @type {any} */ x) => x.id === id) : null); return; }
+    cur.answering = true;
+    cur.ansMsg = '';
+    ab0();
+    answering.add(id);
+    const r = await api('answer', id, text).finally(() => answering.delete(id));
+    if (!cur || cur.id !== id) return;
+    cur.answering = false;
+    if (!r || r.error) cur.ansMsg = T('ans.fail', 'Не записано: {why}', { why: (r && r.error) || '?' });
+    else { box.value = ''; grow(box); cur.ansMsg = T('ans.ok', 'Ответ записан в карту ({head}). Запустите карту снова — агент его прочтёт', { head: String(r.head || '').replace(/^## /, '') }); }
+    paintCard(last && last.cards ? last.cards.find((/** @type {any} */ x) => x.id === id) : null);
+  };
+  const ab0 = () => { const b = /** @type {HTMLButtonElement | null} */ (cardEl.querySelector('[data-act="answer"]')); if (b) b.disabled = true; };
+
   /** Снять pick: человек (t832): update пишет pick без значения, сверка — по значению в файле, как у «Сохранить». */
   const unpick = async () => {
     if (!cur || cur.busy) return;
@@ -2615,13 +2963,14 @@ function roadmapSetup(host) {
     paintCard(last && last.cards ? last.cards.find((/** @type {any} */ x) => x.id === id) : null);
     paintNotes();
   };
-  const launch = async () => {
+  /** @param {boolean} [credits] t1358: вкладка на кредитах API */
+  const launch = async (credits) => {
     if (!cur || runBlock()) return;
     const id = cur.id;
     cur.starting = true;
     cur.notes.run = null;
     paintNotes();
-    const r = await api('run', id);
+    const r = await api('run', id, ...(credits ? [{ credits: true }] : []));
     if (!cur || cur.id !== id) return;
     cur.starting = false;
     if (!r || r.error || !r.session) {
@@ -2693,8 +3042,13 @@ function roadmapSetup(host) {
     if (act && act.dataset.act === 'save') { save(); return; }
     if (act && act.dataset.act === 'prompt') { showPrompt(); return; }
     if (act && act.dataset.act === 'run') { launch(); return; }
+    if (act && act.dataset.act === 'credits') { launch(true); return; }
+    if (act && act.dataset.act === 'toCredits') { crFormOpen(); return; }
+    if (act && act.dataset.act === 'crGo') { crFormGo(); return; }
+    if (act && act.dataset.act === 'crNo') { /** @type {HTMLElement} */ (cardEl.querySelector('.crform')).hidden = true; return; }
     if (act && act.dataset.act === 'show') { showRun(); return; }
     if (act && act.dataset.act === 'unpick') { unpick(); return; }
+    if (act && act.dataset.act === 'answer') { answerCard(); return; }
     const note = /** @type {HTMLElement | null} */ (t.closest('[data-note]'));
     if (!note) return;
     const n = cur.notes;
@@ -2802,7 +3156,8 @@ function roadmapSetup(host) {
     if (comp.busy) return;
     comp.busy = true; comp.note = null;
     draw();
-    const r = await api('compose', T('composeTab', 'Роадмап · составить'));
+    // Язык окна (t1429) — язык новой доски: main.js запишет его в паспорт, когда агент его заведёт.
+    const r = await api('compose', T('composeTab', 'Роадмап · составить'), I18n.lang());
     comp.busy = false;
     if (stopped) return;
     if (r && r.sid) {
@@ -2842,6 +3197,28 @@ function roadmapSetup(host) {
     nc.timer = setTimeout(() => { nc.note = null; if (!stopped && open) draw(); }, 10000);
     draw();
   };
+  /** «Новая главная сессия» (t1423, Д8): команда start без итога — задание «Новая сессия». Вкладка уже открыта — переход на неё. */
+  const orchRun = async () => {
+    if (oc.busy) return;
+    oc.busy = true; nc.note = null;
+    draw();
+    const r = await api('start', T('orchTab', 'Главная сессия'));
+    oc.busy = false;
+    if (stopped) return;
+    if (r && r.sid) {
+      nc.note = { bad: true, text: T('orchAlready', 'Вкладка главной сессии уже открыта, показываю её.') };
+      host.pages.show(String(r.sid));
+    } else if (!r || r.error || !r.session) {
+      nc.note = { bad: true, text: T('orchFail', 'Не открыто: {why}', { why: (r && r.error) || '?' }) };
+      host.log(`главная сессия: не открыто: ${(r && r.error) || '?'}`);
+    } else {
+      nc.note = { bad: false, text: T('orchOpened', 'Вкладка главной сессии открыта: она прочитает журнал и доску и напишет, где мы.') };
+    }
+    clearTimeout(nc.timer);
+    nc.timer = setTimeout(() => { nc.note = null; if (!stopped && open) draw(); }, 10000);
+    draw();
+  };
+  orchBtn.addEventListener('click', () => { orchRun(); });
   // ——— Волна (t687) и выделение (t688) ———
   const clearSel = () => { sel.phase = ''; sel.ids = new Set(); sel.anchor = ''; };
   /** Ctrl+щелчок — карта в выделение или из него; Shift+щелчок — диапазон от anchor по порядку строк фазы. Другая фаза — выделение начинается заново. @param {HTMLElement} c @param {boolean} shift @param {boolean} ctrl */
@@ -2867,6 +3244,7 @@ function roadmapSetup(host) {
   const waveClick = (btn) => {
     const mode = btn.dataset.wave || '';
     const wid = btn.dataset.wid || '';
+    if (mode === 'credits') { crPhaseOpen(btn.dataset.ph || ''); return; }
     if (mode === 'stop') {
       if (stopAsk && stopAsk.id === wid && stopAsk.until > Date.now()) {
         stopAsk = null;
@@ -2879,11 +3257,38 @@ function roadmapSetup(host) {
       return;
     }
     if (mode === 'drop') { api('waveDrop', wid); return; }
+    // Проверка роадмапа (t1437): «запускать всё равно» — та же волна без проверки; «убрать» — строку проверки.
+    if (mode === 'checkDrop') { api('checkDrop', btn.dataset.ph || ''); return; }
+    if (mode === 'force') {
+      const ph = btn.dataset.ph || '';
+      waveNote = null;
+      host.log(`волна ${ph}: человек нажал «запускать всё равно»`);
+      api('waveForce', ph).then((/** @type {any} */ r) => {
+        if (stopped || !r || !r.error) return;
+        waveNote = { phase: ph, text: T('wave.failAll', 'Волна не запущена: {why}', { why: r.error }) };
+        host.log(`волна ${ph} («запускать всё равно») не запущена: ${r.error}`);
+        draw();
+      });
+      return;
+    }
+    if (mode === 'resume') {
+      const ph = btn.dataset.ph || '';
+      waveNote = null;
+      api('waveResume', wid).then((/** @type {any} */ r) => {
+        if (stopped || !r || !r.error) return;
+        waveNote = { phase: ph, text: T('wave.resumeFail', 'Волна не продолжена: {why}', { why: r.error }) };
+        host.log(`волна ${wid} не продолжена: ${r.error}`);
+        draw();
+      });
+      return;
+    }
     const ph = btn.dataset.ph || '';
     waveNote = null;
     const ids = (mode === 'sel' || mode === 'one') && sel.phase === ph ? [...sel.ids] : [];
     (mode === 'one' ? api('runOne', ids, ph) : api('wave', ph, mode, ids)).then((/** @type {any} */ r) => {
       if (stopped) return;
+      // Отказ проверки роадмапа (t1437): ошибки и кнопки — строкой проверки под фазой (b.checks), вторую строку не пишем.
+      if (r && r.error && Array.isArray(r.check)) { host.log(`волна в ${ph} (${mode}) не запущена: проверка роадмапа нашла ${r.check.length}`); draw(); return; }
       if (!r || r.error) {
         const why = (r && r.error) || '?';
         const skip = r && Array.isArray(r.skipped) ? r.skipped.map((/** @type {any} */ x) => `${x.id} — ${skipWhy(x)}`).join(', ') : '';
@@ -2952,6 +3357,8 @@ function roadmapSetup(host) {
     if (s) { api('setState', { maxRuns: Number(s.value) }); limDone(); }
     const g = /** @type {HTMLInputElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('input[data-do="bg"]'));
     if (g) { bgOn = g.checked; api('setState', { bg: bgOn }); }
+    const ma = /** @type {HTMLSelectElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('select[data-do="magent"]'));
+    if (ma) { mainAg = ma.value; api('setState', { mainAgent: mainAg }); }
   });
   // Список предела открыт (t722): событие доски её не перерисовывает — иначе список закрылся бы и сбросил фокус. Приём t711 «Входящих»:
   // отложенное рисуем, когда фокус ушёл со списка, но не посреди щелчка.
@@ -2980,6 +3387,9 @@ function roadmapSetup(host) {
     if (Date.now() - bandEnd < 300) return;
     const wb = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-wave]'));
     if (wb) { if (!(/** @type {HTMLButtonElement} */ (wb)).disabled) waveClick(wb); return; }
+    // t1522: значок «кредиты · …» на строке карты — задание в панели «Кредиты», карту не открывает.
+    const crb = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-crb]'));
+    if (crb) { ev.stopPropagation(); openCredits(crb.dataset.crb || ''); return; }
     // Отчёт фазы (t701).
     const rb = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-report]'));
     if (rb) { reportOpen(rb.dataset.report || ''); return; }
@@ -3030,6 +3440,76 @@ function roadmapSetup(host) {
     if (open && (ct ? `${ct.sid} ${ct.title}` : '') !== comp.shown) draw();
     if (!syncTimer) syncTimer = setTimeout(() => { syncTimer = null; if (!stopped) api('sync'); }, 300);
   });
+  // ——— t1522: окно «Фазу на кредиты…» (макет, экран 2) — поверх доски в той же панели ———
+  const crEl = $('.rcrd');
+  /** @type {any} */
+  let crPlan = null;
+  /** @param {string} ph */
+  const crPhaseOpen = async (ph) => {
+    const r = await api('creditsPlan', ph);
+    if (!r || r.error) { host.log(`кредиты: окно фазы ${ph}: ${r ? r.error : 'нет ответа'}`); return; }
+    crPlan = r;
+    crPaint();
+    body.hidden = true;
+    crEl.hidden = false;
+  };
+  const crClose = () => { crEl.hidden = true; crPlan = null; body.hidden = false; drawSoft(); };
+  /** Отмеченные строки с их моделью и потолком. */
+  const crPicked = () => [...crEl.querySelectorAll('tr[data-cid]')].filter((tr) => /** @type {HTMLInputElement} */ (tr.querySelector('input[type=checkbox]')).checked).map((tr) => {
+    const [model, effort] = String(/** @type {HTMLSelectElement} */ (tr.querySelector('select')).value).split('|');
+    return { id: /** @type {HTMLElement} */ (tr).dataset.cid || '', model, effort, budget: String(/** @type {HTMLInputElement} */ (tr.querySelector('input[type=text]')).value).trim() };
+  });
+  const crSum = () => {
+    const p = crPicked();
+    const sum = p.reduce((a, x) => a + (Number(x.budget.replace(',', '.').replace('$', '')) || 0), 0);
+    const v = /** @type {HTMLElement | null} */ (crEl.querySelector('[data-tile="sum"]'));
+    if (v) v.textContent = crMoney(sum);
+    const go = /** @type {HTMLButtonElement | null} */ (crEl.querySelector('[data-crp="go"]'));
+    if (go) { go.textContent = I18n.n('roadmap.cr.goN', p.length, ['Положить {n} задание', 'Положить {n} задания', 'Положить {n} заданий']); go.disabled = !p.length; }
+    const s = /** @type {HTMLElement | null} */ (crEl.querySelector('[data-tile="sumS"]'));
+    if (s) s.textContent = I18n.n('roadmap.cr.sumN', p.length, ['{n} карта', '{n} карты', '{n} карт']);
+  };
+  const crPaint = () => {
+    const r = crPlan;
+    const nr = new Map(r.rows.map((/** @type {any} */ x, /** @type {number} */ i) => [x.id, i + 1]));
+    const rows = r.rows.map((/** @type {any} */ x, /** @type {number} */ i) => {
+      const dep = x.depends.length ? `<span class="dep"> · ${esc(T('cr.waits', 'ждёт {n}', { n: x.depends.map((/** @type {string} */ d) => nr.get(d)).join(', ') }))}</span>` : '';
+      const off = !!x.why;
+      return `<tr data-cid="${esc(x.id)}"${off ? ' class="off"' : ''}><td><input type="checkbox"${off ? '' : ' checked'}></td><td>${i + 1}</td><td>${esc(x.id)}</td>`
+        + `<td>${esc(x.title)}${dep}${off ? `<div class="why">${esc(x.why)}</div>` : ''}</td>`
+        + `<td><select>${crOptions(x.model, x.effort)}</select></td><td><input type="text" value="${esc(x.budget)}" spellcheck="false"></td></tr>`;
+    }).join('');
+    const n = r.bar && r.bar.nearest;
+    const nx = r.bar && r.bar.next;
+    const hours = n ? Math.max(0, Math.round((Date.parse(`${n.expires}T23:59:59`) - Date.now()) / 3600000)) : 0;
+    crEl.innerHTML = `<div class="ttl">${esc(T('cr.phaseHead', 'Фазу {ph} на кредиты', { ph: r.phase }))}</div>`
+      + `<div class="tx">${esc(T('cr.phaseText', 'Карты «в очереди» по порядку зависимостей. Каждая уйдёт отдельным заданием «агент»; очередь идёт сверху вниз. Модель, усилие и потолок предлагает Kermach — поменяйте, где нужно.'))}</div>`
+      + (r.rows.length ? `<div class="tw"><table><thead><tr><th></th><th>№</th><th>${esc(T('cr.colCard', 'карта'))}</th><th>${esc(T('cr.colTitle', 'название'))}</th><th>${esc(T('cr.model', 'Модель и усилие'))}</th><th>${esc(T('cr.colBudget', 'потолок'))}</th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<div class="tx">${esc(T('cr.phaseEmpty', 'В фазе нет карт «в очереди».'))}</div>`)
+      + '<div class="tiles">'
+      + `<div class="tile"><div class="k">${esc(T('cr.tileSum', 'Сумма потолков'))}</div><div class="v" data-tile="sum"></div><div class="s" data-tile="sumS"></div></div>`
+      + `<div class="tile"><div class="k">${esc(T('cr.tileNear', 'Ближайшее начисление'))}</div><div class="v">${n ? esc(crMoney(n.left)) : '—'}</div><div class="s">${n ? esc(T('cr.tileBurn', 'сгорает {date}, через {h} ч', { date: crDate(n.expires), h: hours })) : esc(T('cr.tileNone', 'начислений нет'))}</div></div>`
+      + `<div class="tile"><div class="k">${esc(T('cr.tileNext', 'Дальше'))}</div><div class="v">${nx ? esc(crMoney(nx.left)) : '—'}</div><div class="s">${nx ? esc(T('cr.tileNextS', 'до {date}', { date: crDate(nx.expires) })) : ''}</div></div>`
+      + '</div>'
+      + `<div class="tx">${esc(T('cr.phaseNote', 'Без галочки — карты «нужен человек», прод и тяжёлые пробы: причина в строке. После работы каждую карту смотрит проверяющий, как сейчас.'))}</div>`
+      + `<div class="err" hidden></div><div class="foot"><button type="button" class="btn" data-crp="no">${esc(T('cr.cancel', 'Отмена'))}</button><button type="button" class="btn pri" data-crp="go"></button></div>`;
+    crSum();
+  };
+  crEl.addEventListener('change', () => crSum());
+  crEl.addEventListener('input', () => crSum());
+  crEl.addEventListener('click', async (ev) => {
+    const b = /** @type {HTMLButtonElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-crp]'));
+    if (!b || b.disabled) return;
+    if (b.dataset.crp === 'no') { crClose(); return; }
+    b.disabled = true;
+    const r = await api('creditsPhase', crPlan.phase, crPicked());
+    const err = /** @type {HTMLElement} */ (crEl.querySelector('.err'));
+    if (r && r.error) { err.textContent = r.error; err.hidden = false; b.disabled = false; return; }
+    if (r.fail.length) host.log(`кредиты: не ушли — ${r.fail.map((/** @type {any} */ x) => `${x.id}: ${x.error}`).join('; ')}`);
+    host.log(`кредиты: фаза ${crPlan.phase} — заданий ${r.sent.length}: ${r.sent.map((/** @type {any} */ x) => `${x.card}→${x.id}`).join(', ')}`);
+    crClose();
+  });
+  $('.crbar').addEventListener('click', () => openCredits());
   // Правка файлов доски снаружи: главная часть прислала новую доску.
   host.on('board', (/** @type {any} */ b) => {
     if (stopped || !b) return;
@@ -3081,6 +3561,7 @@ function roadmapSetup(host) {
     if (stopped || !s || s.error) return;
     hideDone = !!s.hideDone;
     if (bgOn !== !!s.bg) { bgOn = !!s.bg; if (open) draw(); }
+    if (typeof s.mainAgent === 'string' && s.mainAgent !== mainAg) { mainAg = s.mainAgent; if (open) draw(); }
     if (s.open) setOpen(true, false);
   });
   const offLang = w.I18n ? w.I18n.onChange(() => { labels(); if (open) draw(); if (cur) { cardLabels(); refreshCard(); } if (pv) paintPrompt(); paintPassport(); paintPhase(); paintInbox(); if (dc) decsFrame(); }) : null;

@@ -141,10 +141,41 @@ const lookIcon = (v) => (typeof v === 'string' && /^[a-z0-9-]{1,40}$/i.test(v) ?
 const lookColor = (v) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v : undefined);
 const tabsFile = (c, p) => path.join(c.dataDir, 'tabs', `${p.id}.markdown.json`);
 
+/** Номер временного файла: два сохранения подряд не делят один временный файл. */
+let tmpNo = 0;
+/**
+ * Документ пишется во временный файл рядом и подменяет старый переименованием (t1573): сбой посреди записи
+ * (кончилось место, отключился диск) оставляет старый документ целым. Переименование не прошло — файл держит
+ * другая программа (Windows не даёт подменить открытый без общего доступа на удаление) — тогда пишем прямо в файл:
+ * временный уже записан целиком, значит места хватает. Временный файл после любого исхода удаляется.
+ * @param {string} file @param {Buffer} data
+ */
+async function writeSafe(file, data) {
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}-${++tmpNo}.tmp`);
+  try {
+    await fs.promises.writeFile(tmp, data);
+    try { await fs.promises.rename(tmp, file); } catch { await fs.promises.writeFile(file, data); }
+  } finally { await fs.promises.unlink(tmp).catch(() => {}); }
+}
+
 /**
  * Обработчики — один раз на процесс, из project-window.js.
  * @param {Ctx} c @param {(wc: Electron.WebContents) => Proj | null} projOf
  */
+/** Файл картинки документа: только внутри папки документа (t1575). Абсолютный путь, сетевой «\\server\share», «../» наружу
+ *  и ссылка-переход (junction) наружу — null. Сетевой путь отсекается до обращения к диску: иначе Windows идёт к чужому серверу.
+ *  @param {string} file документ @param {string} rel путь из разметки, уже без ?# и раскодированный @returns {Promise<string | null>} */
+async function imageFile(file, rel) {
+  if (!rel || /^[\\/]/.test(rel) || /^[a-z]:/i.test(rel) || path.isAbsolute(rel)) return null;
+  const dir = path.dirname(path.resolve(file));
+  const abs = path.resolve(dir, rel);
+  if (!inside(dir, abs) || abs.startsWith('\\\\')) return null;
+  let realDir;
+  let realAbs;
+  try { realDir = await fs.promises.realpath(dir); realAbs = await fs.promises.realpath(abs); } catch { return null; }
+  return inside(realDir, realAbs) ? realAbs : null;
+}
+
 function register(c, projOf) {
   if (ctx) return;
   ctx = c;
@@ -184,7 +215,7 @@ function register(c, projOf) {
     if (!isAllowed(e.sender, file)) return { ok: false, error: 'файл не открывался из окна' };
     if (typeof text !== 'string' || text.length > MAX_BYTES) return { ok: false, error: 'текст не тот или слишком большой' };
     const body = Buffer.from(eol === '\r\n' ? text.replace(/\n/g, '\r\n') : text, 'utf8');
-    await fs.promises.writeFile(file, bom ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), body]) : body);
+    await writeSafe(file, bom ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), body]) : body);
     const st = await fs.promises.stat(file);
     c.log(`плагин markdown: сохранён ${file}`);
     return { ok: true, mtimeMs: st.mtimeMs, size: st.size };
@@ -246,7 +277,8 @@ function register(c, projOf) {
     try { rel = decodeURIComponent(rel); } catch {}
     const mime = /** @type {Record<string, string>} */ (IMAGES)[path.extname(rel).toLowerCase()];
     if (!mime) return { ok: false, error: 'не картинка' };
-    const abs = path.resolve(path.dirname(file), rel);
+    const abs = await imageFile(file, rel);
+    if (!abs) return { ok: false, error: 'картинка вне папки документа' };
     const st = await fs.promises.stat(abs);
     if (!st.isFile() || st.size > MAX_IMAGE) return { ok: false, error: 'нет файла или он слишком большой' };
     return { ok: true, url: `data:${mime};base64,${(await fs.promises.readFile(abs)).toString('base64')}` };

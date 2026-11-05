@@ -244,7 +244,7 @@ const PS_ARGS = ['-NoLogo', '-NoExit', '-Command', '$OutputEncoding = [Text.UTF8
  * @param {string[]} [codexHook] флаги -c хука SessionStart Codex от демона (t777). Пусто (старый демон) — codex без хука.
  * @param {boolean} [bypass] Claude без вопросов о разрешениях (t851): --dangerously-skip-permissions, meta.bypass '1'
  * @param {string} [name] имя вкладки Claude для других сессий (t1211, tabName): --name
- * @returns {{ file: string, args: string[], meta: Record<string, string> } | { error: string }}
+ * @returns {{ file: string, args: string[], meta: Record<string, string>, env?: Record<string, string> } | { error: string }}
  */
 function launch(kind, resume, hooksSettings, ag, codexHook, bypass, name) {
   if (kind === 'claude') {
@@ -256,7 +256,7 @@ function launch(kind, resume, hooksSettings, ag, codexHook, bypass, name) {
     // Имя для других сессий (ListAgents, SendMessage, t1211): без флага Claude даёт безликое claude-1c.
     const pre = [...p.pre, ...hooksSettings ? ['--settings', hooksSettings] : [], ...name ? ['--name', name] : []];
     // Агент — и при --resume: без --agent продолженный разговор теряет модель агента (проба t259, q4-summary.txt).
-    // permissionMode файла агента при --agent не действует (t249) — его передаёт флаг; нет поля в файле — нет флага, режим Ростислава.
+    // permissionMode файла агента при --agent не действует (t249) — его передаёт флаг; нет поля в файле — нет флага, режим пользователя.
     // Без вопросов о разрешениях (t851) — флаг ставит только ядро: по пункту меню «+» или настройке проекта, не по аргументам плагина.
     // Флаг как в Орке; --permission-mode bypassPermissions ведёт себя так же (spikes\t851-bypass\probe-claude.txt). Режим агента тогда не ставится: два флага прав спорили бы.
     const agArgs = ag ? ['--agent', ag.name, ...(ag.mode && !bypass ? ['--permission-mode', ag.mode] : [])] : [];
@@ -275,9 +275,11 @@ function launch(kind, resume, hooksSettings, ag, codexHook, bypass, name) {
     // Гасить его нельзя — он общий для всех Codex. С --no-daemon сервер живёт внутри вкладки и закрывается с ней (ОТЧЁТ-t05-codex-server.md).
     // Уведомления Codex — OSC 9 в вывод вкладки, всегда, даже когда окно в фокусе: по ним демон знает «готов» и «требует ответа» (t26).
     // Значения проходят два слоя cmd (codex.cmd) — без кавычек и пробелов.
-    const notify = ['-c', 'tui.notifications=true', '-c', 'tui.notification_method=osc9', '-c', 'tui.notification_condition=always'];
+    const notify = ['-c', 'tui.notifications=true', '-c', 'tui.notification_method=osc9', '-c', 'tui.notification_condition=always',
+      // Плашка «Update available» при каждом запуске вкладки засоряет экран (t1381, d519); ~/.codex/config.toml не трогаем.
+      '-c', 'check_for_update_on_startup=false'];
     // Хук SessionStart (t777): по нему демон узнаёт номер разговора свежей вкладки и новый номер после /clear. В значениях кавычки, пробелы и <> —
-    // .cmd от npm запускается мимо cmd.exe (cmd-shim.unwrap), как подсказка Claude. Первый codex.cmd в PATH — своя обёртка (у Ростислава
+    // .cmd от npm запускается мимо cmd.exe (cmd-shim.unwrap), как подсказка Claude. Первый codex.cmd в PATH — своя обёртка (у пользователя
     // ~/.local/bin/codex.cmd зовёт npm-овский через call): тогда обёртка npm дальше по PATH. Нет её — без хука: номер найдёт демон по журналу (codexRollout).
     const direct = codexHook && codexHook.length ? codexDirect(found) : null;
     const p = direct || found;
@@ -287,6 +289,25 @@ function launch(kind, resume, hooksSettings, ag, codexHook, bypass, name) {
     if (resume) return { file: p.file, args: [...p.pre, 'resume', ...(codexNoDaemon(p.file, p.pre) ? ['--no-daemon'] : []), ...notify, ...hook, resume], meta: { kind, codexSessionId: resume } };
     // --no-daemon есть не у всех версий Codex (0.155 его не знает и выходит с кодом 2): флаг — только если программа его принимает.
     return { file: p.file, args: [...p.pre, ...(codexNoDaemon(p.file, p.pre) ? ['--no-daemon'] : []), ...notify, ...hook], meta: { kind } };
+  }
+  // Claude Agent на кредитах API (t1357): в терминале — обёртка daemon\credits-tab.js, она запускает claude -p с ключом через apiKeyHelper.
+  // Свой бинарник программы как node: под Electron без ELECTRON_RUN_AS_NODE открылось бы окно программы. Номер разговора — как у Claude.
+  if (kind === 'credits') {
+    const ak = require('./api-key');
+    if (!ak.info().has) return { error: i18n.t('term.noApiKey', 'Ключ API не задан: «Настройки» → «Кредиты API».') };
+    const dataDir = ctx ? ctx.dataDir : '';
+    const sessionId = resume || crypto.randomUUID();
+    const args = [path.join(__dirname, '..', 'daemon', 'credits-tab.js'), '--data', dataDir, '--session', sessionId,
+      ...resume ? ['--resume'] : [], ...hooksSettings ? ['--hooks', hooksSettings] : [], ...bypass ? ['--bypass'] : []];
+    const meta = { kind, claudeSessionId: sessionId, ...(bypass ? { bypass: '1' } : {}) };
+    // На Windows electron.exe — оконная программа: консоли псевдотерминала у неё нет, ввод кончается сразу, и обёртка выходит
+    // (spikes\t1357-credits\probe-pty.txt). Поэтому Node человека из PATH — как у строки состояния (daemon\platform.js, nodeCommand).
+    if (process.platform === 'win32') {
+      const node = findProgram('node');
+      if (!node) return { error: i18n.t('term.noNode', 'Для вкладки на кредитах нужен Node.js: {why}.', { why: notFound(['node']) }) };
+      return { file: node.file, args: [...node.pre, ...args], meta };
+    }
+    return { file: process.execPath, args, env: { ELECTRON_RUN_AS_NODE: '1' }, meta };
   }
   // Агент из системы (t183) — как обычный терминал: демон считает агентом только claude и codex, меток и звука нет.
   if (kind.startsWith('agent:')) {
@@ -334,6 +355,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}$/;
 const ALLOW_FLAGS = {
   claude: { '--model': MODEL_RE, '--effort': /^(low|medium|high|xhigh|max)$/, '--strict-mcp-config': null, '--disable-slash-commands': null, '--disallowedTools': /^Agent$/ },
+  // Вкладка на кредитах (t1478): модель, усилие и запрет субагентов карты идут обёртке daemon\credits-tab.js, она передаёт их claude -p.
+  // Модель карты важнее модели из «Кредиты API». Флаги лёгкого старта и mcp — нет: обёртка их не знает.
+  credits: { '--model': MODEL_RE, '--effort': /^(low|medium|high|xhigh|max)$/, '--disallowedTools': /^Agent$/ },
   codex: { '--model': MODEL_RE, '-m': MODEL_RE, '-c': /^model_reasoning_effort=(none|low|medium|high|xhigh|max)$/ },
   'agent:grok': { '--model': MODEL_RE, '-m': MODEL_RE, '--reasoning-effort': /^(low|medium|high|xhigh)$/, '--resume': UUID_RE },
   'agent:gemini': { '--model': MODEL_RE, '-m': MODEL_RE },
@@ -619,7 +643,8 @@ function launchWith(kind, resume, hooksSettings, x, prompt, ag, codexHook, bypas
   const how = launch(kind, resume, hooksSettings, ag, codexHook, bypass, name);
   if ('error' in how || !x && !prompt) return how;
   let args = (x && x.args) || [];
-  let env = x ? x.env : undefined;
+  // Своё окружение вида (credits, t1357: ELECTRON_RUN_AS_NODE) — под env плагина.
+  let env = x && x.env ? { ...('env' in how ? how.env : {}), ...x.env } : 'env' in how ? how.env : undefined;
   if (kind === 'agent:grok' && x && x.args) {
     const g = grokConfig(x);
     if ('error' in g) return g;
@@ -634,6 +659,9 @@ function launchWith(kind, resume, hooksSettings, x, prompt, ag, codexHook, bypas
   // Сообщение одним словом программа приняла бы за подкоманду (t1211): claude update, codex resume. С пробелом в конце это уже не имя
   // подкоманды, а текст (spikes\t1211-env\subcmd.txt). После флага агента (pf) слово — значение флага, его не трогаем; /init подкомандой не бывает.
   const msg = prompt && !pf && !prompt.startsWith('/') && !/\s/.test(prompt) ? `${prompt} ` : prompt;
+  // Карта «Роадмапа» на кредитах (t1553): плагин дал KERMACH_CARD — обёртке флаг --card, она запускает claude -p в режиме разрешений
+  // из настроек пользователя, как карту на подписке. Флаг ставит ядро после checkExtra: сам плагин его передать не может. revive повторяет x — флаг тоже.
+  if (kind === 'credits' && x && x.env && String(x.env.KERMACH_CARD || '').trim()) args = [...args, '--card'];
   const w = withExtra(how, [...args, ...mcpArgs, ...pf ? [pf] : []], msg);
   if ('error' in w) return w;
   return { file: w.file, args: w.args, meta: x ? { ...how.meta, extra: x } : how.meta, env };
@@ -809,7 +837,7 @@ async function runningConversation(d, id) {
 /**
  * Вкладки проекта из файла без живого терминала — запустить заново, по одной. Новый терминал встаёт в файле на место старого.
  * Claude без разговора на диске (в нём не написали ни одного сообщения, или Claude стёр старый разговор) — новый разговор
- * в этой же вкладке, во вкладке строка «прежний разговор не найден, начат новый» (t165, решение Ростислава 04.10 — «Б»).
+ * в этой же вкладке, во вкладке строка «прежний разговор не найден, начат новый» (t165, решение пользователя 04.10 — «Б»).
  * Прежний номер остаётся в main.log: если разговор на самом деле был, его можно продолжить руками (claude --resume).
  * @param {Ctx} c @param {import('../daemon/client').DaemonClient} d @param {{ id: string, path: string }} p @param {number} cols @param {number} rows
  */
@@ -828,8 +856,10 @@ async function revive(c, d, p, cols, rows) {
     try {
       const kind = kindOf({ meta: { kind: t.kind } });
       const name = shownTitle({ ...t, meta: { kind } });
-      if (kind === 'claude' && !t.claudeSessionId) { notices.set(t.sid, i18n.t('term.noConversationId', 'У вкладки «{name}» нет номера разговора — запустить её заново нельзя.', { name })); continue; }
-      const noConv = kind === 'claude' && !hasConversation(t.claudeSessionId || '');
+      // Claude на кредитах (t1357) — тот же номер разговора: обёртка продолжает его claude -p --resume.
+      const cl = kind === 'claude' || kind === 'credits';
+      if (cl && !t.claudeSessionId) { notices.set(t.sid, i18n.t('term.noConversationId', 'У вкладки «{name}» нет номера разговора — запустить её заново нельзя.', { name })); continue; }
+      const noConv = cl && !hasConversation(t.claudeSessionId || '');
       // Запуск от плагина (t253) — те же аргументы, папка и окружение; первое сообщение не повторяется.
       let saved = null;
       if (t.extra) { try { saved = JSON.parse(t.extra); } catch {} }
@@ -843,12 +873,12 @@ async function revive(c, d, p, cols, rows) {
         // Codex, продолженный плагином (t768), — тот же разговор через codex resume; журнал удалили — новый разговор, как у Claude.
         const cxId = kind === 'codex' && t.codexSessionId && UUID_RE.test(t.codexSessionId) ? t.codexSessionId : '';
         const cxGone = !!cxId && !hasConversation(cxId, 'codex', ex.x && ex.x.env);
-        const resumeId = kind === 'claude' ? (noConv ? undefined : t.claudeSessionId) : cxId && !cxGone ? cxId : undefined;
+        const resumeId = cl ? (noConv ? undefined : t.claudeSessionId) : cxId && !cxGone ? cxId : undefined;
         // Агент Claude (t251) — тот же, с тем же режимом, что при открытии: файл агента могли изменить или удалить, вкладка от этого не меняется.
         const ag = kind === 'claude' && t.agent && agents.NAME_RE.test(t.agent) ? { name: t.agent, mode: t.agentMode && /^(default|acceptEdits|plan)$/.test(t.agentMode) ? t.agentMode : '' } : null;
         // Без вопросов о разрешениях (t851) — как вкладку открыли, а не по нынешней настройке проекта. Запрет в настройках Claude — обычный Claude и строка во вкладке.
-        const byOff = kind === 'claude' && t.bypass === '1' ? bypassOff(p.path) : '';
-        const bypass = kind === 'claude' && t.bypass === '1' && !byOff;
+        const byOff = cl && t.bypass === '1' ? bypassOff(p.path) : '';
+        const bypass = cl && t.bypass === '1' && !byOff;
         const how = launchWith(kind, resumeId, d.hooksSettings, ex.x, '', ag, kind === 'codex' ? await codexHookArgs(d, (ex.x && ex.x.cwd) || p.path) : [], bypass, tabName(p.path, name), ex.mcpArgs);
         if ('error' in how) { notices.set(t.sid, how.error); continue; }
         // Разговор уже идёт — в соседней вкладке, запущенной этим же revive, или в другом проекте (t778): второй процесс испортил бы журнал.
@@ -950,7 +980,8 @@ async function openTabHeld(c, p, kind, o, ex0, cols, rows, wc, human, follow, mo
   let byOff = '';
   if (human && human.bypass && kind !== 'claude') return { error: 'без вопросов о разрешениях — только у вкладки Claude' };
   // Настройка «Разрешения Claude» (claudeBypass, Mac-версия, по умолчанию да) — как настройка проекта, для всех проектов.
-  if (kind === 'claude' && ((human && human.bypass) || ((human || follow) && (p.bypass === true || settings.get().claudeBypass !== false)))) {
+  // Claude на кредитах (t1357) следует настройке проекта и claudeBypass, как Claude: в -p спросить «можно?» некому.
+  if ((kind === 'claude' || kind === 'credits') && ((human && human.bypass) || ((human || follow) && (p.bypass === true || settings.get().claudeBypass !== false)))) {
     byOff = bypassOff(p.path);
     if (byOff && human && human.bypass) return { error: bypassOffText(byOff) };
     bypass = !byOff;
@@ -960,7 +991,7 @@ async function openTabHeld(c, p, kind, o, ex0, cols, rows, wc, human, follow, mo
   if (!r.c) return { error: r.error || 'нет связи с демоном' };
   const d = r.c;
   const k = lookOf(kind);
-  // Разговор уже идёт во вкладке любого проекта — второй процесс испортил бы его журнал (решение Ростислава 14.10, t767).
+  // Разговор уже идёт во вкладке любого проекта — второй процесс испортил бы его журнал (решение пользователя 14.10, t767).
   // Или его запускает сейчас revive другого окна (t787): номер занят в launching до create.
   /** @type {{ title: string, project: string, sid: string } | null} */
   let held = null;
@@ -992,7 +1023,7 @@ async function openTabRun(c, d, p, kind, o, ex, k, cols, rows, wc) {
   let title;
   try {
     const live = await projectSessions(d, p.id);
-    title = freeTitle(ex.title || (ex.ag && ex.ag.name) || (kind === 'shell' ? i18n.t('term.shell', 'Терминал') : k.title), live, tabs.titles(c.dataDir, p.id, c.log));
+    title = freeTitle(ex.title || (ex.ag && ex.ag.name) || (kind === 'shell' ? i18n.t('term.shell', 'Терминал') : kind === 'credits' ? i18n.t('term.credits', 'Claude Agent · кредиты') : k.title), live, tabs.titles(c.dataDir, p.id, c.log));
   } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; }
   const how = launchWith(kind, ex.resume || undefined, d.hooksSettings, ex.x, ex.prompt, ex.ag, kind === 'codex' ? await codexHookArgs(d, (ex.x && ex.x.cwd) || p.path) : [], ex.bypass, tabName(p.path, title), ex.mcpArgs);
   if ('error' in how) return how;
@@ -1012,7 +1043,7 @@ async function openTabRun(c, d, p, kind, o, ex, k, cols, rows, wc) {
   const since = c.t0 ? `; от запуска ${Date.now() - c.t0} мс` : '';
   const agLog = `${ex.ag ? `, агент ${ex.ag.name}${ex.ag.mode && !ex.bypass ? ` (--permission-mode ${ex.ag.mode})` : ''}` : ''}${ex.bypass ? ', без вопросов о разрешениях (--dangerously-skip-permissions)' : ''}${ex.byOff ? `, без вопросов о разрешениях не включено: запрет в ${ex.byOff}` : ''}`;
   const from = o && (ex.x || ex.prompt || ex.title || ex.resume) ? `, от плагина${ex.x ? ` ${JSON.stringify({ args: ex.x.args, cwd: ex.x.cwd, env: ex.x.env && Object.keys(ex.x.env) })}` : ''}${ex.prompt ? `, первое сообщение ${ex.prompt.length} знаков` : ''}` : '';
-  const conv = !ex.resume ? (how.meta.claudeSessionId ? `, разговор ${how.meta.claudeSessionId}` : '') : kind === 'claude' ? `, claude --resume ${ex.resume}` : `, codex resume ${ex.resume}`;
+  const conv = !ex.resume ? (how.meta.claudeSessionId ? `, разговор ${how.meta.claudeSessionId}` : '') : kind === 'claude' || kind === 'credits' ? `, claude --resume ${ex.resume}` : `, codex resume ${ex.resume}`;
   const hid = ex.more.hidden ? `, скрытая${ex.more.logPath ? `, журнал ${ex.more.logPath}` : ''}` : '';
   const skipped = ex.agentSkipped ? `, агента ${ex.agentSkipped} нет ни в ~/.claude/agents, ни в папке проекта — продолжен без --agent` : '';
   c.log(`открыл новый ${k.title} в ${p.path}: терминал ${s.sid}, pid ${s.pid}${conv}${agLog}${skipped}${hid}${from}${since}`);
@@ -1164,6 +1195,32 @@ async function attachTo(c, wc, sid, cols, rows) {
 }
 
 /**
+ * Причина из daemon.log для строки «демон не запустился» (t1456): последняя строка «упал: …» в хвосте журнала (не старше 5 минут), целиком
+ * (daemon.js, need и uncaughtException), и путь к журналу. Без слов — строка идёт в {err} перевода term.daemonFail.
+ */
+function daemonCause() {
+  const file = path.join(require('../daemon/protocol').DATA_DIR, 'logs', 'daemon.log');
+  let why = '';
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const st = fs.fstatSync(fd);
+      const size = Date.now() - st.mtimeMs < 5 * 60000 ? st.size : 0;
+      const buf = Buffer.alloc(Math.min(size, 8192));
+      fs.readSync(fd, buf, 0, buf.length, size - buf.length);
+      // Последняя «упал:» в хвосте, а не последняя строка: после неё в журнал могли дописать ещё (t1459). Строка целиком —
+      // в «модуль node-pty не загрузился — …» имя модуля стоит до тире.
+      const lines = buf.toString('utf8').trim().split('\n');
+      for (let i = lines.length - 1; i >= 0 && !why; i--) {
+        const at = lines[i].indexOf('] упал: ');
+        if (at >= 0) why = lines[i].slice(at + 8);
+      }
+    } finally { fs.closeSync(fd); }
+  } catch {}
+  return `${why ? ` — ${why.trim()}` : ''}\n${file}`;
+}
+
+/**
  * Демон для вызова из окна: ошибка — строкой, окно её покажет.
  * После обрыва связи запрос к старому клиенту не получил бы ответа никогда — поэтому проверка client.
  * Связи нет — окно просит демона заново (link.ensure): найти живого или поднять нового (t125).
@@ -1175,7 +1232,7 @@ async function daemon() {
   try {
     await c.daemon.catch((err) => { if (!c.link) throw err; });
     if (!client && c.link) await c.link.ensure();
-  } catch (err) { return { error: i18n.t('term.daemonFail', 'Демон терминалов не запустился: {err}', { err }) }; }
+  } catch (err) { return { error: i18n.t('term.daemonFail', 'Демон терминалов не запустился: {err}', { err: `${err}${daemonCause()}` }) }; }
   return client ? { c: client } : { error: i18n.t('term.daemonLost', 'связь с демоном терминалов потеряна — перезапустите окно') };
 }
 
@@ -1548,6 +1605,13 @@ function register(c) {
     if (!live && !inFile) return { error: `у проекта нет вкладки ${sid}` };
     log(`вкладка ${sid} в ${p.path}${live ? '' : ' (завершённая)'}: ${JSON.stringify(f.fields)}`);
     return { ok: true, fields: f.fields };
+  });
+
+  // Окно открыло вкладку на экране (t1470): демон снимает у неё «не смотрел». Без ответа — окно не ждёт; нет демона или вкладки — ничего.
+  ipcMain.on('term:seen', async (e, { sid }) => {
+    if (!sender.allowed(e, 'term:seen') || !projectWindow.projectOf(e.sender)) return;
+    const r = await daemon();
+    if (r.c) /** @type {any} */ (r.c).request('seen', { sid: String(sid || '') }).catch(() => {});
   });
 
   // «Показать» в списке «в фоне» (t1061): скрытая вкладка окна — тем же путём, что ctx.showTab плагина.

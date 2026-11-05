@@ -104,7 +104,20 @@ function importOrca(data, file, log) {
   for (const g of orca.groups) if (!data.groups.some((x) => x.id === g.id)) data.groups.push(g);
   const fromOrca = new Set(orca.projects.map((p) => p.id));
   const own = data.projects.filter((p) => !fromOrca.has(p.id));
-  data.projects = [...orca.projects, ...own];
+  // Свой проект с той же папкой: поля, которые человек поменял (не равные умолчанию newProject), остаются его.
+  // Запись v1 — одни умолчания, её Орка заменяет целиком.
+  const byId = new Map(data.projects.map((p) => [p.id, p]));
+  const merged = orca.projects.map((op) => {
+    const mine = byId.get(op.id);
+    if (!mine) return op;
+    /** @type {any} */
+    const def = newProject(mine.path);
+    /** @type {any} */
+    const out = { ...op };
+    for (const [k, v] of Object.entries(mine)) if (v !== undefined && v !== def[k]) out[k] = v;
+    return out;
+  });
+  data.projects = [...merged, ...own];
   data.importedFromOrca = { at, count: orca.projects.length };
   log(`перенос из Орки: ${orca.projects.length} проектов, ${orca.groups.length} групп; своих, которых нет в Орке: ${own.length}`);
   return true;

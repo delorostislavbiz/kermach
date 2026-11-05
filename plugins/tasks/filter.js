@@ -60,7 +60,8 @@
   /** Слово запроса → условие. @param {string} raw */
   function term(raw) {
     const w = raw.toLowerCase().replace(/\s+/g, ' ');
-    if (WORDS[w]) return { k: WORDS[w] };
+    // Только свои ключи: «constructor», «__proto__» иначе берутся из Object.prototype (t1581).
+    if (Object.prototype.hasOwnProperty.call(WORDS, w)) return { k: WORDS[w] };
     const p = /^p([1-4])$/.exec(w);
     if (p) return { k: 'prio', v: p[1] };
     if (w.startsWith('#') && w.length > 1) return { k: 'project', v: w.slice(1).replace(/_/g, ' ') };

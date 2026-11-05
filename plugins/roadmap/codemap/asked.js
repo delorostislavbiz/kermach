@@ -120,7 +120,9 @@ function locked(file, fn) {
       const code = /** @type {any} */ (e).code;
       if (code !== 'EEXIST' && code !== 'EPERM') throw e;
       if (Date.now() > until) throw new Error(`журнал не записан: замок ${lock} не взять за ${LOCK_WAIT_MS / 1000} с (${code}) — нет права записи в папку или замок держит другой процесс`);
-      const st = fs.lstatSync(lock, { throwIfNoEntry: false });
+      // Замок, который другой процесс как раз удаляет, на Windows даёт EPERM и на lstat (t1382): он уходит — подождать и повторить.
+      let st;
+      try { st = fs.lstatSync(lock, { throwIfNoEntry: false }); } catch (le) { if (/** @type {any} */ (le).code !== 'EPERM') throw le; }
       if (st && Date.now() - st.mtimeMs > LOCK_STALE_MS) { try { fs.unlinkSync(lock); } catch { /* убрал другой */ } continue; }
       Atomics.wait(nap, 0, 0, 5);
     }

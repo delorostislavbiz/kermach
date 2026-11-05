@@ -5,28 +5,30 @@
 // "lang": { "uk": { "file": "uk.json", "name": "Українська" } } — языки плагина (t184, main\i18n.js): окно настроек строит из них список «Язык программы».
 // Где искать: plugins\ рядом с кодом программы (resources\app\plugins) и %APPDATA%\Kermach\plugins.
 // Плагин пользователя (%APPDATA%\Kermach\plugins, t855) выключен, пока человек не включил его в «Настройках»; "enabled" в его plugin.json не читается.
-// Его код получает права программы (ниже), поэтому граница — включение человеком: до него код не выполняется ни в окне, ни в главном процессе.
+// Его код окна работает в Web Worker без моста (renderer\plugin-worker.js, t1289), главная часть — только с отдельной галочкой (t1384, ниже).
+// До включения человеком код не выполняется ни в окне, ни в главном процессе.
 // Имя папки, как у плагина при программе, — плагин пользователя пропускается со строкой в журнале: встроенный он не заменяет (t855).
 // Папки читаются при каждом открытии окна: плагин добавили или убрали — новое окно это уже видит.
-// Код плагина страница окна подключает тегом <script> (renderer\project-page.js). Он работает в самой странице,
+// Код встроенного плагина страница окна подключает тегом <script> (renderer\project-page.js). Он работает в самой странице,
 // с тем же мостом window.kermach, что и она: может писать в любой терминал проекта. Для своей программы это так задумано.
 // "main": "main.js" — своя часть в главном процессе (t256, main\plugin-bridge.js): подключается при первом вызове plugin.call
-// и только у включённого плагина, в том числе из %APPDATA%\Kermach\plugins — то же доверие, что запись в терминалы проекта.
-// Это require в главном процессе: у главной части весь Node (child_process, fs), проверки моста её не ограничивают (t855).
+// и только у включённого плагина. Это require в главном процессе: у главной части весь Node (child_process, fs), проверки моста её не ограничивают (t855).
+// Поэтому у своего плагина (%APPDATA%\Kermach\plugins) она грузится только с галочкой «главная часть» в «Настройках» (settings.pluginMain, t1384).
 const { ipcMain } = require('electron');
 const sender = require('./sender');
 const settings = require('./settings');
 const fs = require('fs');
 const path = require('path');
-const { pathToFileURL } = require('url');
+const appScheme = require('./app-scheme');
 const { langs } = require('./i18n');
 /** Имя папки плагина — как ключ выключателя в settings.js и ID_RE в plugin-bridge.js. */
 const PLUGIN_ID = /^[\w.-]{1,64}$/;
 
 /**
- * @typedef {{ id: string, name: string, url: string, defaultOn: boolean, own?: boolean, langs?: Record<string, string> }} Plugin
- * id — имя папки, url — адрес кода окна (file:///…), defaultOn — включён, пока в настройках нет записи (plugin.json, "enabled": false — нет;
+ * @typedef {{ id: string, name: string, url: string, defaultOn: boolean, own?: boolean, hasMain?: boolean, langs?: Record<string, string> }} Plugin
+ * id — имя папки, url — адрес кода окна по своей схеме (kermach-app://app/plugins/… или /own/…, main\app-scheme.js, t1404), defaultOn — включён, пока в настройках нет записи (plugin.json, "enabled": false — нет;
  * у плагина пользователя всегда нет). own — плагин пользователя (t855): окно настроек пишет под выключателем, что у него права программы.
+ * hasMain — у своего плагина есть главная часть: окно настроек ставит под ним галочку «главная часть» (t1384); у встроенных поля нет.
  * langs — языки плагина: код → имя языка на нём самом; поля нет, если языков нет. Пути к словарям окну не отдаются.
  * @typedef {Omit<Plugin, 'langs'> & { dir: string, main: string, langs: Record<string, { file: string, name: string }> }} PluginFull
  * dir — папка плагина, main — полный путь к главной части или '' (поля main нет), langs — языки с файлами словарей; окну они не отдаются.
@@ -48,9 +50,9 @@ function inside(dir, rel, what) {
  * @returns {Plugin[]}
  */
 function list(dirs, log) {
-  return full(dirs, log).map(({ id, name, url, defaultOn, own, langs: l }) => {
+  return full(dirs, log).map(({ id, name, url, defaultOn, own, main, langs: l }) => {
     const names = Object.fromEntries(Object.entries(l).map(([code, v]) => [code, v.name]));
-    const pl = own ? { id, name, url, defaultOn, own } : { id, name, url, defaultOn };
+    const pl = own ? { id, name, url, defaultOn, own, ...(main ? { hasMain: true } : {}) } : { id, name, url, defaultOn };
     return Object.keys(names).length ? { ...pl, langs: names } : pl;
   });
 }
@@ -92,7 +94,7 @@ function full(dirs, log) {
         const file = inside(dir, rel, 'код окна');
         if (j.main !== undefined && typeof j.main !== 'string') throw new Error('поле main — не строка');
         const main = j.main ? inside(dir, j.main, 'главная часть') : '';
-        found.set(it.name, { id: it.name, name: j.name.trim(), url: pathToFileURL(file).href, defaultOn: own ? false : j.enabled !== false, ...(own ? { own } : {}), dir, main, langs: langs(j) });
+        found.set(it.name, { id: it.name, name: j.name.trim(), url: appScheme.pluginUrl(it.name, path.relative(dir, file), own), defaultOn: own ? false : j.enabled !== false, ...(own ? { own } : {}), dir, main, langs: langs(j) });
       } catch (e) {
         log(`плагин ${it.name} пропущен: ${e instanceof Error ? e.message : e} (${conf})`);
       }

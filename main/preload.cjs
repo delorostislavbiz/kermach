@@ -1,6 +1,20 @@
 // Мост окна к терминалу: странице доступны только эти вызовы, Node и файлы ей недоступны.
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+// t1409: окно на схеме kermach-app — новый источник, localStorage пуст. Один раз переносим снимок из file:// (main\legacy-storage.js).
+// Метка kermach.legacy — «уже переносили»: ключ, который окно сняло само, не вернётся. Существующие ключи не перезаписываем.
+try {
+  if (location.protocol === 'kermach-app:' && localStorage.getItem('kermach.legacy') === null) {
+    const old = ipcRenderer.sendSync('storage:legacy');
+    // null — снимка нет (не снят или уже перенесён раньше): метку не ставим, в следующий раз спросим снова.
+    if (old) {
+      for (const k of Object.keys(old)) if (localStorage.getItem(k) === null) localStorage.setItem(k, String(old[k]));
+      localStorage.setItem('kermach.legacy', '1');
+      ipcRenderer.send('storage:legacy-done');
+    }
+  }
+} catch {}
+
 const bridge = {
   // Кнопки своего заголовка.
   win: {
@@ -75,6 +89,8 @@ const bridge = {
     reorder: (sids) => ipcRenderer.invoke('term:reorder', { sids }),
     // Скрытую вкладку (t1059) — на полосу: кнопка «в фоне» (t1061).
     unhide: (sid) => ipcRenderer.invoke('term:unhide', { sid }),
+    // Вкладку открыли на экране (t1470): демон снимает «не смотрел».
+    seen: (sid) => ipcRenderer.send('term:seen', { sid }),
     // И обратно — «Спрятать в фон» в меню вкладки (d307); onHide — вкладку спрятали (меню или плагин): окно снимает её с полосы.
     hide: (sid) => ipcRenderer.invoke('term:hide', { sid }),
     onHide: (cb) => ipcRenderer.on('term:hide', (_e, m) => cb(m.sid)),
@@ -115,6 +131,8 @@ const bridge = {
     open: (o) => ipcRenderer.invoke('auto:open', o || {}),
     onChanged: (cb) => { const f = () => cb(); ipcRenderer.on('auto:changed', f); return () => ipcRenderer.removeListener('auto:changed', f); },
   },
+  // Окно «Дашборд» (main\dashboard-window.js, t1402): кнопка окна «Проекты».
+  dashboard: { open: () => ipcRenderer.invoke('dashboard:open') },
   // Плагин «История» для окна «Проекты» (plugins\history\app.js, t1127): waits — { counts: { номер проекта: N } } разговоров «ждут вас»,
   // { off: true } — плагин выключен. fresh — перечитать пометки «идёт». onChanged отвечает функцией снятия подписки.
   history: {
@@ -179,6 +197,15 @@ const bridge = {
     version: () => ipcRenderer.sendSync('settings:version'),
     // Отвечает функцией снятия подписки (t218): «Браузер» подписывается при каждом включении и снимает подписку при выключении.
     onChanged: (cb) => { const f = (_e, s) => cb(s); ipcRenderer.on('settings:changed', f); return () => ipcRenderer.removeListener('settings:changed', f); },
+  },
+  // Ключ API Anthropic для вкладки на кредитах (main\api-key.js, t1356): get — { mode, has, masked, cmd, budget, model }, без ключа;
+  // save — { key } | { cmd } | { budget, model } | { clear: true }, ответ — то же или { error }; check — { ok, error?, cost? }.
+  apiKey: {
+    get: () => ipcRenderer.invoke('apikey:get'),
+    save: (patch) => ipcRenderer.invoke('apikey:save', patch),
+    check: () => ipcRenderer.invoke('apikey:check'),
+    // Начисления кредитов (t1521): op list | add | remove; ответ — { grants, nearest, suggest } или { error }.
+    grants: (op, arg) => ipcRenderer.invoke('credits:grants', op, arg),
   },
   // Агенты из системы (main\agents.js, t183): [{ id, title, found, enabled, builtin }] — весь каталог, поиск при каждом вызове.
   // В меню «+» — found && enabled && !builtin; запуск — term.create('agent:<id>'). Включили или выключили — settings.onChanged (поле agents).

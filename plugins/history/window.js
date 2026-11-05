@@ -585,7 +585,7 @@ function historySetup(host) {
     closeModal();
     const m = document.createElement('div');
     m.innerHTML = `<div class="shade"></div><div class="modal" role="dialog"><div class="q">${esc(I18n.t('history.trashAsk', 'Удалить разговор «{title}»?', { title: it.title || it.id }))}</div>`
-      + `<div class="w">${esc(I18n.t('history.trashWarn', 'Журнал и папка разговора уйдут в Корзину. Продолжить его будет нельзя — ни отсюда, ни из {agent}. Вернуть можно из Корзины Windows.', { agent: agentName(it.agent) }))}</div>`
+      + `<div class="w">${esc(I18n.t('history.trashWarn', 'Журнал и папка разговора уйдут в Корзину. Продолжить его будет нельзя — ни отсюда, ни из {agent}. Вернуть можно из Корзины.', { agent: agentName(it.agent) }))}</div>`
       + '<div class="why" hidden></div>'
       + `<div class="acts"><button class="btn" data-do="no">${esc(I18n.t('history.cancel', 'Отмена'))}</button><button class="btn red" data-do="yes">${esc(I18n.t('history.trashOk', 'В Корзину'))}</button></div></div>`;
     panel.appendChild(m);

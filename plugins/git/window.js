@@ -1,11 +1,16 @@
 // @ts-check
 // Плагин «Git» (t182), часть окна: в нижней строке — ветка и число изменённых файлов, по щелчку — правая панель.
-// Данные — команды главной части (main.js рядом, общий мост t256). Опрос раз в 4 с, пока окно видно. Не git-папка — строка скрыта.
+// Данные — команды главной части (main.js рядом, общий мост t256). Не git-папка — строка скрыта.
+// Опрос (t1430): панель закрыта — раз в 30 с (счётчик в строке), открыта — раз в 10 с; открытие панели и фокус окна — сразу.
+// git status -uall в большом репозитории идёт ~1 с (t1416), прежний опрос раз в 4 с грузил диск постоянно.
 // setup возвращает функцию остановки: ядро зовёт её, когда плагин выключили в настройках (убрать своё из окна и снять таймеры).
 // t1168 (ГИТ-устройство.md, разделы (а) и (д), макет spikes\t1165-git-design): в панели — дерево изменённых файлов по папкам
 // с буквой статуса и «+N −M» и «Последние коммиты»; щелчок по файлу — вкладка «Изменения: <имя>» в полосе вкладок, подряд по кускам.
 // t1170 (раздел (б), этап 6, points-light.png): раздел «Точки возврата», щелчок — файлы точки и «Вернуть к этой точке» → окно подтверждения.
-const GIT_POLL_MS = 4000;
+const GIT_IDLE_MS = 30000;
+const GIT_OPEN_MS = 10000;
+/** Шаг проверки таймера и наименьший промежуток между запусками по фокусу. */
+const GIT_TICK_MS = 2000;
 const GIT_MARK = () => ({ M: I18n.t('git.izmenen', 'изменён'), A: I18n.t('git.dobavlen', 'добавлен'), D: I18n.t('git.udalen', 'удалён'), R: I18n.t('git.pereimenovan', 'переименован'), C: I18n.t('git.skopirovan', 'скопирован'), U: I18n.t('git.konflikt', 'конфликт'), '?': I18n.t('git.novyy', 'новый') });
 /** Цвет вкладки «Изменения» и значок — как у раздела «Гит» в макете. */
 const GIT_COLOR = '#62B0FA';
@@ -271,7 +276,7 @@ function gitSetup(host) {
       draw();
     }).catch(fail);
   };
-  /** Окно «Вернуть проект к точке …?» — как points-light.png макета. На body, не в панели: панель перерисовывается раз в 4 с. @param {any} p */
+  /** Окно «Вернуть проект к точке …?» — как points-light.png макета. На body, не в панели: панель перерисовывается по опросу. @param {any} p */
   async function askRollback(p) {
     const r = await host.call('rollbackPlan', p.n).catch((/** @type {any} */ e) => ({ error: String((e && e.message) || e) }));
     if (stopped) return;
@@ -461,7 +466,7 @@ function gitSetup(host) {
     draw();
     host.call('commit', hash).then((/** @type {any} */ r) => { if (shown.has(hash)) { shown.set(hash, Array.isArray(r) ? r : []); draw(); } }).catch(() => {});
   };
-  bar.onclick = () => { open = !open; if (open) loadMore(); draw(); };
+  bar.onclick = () => { open = !open; if (open) { loadMore(); load(); } draw(); };
   let stopped = false;
   let said = '';
   /** Подпись состояния: изменилось — открытые вкладки «Изменения» перечитываются. */
@@ -480,9 +485,14 @@ function gitSetup(host) {
       draw();
     }).catch(fail);
   };
+  /** Когда запущен последний status и идёт ли он сейчас: запуски не накладываются. */
+  let loadAt = 0;
+  let loading = false;
   const load = () => {
-    if (stopped || !api) return;
-    api.status().then((/** @type {any} */ d) => {
+    if (stopped || !api || loading) return;
+    loading = true;
+    loadAt = Date.now();
+    api.status().finally(() => { loading = false; }).then((/** @type {any} */ d) => {
       if (stopped) return;
       last = d && d.error ? null : d;
       const s = last && last.repo ? JSON.stringify([last.branch, last.files]) : '';
@@ -577,11 +587,14 @@ function gitSetup(host) {
   }
 
   load();
-  const timer = setInterval(load, GIT_POLL_MS);
-  // Сменился язык (t184) — строка, панель и вкладки заново, а не через 4 с.
+  const timer = setInterval(() => { if (Date.now() - loadAt >= (open ? GIT_OPEN_MS : GIT_IDLE_MS)) load(); }, GIT_TICK_MS);
+  // Вернулись в окно — счётчик свежий сразу, а не через 30 с.
+  const onFocus = () => { if (Date.now() - loadAt >= GIT_TICK_MS) load(); };
+  window.addEventListener('focus', onFocus);
+  // Сменился язык (t184) — строка, панель и вкладки заново, а не по следующему опросу.
   const offLang = /** @type {any} */ (window).I18n ? /** @type {any} */ (window).I18n.onChange(() => { draw(); for (const v of views.values()) render(v); }) : null;
   return () => {
-    stopped = true; clearInterval(timer); if (offLang) offLang();
+    stopped = true; clearInterval(timer); window.removeEventListener('focus', onFocus); if (offLang) offLang();
     for (const v of [...views.values()]) host.pages.removeTab(v.sid);
     views.clear();
     for (const d of document.querySelectorAll('.gitdlg')) d.remove();

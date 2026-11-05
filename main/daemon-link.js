@@ -35,6 +35,8 @@ function create({ log, name }) {
 
   /** @param {DaemonClient} c */
   function take(c) {
+    // Подключение пришло после stop() (t1583): программа выходит — клиента закрыть, подписчикам не раздавать.
+    if (stopped) { c.close(); return c; }
     client = c;
     c.setMaxListeners(0);
     if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
@@ -91,6 +93,7 @@ function create({ log, name }) {
     if (!pending) {
       pending = ensureDaemon(hello).then((c) => {
         if (client) { c.close(); return client; }
+        if (stopped) { c.close(); throw new Error('программа выходит, демон не поднимается'); }
         return take(c);
       }).finally(() => { pending = null; });
     }

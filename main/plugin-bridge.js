@@ -27,6 +27,7 @@
 // Кто может звать: любой код страницы окна проекта, с любым id. Код всех плагинов работает в одной странице и видит один мост
 // (main\sender.js), поэтому «только свой id» главный процесс проверить не может — такое ограничение было бы видимостью.
 // Проверяется другое: вызов из окна проекта, плагин есть, включён и у него есть главная часть.
+// Свой плагин (папка пользователя) — ещё и галочка «главная часть» в «Настройках» (settings.pluginMain, t1384): без неё main.js не загружается.
 // Встроенные browser и markdown сюда не переведены: у них свои обработчики (project-window.js) и своя проверка. git и limits — на мосту (t266).
 const { ipcMain } = require('electron');
 const fs = require('fs');
@@ -37,10 +38,11 @@ const plugins = require('./plugins');
 
 /**
  * @typedef {import('./projects').Project} Project
- * @typedef {{ handle?: (cmd: string, ...args: any[]) => any, stop?: () => void }} Api
- * @typedef {{ id: string, dir: string, file: string, defaultOn: boolean, project: Project, api: Api | null, error: string, offs: (() => void)[] }} Inst
+ * @typedef {{ handle?: (cmd: string, ...args: any[]) => any, stop?: (why?: string) => void }} Api
+ * @typedef {{ id: string, dir: string, file: string, defaultOn: boolean, own: boolean, project: Project, api: Api | null, error: string, offs: (() => void)[], closing?: boolean }} Inst
  * api — что вернула фабрика; error — почему главной части нет (не загрузилась): запоминается до закрытия окна, а не повторяется каждым вызовом.
  * offs — отписки ctx.onState: снимаются при остановке экземпляра, даже если плагин сам не отписался.
+ * own — плагин пользователя (t855): главная часть грузится только с галочкой settings.pluginMain (t1384).
  */
 
 /** @type {{ dataDir: string, log: (m: string) => void } | null} */
@@ -67,7 +69,9 @@ function stopInst(key, why) {
   insts.delete(key);
   for (const off of inst.offs.splice(0)) off();
   if (inst.api && inst.api.stop) {
-    try { inst.api.stop(); } catch (e) { log(`плагин ${inst.id}: ошибка в stop(): ${e instanceof Error ? e.stack : e}`); }
+    // t1532: во время stop() уведомление ещё можно послать (предупреждение «слежение остановится»), после — нет.
+    inst.closing = true;
+    try { inst.api.stop(why); } catch (e) { log(`плагин ${inst.id}: ошибка в stop(): ${e instanceof Error ? e.stack : e}`); } finally { inst.closing = false; }
     log(`плагин ${inst.id}: главная часть остановлена — ${why} (${inst.project.path})`);
   }
   forget(inst.id, inst.dir);
@@ -106,7 +110,7 @@ function instOf(pl, p) {
   if (had) return had;
   const c = /** @type {{ dataDir: string, log: (m: string) => void }} */ (ctx);
   /** @type {Inst} */
-  const inst = { id: pl.id, dir: pl.dir, file: pl.main, defaultOn: pl.defaultOn, project: p, api: null, error: '', offs: [] };
+  const inst = { id: pl.id, dir: pl.dir, file: pl.main, defaultOn: pl.defaultOn, own: !!pl.own, project: p, api: null, error: '', offs: [] };
   insts.set(key, inst);
   const dataDir = path.join(c.dataDir, 'plugins-data', pl.id);
   const log = (/** @type {string} */ m) => c.log(`плагин ${pl.id}: ${m}`);
@@ -155,8 +159,8 @@ function instOf(pl, p) {
     },
     /** Смена состояния вкладки проекта (t276); ответ — отписка. @param {(m: any) => void} cb */
     onState: (cb) => {
-      if (typeof cb !== 'function' || insts.get(key) !== inst) return () => {};
-      const off = require('./terminals').onState(p.id, (/** @type {any} */ m) => { if (insts.get(key) === inst) cb(m); });
+      if (typeof cb !== 'function' || insts.get(key) !== inst || inst.error) return () => {};
+      const off = require('./terminals').onState(p.id, (/** @type {any} */ m) => { if (insts.get(key) === inst && !inst.error) cb(m); });
       inst.offs.push(off);
       return () => { off(); const i = inst.offs.indexOf(off); if (i >= 0) inst.offs.splice(i, 1); };
     },
@@ -176,7 +180,7 @@ function instOf(pl, p) {
      * @param {{ sid: string, state: string, text: string }} o
      */
     notify: (o) => {
-      if (insts.get(key) !== inst || !o || typeof o.sid !== 'string') return;
+      if ((insts.get(key) !== inst && !inst.closing) || !o || typeof o.sid !== 'string') return;
       const pn = projectNow(p);
       require('./notify').show({ sid: o.sid, state: String(o.state), project: pn.path, name: pn.name, tab: String(o.text || '').slice(0, 200), hidden: true, on: settings.get().notify !== false },
         `${o.sid} ${pl.id}`, log);
@@ -194,6 +198,8 @@ function instOf(pl, p) {
   } catch (e) {
     inst.error = `главная часть не подключилась: ${errText(e)}`;
     c.log(`плагин ${pl.id}: ${inst.error}${e instanceof Error && e.stack ? `\n${e.stack}` : ''}`);
+    // Фабрика успела подписаться на onState и упала (t1583): подписки снять — события упавшему плагину не идут.
+    for (const off of inst.offs.splice(0)) { try { off(); } catch { /* отписка не должна мешать */ } }
     forget(pl.id, pl.dir);
   }
   return inst;
@@ -230,11 +236,30 @@ function watchOff() {
   if (watching) return;
   watching = true;
   settings.onChange((s) => {
+    mainRefused.clear();
     for (const [key, inst] of [...insts]) {
       const on = typeof s.plugins[inst.id] === 'boolean' ? s.plugins[inst.id] : null;
       if (on === false) stopInst(key, 'плагин выключен');
+      else if (inst.own && !settings.pluginMainOn(inst.id)) stopInst(key, 'снята галочка «главная часть»');
     }
   });
+}
+
+/** Отказы без галочки, уже записанные в журнал: id и номер проекта — строка одна на окно, а не на каждый вызов. */
+const mainRefused = new Set();
+
+/**
+ * Свой плагин без галочки «главная часть» (t1384): main.js — это require в главном процессе со всеми правами программы,
+ * поэтому без отдельного согласия человека он не загружается. Окно своего плагина работает, call отвечает { error }.
+ * @param {string} id @param {Project} p
+ */
+function mainOff(id, p) {
+  const key = `${id}\n${p.id}`;
+  if (!mainRefused.has(key)) {
+    mainRefused.add(key);
+    /** @type {any} */ (ctx).log(`плагин ${id}: главная часть не загружена — свой плагин, галочки «главная часть» в «Настройках» нет (${p.path || 'вне окна проекта'})`);
+  }
+  return { error: `главная часть плагина ${id} не включена: галочка «главная часть» в «Настройках»`, mainOff: true };
 }
 
 /** Вызов главной части плагина для проекта: тот же путь у окна (plugin:call) и у терминала (callFor). @param {Project} p @param {unknown} id @param {unknown} cmd @param {unknown} args */
@@ -249,8 +274,10 @@ async function callIn(p, id, cmd, args) {
     if (!pl) return { error: `нет плагина ${id}` };
     if (!pl.main) return { error: `у плагина ${id} нет главной части (поле main в plugin.json)` };
     if (!settings.pluginOn(id, pl.defaultOn)) return { error: `плагин ${id} выключен` };
+    if (pl.own && !settings.pluginMainOn(id)) return mainOff(id, p);
     inst = instOf(pl, p);
   } else if (!settings.pluginOn(id, inst.defaultOn)) return { error: `плагин ${id} выключен` };
+  else if (inst.own && !settings.pluginMainOn(id)) return mainOff(id, p);
   if (!inst.api || !inst.api.handle) return { error: inst.error || 'главная часть не подключилась' };
   try {
     return await inst.api.handle(cmd, ...(Array.isArray(args) ? args : []));
@@ -292,6 +319,7 @@ async function callOutside(id, cmd, args, hooks, c) {
     const pl = find(id);
     if (!pl || !pl.main) return { error: `нет главной части плагина ${id}` };
     if (!settings.pluginOn(id, pl.defaultOn)) return { error: `плагин ${id} выключен`, off: true };
+    if (pl.own && !settings.pluginMainOn(id)) return mainOff(id, OUTSIDE);
     outsideHooks.set(key, hooks);
   }
   return callIn(OUTSIDE, id, cmd, args);

@@ -23,8 +23,9 @@
 // Её номер — в мешке, compose[ключ проекта] = { sid, started, title } (t568): экземпляр гаснет с окном, а вкладка живёт у демона. После revive номер новый — вкладку узнаём по title (ownTitle ядра); её нет — sync забывает запись.
 // «Новая карта» (t818) — команда newcard: доска есть — вкладка Claude с заданием из newcard.md (prompt.newcard), карту заводит агент. Запись — newcard[ключ проекта], как compose.
 // Файл карты есть, но не читается (агент пишет его не разом, опечатка в шапке) — запись держим: забываем, только когда карты нет на доске (t553).
-// Волна (t687) — команда wave: карты одной фазы («независимые», «все», «выделенные») запускаются тем же run по очереди. Очередь — только в памяти экземпляра:
-// окно закрыли или программу перезапустили — волн нет, само ничего не стартует. Шаг волны (pump) — в том же цикле sync после сверки статусов.
+// Волна (t687) — команда wave: карты одной фазы («независимые», «все», «выделенные») запускаются тем же run по очереди. Шаг волны (pump) — в том же цикле sync после сверки статусов.
+// Идущие волны — ещё и в .kermach\waves\waves.json (t1422, Б2): окно закрыли или программу перезапустили — после открытия волна «прервана» (cut), сама не идёт.
+// Продолжает её команда waveResume: карты сверяются с доской (Д9), готовые, отменённые и изменённые после остановки не запускаются; старше суток — не продолжается.
 // Путь «готово»: агент пишет статус в файл карты → board.watch (опрос, pin) → колбэк слежения → sync → pump → зависимая карта стартует.
 // Выход вкладки место освобождает, но «готово» не ставит: такая карта в волне «вкладка закрыта, карта не готова», её зависимые ждут.
 // «Стоп» (команда waveStop) — новых запусков нет, вкладки волны закрывает окно по событию waveClose: команды закрыть вкладку у ctx нет, у окна есть (term.close).
@@ -42,6 +43,7 @@ const codemap = require('./codemap/host');
 const askLog = require('./codemap/asked');
 const known = require('./known');
 const grader = require('./grader');
+const acceptMod = require('./accept');
 /** Словарь программы (t1126): строки во вкладку-источник и уведомление — на языке программы. Без ядра (проба вне Electron) — по-русски. */
 const i18n = (() => { try { return require('../../main/i18n'); } catch { return null; } })();
 /** @param {string} k @param {string} ru @param {Record<string, any>} vars */
@@ -50,23 +52,75 @@ const tr = (k, ru, vars) => (i18n ? i18n.t(k, ru, vars) : ru.replace(/\{(\w+)\}/
 const TELL_RETRY_MS = 3000;
 const TELL_WAIT_MS = 10 * 60 * 1000;
 const TELL_ENTER_MS = 150;
+/**
+ * Ключ API вкладки на кредитах (t1358) — main\api-key.js ядра, тот же модуль главного процесса, что у «Настройки» → «Кредиты API».
+ * Под проверкой без ядра — null: ключа нет, кнопки «Запустить на кредитах» нет.
+ */
+const apiKey = (() => { try { return require('../../main/api-key'); } catch { return null; } })();
+/** Сохранён ли ключ или команда, которая его выдаёт. */
+// Telegram (t1497, t1498): напоминание о вставшей карте уходит в группу человека, ответ reply — в карту. Модуля нет (подставное ядро) — ничего не шлём.
+const telegram = (() => { try { return require('../../main/telegram'); } catch { return null; } })();
+const creditsKey = () => { try { return !!(apiKey && apiKey.info().has); } catch { return false; } };
+/** Модель по умолчанию из «Кредиты API»; пусто — по умолчанию Claude. */
+const creditsModel = () => { try { return String((apiKey && apiKey.info().model) || ''); } catch { return ''; } };
+/** Строка ввода обёртки daemon\credits-tab.js появилась — набранное уже не пропадёт; ждём её не дольше CREDITS_READY_MS. */
+const CREDITS_READY = /Enter отправляет сообщение/;
+const CREDITS_READY_MS = 20000;
 /** Одна строка без управляющих знаков, не длиннее n. @param {unknown} s @param {number} n */
 const oneLine = (s, n) => String(s || '').replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
 /** Черновик карты (t1325): `draft: да` в шапке; волна и «одним агентом» без выделения его не запускают. @param {any} c */
 const isDraft = (c) => String((c.extra && c.extra.draft) || '').trim().toLowerCase() === 'да';
-/** Первая непустая строка раздела «## Вопрос» карты (t1126). @param {any} c */
+/** t1500: фаза «сама» — `solo: да` в шапке фазы (kermach roadmap solo fN): карты делает главная сессия, агентов программа не запускает. @param {any} f */
+const isSolo = (f) => !!f && String((f.extra && f.extra.solo) || '').trim().toLowerCase() === 'да';
+/** t1530: сколько после kermach roadmap solo fN --off окно ещё отдаёт проверяющему карты, закрытые в режиме «сама». */
+const SOLO_OFF_KEEP_MS = 24 * 3600000;
+/** t1530: время выключения режима «сама» — `solo-off: ГГГГ-ММ-ДД ЧЧ:ММ` в шапке фазы; режим включён, строки нет или она старше SOLO_OFF_KEEP_MS — 0. @param {any} f */
+const soloOffAt = (f) => {
+  if (!f || isSolo(f)) return 0;
+  const t = Date.parse(String((f.extra && f.extra['solo-off']) || '').trim().replace(' ', 'T'));
+  return Number.isFinite(t) && Date.now() - t < SOLO_OFF_KEEP_MS ? t : 0;
+};
+/** Первая непустая строка последнего раздела «## Вопрос» карты с текстом (t1126, t1396: не первого — тот уже отвечен). @param {any} c */
 const questionOf = (c) => {
   const lines = String((c && c.body) || '').split('\n');
-  const i = lines.findIndex((l) => /^#{2,3}\s*Вопрос/i.test(l.trim()));
-  if (i < 0) return '';
-  for (const l of lines.slice(i + 1)) { if (/^#{1,3}\s/.test(l.trim())) break; const s = l.replace(/^\s*(?:[-*]|\d+[.)])\s+/, '').trim(); if (s) return s; }
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!/^#{2,3}\s*Вопрос/i.test(lines[i].trim())) continue;
+    for (const l of lines.slice(i + 1)) { if (/^#{1,3}\s/.test(l.trim())) break; const s = l.replace(/^\s*(?:[-*]|\d+[.)])\s+/, '').trim(); if (s) return s; }
+  }
   return '';
+};
+/**
+ * Карта ждёт ответа человека (t1375): в теле есть «## Вопрос» с текстом, и после последнего такого раздела нет «## Ответ человека».
+ * Вкладка замолчала без такого вопроса — агент застрял или кончил, не закрыв карту: панель показывает это иначе. @param {any} c
+ */
+const asksOf = (c) => {
+  let q = -1, a = -1;
+  // Вопрос строкой «Вопрос: текст» без заголовка — тоже вопрос (ревью 2710b, М5): промпт карты заголовка не требует.
+  String((c && c.body) || '').split('\n').forEach((l, i) => { const s = l.trim(); if (/^\**Вопрос\**\s*:\s*\S/i.test(s)) q = i; else if (/^#{2,3}\s*Вопрос/i.test(s)) { if (questionOf({ body: String(c.body).split('\n').slice(i).join('\n') })) q = i; } else if (/^#{2,3}\s*Ответ (?:человека|главной сессии)/i.test(s)) a = i; });
+  return q > a;
 };
 /** Последний ответ агента на экране Claude: строка «● текст», не вызов инструмента «● Bash(…)». @param {string} screen */
 const replyOf = (screen) => {
   const ls = String(screen || '').split('\n').map((l) => l.trim()).filter((l) => /^●\s+\S/.test(l)).map((l) => l.replace(/^●\s+/, ''));
   for (let i = ls.length - 1; i >= 0; i--) if (!/^[\w.-]+\(/.test(ls[i])) return ls[i];
   return '';
+};
+/**
+ * Кончается ли последний ответ агента вопросом (t1513): текст от последней строки ответа «● …» (Claude) или «• …» (Codex), не вызова инструмента,
+ * до рамки поля ввода или строки инструмента; признак — «?» в конце, как askOf демона (t1483). Ответа на экране нет — false. @param {string} screen
+ */
+const endsAsk = (screen) => {
+  const ls = String(screen || '').split('\n');
+  let at = -1;
+  for (let i = ls.length - 1; i >= 0; i--) { const m = /^\s*[●•]\s+(\S.*)$/.exec(ls[i]); if (m && !/^[\w.-]+\(/.test(m[1])) { at = i; break; } }
+  if (at < 0) return false;
+  const out = [];
+  for (let i = at; i < ls.length; i++) {
+    const s = ls[i].trim();
+    if (i > at && (/^[╭╰─│>❯›⎿●•✻✶✳]/.test(s))) break;
+    out.push(i === at ? s.replace(/^[●•]\s+/, '') : s);
+  }
+  return /\?[\s»"'`)*_]*$/.test(out.join('\n').trim());
 };
 /**
  * Набранный человеком текст в поле ввода Claude Code: последняя строка «> …» или «❯ …» внизу экрана; подсказка пустого поля «Try "…"» — пусто.
@@ -76,7 +130,60 @@ const typedOf = (screen) => {
   const ls = String(screen || '').split('\n').slice(-15);
   for (let i = ls.length - 1; i >= 0; i--) {
     const m = /^\s*[│|]?\s*[>❯]\s?(.*?)\s*[│|]?\s*$/.exec(ls[i]);
-    if (m) return /^Try "/.test(m[1]) ? '' : m[1].trim();
+    // t1389: серые подсказки пустого поля Claude Code (очередь сообщений, «Message @агент…», вопрос с вариантами) в тексте экрана не отличить от набранного.
+    if (m) return /^(Try "|Press (up|Enter) to |Message @|press \d+-\d+ or type your answer$|reply$)/.test(m[1].trim()) ? '' : m[1].trim();
+  }
+  return '';
+};
+/**
+ * Экран с цветами (snapshot демона, формат 'ansi') → строки, где у каждого знака отметка «обычный»: цвет по умолчанию, не тусклый, не инверсный (t1395).
+ * Claude Code печатает набранное обычным цветом (снимок spikes/t1395-hint/typed.ansi), а серые подсказки и курсор — тусклым, цветом или инверсией.
+ * @param {string} ansi @returns {{ text: string, plain: boolean[] }[]}
+ */
+const cellsOf = (ansi) => {
+  const rows = [{ text: '', plain: /** @type {boolean[]} */ ([]) }];
+  let fg = false, dim = false, inv = false;
+  const put = (ch) => { const r = rows[rows.length - 1]; r.text += ch; r.plain.push(!fg && !dim && !inv); };
+  const s = String(ansi || '');
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '\n') { rows.push({ text: '', plain: [] }); continue; }
+    if (c === '\r') continue;
+    if (c !== '\x1b') { put(c); continue; }
+    if (s[i + 1] !== '[') { i++; continue; }
+    let j = i + 2;
+    while (j < s.length && !/[@-~]/.test(s[j])) j++;
+    const args = s.slice(i + 2, j), fin = s[j];
+    i = j;
+    if (fin === 'C') { for (let n = Number(args) || 1; n > 0; n--) put(' '); continue; }
+    if (fin !== 'm' || args.startsWith('?')) continue;
+    const p = args === '' ? [0] : args.split(/[;:]/).map(Number);
+    for (let k = 0; k < p.length; k++) {
+      const v = p[k];
+      if (v === 0) { fg = false; dim = false; inv = false; }
+      else if (v === 2) dim = true;
+      else if (v === 22) dim = false;
+      else if (v === 7) inv = true;
+      else if (v === 27) inv = false;
+      else if (v === 39) fg = false;
+      else if ((v >= 30 && v <= 37) || (v >= 90 && v <= 97)) fg = true;
+      else if (v === 38) { fg = true; k += p[k + 1] === 5 ? 2 : p[k + 1] === 2 ? 4 : 0; }
+      else if (v === 48) k += p[k + 1] === 5 ? 2 : p[k + 1] === 2 ? 4 : 0;
+    }
+  }
+  return rows;
+};
+/** Набранное в поле Claude Code по экрану с цветами: строка поля как у typedOf, из неё — только знаки обычного вида (t1395). @param {string} ansi */
+const typedOfAnsi = (ansi) => {
+  const rows = cellsOf(ansi).slice(-15);
+  for (let i = rows.length - 1; i >= 0; i--) {
+    // «›» — поле Codex (t1485: главная вкладка на Codex); без него за поле читалась строка заголовка «>_ OpenAI Codex».
+    const m = /^(\s*[│|]?\s*[>❯›]\s?)(.*?)\s*[│|]?\s*$/.exec(rows[i].text);
+    if (!m) continue;
+    const from = m[1].length;
+    let t = '';
+    for (let k = from; k < from + m[2].length; k++) t += rows[i].plain[k] ? rows[i].text[k] : ' ';
+    return typedOf(`> ${t.replace(/\s+/g, ' ').trim()}`);
   }
   return '';
 };
@@ -122,16 +229,36 @@ const fromOf = (o) => (o && typeof o.from === 'string' && /^[\w.:-]{1,80}$/.test
 const why = (e) => String((e && /** @type {any} */ (e).message) || e);
 /** Статусы, которые ставит запуск: только их программа меняет дальше сама. */
 const OWN = ['в работе', 'ждёт ответа'];
+/** Пачка одним агентом (t1513): сколько раз на карту напомнить «продолжай», когда агент остановился без вопроса. */
+const NUDGE_MAX = 3;
 /** Статусы, после которых счёт попыток начинается с 1 (t830). */
 const RESET = ['готово', 'в очереди'];
 /** Карту проверяют, вкладка запуска ещё жива (t707): запись держим — место занято, но статус по вкладке не пишем; вкладку закрыли — запись забываем без «паузы». */
 const HOLD = ['на проверке', 'на ревью'];
+/**
+ * Почему проверяющий отдал карту человеку (wby записи запуска, t1421): rounds — круги кончились, notab — замечания некуда отдать, criteria — критерии
+ * не подходят, twice — проверяющий дважды не дал итога, build — задание проверяющему не собралось. Причины ниже — не неудача агента: повтор на той же ступени.
+ * notab здесь же: круги не кончились, агенту просто не дали исправить — Б1 неудачей считает только «не принял после всех кругов».
+ */
+const CALM_STOP = ['criteria', 'twice', 'build', 'notab'];
 /**
  * Состояние агента во вкладке (STATES ядра) → статус карты. done — агент закончил ход и стоит у приглашения: ход за человеком, как при вопросе.
  * error — агент жив, но ход оборвался ошибкой (StopFailure): тоже ждёт человека. Пустое — агент ещё не начал, статус не трогаем.
  * @type {Record<string, string>}
  */
 const BY_STATE = { working: 'в работе', waiting: 'ждёт ответа', done: 'ждёт ответа', error: 'ждёт ответа' };
+/**
+ * Поля задания (t1427, дыра П.1): их пишет человек, а не программа и не агент. «Что сделано», «Доказательство», шапка и разделы «## Вопрос»/«## Ответ» сюда не входят —
+ * иначе агент получит «перечитай» на свою же правку или на ответ человека. Ключ — поле карты, значение — подпись для строки агенту.
+ */
+const SPEC = { title: 'заголовок', what: 'Что сделать', why: 'Зачем', files: 'Файлы', check: 'Как проверить', notes: 'Особые указания' };
+/** Отпечаток полей задания: поле → 8 знаков sha1 текста без хвостовых пробелов строк. @param {any} c @returns {Record<string, string>} */
+const specOf = (c) => Object.fromEntries(Object.keys(SPEC).map((k) => [k, require('crypto').createHash('sha1')
+  .update(String((k === 'title' ? c.title : c.fields && c.fields[k]) || '').replace(/[ \t]+$/gm, '').trim()).digest('hex').slice(0, 8)]));
+/** Какие поля задания отличаются от отпечатка при запуске; отпечатка нет — пусто. @param {any} was @param {Record<string, string>} now */
+const specDiff = (was, now) => (was && typeof was === 'object' ? Object.keys(SPEC).filter((k) => typeof was[k] === 'string' && was[k] !== now[k]) : []);
+/** Файл карты правили только что — строку агенту шлём после паузы (t1427): человек сохраняет файл несколько раз подряд, строка одна. */
+const EDIT_QUIET_MS = 3000;
 /**
  * Предел ядра на первое сообщение вкладки (src\main\terminals.js, checkExtra): вся командная строка Windows — до 32767 знаков, поднимать его нельзя (t545).
  * Промпт длиннее идёт файлом в папке проекта, первое сообщение — короткая просьба прочитать файл. Молча не обрезаем.
@@ -150,14 +277,46 @@ const CLOSE_MS = 10000;
  */
 const GRADE_ROUNDS = 3;
 const GRADE_BACK_MS = 60000;
+/** t1500: карта фазы «сама» закрыта без замеченного «в работе» — проверяющий смотрит изменения с этого времени до closed:. */
+const GRADE_SOLO_BACK_MS = 2 * 3600000;
+/** t1500: отказ запуска агента на фазу «сама». @param {string} ph */
+const soloRefuse = (ph) => `фаза ${ph} в режиме «сама»: её карты делает главная сессия, агентов программа не запускает. Выключить режим — kermach roadmap solo ${ph} --off (по слову человека)`;
 /** Окно закрыли посреди проверки (t1340): столько ждём, что новый экземпляр возьмёт тот же claude -p, потом гасим его деревом. */
 const GRADE_ADOPT_MS = Number(process.env.T1340_ADOPT_MS) || 30000;
+/** Проверяющий упал (t1419, В1): один повтор через столько, на том же усилии; второй сбой — «ждёт ответа». */
+const GRADE_RETRY_MS = Number(process.env.T1419_RETRY_MS) || 2 * 60 * 1000;
+/** Проверяющий сломан (t1419, Д7): пробный запуск claude не чаще, остальные карты — «готово, не проверена» без вызова. */
+const GRADE_PROBE_MS = Number(process.env.T1419_PROBE_MS) || 30 * 60 * 1000;
+/** Имя в строке «Замечаний» доски, когда проверяющий сломан. */
+const GRADER_WARN = 'проверяющий';
+/** Пометка строки «Замечаний» о фазе, где карты закрыли без агента и проверяющего (t1435): по ней строки прошлого снимка — долой. */
+const BARE_WARN = 'bare';
+/**
+ * Состояние проверяющего на программу (t1419): limit — лимит подписки { until, line } (Д2); last — последний сбой { sig, id };
+ * broken — две карты подряд упали одной ошибкой { sig, error, at, tried } (Д7). В globalThis, как идущие проверки grader.js: переживает переоткрытие окна.
+ * @type {{ limit: { until: number, line: string } | null, last: { sig: string, id: string } | null, broken: { sig: string, error: string, at: number, tried: number } | null }}
+ */
+const graderHealth = /** @type {any} */ (globalThis).__kermachGraderHealth || (/** @type {any} */ (globalThis).__kermachGraderHealth = { limit: null, last: null, broken: null });
+/**
+ * Подпись ошибки проверяющего для сравнения у разных карт (Д7): без путей, чисел и номеров. Таймаут и лимит — не поломка claude: ''.
+ * Ответ не по образцу (t1445) — тоже '': claude работает, а текст вместо JSON у двух карт подряд не значит, что он сломан.
+ * @param {string} e
+ */
+const failSig = (e) => {
+  const s = String(e || '');
+  if (/^(проверка дольше|лимит подписки|ответ проверяющего не разобран)/.test(s)) return '';
+  return s.replace(/[A-Za-z]:[\\/][^\s'"«»;]*/g, '<путь>').replace(/(?:\/[^\s/'"«»;]+){2,}/g, '<путь>').replace(/\d+/g, 'N').replace(/\s+/g, ' ').trim().slice(0, 200);
+};
+/** Время для журнала: «02:41». @param {number} t */
+const hhmm = (t) => { const d = new Date(t); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 /** Папка разборов проверяющего в проекте: .kermach/grades/<карта>-<круг>.md, своя .gitignore. */
 const GRADES_DIR = path.join('.kermach', 'grades');
-/** Один проверяющий на программу (t1330): волна закрывает карты подряд, а каждый — отдельный claude. */
-const gradeQueue = { last: Promise.resolve() };
 /** Состояния карты в волне, после которых волна её больше не ведёт. */
 const WAVE_END = ['done', 'fail', 'closed', 'off'];
+/** Папка прерванных волн (t1422): своя .gitignore — .kermach под git, файл волны в коммиты не идёт. */
+const WAVES_DIR = path.join('.kermach', 'waves');
+/** Прерванную волну старше суток не продолжаем (Д9): за это время карты могли отменить, поправить, сделать руками. */
+const WAVE_STALE_MS = 24 * 60 * 60 * 1000;
 /** Папка длинных промптов в проекте; своя .gitignore со «*» — файлы не попадают в git. */
 const LONG_DIR = path.join('.kermach', 'prompts');
 /** Журналы фоновых вкладок (t1079): экран агента с выводом команд — не для git, как промпты. */
@@ -187,11 +346,15 @@ function reportText(b, f) {
   const last = cards.map((c) => c.closed).filter(Boolean).sort().pop() || '';
   const out = [`# Отчёт фазы ${f.id}: ${f.title}`, '',
     `Собран программой: все карты фазы готовы (${cards.length})${last ? `, последняя закрыта ${last}` : ''}.`];
+  // t1435 (И4): карты закрыли сами, без запуска — сказать прямо. У принятой фазы строки нет (acceptMod.bareLine).
+  const bare = acceptMod.bareLine(f, cards);
+  if (bare) out.push(bare);
   if (f.goal) out.push(`Цель: ${f.goal}`);
   out.push('', '## Карты');
   for (const c of cards) {
     out.push('', `### ${c.id}: ${c.title}`);
     if (c.closed) out.push(`Закрыта: ${c.closed}`);
+    if (bare && acceptMod.isBare(c)) out.push('Без вкладки агента и без проверяющего: закрыта не из «Запустить» и не волной.');
     out.push(`Что сделано: ${c.fields.done || '—'}`, `Доказательство: ${c.fields.proof || '—'}`);
   }
   out.push('', '## Записи фазы', '');
@@ -246,8 +409,159 @@ function longPrompt(project, ref, text, subj = { title: `Промпт карты
  */
 const live = new Set();
 
-/** Мешки ctx.settings с ключом «путь проекта» (t1196, d210, d218): запуски, счёт попыток, вкладки составления и новой карты, открытость панели. */
-const BY_PROJECT = ['runs', 'past', 'compose', 'newcard', 'openIn'];
+/** Мешки ctx.settings с ключом «путь проекта» (t1196, d210, d218): запуски, счёт попыток, вкладки составления и новой карты, открытость панели, проверка роадмапа (t1438), проверка фаз (t1439). */
+const BY_PROJECT = ['runs', 'past', 'compose', 'newcard', 'orch', 'openIn', 'review', 'phaseReview', 'solo'];
+
+/** Задание свежего проверяющего роадмапа (t1438): шаблон review-roadmap.md, своя копия — в папке данных плагина, как compose.md. */
+const REVIEW = 'review-roadmap.md';
+/**
+ * Своя русская копия задания на доске другого языка (t1451, как prompt.js у промпта карты, d587): берётся она — правка человека, — а окно предупреждает.
+ * @param {{ file: string, ownRu?: string }} tf
+ */
+const ownRuWarn = (tf) => `своя копия ${tf.file} — русская, а доска на другом языке: взята она, агент получит русский текст. Нужен перевод — положите рядом копию ${path.basename(tf.ownRu || '')} (образец — ${tf.ownRu})`;
+/** Кругов проверки роадмапа: серьёзные замечания — построитель правит, второй круг; что осталось после него — человеку. */
+const REVIEW_ROUNDS = 2;
+/** Усилие проверяющего роадмапа: opus читает всю доску и обзор, а не одну карту — 20 минут по grader.timeoutOf. */
+const REVIEW_EFFORT = 'высокое';
+/** Начало отказа start, пока идёт проверка роадмапа: по нему построитель (compose.md, шаг 6) отличает её от ошибки. */
+const REVIEW_BUSY = 'проверка роадмапа идёт';
+/** Начало строки итога во вкладке построителя (compose.md, шаг 6). */
+const REVIEW_HEAD = '[Роадмап] Проверка роадмапа';
+/** Раздел review-roadmap.md с заданием проверяющего фазы (t1439). */
+const PHASE_SECTION = 'Проверка фазы';
+/** Начало отказа wave, пока идёт проверка фазы: по нему главная сессия (accept.md, шаг 10) отличает её от ошибки. */
+const PHASE_BUSY = 'проверка фазы идёт';
+/** Начало строки итога во вкладке главной сессии (accept.md, шаг 10); дальше — номер фазы. */
+const PHASE_HEAD = '[Роадмап] Проверка фазы';
+/** Статусы карт не начатой фазы (t1439): ни одну карту ещё не запускали. */
+const PHASE_IDLE = ['в очереди', 'пауза'];
+/**
+ * Задание проверяющего (t1438) из review-roadmap.md: роадмап — первый раздел «## » до следующего, фаза (t1439) — раздел «## Проверка фазы».
+ * Своя копия не читается или нужного раздела в ней нет — встроенный текст и предупреждение.
+ * Подстановки: {проект}, {папка}, {формат}, {круг}, {кругов}, {итог}, {проверка}, {прошлое}; у фазы ещё {фаза} и {фаза-до} — фаза перед ней.
+ * @param {string} project @param {{ dataDir?: string, round: number, summary?: string, check?: string, prev?: string, phase?: string, before?: string }} opts
+ * @returns {{ text: string, warnings: string[], own: boolean } | { error: string }}
+ */
+function reviewTask(project, opts) {
+  /** @type {string[]} */
+  const warnings = [];
+  const what = opts.phase ? 'фазы' : 'роадмапа';
+  const none = opts.phase ? `раздела «## ${PHASE_SECTION}»` : 'текста после «## »';
+  const read = (/** @type {string} */ f) => {
+    const lines = fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n').split('\n');
+    const at = lines.findIndex((l) => (opts.phase ? l.trim() === `## ${PHASE_SECTION}` : l.startsWith('## ')));
+    if (at < 0) return '';
+    const end = lines.findIndex((l, i) => i > at && l.startsWith('## '));
+    return lines.slice(at + 1, end < 0 ? undefined : end).join('\n').trim();
+  };
+  // t1451: задание на языке доски (review-roadmap.uk.md), запасной встроенный текст — того же языка, FORMAT — тоже.
+  const lang = board.boardLang(project);
+  const tf = prompt.templateFile(opts.dataDir, REVIEW, lang);
+  let text = '';
+  try { text = read(tf.file); } catch (e) { if (!tf.own) return { error: `задание проверяющего ${what} не прочитано: ${why(e)}` }; warnings.push(`своя копия ${tf.file}: ${why(e)} — взят встроенный текст`); }
+  if (!text && tf.own) {
+    if (!warnings.length) warnings.push(`в своей копии ${tf.file} нет ${none} — взят встроенный текст`);
+    tf.file = prompt.builtinIn(REVIEW, lang); tf.own = false;
+    try { text = read(tf.file); } catch (e) { return { error: `задание проверяющего ${what} не прочитано: ${why(e)}` }; }
+  }
+  if (!text) return { error: `в ${path.basename(tf.file)} нет ${none}` };
+  if (tf.own && tf.ownRu) warnings.unshift(ownRuWarn(tf));
+  const summary = String(opts.summary || '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').trim().slice(0, ORCH_SUMMARY_MAX);
+  const prev = String(opts.prev || '').trim();
+  const again = opts.phase ? `главная сессия их правила. Проверь, исправлены ли они, и все карты фазы ${opts.phase} заново` : 'построитель их правил. Проверь, исправлены ли они, и всю доску заново';
+  /** @type {Record<string, string>} */
+  const vars = {
+    'проект': project, 'папка': board.root(project) + path.sep, 'формат': prompt.builtinIn('FORMAT.md', lang),
+    'круг': String(opts.round), 'кругов': String(REVIEW_ROUNDS), 'итог': summary || '—', 'проверка': String(opts.check || '').trim(),
+    'прошлое': prev ? `Прошлый круг нашёл серьёзные замечания, ${again} — правка могла сломать соседнее:\n${prev}` : '',
+    'фаза': String(opts.phase || ''), 'фаза-до': String(opts.before || ''),
+  };
+  const out = text.replace(/\{(проект|папка|формат|круг|кругов|итог|проверка|прошлое|фаза|фаза-до)\}/g, (_, k) => vars[k]).replace(/\n{3,}/g, '\n\n') + '\n';
+  return { text: out, warnings, own: tf.own };
+}
+
+/** Задание главной сессии (t1423, А2 и Д8): шаблон orchestrator.md, своя копия — в папке данных плагина, как compose.md. */
+const ORCH = 'orchestrator.md';
+/** Предел итога построителя в задании: --summary — строка сверки, а не документ. */
+const ORCH_SUMMARY_MAX = 4000;
+/** t1500: раздел orchestrator.md — задание режима «сама»: главная сессия делает карты фазы без агентов. */
+const SOLO_HEAD = 'Сама, без агентов';
+/**
+ * Задание вкладки главной сессии из orchestrator.md: раздел «## После построителя», когда построитель передал итог сверки (summary),
+ * иначе «## Новая сессия» (Д8: человек открыл главную сессию заново). Строка заголовка в задание не идёт; подстановки — {проект}, {папка}, {итог}.
+ * Своя копия без нужного раздела — встроенный текст и предупреждение. check — итог проверки роадмапа программой (t1437), идёт в {итог} после итога сверки, вне предела.
+ * @param {string} project @param {{ dataDir?: string, summary?: string, check?: string, head?: string, phase?: string }} [opts]
+ */
+function orchestrate(project, opts = {}) {
+  const summary = String(opts.summary || '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').trim().slice(0, ORCH_SUMMARY_MAX);
+  // t1500: head «Сама, без агентов» — задание режима, его печатает kermach roadmap solo fN; подстановка {фаза}.
+  const head = opts.head === SOLO_HEAD ? SOLO_HEAD : summary ? 'После построителя' : 'Новая сессия';
+  /** @type {string[]} */
+  const warnings = [];
+  /** Текст раздела head или null — раздела нет. @param {string} file */
+  const sectionOf = (file) => {
+    const lines = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n');
+    const at = lines.findIndex((l) => l.trim() === `## ${head}`);
+    if (at < 0) return null;
+    const end = lines.findIndex((l, i) => i > at && l.startsWith('## '));
+    return lines.slice(at + 1, end < 0 ? undefined : end).join('\n').trim() || null;
+  };
+  // t1451: задание на языке доски (orchestrator.uk.md), запасной встроенный текст — того же языка.
+  const lang = board.boardLang(project);
+  const tf = prompt.templateFile(opts.dataDir, ORCH, lang);
+  let text = null;
+  try { text = sectionOf(tf.file); } catch (e) { if (!tf.own) return { error: `задание главной сессии не прочитано: ${why(e)}` }; warnings.push(`своя копия ${tf.file}: ${why(e)} — взят встроенный текст`); }
+  if (!text && tf.own) {
+    if (!warnings.length) warnings.push(`в своей копии ${tf.file} нет раздела «## ${head}» — взят встроенный текст`);
+    tf.file = prompt.builtinIn(ORCH, lang); tf.own = false;
+    try { text = sectionOf(tf.file); } catch (e) { return { error: `задание главной сессии не прочитано: ${why(e)}` }; }
+  }
+  if (!text) return { error: `в ${path.basename(tf.file)} нет раздела «## ${head}»` };
+  if (tf.own && tf.ownRu) warnings.unshift(ownRuWarn(tf));
+  { const st = tf.own ? prompt.stale(opts.dataDir, path.basename(tf.file)) : null; if (st) warnings.push(`своя копия ${st.file}: ${st.reason}`); }
+  /** @type {Record<string, string>} */
+  const check = summary ? String(opts.check || '').trim() : '';
+  const vars = { 'проект': project, 'папка': board.root(project) + path.sep, 'итог': check ? `${summary}\n\n${check}` : summary, 'фаза': String(opts.phase || '') };
+  const out = text.replace(/\{(проект|папка|итог|фаза)\}/g, (_, k) => vars[k]) + '\n';
+  return { text: out, chars: out.length, warnings, templates: tf };
+}
+/** Правила сопутствующей сессии (t1486): шаблон companion.md на языке доски, своя копия — в папке данных плагина. */
+const COMP = 'companion.md';
+const COMP_HEAD = 'Сопутствующая сессия';
+/** Предел темы: она же заголовок вкладки. */
+const TOPIC_MAX = 64;
+/** Тема без управляющих знаков и лишних пробелов, не длиннее TOPIC_MAX. @param {unknown} v */
+const topicOf = (v) => String(v || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, TOPIC_MAX);
+/**
+ * Первое сообщение сопутствующей сессии: раздел «## Сопутствующая сессия» из companion.md, подстановки {тема} и {проект}.
+ * Своя копия без раздела — встроенный текст и предупреждение, как у orchestrate.
+ * @param {string} project @param {string} topic @param {{ dataDir?: string }} [opts]
+ */
+function companion(project, topic, opts = {}) {
+  /** @type {string[]} */
+  const warnings = [];
+  const sectionOf = (/** @type {string} */ file) => {
+    const lines = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n');
+    const at = lines.findIndex((l) => l.trim() === `## ${COMP_HEAD}`);
+    if (at < 0) return null;
+    const end = lines.findIndex((l, i) => i > at && l.startsWith('## '));
+    return lines.slice(at + 1, end < 0 ? undefined : end).join('\n').trim() || null;
+  };
+  const lang = board.boardLang(project);
+  const tf = prompt.templateFile(opts.dataDir, COMP, lang);
+  let text = null;
+  try { text = sectionOf(tf.file); } catch (e) { if (!tf.own) return { error: `правила сопутствующей сессии не прочитаны: ${why(e)}` }; warnings.push(`своя копия ${tf.file}: ${why(e)} — взят встроенный текст`); }
+  if (!text && tf.own) {
+    if (!warnings.length) warnings.push(`в своей копии ${tf.file} нет раздела «## ${COMP_HEAD}» — взят встроенный текст`);
+    tf.file = prompt.builtinIn(COMP, lang); tf.own = false;
+    try { text = sectionOf(tf.file); } catch (e) { return { error: `правила сопутствующей сессии не прочитаны: ${why(e)}` }; }
+  }
+  if (!text) return { error: `в ${path.basename(tf.file)} нет раздела «## ${COMP_HEAD}»` };
+  /** @type {Record<string, string>} */
+  const vars = { 'тема': topic, 'проект': project };
+  const out = text.replace(/\{(тема|проект)\}/g, (_, k) => vars[k]) + '\n';
+  return { text: out, chars: out.length, warnings, templates: tf };
+}
 /**
  * Мешок без записей проектов, которых нет на диске (удалён, переименован). Проект есть, если есть его папка; нет её, а папка выше есть — записи лишние.
  * Нет и папки выше (диск или сеть отключены) — не трогаем: вернётся. Свой ключ own не трогаем никогда. Нечего чистить — null.
@@ -296,6 +610,14 @@ module.exports = (ctx) => {
   const grading = new Set();
   /** Ключи grader.shared, которые ждёт этот экземпляр (t1340): stop() отдаёт их grader.release. @type {Set<string>} */
   const held = new Set();
+  /** Сверка ко времени повтора проверки или сброса лимита (t1419): один таймер на ближайшее время; stop() его снимает. @type {{ t: number, h: NodeJS.Timeout } | null} */
+  let wake = null;
+  /** Позвать sync в момент t (не раньше чем через 1 с). @param {number} t */
+  const gradeWake = (t) => {
+    if (stopped || (wake && wake.t <= t)) return;
+    if (wake) clearTimeout(wake.h);
+    wake = { t, h: setTimeout(() => { wake = null; if (!stopped) sync(); }, Math.max(1000, t - Date.now())) };
+  };
   // Карта кода (t840): строится и обновляется в фоне, в отдельном процессе (codemap\host.js — один исполнитель на программу).
   // Карта — в .kermach\codemap\ проекта, только если .kermach уже есть: в чужие папки не пишем. Отписка — в stop().
   // .kermach нет (папку ещё не завели или сама папка пропала) — смотреть раз в MAP_WAIT_MS: появилась — карта строится без переоткрытия окна (t876).
@@ -364,7 +686,11 @@ module.exports = (ctx) => {
     const all = { ...(s.runs && typeof s.runs === 'object' ? s.runs : {}) };
     const mine = all[key] && typeof all[key] === 'object' ? { ...all[key] } : {};
     for (const [id, v] of Object.entries(ch)) {
-      if (v) mine[id] = v; else delete mine[id];
+      // d496, t1374: сверка пишет копию записи, прочитанную до await (:575), — base, дописанный тем временем после git rev-parse, пропал бы.
+      // base зависит только от started: у того же запуска переносим его из записи в мешке.
+      const was = mine[id];
+      if (v && !v.base && was && was.base && was.started === v.started) mine[id] = { ...v, base: was.base };
+      else if (v) mine[id] = v; else delete mine[id];
     }
     if (Object.keys(mine).length) all[key] = mine; else delete all[key];
     ctx.settings.set({ ...s, runs: all });
@@ -372,19 +698,25 @@ module.exports = (ctx) => {
   };
   /**
    * Вкладка задания этого проекта из мешка: bag — compose (составление, t568) или newcard (новая карта, t818); title — заголовок, данный при открытии (ownTitle ядра).
-   * @param {'compose' | 'newcard'} bag @returns {{ sid: string, started: number, title: string } | null}
+   * lang (t1429) — язык окна при «Составить роадмап»: его получит доска, когда агент заведёт паспорт.
+   * @param {'compose' | 'newcard' | 'orch'} bag @returns {{ sid: string, started: number, title: string, lang?: string } | null}
    */
   const taskOf = (bag) => {
     const s = ctx.settings.get();
     const c = s[bag] && typeof s[bag] === 'object' ? s[bag][key] : null;
-    return c && typeof c === 'object' && typeof c.sid === 'string' && c.sid ? { sid: c.sid, started: Number(c.started) || 0, title: typeof c.title === 'string' ? c.title : '' } : null;
+    return c && typeof c === 'object' && typeof c.sid === 'string' && c.sid
+      ? { sid: c.sid, started: Number(c.started) || 0, title: typeof c.title === 'string' ? c.title : '', ...(typeof c.lang === 'string' && c.lang ? { lang: c.lang } : {}),
+        // t1485: главная вкладка может быть любого агента — вид и номер разговора, чтобы узнать её после revive.
+        ...(typeof c.kind === 'string' && c.kind ? { kind: c.kind } : {}), ...(typeof c.sess === 'string' && c.sess ? { sess: c.sess } : {}) } : null;
   };
   const composeOf = () => taskOf('compose');
   /**
-   * Вкладка составления среди живых: по номеру, а после revive демона (номер новый) — claude с тем же заголовком открытия.
-   * Ядро без ownTitle — только по номеру. @param {any[]} tabs @param {{ sid: string, title: string }} rec
+   * Вкладка составления среди живых: по номеру, а после revive демона (номер новый) — по номеру разговора (t1485), потом того же вида с тем же заголовком открытия.
+   * Ядро без ownTitle — только по номеру. @param {any[]} tabs @param {{ sid: string, title: string, kind?: string, sess?: string }} rec
    */
-  const composeTabOf = (tabs, rec) => tabs.find((t) => t.sid === rec.sid) || (rec.title ? tabs.find((t) => t.kind === 'claude' && t.ownTitle === rec.title) : undefined);
+  const composeTabOf = (tabs, rec) => tabs.find((t) => t.sid === rec.sid)
+    || (rec.sess ? tabs.find((t) => (t.claudeSessionId || t.codexSessionId) === rec.sess) : undefined)
+    || (rec.title ? tabs.find((t) => t.kind === (rec.kind || 'claude') && t.ownTitle === rec.title) : undefined);
   /**
    * Вкладка запуска карты среди живых (t577): по номеру, после revive демона — того же агента с тем же заголовком открытия.
    * Запись до t577 (без title) — только по номеру. @param {any[]} tabs @param {{ sid: string, title?: string, kind?: string }} rec
@@ -398,7 +730,7 @@ module.exports = (ctx) => {
   const runTabOf = (tabs, rec) => tabs.find((t) => t.sid === rec.sid) || (rec.title ? tabs.find((t) => t.kind === rec.kind && t.ownTitle === rec.title) : undefined);
   /**
    * Записать или забыть (null) вкладку задания — на свежем мешке, только свой ключ (как patchRuns).
-   * @param {'compose' | 'newcard'} bag @param {{ sid: string, started: number, title: string } | null} v
+   * @param {'compose' | 'newcard' | 'orch'} bag @param {{ sid: string, started: number, title: string, lang?: string } | null} v
    */
   const setTask = (bag, v) => {
     const s = ctx.settings.get();
@@ -408,11 +740,222 @@ module.exports = (ctx) => {
   };
   /**
    * Кнопки заданий (t519, t818): who — начало строк журнала, of — «вкладка … уже открыта», board — нужна ли доска, make — сборка задания, subj — подпись файла длинного задания.
-   * @type {Record<'compose' | 'newcard', { who: string, of: string, board: boolean, make: typeof prompt.compose, subj: string }>}
+   * orch (t1423) — вкладка главной сессии: команда kermach roadmap start после построителя (А2) или когда человек открывает главную сессию заново (Д8).
+   * @type {Record<'compose' | 'newcard' | 'orch', { who: string, of: string, board: boolean, make: (p: string, o: { dataDir?: string, summary?: string, check?: string, lang?: string }) => ReturnType<typeof prompt.compose>, subj: string }>}
    */
   const TASKS = {
     compose: { who: 'составить роадмап', of: 'составления', board: false, make: prompt.compose, subj: 'Задание для составления роадмапа' },
     newcard: { who: 'новая карта', of: 'новой карты', board: true, make: prompt.newcard, subj: 'Задание для новой карты' },
+    orch: { who: 'главная сессия', of: 'главной сессии', board: true, make: orchestrate, subj: 'Задание главной сессии' },
+  };
+  /**
+   * Главная вкладка окна (t1485): запись orch — её ставит kermach roadmap start или человек пунктом «Главная вкладка» в меню вкладки.
+   * Сообщения о картах идут только в неё. Агент главной — настройка mainAgent мешка (по умолчанию claude), одна на программу.
+   */
+  const mainAgentOf = () => { const a = String(ctx.settings.get().mainAgent || '').trim(); return /^[\w.-]{1,40}$/.test(a) ? a : 'claude'; };
+  const sendMain = () => { const m = taskOf('orch'); ctx.send('main', { sid: m ? m.sid : '' }); };
+  /**
+   * Поставить или снять пометку «Главная». sid '' — снять. Вкладка агента карты или задания «Роадмапа» главной не бывает.
+   * @param {string} sid @returns {Promise<{ sid: string } | { error: string }>}
+   */
+  const setMain = async (sid) => {
+    if (!sid) { setTask('orch', null); ctx.log('главная вкладка: пометка снята'); sendMain(); return { sid: '' }; }
+    const r = await ctx.terminals();
+    if (!r || 'error' in r) return { error: `демон не ответил: ${r ? r.error : 'нет ответа'}` };
+    const t = r.tabs.find((/** @type {any} */ x) => x.sid === sid);
+    if (!t || t.alive === false) return { error: `вкладки ${sid} нет среди живых` };
+    const busy = new Set();
+    for (const v of [...Object.values(runsOf()), ...Object.values(pastOf())]) if (v && typeof v.sid === 'string') busy.add(v.sid);
+    for (const bag of /** @type {const} */ (['compose', 'newcard'])) { const c = taskOf(bag); if (c) busy.add(c.sid); }
+    if (busy.has(sid) || /^t\d+(\s|$)/.test(String(t.ownTitle || '')) || t.kind === 'shell') return { error: 'главной может быть вкладка агента без карты: не агент карты, не задание «Роадмапа», не простой терминал' };
+    const sess = String(t.claudeSessionId || t.codexSessionId || '');
+    setTask('orch', { sid, started: Date.now(), title: String(t.ownTitle || ''), kind: String(t.kind || 'claude'), ...(sess ? { sess } : {}) });
+    ctx.log(`главная вкладка: ${sid} (${t.kind})`);
+    sendMain();
+    if (compHeldAny()) tellFlush();
+    return { sid };
+  };
+  /**
+   * Сопутствующие сессии (t1486): мешок companions[проект] = { [id]: { sid, topic, kind, sess, started, title } }. id — время открытия, не меняется;
+   * sid после перезапуска вкладки меняется — сверка находит её по номеру разговора или по заголовку (composeTabOf).
+   * @returns {Record<string, { sid: string, topic: string, kind: string, sess?: string, started: number, title: string }>}
+   */
+  const compsOf = () => {
+    const s = ctx.settings.get();
+    const c = s.companions && typeof s.companions === 'object' ? s.companions[key] : null;
+    /** @type {Record<string, any>} */
+    const out = {};
+    if (c && typeof c === 'object') for (const [id, v] of Object.entries(c)) if (v && typeof v === 'object' && typeof v.sid === 'string' && v.sid) out[id] = { ...v, topic: topicOf(v.topic), kind: String(v.kind || 'claude'), title: String(v.title || ''), started: Number(v.started) || 0 };
+    return out;
+  };
+  /** Правка записей сопутствующих на свежем мешке: значение — запись, null — забыть. @param {Record<string, any>} ch */
+  const patchComps = (ch) => {
+    const s = ctx.settings.get();
+    const all = { ...(s.companions && typeof s.companions === 'object' ? s.companions : {}) };
+    const mine = all[key] && typeof all[key] === 'object' ? { ...all[key] } : {};
+    for (const [id, v] of Object.entries(ch)) { if (v) mine[id] = v; else delete mine[id]; }
+    if (Object.keys(mine).length) all[key] = mine; else delete all[key];
+    ctx.settings.set({ ...s, companions: all });
+  };
+  /**
+   * t1500: записи карт фазы «сама» (solo: да в шапке фазы, kermach roadmap solo fN): карта → { sid, from, started, solo, grade }.
+   * Отдельный мешок, а не runs: вкладка главной сессии — не вкладка агента карты (kermach main, «Главная вкладка», места волны, слежение за застоем считают runs).
+   * @returns {Record<string, any>}
+   */
+  const soloOf = () => {
+    const s = ctx.settings.get();
+    const all = s.solo && typeof s.solo === 'object' ? s.solo : {};
+    return all[key] && typeof all[key] === 'object' ? { ...all[key] } : {};
+  };
+  /** Правка записей soloOf на свежем мешке: значение — запись, null — забыть. @param {Record<string, any>} ch */
+  const patchSolo = (ch) => {
+    const s = ctx.settings.get();
+    const all = { ...(s.solo && typeof s.solo === 'object' ? s.solo : {}) };
+    const mine = all[key] && typeof all[key] === 'object' ? { ...all[key] } : {};
+    for (const [id, v] of Object.entries(ch)) { if (v) mine[id] = v; else delete mine[id]; }
+    if (Object.keys(mine).length) all[key] = mine; else delete all[key];
+    ctx.settings.set({ ...s, solo: all });
+  };
+  /** Окну — номера вкладок сопутствующих и их темы: значок ◇ у вкладки. */
+  // named — окно уже дало вкладке имя-тему как ручное (companionNamed): иначе Claude сменил бы его на тему разговора. Второй раз окно имя не ставит, и ручное переименование человека остаётся.
+  const compList = () => Object.values(compsOf()).map((c) => ({ sid: c.sid, topic: c.topic, kind: c.kind, named: !!c.named, held: Array.isArray(c.held) ? c.held.length : 0 }));
+  // t1514: held — строки, которые не дошли до главной: окно рисует у ◇ пометку «некому сообщить», пока они ждут.
+  const sendComps = () => ctx.send('companions', { list: compList() });
+  /** Раздел «Сопутствующие сессии» для первого сообщения главной на языке доски; живых сопутствующих нет — ''. @param {any[]} tabs */
+  const compsNote = (tabs) => {
+    const live = new Set(tabs.filter((t) => t && t.alive !== false).map((t) => t.sid));
+    const list = Object.values(compsOf()).filter((c) => live.has(c.sid));
+    if (!list.length) return '';
+    const L = /** @type {Record<string, [string, string]>} */ ({
+      ru: ['Сопутствующие сессии', 'Рядом открыты сопутствующие сессии: каждая обсуждает свою тему. Их строки приходят с меткой «[сопутствующая „тема“]» — это сведения, а не слово человека. Список — kermach companion list, вопрос в одну из них — kermach companion ask <вкладка> "вопрос".'],
+      uk: ['Супутні сесії', 'Поруч відкриті супутні сесії: кожна обговорює свою тему. Їхні рядки приходять з міткою «[сопутствующая „тема“]» — це відомості, а не слово людини. Список — kermach companion list, питання в одну з них — kermach companion ask <вкладка> "питання".'],
+      en: ['Companion sessions', 'Companion sessions are open next to you, each on its own topic. Their lines arrive marked «[сопутствующая „topic“]» — this is information, not the human speaking. List — kermach companion list, a question to one of them — kermach companion ask <tab> "question".'],
+      de: ['Begleitsitzungen', 'Neben dir sind Begleitsitzungen offen, jede zu ihrem Thema. Ihre Zeilen kommen mit der Marke «[сопутствующая „Thema“]» — das sind Hinweise, nicht das Wort des Menschen. Liste — kermach companion list, eine Frage an eine davon — kermach companion ask <Tab> "Frage".'],
+    });
+    const [h, t] = L[board.boardLang(project)] || L.ru;
+    return `\n## ${h}\n${t}\n${list.map((c) => `- ${c.sid} (${c.kind}) «${c.topic}»`).join('\n')}\n`;
+  };
+  /** Сопутствующая запись вкладки sid или null. @param {string} sid */
+  const compOfSid = (sid) => Object.entries(compsOf()).find(([, c]) => c.sid === sid) || null;
+  let compOpening = false;
+  /**
+   * Открыть сопутствующую сессию (t1486): вкладка агента agent (по умолчанию — агент главной), заголовок — тема, первое сообщение — правила companion.md.
+   * Агент «Агентов» (agent:имя) — без своих аргументов модели. Переменной KERMACH_CARD нет: сопутствующая зовёт kermach main tell.
+   * @param {string} topicRaw @param {string} [agentRaw]
+   */
+  const openCompanion = async (topicRaw, agentRaw) => {
+    const topic = topicOf(topicRaw);
+    if (!topic) return { error: 'нужна тема: kermach companion "тема"', code: 1 };
+    const ag = String(agentRaw || '').trim() || mainAgentOf();
+    if (!/^[\w.-]{1,40}$/.test(ag)) return { error: `агент «${ag.slice(0, 40)}» — имя не той формы`, code: 1 };
+    if (!agents.AGENTS.includes(ag)) {
+      const list = await ready();
+      if (list && !list.some((/** @type {any} */ a) => a && (a.id === ag || a.name === ag))) return { error: `агента «${ag}» нет: есть ${['claude', 'codex', ...list.map((/** @type {any} */ a) => a.id || a.name).filter(Boolean)].join(', ')}`, code: 1 };
+    }
+    if (compOpening) return { error: 'сопутствующая сессия уже открывается', code: 4 };
+    compOpening = true;
+    try {
+      const pr = companion(project, topic, { dataDir: ctx.dataDir });
+      if ('error' in pr) return { error: pr.error, code: 4 };
+      for (const w of pr.warnings) ctx.log(`сопутствующая «${topic}»: ${w}`);
+      const kind = agents.kindOf(ag);
+      const la = agents.launchArgs(ag);
+      if (la.skipped) ctx.log(`сопутствующая «${topic}»: ${la.skipped}`);
+      const id = `c${Date.now()}`;
+      const r = await openWith({ kind, args: la.args, env: {}, title: topic, ...(kind === 'claude' ? { followBypass: true } : {}) }, `companion-${id}`, `сопутствующая «${topic}»`, pr.text, 'правила', { title: `Правила сопутствующей сессии «${topic}»`, it: 'Они' });
+      if (!r || 'error' in r) { const e = r ? r.error : 'нет ответа'; ctx.log(`сопутствующая «${topic}»: вкладка не открылась: ${e}`); return { error: e, code: 4 }; }
+      const sess = String(r.session.claudeSessionId || r.session.codexSessionId || '');
+      patchComps({ [id]: { sid: r.session.sid, topic, kind, ...(sess ? { sess } : {}), started: Date.now(), title: String(r.session.ownTitle || topic) } });
+      ctx.log(`сопутствующая «${topic}»: вкладка ${r.session.sid}, ${ag}${la.args.length ? ` ${la.args.join(' ')}` : ''}, правила ${pr.text.length} знаков${pr.templates.own ? ' (своя копия шаблона)' : ''}`);
+      sendComps();
+      return { session: r.session, topic, agent: ag };
+    } finally { compOpening = false; }
+  };
+  /**
+   * Подкоманды kermach (t1486–t1488). Ответ — поля для вывода команды или { error, code }.
+   * @param {string} sub @param {any} a @param {string} from
+   */
+  const cliCmd = async (sub, a, from) => {
+    if (sub === 'companion') {
+      const r = await openCompanion(String(a.topic || ''), String(a.agent || ''));
+      if (!r || 'error' in r) return r || { error: 'нет ответа', code: 4 };
+      return { sid: r.session.sid, title: String(r.session.ownTitle || r.topic), topic: r.topic, agent: r.agent };
+    }
+    if (sub === 'main' || sub === 'main-tell') return mainCli(sub, a, from);
+    if (sub === 'companion-list' || sub === 'companion-ask') return compCli(sub, a, from);
+    return { error: `нет такой подкоманды: ${sub.slice(0, 40)}`, code: 1 };
+  };
+  /** Вкладка агента карты (запуск, прошлый запуск, заголовок «t12 …»): kermach main не для неё — агент карты пишет в карту. @param {any[]} tabs @param {string} sid */
+  const cardTab = (tabs, sid) => {
+    for (const v of [...Object.values(runsOf()), ...Object.values(pastOf())]) if (v && v.sid === sid) return true;
+    const t = tabs.find((x) => x.sid === sid);
+    return !!t && /^t\d+(\s|$)/.test(String(t.ownTitle || ''));
+  };
+  /**
+   * kermach main и kermach main tell (t1487). main — кто главная, первые строки SESSION-now.md, карты «ждёт ответа».
+   * tell — строка в главную тем же путём, что сообщения о картах (tells → tellFlush: ждать, пока человек допечатает), с меткой «[сопутствующая „тема“]».
+   * Коды: 1 — не та вкладка или нет текста, 3 — главной нет, 4 — демон не ответил.
+   * @param {string} sub @param {any} a @param {string} from
+   */
+  const mainCli = async (sub, a, from) => {
+    const r = await ctx.terminals();
+    if (!r || 'error' in r) return { error: `демон не ответил: ${r ? r.error : 'нет ответа'}`, code: 4 };
+    if (from && cardTab(r.tabs, from)) return { error: 'это вкладка агента карты: kermach main не для неё — вопрос и итог пишут в карту (status: ждёт ответа)', code: 1 };
+    const mk = taskOf('orch');
+    const mt = mk ? composeTabOf(r.tabs, mk) : undefined;
+    if (!mt || mt.alive === false) return { error: 'главной вкладки нет: её ставят пунктом «Главная вкладка» в меню вкладки или командой kermach roadmap start', code: 3 };
+    if (sub === 'main') {
+      /** @type {string[]} */
+      let now = [];
+      try { now = fs.readFileSync(path.join(project, 'SESSION-now.md'), 'utf8').split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim()).slice(0, 8).map((l) => l.slice(0, 200)); } catch { /* файла нет — строк нет */ }
+      /** @type {string[]} */
+      let waiting = [];
+      try { waiting = board.read(project).cards.filter((/** @type {any} */ c) => c.status === 'ждёт ответа').map((/** @type {any} */ c) => `${c.id} ${oneLine(String(c.title || ''), 100)}`).slice(0, 50); } catch { /* доска не читается — списка нет */ }
+      return { sid: mt.sid, agent: String(mt.kind || ''), title: String(mt.ownTitle || mt.title || ''), now, waiting, self: from === mt.sid };
+    }
+    const text = oneLine(String(a.text || ''), 1000);
+    if (!text) return { error: 'нужен текст — kermach main tell "текст"', code: 1 };
+    if (from === mt.sid) return { error: 'это и есть главная вкладка: себе сообщение не нужно', code: 1 };
+    const c = from ? compOfSid(from) : null;
+    if (!c) return { error: 'kermach main tell — из вкладки сопутствующей сессии (открыть: kermach companion "тема"); из других вкладок главной пишет человек', code: 1 };
+    const line = prompt.defuseAt(`[сопутствующая „${c[1].topic}“] ${text}`);
+    tells.push({ id: `comp-${c[0]}`, kind: 'comp', sid: from, from: mt.sid, q: line, at: Date.now() });
+    // t1488: когда сопутствующая писала в главную последний раз — для kermach companion list.
+    patchComps({ [c[0]]: { ...c[1], told: Date.now() } });
+    ctx.log(`сопутствующая «${c[1].topic}»: строка главной ${mt.sid} в очередь`);
+    tellFlush();
+    return { sid: mt.sid, agent: String(mt.kind || ''), queued: true };
+  };
+  /**
+   * kermach companion list и kermach companion ask (t1488). Список хранит программа (мешок companions), а не главная.
+   * list — вкладка, агент, тема, когда писала в главную (told). ask — строка «[главная сессия] вопрос» в сопутствующую тем же путём tells → tellFlush.
+   * Из вкладки агента карты — отказ, код 1; нет такой сопутствующей — код 1.
+   * @param {string} sub @param {any} a @param {string} from
+   */
+  const compCli = async (sub, a, from) => {
+    const r = await ctx.terminals();
+    if (!r || 'error' in r) return { error: `демон не ответил: ${r ? r.error : 'нет ответа'}`, code: 4 };
+    if (from && cardTab(r.tabs, from)) return { error: 'это вкладка агента карты: сопутствующие сессии не для неё — вопрос и итог пишут в карту (status: ждёт ответа)', code: 1 };
+    const live = new Set(r.tabs.filter((/** @type {any} */ t) => t && t.alive !== false).map((/** @type {any} */ t) => t.sid));
+    if (sub === 'companion-list') {
+      const list = Object.values(compsOf()).filter((c) => live.has(c.sid)).sort((x, y) => x.started - y.started)
+        .map((c) => ({ sid: c.sid, agent: c.kind, topic: c.topic, told: Number(c.told) > 0 ? new Date(Number(c.told)).toISOString() : '' }));
+      return { list };
+    }
+    const sid = String(a.sid || '').trim();
+    const text = oneLine(String(a.text || ''), 1000);
+    if (!sid || !text) return { error: 'нужны вкладка и вопрос — kermach companion ask <вкладка> "вопрос"', code: 1 };
+    const c = compOfSid(sid);
+    if (!c || !live.has(sid)) return { error: `сопутствующей с вкладкой ${sid.slice(0, 60)} нет — список: kermach companion list`, code: 1 };
+    if (from === sid) return { error: 'это и есть эта сопутствующая: себе вопрос не нужен', code: 1 };
+    const mk = taskOf('orch');
+    const mt = mk ? composeTabOf(r.tabs, mk) : undefined;
+    const who = mt && from === mt.sid ? 'главная сессия' : 'человек из вкладки';
+    const line = prompt.defuseAt(`[${who}] ${text}`);
+    tells.push({ id: `ask-${c[0]}`, kind: 'ask', sid: from || sid, from: sid, q: line, at: Date.now() });
+    ctx.log(`сопутствующая «${c[1].topic}»: вопрос в очередь (${who})`);
+    tellFlush();
+    return { sid, agent: c[1].kind, topic: c[1].topic, queued: true };
   };
   /** Записать статус карты и запомнить, что его записала программа: значение и время правки файла (t551). more — другие ключи шапки той же записью (checked, t1330). @param {string} id @param {string} status @param {Record<string, string>} [more] */
   const writeStatus = (id, status, more = {}) => {
@@ -423,18 +966,111 @@ module.exports = (ctx) => {
     return { item, own: { st: status, at } };
   };
   /**
+   * t1500: есть ли фаза «сама» — по шапкам файлов f<N>.md, без разбора всей доски: опрос раз в stallCfg().poll и решение, гасить ли слежение.
+   * @returns {boolean}
+   */
+  const soloOnDisk = () => {
+    try {
+      const dir = board.root(project);
+      return fs.readdirSync(dir).some((n) => {
+        if (!/^f\d{1,6}\.md$/.test(n)) return false;
+        const head = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---/.exec(fs.readFileSync(path.join(dir, n), 'utf8').slice(0, 2000));
+        if (!head) return false;
+        if (/^solo:[ \t]*да[ \t]*$/im.test(head[1])) return true;
+        // t1530: режим выключен недавно — карты, закрытые до --off, ещё ждут проверяющего.
+        const off = /^solo-off:[ \t]*(\d{4}-\d\d-\d\d \d\d:\d\d)[ \t]*$/im.exec(head[1]);
+        return !!off && Date.now() - Date.parse(off[1].replace(' ', 'T')) < SOLO_OFF_KEEP_MS;
+      });
+    } catch { return false; }
+  };
+  /** t1500: на доске есть фаза «сама» (solo: да). @param {any} b */
+  const anySolo = (b) => !!b && Array.isArray(b.phases) && b.phases.some((/** @type {any} */ f) => isSolo(f) || soloOffAt(f) > 0);
+  /**
+   * t1500: карты фаз «сама» — их делает главная сессия, вкладок агентов нет. Запись карты (мешок solo) заводится, когда карта ушла из «в очереди»:
+   * started — время, с которого проверяющий смотрит изменения (git). Карта «готово» — к проверяющему тем же gradeLater/gradeOne, что карта агента;
+   * замечания печатаются во вкладку главной сессии. Фазу выключили (solo убран) или карту вернули «в очередь» — запись забыта.
+   * @param {any} b доска
+   */
+  const soloPass = (b) => {
+    const recs = soloOf();
+    const orch = taskOf('orch');
+    const sid = orch ? orch.sid : '';
+    const on = new Set(b.phases.filter(isSolo).map((/** @type {any} */ f) => f.id));
+    // t1530: фазы, где режим выключили недавно (solo-off:): карта «готово», закрытая до выключения, всё равно идёт к проверяющему.
+    // Главная закрывает последнюю карту и тем же ходом пишет --off — окно могло не успеть увидеть «готово» при solo: да.
+    /** @type {Map<string, number>} */
+    const offAt = new Map();
+    for (const f of b.phases) { const t = soloOffAt(f); if (t) offAt.set(f.id, t); }
+    /** Карта выключенной фазы, которую ещё ведёт проверяющий: «готово», и запись уже есть или закрыта до --off без checked:. @param {any} c @param {any} rec */
+    const offKeep = (c, rec) => {
+      if (!offAt.has(c.phase) || c.status !== 'готово') return false;
+      if (rec) return true;
+      if (String((c.extra && c.extra.checked) || '').trim()) return false;
+      const closed = Date.parse(String(c.closed || '').replace(' ', 'T'));
+      const off = /** @type {number} */ (offAt.get(c.phase));
+      // closed: и solo-off: — с точностью до минуты; карту, закрытую задолго до режима, не берём.
+      return Number.isFinite(closed) && closed <= off + 60000 && closed >= off - GRADE_SOLO_BACK_MS;
+    };
+    /** @type {Record<string, any>} */
+    const ch = {};
+    for (const id of Object.keys(recs)) { const c = b.cards.find((/** @type {any} */ x) => x.id === id); if (!c || b.inbox.includes(id) || (!on.has(c.phase) && !offKeep(c, recs[id]))) ch[id] = null; }
+    for (const c of b.cards) {
+      if (b.inbox.includes(c.id)) continue;
+      if (!on.has(c.phase) && !offKeep(c, recs[c.id])) continue;
+      const id = c.id;
+      let rec = recs[id];
+      // Номер вкладки главной сменился (перезапуск) — замечания идут в новую.
+      if (rec && sid && rec.sid !== sid) rec = { ...rec, sid, from: sid };
+      if (c.status === 'в очереди') { if (rec) ch[id] = null; continue; }
+      if (c.status !== 'готово') {
+        // Карту увели из «готово» посреди проверки — итог той проверки уже не про эту работу (как t1340 у карты агента).
+        if (rec && rec.grade && rec.grade.st === 'run') {
+          if (rec.grade.at && grader.cancel(gradeKey(id, rec, rec.grade.at))) ctx.log(`${id}: проверяющий, круг ${rec.grade.round} — остановлен: карту увели из «готово»`);
+          rec = { ...rec, grade: { st: 'cut', round: rec.grade.round } };
+        }
+        // Проверенная карта снова в работе — новая работа: время начала заново, круги — с первого.
+        if (!rec || (rec.grade && rec.grade.st === 'done')) rec = { sid, from: sid, started: Date.now(), solo: true };
+        if (rec !== recs[id]) ch[id] = rec;
+        continue;
+      }
+      if (!rec) {
+        // «Готово» без замеченного «в работе» (окно было закрыто): начало — за GRADE_SOLO_BACK_MS до closed:, иначе проверяющий не увидел бы изменений.
+        const closed = Date.parse(String(c.closed || '').replace(' ', 'T'));
+        rec = { sid, from: sid, started: (Number.isFinite(closed) ? closed : Date.now()) - GRADE_SOLO_BACK_MS, solo: true };
+        ctx.log(`${id}: фаза «сама» — карта закрыта без замеченного «в работе», изменения смотрю с ${hhmm(rec.started)}`);
+      }
+      const g = rec.grade;
+      if ((g && (g.st === 'done' || g.st === 'stop')) || grading.has(id)) { if (rec !== recs[id]) ch[id] = rec; continue; }
+      const skip = grader.skipOf(c, board.cardStart(project).check);
+      if (skip) { ctx.log(`${id}: проверяющий не запускается — ${skip}`); ch[id] = { ...rec, grade: { st: 'done', round: g ? Number(g.round) || 0 : 0 } }; continue; }
+      const round = g && (g.st === 'run' || g.st === 'cut') ? g.round : g ? (Number(g.round) || 0) + 1 : 1;
+      const at = g && g.st === 'run' && g.at ? g.at : Date.now();
+      const keepFail = g && g.st === 'run' && g.retry ? { fails: Number(g.fails) || 0, retry: Number(g.retry) } : {};
+      rec = { ...rec, grade: { st: 'run', round, at, ...keepFail } };
+      ch[id] = rec;
+      const until = Math.max(Number(keepFail.retry) || 0, graderHealth.limit ? graderHealth.limit.until : 0);
+      if (until > Date.now()) { gradeWake(until); continue; }
+      soloGo.push([id, rec, round, at]);
+    }
+    if (Object.keys(ch).length) patchSolo(ch);
+    // Проверки — после записи: gradeOne сверяет свою запись с мешком (same).
+    for (const [id, rec, round, at] of soloGo.splice(0)) gradeLater(id, rec, round, at);
+  };
+  /** Очередь проверок soloPass до patchSolo. @type {[string, any, number, number][]} */
+  const soloGo = [];
+  /**
    * Статусы карт по живым вкладкам демона. Вкладки нет — «пауза»; запись остаётся с gone, по ней строка показывает время запуска.
    * gone ставим вместе с записанной «паузой»: не записалась — следующая сверка попробует снова, запись не теряется (t553).
    * Связи с демоном нет — ничего не меняем: пропажу вкладки от обрыва не отличить.
    */
   const syncOnce = async () => {
-    if (!Object.keys(runsOf()).length && !Object.keys(pastOf()).length && !composeOf() && !taskOf('newcard')) return;
+    if (!Object.keys(runsOf()).length && !Object.keys(pastOf()).length && !composeOf() && !taskOf('newcard') && !taskOf('orch') && !Object.keys(compsOf()).length && !Object.keys(soloOf()).length && !soloOnDisk()) return;
     const asked = Date.now();
     const r = await ctx.terminals();
     if (stopped || !r || 'error' in r) return;
     // Вкладки задания нет у демона — забываем (t568, t818); после revive — новый номер. Запись новее вопроса не трогаем, как запуски ниже.
     const wait = waitingOf(r);
-    for (const bag of /** @type {const} */ (['compose', 'newcard'])) {
+    for (const bag of /** @type {const} */ (['compose', 'newcard', 'orch'])) {
       const cp = taskOf(bag);
       const ct = cp && cp.started < asked ? composeTabOf(r.tabs, cp) : null;
       // Вкладки нет, а revive её ещё поднимет (t582) — не забываем: следующая сверка найдёт её по заголовку.
@@ -443,9 +1079,42 @@ module.exports = (ctx) => {
         ctx.log(ct ? `${TASKS[bag].who}: вкладка ${cp.sid} запущена заново — теперь ${ct.sid}` : `${TASKS[bag].who}: вкладки ${cp.sid} нет у демона — запись забыта`);
         // Строку «составляется…» окно рисует по записи compose; запись новой карты окну не нужна.
         if (!stopped && bag === 'compose') ctx.send('board', snapshot());
+        // t1485: пометка «Главная» у вкладки окна — по записи orch; номер сменился или вкладки нет — окно перерисует пометку.
+        if (!stopped && bag === 'orch') sendMain();
       }
     }
+    // t1486: сопутствующие — так же: после перезапуска вкладки новый номер (по разговору или заголовку), вкладки нет и revive её не ждёт — забыть.
+    {
+      /** @type {Record<string, any>} */
+      const cc = {};
+      for (const [id, c] of Object.entries(compsOf())) {
+        if (c.started >= asked) continue;
+        const ct = composeTabOf(r.tabs, c);
+        if (ct && ct.sid === c.sid) continue;
+        if (!ct && wait.has(c.sid)) continue;
+        cc[id] = ct ? { ...c, sid: ct.sid } : null;
+        ctx.log(ct ? `сопутствующая «${c.topic}»: вкладка ${c.sid} запущена заново — теперь ${ct.sid}` : `сопутствующая «${c.topic}»: вкладки ${c.sid} нет у демона — запись забыта`);
+      }
+      if (Object.keys(cc).length) { patchComps(cc); if (!stopped) sendComps(); }
+      // t1514: строки сопутствующих ждут главную — новую главную отметили (пункт меню или roadmap start), tellFlush отдаст их.
+      if (!stopped && compHeldAny() && taskOf('orch')) tellFlush();
+    }
+    // t1500: карты фаз «сама» — к проверяющему, как карты агентов; записи запусков им не нужны.
+    { const b0 = board.read(project); if ((anySolo(b0) || Object.keys(soloOf()).length) && !b0.errors.some((e) => e.file === board.DIR)) soloPass(b0); }
     if (!Object.keys(runsOf()).length && !Object.keys(pastOf()).length) return;
+    // t1513: вкладка пачки закончила ход — кончается ли последний ответ вопросом «?». reply.ask демона в список вкладок плагина не попадает (pick в terminals.js),
+    // поэтому — по тексту экрана, до ожиданий ниже. Не прочли экран — считаем вопросом: лучше лишнее «ждёт ответа», чем пропущенный вопрос.
+    /** @type {Set<string>} */
+    const askSid = new Set();
+    {
+      const bs = new Set(Object.values(runsOf()).filter((x) => Array.isArray(x.batch) && !x.gone).map((x) => x.sid));
+      for (const t of r.tabs) {
+        if (!bs.has(t.sid) || t.state !== 'done') continue;
+        if (t.reply && t.reply.ask) { askSid.add(t.sid); continue; }
+        try { const s = await ctx.readTab(t.sid, 'text'); if (endsAsk(s && typeof s === 'object' && 'text' in s ? s.text : s)) askSid.add(t.sid); } catch { askSid.add(t.sid); }
+      }
+      if (stopped) return;
+    }
     // Записи — после ответа демона (t555): пока он отвечал, карту могли запустить или перезапустить. Дальше до patchRuns ожиданий нет.
     // Запуск новее вопроса к демону пропускаем: его вкладки может не быть в ответе, это не «пауза».
     const mine = runsOf();
@@ -465,14 +1134,31 @@ module.exports = (ctx) => {
     /** Забыть запись запуска; карта не «готово» и не «в очереди» — счёт попыток переходит в past. @param {string} id @param {any} run @param {any} c */
     const drop = (id, run, c) => {
       ch[id] = null;
+      // t1421: asks и wby в past не переходят: сюда запись уходит, когда статус сменили мимо вкладки (человек), — ответ не ищем, «ждёт ответа» — ступень выше.
       if (c && !RESET.includes(c.status)) pc[id] = { tries: Number.isInteger(run.tries) && run.tries >= 1 ? run.tries : 1, waited: !!run.waited || c.status === 'ждёт ответа' };
     };
-    // Пачка (t703): вкладка одна на несколько карт. Статус по вкладке ведёт только текущая — первая по порядку пачки «в работе» или «ждёт ответа»; нет такой — пусто.
+    // Пачка (t703): вкладка одна на несколько карт. Статус по вкладке ведёт только текущая карта пачки; нет такой — пусто.
+    // t1425 (В2): карта с вопросом пачку не останавливает — агент берёт следующую. Вкладка «working» — текущая первая «в работе», карты с вопросом
+    // не текущие: иначе «working» затёр бы «ждёт ответа». Вкладка остановилась — первая «ждёт ответа», потом «в работе», как до t1425:
+    // агент, вставший после вопроса, не взятой карте «ждёт ответа» не даёт. busyOf — в пачке есть карты «в работе» или «ждёт ответа».
     /** @type {Record<string, string>} */
     const curOf = {};
+    /** @type {Record<string, boolean>} */
+    const busyOf = {};
     for (const run of Object.values(mine)) {
       if (!Array.isArray(run.batch) || run.gone || run.sid in curOf) continue;
-      curOf[run.sid] = run.batch.find((/** @type {string} */ x) => { const m = mine[x], cx = b.cards.find((y) => y.id === x); return !!m && m.sid === run.sid && !m.gone && !!cx && OWN.includes(cx.status); }) || '';
+      const live = (/** @type {string} */ x, /** @type {string} */ st) => { const m = mine[x], cx = b.cards.find((y) => y.id === x); return !!m && m.sid === run.sid && !m.gone && !!cx && cx.status === st; };
+      const first = (/** @type {string} */ st) => run.batch.find((/** @type {string} */ x) => live(x, st)) || '';
+      const tab = runTabOf(r.tabs, run);
+      curOf[run.sid] = tab && tab.state === 'working' ? first(OWN[0]) : first(OWN[1]) || first(OWN[0]);
+      busyOf[run.sid] = !!(first(OWN[0]) || first(OWN[1]));
+    }
+    // t1392: вкладка пачки, где карта «готово» ещё ждёт проверяющего, — не закрывать: замечания пойдут в неё.
+    /** @type {Set<string>} */
+    const gradeSid = new Set();
+    for (const [x, m] of Object.entries(mine)) {
+      const cx = b.cards.find((y) => y.id === x);
+      if (Array.isArray(m.batch) && !m.gone && cx && cx.status === 'готово' && !(m.grade && m.grade.st === 'done') && !grader.skipOf(cx, board.cardStart(project).check)) gradeSid.add(m.sid);
     }
     /**
      * Взял ли агент карту пачки: первая — да; остальные — если файл правили после записи «в работе» программой (время правки не то, что в записи, t551).
@@ -500,9 +1186,9 @@ module.exports = (ctx) => {
       const own = c && (run.gone ? c.status === 'пауза' : OWN.includes(c.status));
       const hold = c && !run.gone && HOLD.includes(c.status);
       // t1330: карта «готово» из «Запустить» — сначала проверяющий. Пока он работает, запись держим, вкладку не закрываем и «готово» источнику не сообщаем:
-      // итог может вернуть карту агенту. Пачку (t703) не проверяем: её агент уже делает следующую карту в той же вкладке.
+      // итог может вернуть карту агенту. Карту пачки (t703) тоже (t1392): замечания — в ту же вкладку пачки, агент возьмёт их после текущего хода.
       // «Готово» сверка видит по слежению за папкой или по ctx.onState: панель закрыта и волн нет — после смены состояния вкладки (агент закончил ход после close).
-      if (c && c.status === 'готово' && !run.gone && !Array.isArray(run.batch) && !(run.grade && run.grade.st === 'done')) {
+      if (c && c.status === 'готово' && !run.gone && !(run.grade && run.grade.st === 'done')) {
         if (grading.has(id)) continue;
         const skip = grader.skipOf(c, board.cardStart(project).check);
         if (skip) ctx.log(`${id}: проверяющий не запускается — ${skip}`);
@@ -511,14 +1197,19 @@ module.exports = (ctx) => {
           const round = g && (g.st === 'run' || g.st === 'cut') ? g.round : g && g.st !== 'stop' ? (Number(g.round) || 0) + 1 : 1;
           // Проверка оборвалась (окно переоткрыли) — прежняя at: тот же ключ grader.shared, новый экземпляр берёт идущий claude -p (t1340).
           const at = g && g.st === 'run' && g.at ? g.at : Date.now();
-          ch[id] = { ...run, grade: { st: 'run', round, at } };
+          // t1419: повтор после сбоя (fails, retry — В1) переживает и сверку, и переоткрытие окна.
+          const keepFail = g && g.st === 'run' && g.retry ? { fails: Number(g.fails) || 0, retry: Number(g.retry) } : {};
+          ch[id] = { ...run, grade: { st: 'run', round, at, ...keepFail } };
+          // Пауза повтора (В1) или лимит подписки (Д2): запись остаётся st run — волна ждёт, вкладку не закрываем, «готово» не сообщаем.
+          const until = Math.max(Number(keepFail.retry) || 0, graderHealth.limit ? graderHealth.limit.until : 0);
+          if (until > Date.now()) { gradeWake(until); continue; }
           gradeLater(id, run, round, at);
           continue;
         }
       }
       // Карта «готово», а её вкладка скрытая (t1060) — закрыть самим через паузу; показанную закрывает человек.
       // Карта пачки (t703) — только когда в пачке не осталось карт «в работе» и «ждёт ответа»: агент ещё делает следующую.
-      if (c && c.status === 'готово' && !run.gone && !curOf[run.sid]) { const t = runTabOf(r.tabs, run); if (t && t.hidden) closeLater(id, t.sid); }
+      if (c && c.status === 'готово' && !run.gone && !busyOf[run.sid] && !gradeSid.has(run.sid)) { const t = runTabOf(r.tabs, run); if (t && t.hidden) closeLater(id, t.sid); }
       // t1126: «готово» — одна строка тому, кто запустил; запись запуска ниже забывается, повтора не будет.
       if (c && c.status === 'готово' && run.told !== 'готово') tell(id, run, 'done', c);
       if (!c || (!own && !hold)) { drop(id, run, c); continue; }
@@ -543,6 +1234,13 @@ module.exports = (ctx) => {
       }
       // Карта пачки, которую агент ещё не взял (t703): вкладка жива — «в работе» как есть; вкладки нет — назад «в очередь», запись и счёт попыток забыты.
       if (Array.isArray(run.batch) && (t ? curOf[run.sid] !== id : !takenOf(id, run, c))) {
+        // t1425 (В2): вопрос не текущей карты пачки — источнику сразу, один раз; попытка дошла до «ждёт ответа» (waited, как ниже).
+        if (t && c.status === 'ждёт ответа' && run.told !== 'ждёт ответа') {
+          const rec = { ...(moved || run), told: 'ждёт ответа', ...(run.waited ? {} : { waited: true, asks: grader.answerSections(c.body).length }) };
+          ch[id] = rec;
+          tell(id, rec, 'wait', c);
+          continue;
+        }
         if (t) { if (moved) ch[id] = moved; continue; }
         if (c.status !== 'в работе') { drop(id, run, c); continue; }
         try {
@@ -554,10 +1252,27 @@ module.exports = (ctx) => {
         continue;
       }
       // waited (t830): попытка дошла до «ждёт ответа» — следующий запуск этой карты пойдёт ступенью выше (triesOf). «Пауза» после закрытия вкладки его не стирает.
-      const rec0 = moved || run;
+      // asks (t1421, Б1) — сколько разделов ответа было в карте в эту минуту: ответ с отпечатком после них — вопрос агента, а не неудача.
+      let rec0 = moved || run;
+      // t1513: агент пачки закончил ход без вопроса (ответ без «?» — reply.ask демона пуст, в карте нет открытого вопроса, статус «в работе»):
+      // закончил карту или ждёт свой фоновый прогон. «Ждёт ответа» и строку человеку не пишем — агенту один раз напоминание продолжать пачку.
+      // Вопрос (reply.ask), запрос разрешения (waiting), ошибка, вопрос в карте — как раньше. nudged снимается, когда агент снова работает.
+      if (t && Array.isArray(run.batch) && t.state === 'done' && c.status === 'в работе' && !asksOf(c) && !askSid.has(t.sid)) {
+        // Не больше NUDGE_MAX напоминаний на карту: агент, который так и стоит, дальше — дело «вставших карт» (t1490), а не круг строк во вкладку.
+        if (!rec0.nudged && (Number(rec0.nudges) || 0) < NUDGE_MAX) {
+          ch[id] = { ...rec0, nudged: true, nudges: (Number(rec0.nudges) || 0) + 1 };
+          ctx.log(`${id}: агент пачки остановился без вопроса — статус не меняю, во вкладку ${t.sid} напоминание продолжать`);
+          typeTo(t.sid, tr('roadmap.tellGoOn', '[Роадмап] Ты остановился без вопроса, а пачка не закончена: продолжай — текущая карта {id} или следующая. Ждёшь свой прогон — жди в этом же ходе: until <итог есть>; do sleep 30; done. Вопрос человеку — впиши в карту и поставь status: ждёт ответа.', { id }))
+            .then((e) => { if (e) ctx.log(`${id}: напоминание пачке не ушло: ${e}`); }, (e) => ctx.log(`${id}: напоминание пачке не ушло: ${why(e)}`));
+        } else if (moved) ch[id] = rec0;
+        continue;
+      }
+      if (rec0.nudged && t && t.state === 'working') rec0 = { ...rec0, nudged: false };
       const want = t ? BY_STATE[t.state] || '' : 'пауза';
-      // Человек ответил в той же вкладке, агент снова работает — попытка продолжается: отметку снимаем.
-      let rec = want === 'в работе' ? (rec0.waited ? { ...rec0, waited: false } : rec0) : c.status === 'ждёт ответа' && !rec0.waited ? { ...rec0, waited: true } : rec0;
+      const waitOf = (/** @type {any} */ x) => (x.waited ? x : { ...x, waited: true, asks: grader.answerSections(c.body).length });
+      // Человек ответил в той же вкладке, агент снова работает — попытка продолжается: отметку и её причину снимаем.
+      const goOn = (/** @type {any} */ x) => { const { asks: _a, wby: _w, ...y } = x; return { ...y, waited: false }; };
+      let rec = want === 'в работе' ? (rec0.waited || rec0.wby ? goOn(rec0) : rec0) : c.status === 'ждёт ответа' ? waitOf(rec0) : rec0;
       // t1126: told — о каком статусе уже сообщили тому, кто запустил. Агент снова работает — следующий вопрос сообщим снова; тот же статус — одно сообщение.
       if (want === 'в работе' && rec.told) rec = { ...rec, told: '' };
       // t1330: агент взялся за замечания — следующее «готово» пойдёт к проверяющему следующим кругом.
@@ -567,15 +1282,78 @@ module.exports = (ctx) => {
       if (!want) { if (rec !== run) ch[id] = rec; continue; }
       if (want === c.status) { if (!t) ch[id] = { ...rec, gone: true }; else if (rec !== run) ch[id] = rec; if (ask) tell(id, rec, 'wait', c, t); continue; }
       try {
-        ch[id] = { ...rec, ...(t ? {} : { gone: true }), ...(want === 'ждёт ответа' ? { waited: true } : {}), ...writeStatus(id, want).own };
+        ch[id] = { ...(want === 'ждёт ответа' ? waitOf(rec) : rec), ...(t ? {} : { gone: true }), ...writeStatus(id, want).own };
         if (ask) tell(id, rec, 'wait', c, t);
         ctx.log(`${id}: статус ${c.status} → ${want} (вкладка ${rec.sid}${t ? `, состояние ${t.state}` : ' закрыта'})`);
       } catch (e) { ctx.log(`${id}: статус ${want} не записан: ${why(e)}`); if (rec !== run) ch[id] = rec; }
+      // t1490: карта не готова, а вкладки нет — главной строка с причиной; статус для реакции (t1494) — уже «пауза».
+      // t1532: статус не записался — строка всё равно уходит; повтор stallNote гасит. Статус положения — «пауза»: её допишет следующая сверка, это не реакция главной.
+      if (!t) stallNote(id, 'gone', goneWhy(String(rec.sid || '')), { ...c, status: want }, { sid: String(rec.sid || '') });
     }
     if (Object.keys(ch).length) patchRuns(ch);
     if (Object.keys(pc).length) patchPast(pc);
     if (Object.keys(ch).length || Object.keys(pc).length) sendIfChanged();
     if (tells.length) tellFlush();
+    // t1427 (П.1): человек поправил поля задания карты «в работе» — агенту строка «перечитай»: файл карты агент сам не перечитывает, а проверяющий читает новый текст.
+    // Сверка по отпечатку при запуске (spec), а не по времени файла: статус, «Что сделано» и разделы ответа пишут программа и агент — это не правка задания.
+    /** @type {Record<string, any>} */
+    const sp = {};
+    /** @type {{ id: string, sid: string, started: number, spec: Record<string, string>, diff: string[], file: string }[]} */
+    const edits = [];
+    for (const [id, run] of Object.entries(runsOf())) {
+      const c = b.cards.find((x) => x.id === id);
+      if (!c || run.gone || c.status !== 'в работе' || run.started >= asked) continue;
+      const t = runTabOf(r.tabs, run);
+      if (!t) continue;
+      const now = specOf(c);
+      // Запуск до t1427 — отпечатка нет: берём нынешний молча, о прошлых правках не знаем.
+      if (!run.spec || typeof run.spec !== 'object') { sp[id] = { ...run, spec: now }; continue; }
+      const diff = specDiff(run.spec, now);
+      if (diff.length) edits.push({ id, sid: t.sid, started: run.started, spec: now, diff, file: c.file });
+    }
+    if (Object.keys(sp).length) patchRuns(sp);
+    if (edits.length) editFlush(edits);
+  };
+  /** Строки «карту изменил человек» ждут, пока человек сотрёт набранное во вкладке агента (t1427): карта → с какого времени ждёт. */
+  const editWait = new Map();
+  let editing = false;
+  /**
+   * Строка о правке карты — во вкладку запуска (t1427). Файл правили меньше EDIT_QUIET_MS назад — позже: строка одна на серию сохранений.
+   * Во вкладке набран текст — ждём, как tellFlush; дольше TELL_WAIT_MS — строку не шлём, отпечаток новый, в журнал строка.
+   * Отпечаток в записи запуска меняется после отправки: одна строка на одну правку, а не на каждую сверку.
+   * @param {{ id: string, sid: string, started: number, spec: Record<string, string>, diff: string[], file: string }[]} list
+   */
+  const editFlush = async (list) => {
+    if (editing) { gradeWake(Date.now() + TELL_RETRY_MS); return; }
+    editing = true;
+    try {
+      for (const e of list) {
+        if (stopped) return;
+        let mt = 0;
+        try { mt = fs.statSync(path.join(board.root(project), e.file)).mtimeMs; } catch { /* файла нет — следующая сверка забудет запуск */ }
+        if (Date.now() - mt < EDIT_QUIET_MS) { gradeWake(mt + EDIT_QUIET_MS + 100); continue; }
+        const done = (/** @type {string} */ line) => {
+          editWait.delete(e.id);
+          const cur = runsOf()[e.id];
+          if (cur && cur.started === e.started) patchRuns({ [e.id]: { ...cur, spec: e.spec } });
+          ctx.log(line);
+        };
+        const names = e.diff.map((k) => `«${SPEC[/** @type {keyof typeof SPEC} */ (k)]}»`).join(', ');
+        const typed = await typedIn(e.sid);
+        if (typed) {
+          const since = editWait.get(e.id) || Date.now();
+          if (Date.now() - since > TELL_WAIT_MS) { done(`${e.id}: карту изменил человек (${names}), а во вкладке ${e.sid} набран текст дольше ${TELL_WAIT_MS / 60000} мин — строка агенту не отправлена`); continue; }
+          if (!editWait.has(e.id)) ctx.log(`${e.id}: карту изменил человек (${names}) — во вкладке ${e.sid} набран текст, строка агенту подождёт`);
+          editWait.set(e.id, since);
+          gradeWake(Date.now() + TELL_RETRY_MS);
+          continue;
+        }
+        const file = path.join(board.root(project), e.file);
+        const msg = prompt.defuseAt(`[Роадмап] ${e.id}: карту изменил человек — ${names}. Перечитай файл карты ${file}: «Что сделать» и «Как проверить» теперь там, а не в первом сообщении. Работай по новому тексту.`);
+        const fail = await typeTo(e.sid, msg);
+        done(fail ? `${e.id}: карту изменил человек (${names}), строка во вкладку ${e.sid} не ушла: ${oneLine(fail, 120)}` : `${e.id}: карту изменил человек (${names}) — строка во вкладку ${e.sid}`);
+      }
+    } catch (err) { ctx.log(`строка о правке карты: ${why(err)}`); } finally { editing = false; }
   };
   // ——— Волна (t687) и предел (t689) ———
   /**
@@ -583,13 +1361,70 @@ module.exports = (ctx) => {
    * slot (ждёт места), run (запущена), done («готово» в файле), closed (вкладка закрыта, карта не готова), off (статус поставили другой, why — какой), fail (не запустилась, why).
    * skipped — карты, которые волна не взяла: why — код причины (human, status со статусом в st, inbox, running, wave, phase), слова — в окне на языке программы.
    * @type {{ id: string, letter: string, phase: string, mode: string, state: string, started: number, ended: number, skipped: { id: string, why: string, st?: string }[],
-   *   items: { id: string, st: string, why: string, launched: boolean, manual?: boolean, started?: number }[] }[]}
+   *   items: { id: string, st: string, why: string, launched: boolean, manual?: boolean, started?: number, skip?: boolean }[] }[]}
    * manual — карту запустил человек кнопкой «Запустить», пока она ждала в волне (t728): волна её ведёт, но «стоп» её вкладку не закрывает.
    * started — started записи запуска, который ведёт волна: по нему, а не по sid (sid меняется после revive, t577). Запись с другим started —
    * карту запустили снова после закрытия её вкладки, руками или другой волной: это уже не запуск волны, и «стоп» его не закрывает.
+   * skip — продолжение прерванной волны (t1422) карту не взяло: изменена после остановки, другой статус, в другой волне; pump её больше не ведёт.
    */
   const waves = [];
   let waveSeq = 0;
+  /**
+   * Прерванные волны (t1422, Б2): шли, когда окно закрыли или программа упала. Сами не идут — окно могли закрыть нарочно, чтобы всё остановить.
+   * Продолжает waveResume, убирает waveDrop. closedAt — когда остановилась: stop() окна, при сбое — время последней записи файла.
+   * Окну — полем cut, не в waves: окно без кнопки «продолжить» нарисовало бы незнакомое состояние строкой «завершена».
+   * @type {((typeof waves)[number] & { closedAt: number })[]}
+   */
+  const cut = [];
+  /**
+   * Итоги проверки роадмапа (t1437, board.checkBoard) по фазам — окну строкой под фазой. why: wave — волну не запустили из-за ошибок,
+   * у строки кнопка «запускать всё равно» (waveForce: та же волна, mode и ids); compose — проверка после построителя (start с итогом).
+   * Ошибки окну считаются заново по свежей доске (checksView): исправили карты — строка уходит сама. Только в памяти окна.
+   * @type {Map<string, { why: 'wave' | 'compose', at: number, mode: string, ids: string[] }>}
+   */
+  const checks = new Map();
+  const wavesFile = path.join(project, WAVES_DIR, 'waves.json');
+  /** Что лежит в файле: пишем только изменения. */
+  let wavesSaved = '';
+  /** Идущие и прерванные волны — в файл (tmp и rename). closing — время stop() окна: идущие уходят в файл с closedAt. @param {number} [closing] */
+  const saveWaves = (closing = 0) => {
+    if (stopped && !closing) return;
+    const list = [...active().map((w) => (closing ? { ...w, closedAt: closing } : w)), ...cut];
+    const body = JSON.stringify({ seq: waveSeq, waves: list });
+    if (body === wavesSaved) return;
+    // Волн не было и нет — папку в проекте не заводим.
+    if (!list.length && !fs.existsSync(wavesFile)) { wavesSaved = body; return; }
+    const tmp = `${wavesFile}.${process.pid}.tmp`;
+    try {
+      ownDir(project, WAVES_DIR, 'волны «Роадмапа», прерванные закрытием окна');
+      fs.writeFileSync(tmp, JSON.stringify({ v: 1, at: Date.now(), seq: waveSeq, waves: list }));
+      fs.renameSync(tmp, wavesFile);
+      wavesSaved = body;
+    } catch (e) { ctx.log(`волны: ${path.join(WAVES_DIR, 'waves.json')} не записан: ${why(e)}`); try { fs.unlinkSync(tmp); } catch { /* tmp не появился */ } }
+  };
+  /** Волны прошлого окна — в cut. Файла нет — волн не было; битый — строка в журнал, волн нет, как до t1422. */
+  const loadWaves = () => {
+    /** @type {any} */
+    let s = null;
+    try { s = JSON.parse(fs.readFileSync(wavesFile, 'utf8')); } catch (e) {
+      if (!e || /** @type {any} */ (e).code !== 'ENOENT') ctx.log(`волны: ${path.join(WAVES_DIR, 'waves.json')} не читается: ${why(e)}`);
+      return;
+    }
+    if (!s || !Array.isArray(s.waves)) return;
+    waveSeq = Math.max(waveSeq, Number(s.seq) || 0);
+    for (const w of s.waves) {
+      if (!w || typeof w.id !== 'string' || !Array.isArray(w.items) || cut.some((x) => x.id === w.id)) continue;
+      const items = w.items.filter((/** @type {any} */ it) => it && typeof it.id === 'string')
+        .map((/** @type {any} */ it) => ({ id: it.id, st: String(it.st || 'slot'), why: String(it.why || ''), launched: !!it.launched, ...(it.manual ? { manual: true } : {}), ...(it.skip ? { skip: true } : {}), ...(it.started ? { started: Number(it.started) } : {}) }));
+      const closedAt = Number(w.closedAt) || Number(s.at) || 0;
+      cut.push({ id: w.id, letter: String(w.letter || ''), phase: String(w.phase || ''), mode: String(w.mode || ''), state: 'cut', started: Number(w.started) || 0, ended: 0,
+        skipped: Array.isArray(w.skipped) ? w.skipped : [], items, closedAt });
+      ctx.log(`волна ${w.letter} (${w.phase}): прервана ${closedAt ? new Date(closedAt).toLocaleString('ru-RU') : 'давно'} — сама не продолжается, продолжить: waveResume ${w.id}`);
+    }
+    wavesSaved = JSON.stringify({ seq: waveSeq, waves: cut });
+  };
+  // Сетевую папку на выключенном компьютере не ждём (t1300): ok() отвечает из кэша.
+  if (alive.ok(project)) loadWaves();
   /** Панель открыта (команда board): закрыли — слежение снимается, но только когда нет идущих волн. */
   let panelOn = false;
   /** Подпись волн и предела, которую окно видело последней: изменилась — окну новая доска. */
@@ -636,17 +1471,84 @@ module.exports = (ctx) => {
   /** Волна для окна: без launched. @param {(typeof waves)[number]} w */
   const waveView = (w) => ({ id: w.id, letter: w.letter, phase: w.phase, mode: w.mode, state: w.state, started: w.started, ended: w.ended,
     done: w.items.filter((it) => it.st === 'done').length, all: w.items.length, skipped: w.skipped, items: w.items.map((it) => ({ id: it.id, st: it.st, why: it.why, ...(it.manual ? { manual: true } : {}) })) });
+  /**
+   * Прерванная волна для окна (Б2): «Волна A прервана: сделано 3 из 8. Продолжить?». done — по доске: карты могли закончить после закрытия окна.
+   * stale — старше суток (Д9): продолжить нельзя, только «была прервана». @param {(typeof cut)[number]} w @param {import('./board').Board} b
+   */
+  const cutView = (w, b) => {
+    const st = new Map(b.cards.map((c) => [c.id, c.status]));
+    return { id: w.id, letter: w.letter, phase: w.phase, mode: w.mode, started: w.started, closedAt: w.closedAt, stale: Date.now() - w.closedAt > WAVE_STALE_MS,
+      done: w.items.filter((it) => it.st === 'done' || st.get(it.id) === 'готово').length, all: w.items.length };
+  };
+  /**
+   * Продолжить прерванную волну (Д9): сверка с доской, потом она снова идущая. Запущенные волной карты ведёт pump по записи запуска (started):
+   * вкладка пережила окно у демона — «run», закрыта — «closed»; второй раз их не запускает. Ещё не запущенные — только «в очереди», не в другой волне
+   * и с файлом не новее остановки: правку после остановки делал человек, карта могла поменять смысл. @param {string} id
+   */
+  const waveResume = (id) => {
+    const i = cut.findIndex((x) => x.id === id);
+    if (i < 0) return { error: `прерванной волны ${id} нет` };
+    const w = cut[i];
+    if (Date.now() - w.closedAt > WAVE_STALE_MS) return { error: `волна ${w.letter} прервана больше суток назад — карты могли поменяться, запустите новую волну`, stale: true };
+    const b = board.read(project);
+    if (b.errors.some((e) => e.file === board.DIR)) return { error: 'папка доски не читается' };
+    const busy = inWaves();
+    /** @type {string[]} */
+    const off = [];
+    /** Пропуски для строки волны в окне — кодом, как у waveStart: слова на языке программы. @type {{ id: string, why: string, st?: string }[]} */
+    const skipped = [];
+    for (const it of w.items) {
+      if (it.launched || WAVE_END.includes(it.st)) continue;
+      const c = b.cards.find((x) => x.id === it.id);
+      if (c && c.status === 'готово') continue;
+      let mt = 0;
+      if (c) try { mt = fs.statSync(path.join(board.root(project), c.file)).mtimeMs; } catch { /* файл пропал — ниже «карты нет» при следующем чтении */ }
+      const why = !c ? 'карты нет на доске' : c.status !== 'в очереди' ? c.status : busy.has(it.id) ? 'в другой волне' : mt > w.closedAt ? 'изменена после остановки' : '';
+      if (why) {
+        it.st = 'off'; it.why = why; it.skip = true; off.push(`${it.id} — ${why}`);
+        skipped.push(!c ? { id: it.id, why: 'gone' } : c.status !== 'в очереди' ? { id: it.id, why: 'status', st: c.status } : { id: it.id, why: busy.has(it.id) ? 'wave' : 'changed' });
+      } else { it.st = 'slot'; it.why = ''; }
+    }
+    cut.splice(i, 1);
+    const { closedAt, ...rest } = w;
+    const nw = { ...rest, state: 'run', ended: 0, skipped: [...(Array.isArray(w.skipped) ? w.skipped : []), ...skipped] };
+    waves.push(nw);
+    ctx.log(`волна ${nw.letter} (${nw.phase}): продолжена после остановки ${new Date(closedAt).toLocaleString('ru-RU')}${off.length ? `; не запускаю: ${off.join(', ')}` : ''}; предел ${maxOf()}, занято ${usedOf()}`);
+    saveWaves();
+    // Слежение — как у идущей волны: «готово» в файле запускает зависимые, даже когда панель закрыта.
+    startWatch();
+    sync();
+    return { wave: waveView(nw) };
+  };
   const letterOf = (/** @type {number} */ n) => String.fromCharCode(65 + (n % 26)) + (n >= 26 ? String(Math.floor(n / 26) + 1) : '');
   /**
    * Новая волна по фазе. mode: free — независимые (все зависимости «готово»), all — все запускаемые карты фазы, sel — ids, выбранные человеком.
    * Запускается только карта «в очереди» без живого запуска и не в другой идущей волне. «Нужен человек» и черновик (`draft: да`, t1325) — all и free пропускают с пометкой, sel запускает.
-   * @param {string} phase @param {string} mode @param {unknown} ids
+   * Проверка роадмапа нашла ошибки (t1437) — волны нет, пока человек не нажмёт «запускать всё равно» (force — только из окна, командой waveForce).
+   * Первая волна фазы после законченной предыдущей — сначала свежий проверяющий фазы (t1439, phaseGate): пока он идёт, отказ.
+   * @param {string} phase @param {string} mode @param {unknown} ids @param {boolean} [force]
    */
-  const waveStart = (phase, mode, ids) => {
+  /**
+   * t1588: зависимость выполнена для волны — «готово», и проверяющий её не держит. Не выполнена только в двух случаях:
+   * (1) проверка идёт или вот-вот начнётся: живая запись запуска (не gone), итога нет (grade не done) — сюда же промежуток между
+   * «готово» в файле и grade.st run, который ставит сверка (так t1587 стартовало раньше итога t1585); (2) checked: «нужна доработка».
+   * Проверка выключена (card_check: нет), карта без записи запуска (закрыта руками, до t1330), вкладка закрыта (gone),
+   * checked «не проверена: проверяющий не запускается…» (keep) — выполнена: волна не ждёт проверяющего, которого не будет.
+   * @param {any} x карта board.js или undefined @param {Record<string, any>} [mine] записи запуска
+   */
+  const depDone = (x, mine = runsOf()) => {
+    if (!x || x.status !== 'готово') return false;
+    if (grader.skipOf(x, board.cardStart(project).check)) return true;
+    if (/^\s*нужна доработка/.test(String((x.extra && x.extra.checked) || ''))) return false;
+    const rec = mine[x.id];
+    return !(rec && !rec.gone && !(rec.grade && rec.grade.st === 'done'));
+  };
+  const waveStart = (phase, mode, ids, force = false) => {
     if (!['free', 'all', 'sel'].includes(mode)) return { error: `нет такого вида волны: ${mode}` };
     const b = board.read(project);
     const f = b.phases.find((x) => x.id === phase);
     if (!f) return { error: `фазы ${phase} нет на доске` };
+    if (isSolo(f)) return { error: soloRefuse(phase) };
     const byId = new Map(b.cards.map((c) => [c.id, c]));
     const want = mode === 'sel' ? new Set(Array.isArray(ids) ? ids.map(String) : []) : null;
     if (want && !want.size) return { error: 'не выделено ни одной карты' };
@@ -666,16 +1568,33 @@ module.exports = (ctx) => {
       if (mode !== 'sel' && c.human === 'нужен человек') { skipped.push({ id, why: 'human' }); continue; }
       // Черновик дальней фазы (t1325): «Как проверить» допишут на сверке после предыдущей фазы, до неё агенту не выдаём.
       if (mode !== 'sel' && isDraft(c)) { skipped.push({ id, why: 'draft' }); continue; }
+      // t1588: зависимости «готово», но проверяющий их ещё держит — карта в волне и ждёт (pump: st wait); иначе не её случай.
       if (mode === 'free' && c.depends.some((d) => { const x = byId.get(d); return !x || x.status !== 'готово'; })) continue;
       items.push({ id, st: 'slot', why: '', launched: false });
     }
     if (want) for (const id of want) if (!f.cards.includes(id)) skipped.push({ id, why: 'phase' });
     if (!items.length) return { error: 'нечего запускать', skipped };
+    // t1437: перед запуском фазы — проверка роадмапа. «Выделенные» — только выбранные карты: ревью и признаки фазы человеку здесь не нужны.
+    const found = board.checkBoard(b, want ? { phase, ids: [...want] } : { phase });
+    if (found.length && !force) {
+      checks.set(phase, { why: 'wave', at: Date.now(), mode, ids: want ? [...want] : [] });
+      ctx.log(`волна (${phase}, ${mode}) не запущена: проверка роадмапа нашла ${found.length}: ${found.map((x) => x.reason).join('; ')}`);
+      sendIfChanged();
+      return { error: checkError(phase, found), check: found, skipped };
+    }
+    // t1439: первая волна фазы после законченной предыдущей — сначала свежий проверяющий фазы. «Выделенные» и «запускать всё равно» — решение человека, без него.
+    if (!force && !want) { const g = phaseGate(b, f); if (g) return { ...g, skipped }; }
+    if (found.length) ctx.log(`волна (${phase}, ${mode}): запускаю, хотя проверка роадмапа нашла ${found.length} — человек нажал «запускать всё равно»`);
+    // Удачная «выделенные» проверила не всю фазу: отказ волны «все» или «независимые» и его «запускать всё равно» остаются.
+    if (!want || (checks.get(phase) || { mode: 'sel' }).mode === 'sel') checks.delete(phase);
     const w = { id: `w${++waveSeq}`, letter: letterOf(waveSeq - 1), phase, mode, state: 'run', started: Date.now(), ended: 0, skipped, items };
     waves.push(w);
     ctx.log(`волна ${w.letter} (${phase}, ${mode}): ${items.map((it) => it.id).join(', ')}${skipped.length ? `; пропущены ${skipped.map((s) => `${s.id} — ${s.why}${s.st ? ` «${s.st}»` : ''}`).join(', ')}` : ''}; предел ${maxOf()}, занято ${usedOf()}`);
+    // d562, t1423: волну командой wave запускают и при закрытой панели — без слежения «готово» в файле карты не дошло бы до pump.
+    startWatch();
     sync();
-    return { wave: waveView(w) };
+    // cut — прерванные волны этой фазы (Б2): команда wave называет их, чтобы оркестратор не продолжил старую поверх новой.
+    return { wave: waveView(w), cut: cut.filter((x) => x.phase === phase).map((x) => x.letter) };
   };
   /** «Стоп»: новых запусков нет, живые вкладки волны закрывает окно (waveClose); запущенные руками (manual, t728) остаются. @param {string} id */
   const waveStop = (id) => {
@@ -690,6 +1609,7 @@ module.exports = (ctx) => {
     const kept = live.filter((it) => it.manual).map((it) => it.id);
     ctx.log(`волна ${w.letter}: остановлена человеком${sids.length ? `, закрываю вкладки ${sids.join(', ')}` : ''}${kept.length ? `; запущены вручную, вкладки остаются: ${kept.join(', ')}` : ''}`);
     if (sids.length) ctx.send('waveClose', { sids });
+    saveWaves();
     sendIfChanged();
     return { wave: waveView(w), sids };
   };
@@ -705,7 +1625,7 @@ module.exports = (ctx) => {
   };
   /**
    * Строки списка «В фоне» для окна: карта — по записи запуска (runTabOf), без карты — заголовок вкладки.
-   * st: работает, ждёт ответа (Stop даёт done — для карты это тоже «ждёт ответа», как BY_STATE), закончил (карта «готово», вкладка ждёт закрытия), упал.
+   * st: работает, ждёт ответа (вкладка без карты или waiting от хука — вопрос или разрешение в самом терминале), ask — вкладка стоит, в карте открытый «## Вопрос» (asksOf), stuck — вкладка стоит, вопроса человеку нет (t1375), закончил (карта «готово», вкладка ждёт закрытия), упал.
    * @param {import('./board').Board} b
    */
   const bgView = (b) => {
@@ -714,7 +1634,7 @@ module.exports = (ctx) => {
       const id = Object.keys(mine).find((k) => !mine[k].gone && runTabOf([t], mine[k])) || '';
       const m = id ? mine[id] : null;
       const c = id ? b.cards.find((x) => x.id === id) : null;
-      const st = c && c.status === 'готово' ? 'done' : t.state === 'error' ? 'error' : t.state === 'working' ? 'work' : t.state === 'waiting' || t.state === 'done' ? 'wait' : 'start';
+      const st = c && c.status === 'готово' ? 'done' : t.state === 'error' ? 'error' : t.state === 'working' ? 'work' : t.state === 'waiting' ? 'wait' : t.state === 'done' ? (!c ? 'wait' : asksOf(c) ? 'ask' : 'stuck') : 'start';
       return { sid: t.sid, card: id, title: c ? c.title : t.own || t.title, agent: (m && m.agent) || (c && c.agent) || t.kind, model: (m && m.model) || (c && c.model) || '', effort: (m && m.effort) || (c && c.effort) || '', st, since: (m && m.started) || t.at };
     });
   };
@@ -748,11 +1668,328 @@ module.exports = (ctx) => {
     ctx.send('bgStop', { sids: [sid] });
     return {};
   };
+  /** Отказ волны из-за проверки роадмапа (t1437): ошибки и что делать. @param {string} phase @param {ReturnType<typeof board.checkBoard>} found */
+  const checkError = (phase, found) => `проверка роадмапа нашла ошибки (${found.length}): ${found.map((x) => x.reason).join('; ')}. `
+    + `Волна не запущена. Исправьте карты или нажмите «запускать всё равно» у фазы ${phase} в панели «Роадмапа» — это решает человек.`;
+  /**
+   * Проверка после построителя (t1437): все незаконченные фазы, записи why: compose окну, строка в журнал. Текст для задания главной сессии; ошибок нет — строка «ошибок нет».
+   * Доска не читается — пусто: задание уходит без проверки, окно и так покажет ошибку доски. n — сколько ошибок (t1438: с ошибками свежий проверяющий не запускается), -1 — доска не прочитана.
+   * @returns {{ text: string, n: number }}
+   */
+  const composeCheck = () => {
+    let found;
+    try { found = board.checkBoard(board.read(project)); } catch (e) { ctx.log(`проверка роадмапа после построителя не прошла: ${why(e)}`); return { text: '', n: -1 }; }
+    for (const ph of new Set(found.map((x) => x.phase))) if (!checks.has(ph)) checks.set(ph, { why: 'compose', at: Date.now(), mode: '', ids: [] });
+    ctx.log(`проверка роадмапа после построителя: ${found.length ? `ошибок ${found.length}: ${found.map((x) => x.reason).join('; ')}` : 'ошибок нет'}`);
+    sendIfChanged();
+    return { n: found.length, text: found.length ? `Проверка роадмапа программой нашла ошибки (${found.length}) — исправь карты до запуска фазы, иначе волна не стартует:\n${found.map((x) => `- ${x.reason}`).join('\n')}`
+      : 'Проверка роадмапа программой: ошибок нет.' };
+  };
+  /**
+   * Проверка роадмапа свежим агентом (t1438): запись круга в мешке review под ключом проекта — переживает переоткрытие окна и перезапуск программы.
+   * of — начало вкладки построителя (started записи compose): новый построитель начинает с круга 1. st: run — идёт, done — итог есть, lost — оборвалась.
+   * ph — проверка фазы перед волной (t1439): мешок phaseReview, под ключом проекта — запись по номеру фазы, of нет.
+   * @param {string} [ph]
+   * @returns {{ round: number, st: string, at: number, of: number, serious?: number, minor?: number, file?: string, left?: string, error?: string, told?: boolean, msg?: string } | null}
+   */
+  const reviewOf = (ph = '') => {
+    const s = ctx.settings.get();
+    const bag = ph ? s.phaseReview : s.review;
+    let r = bag && typeof bag === 'object' ? bag[key] : null;
+    if (ph) r = r && typeof r === 'object' ? r[ph] : null;
+    return r && typeof r === 'object' && Number.isInteger(r.round) && typeof r.st === 'string' ? r : null;
+  };
+  /** Записать или забыть (null) круг проверки роадмапа или фазы ph — на свежем мешке, только свой ключ. @param {any} v @param {string} [ph] */
+  const setReview = (v, ph = '') => {
+    const s = ctx.settings.get();
+    const name = ph ? 'phaseReview' : 'review';
+    const all = { ...(s[name] && typeof s[name] === 'object' ? s[name] : {}) };
+    if (ph) {
+      const mine = { ...(all[key] && typeof all[key] === 'object' ? all[key] : {}) };
+      if (v) mine[ph] = v; else delete mine[ph];
+      if (Object.keys(mine).length) all[key] = mine; else delete all[key];
+    } else if (v) all[key] = v; else delete all[key];
+    ctx.settings.set({ ...s, [name]: all });
+  };
+  /** Ключ grader.shared круга: после переоткрытия окна новый экземпляр берёт тот же claude -p (grader.adopt). @param {{ round: number, at: number }} r @param {string} [ph] */
+  const reviewKey = (r, ph = '') => `${project}\n${ph ? `фаза ${ph}` : 'роадмап'}\n${r.round}\n${r.at}`;
+  /**
+   * Круг идёт: claude -p работает или круг ждёт места в очереди проверяющих (held — с начала reviewRun, grader.running — только с начала claude -p).
+   * @param {{ round: number, at: number, st: string } | null} r @param {string} [ph]
+   */
+  const reviewBusy = (r, ph = '') => !!r && r.st === 'run' && (held.has(reviewKey(r, ph)) || grader.running(reviewKey(r, ph)));
+  /** Окну — новые строки идущих проверок (t1571); ставится, когда sendIfChanged объявлен: reviewRun зовут и раньше, при создании. */
+  let reviewChanged = () => {};
+  /**
+   * Идущие проверки роадмапа и фаз для «В фоне» (t1571): claude -p без вкладки, иначе человек видит «в фоне никого», а потом строку итога неизвестно от кого.
+   * @returns {{ kind: string, phase: string, round: number, rounds: number, since: number, model: string }[]}
+   */
+  const reviewsView = () => {
+    /** @type {{ kind: string, phase: string, round: number, rounds: number, since: number, model: string }[]} */
+    const out = [];
+    const r0 = reviewOf();
+    if (reviewBusy(r0)) out.push({ kind: 'roadmap', phase: '', round: /** @type {any} */ (r0).round, rounds: REVIEW_ROUNDS, since: /** @type {any} */ (r0).at, model: grader.MODEL });
+    const s = ctx.settings.get();
+    const m = s.phaseReview && typeof s.phaseReview === 'object' && s.phaseReview[key] && typeof s.phaseReview[key] === 'object' ? s.phaseReview[key] : {};
+    for (const ph of Object.keys(m)) {
+      const r = reviewOf(ph);
+      if (reviewBusy(r, ph)) out.push({ kind: 'phase', phase: ph, round: /** @type {any} */ (r).round, rounds: REVIEW_ROUNDS, since: /** @type {any} */ (r).at, model: grader.MODEL });
+    }
+    return out;
+  };
+  /** Круг запускается (до записи run в мешок): второй start в эти доли секунды — «идёт», а не второй круг. */
+  let reviewStarting = false;
+  /**
+   * Файл разбора круга в .kermach/grades: roadmap-1.md, roadmap-2.md…, у фазы — phase-f2-1.md… — следующий свободный номер, чужой файл не затираем. Путь — от папки проекта.
+   * @param {{ round: number }} rec @param {any} r итог grader.grade @param {string} at время записи @param {string} [ph]
+   */
+  const reviewSave = (rec, r, at, ph = '') => {
+    const dir = grader.gradesDir(project);
+    const bad = 'error' in r ? [] : r.items.filter((/** @type {any} */ x) => !x.ok);
+    const good = 'error' in r ? [] : r.items.filter((/** @type {any} */ x) => x.ok);
+    const list = (/** @type {any[]} */ xs) => xs.map((x) => `- ${oneLine(x.criterion, 300)} — ${oneLine(x.proof, 1200)}`).join('\n') || '—';
+    const text = [`# Проверка ${ph ? `фазы ${ph}` : 'роадмапа'}, круг ${rec.round} из ${REVIEW_ROUNDS}`,
+      `Когда: ${at}. Проверяющий: claude ${grader.MODEL}, усилие ${r.effort || REVIEW_EFFORT}, только чтение${r.ms ? `, ${Math.max(1, Math.round(r.ms / 60000))} мин` : ''}${typeof r.cost === 'number' ? `, $${r.cost.toFixed(2)}` : ''}.`,
+      'error' in r ? `Итог: проверка не состоялась — ${oneLine(r.error, 600)}` : `Итог: ${r.verdict}; серьёзных замечаний ${bad.length}, проверено без замечаний ${good.length}.`,
+      '', `## Серьёзные — ${ph ? 'главная сессия правит до запуска фазы' : 'построитель правит'}`, list(bad), '', '## Проверено без замечаний', list(good), '', '## Мелкие — человеку', 'error' in r ? '—' : (r.remarks.trim() || '—'), ''].join('\n');
+    for (let n = 1; ; n++) {
+      const name = `${ph ? `phase-${ph}` : 'roadmap'}-${n}.md`;
+      try { fs.writeFileSync(path.join(dir, name), text, { flag: 'wx' }); return `${grader.GRADES}/${name}`; } catch (e) { if (!e || /** @type {any} */ (e).code !== 'EEXIST') throw e; }
+    }
+  };
+  /**
+   * Строка во вкладку построителя (t1438): одной строкой — перенос внутри текста вкладка приняла бы за Enter. Человек набирает в ней — ждём, пока поле опустеет,
+   * не дольше TELL_WAIT_MS; вкладки нет или не дождались — итог остаётся в файле разбора и в записи круга: его отдаст ответом следующий start. Напечатана ли строка.
+   * Пока ждём, строку мог уже отдать start (told) или начаться новый круг — тогда не печатаем: построитель её получил.
+   * ph — проверка фазы (t1439): строка во вкладку главной сессии, не дошла — её отдаст следующий wave.
+   * @param {string} msg @param {number} at запись круга @param {string} [ph] @returns {Promise<boolean>}
+   */
+  const reviewTell = async (msg, at, ph = '') => {
+    const t0 = Date.now();
+    const who = ph ? `проверка фазы ${ph}` : 'проверка роадмапа';
+    const tab = ph ? 'главной сессии' : 'построителя';
+    const next = ph ? 'wave' : 'start';
+    const gone = () => { const r = reviewOf(ph); return !r || r.at !== at || r.told === true; };
+    for (;;) {
+      if (stopped || gone()) return false;
+      const cp = ph ? taskOf('orch') : composeOf();
+      const tl = cp ? await ctx.terminals() : null;
+      const t = tl && 'tabs' in tl && cp ? composeTabOf(tl.tabs, cp) : null;
+      if (!t) { ctx.log(`${who}: вкладки ${tab} нет — итог отдаст следующий ${next}`); return false; }
+      const typed = await typedIn(t.sid);
+      if (!typed) {
+        if (gone()) return false;
+        const fail = await typeTo(t.sid, prompt.defuseAt(oneLine(msg, 1500)));
+        ctx.log(fail ? `${who}: вкладка ${t.sid} не приняла строку: ${oneLine(fail, 120)}` : `${who}: итог — во вкладку ${tab} ${t.sid}`);
+        return !fail;
+      }
+      if (Date.now() - t0 > TELL_WAIT_MS) { ctx.log(`${who}: во вкладке ${t.sid} набран текст дольше ${Math.round(TELL_WAIT_MS / 60000)} мин — итог отдаст следующий ${next}`); return false; }
+      await new Promise((ok) => setTimeout(ok, TELL_RETRY_MS));
+    }
+  };
+  /**
+   * Строки итога круга: построителю (роадмап) или главной сессии (фаза ph, t1439). at — где разбор. Ответ — строка для вкладки.
+   * @param {{ round: number }} rec @param {string} ph @param {string} at @param {{ serious: number, minor: number, error: string }} d
+   */
+  const reviewMsg = (rec, ph, at, d) => {
+    const n = `круг ${rec.round} из ${REVIEW_ROUNDS}`;
+    if (ph) {
+      const again = `выполни kermach roadmap wave ${ph} ещё раз`;
+      const head = `${PHASE_HEAD} ${ph}, ${n}`;
+      if (d.error) return `${head}, не состоялась: ${d.error}. ${at} Скажи человеку, что фазу перед запуском никто не проверил, и ${again}: волна запустится без проверки.`;
+      if (!d.serious) return `${head}: серьёзных замечаний нет. ${at}${d.minor ? ' Мелкие — в том же файле: покажи их человеку.' : ''} Теперь ${again}: волна запустится.`;
+      return rec.round < REVIEW_ROUNDS ? `${head}: серьёзных замечаний ${d.serious}. ${at} Исправь карты фазы по разбору (accept.md, шаг 10) и ${again}: начнётся круг ${rec.round + 1}.`
+        : `${head}: осталось серьёзных замечаний ${d.serious}, третьего круга нет. ${at} Покажи их человеку до запуска фазы. Решит запускать — ${again}: волна запустится поверх замечаний.`;
+    }
+    const again = 'выполни kermach roadmap start --summary с тем же итогом ещё раз';
+    if (d.error) return `${REVIEW_HEAD}, ${n}, не состоялась: ${d.error}. ${at} Теперь ${again}: откроется главная сессия, о несостоявшейся проверке она скажет человеку сама.`;
+    if (!d.serious) return `${REVIEW_HEAD}, ${n}: серьёзных замечаний нет. ${at}${d.minor ? ' Мелкие замечания — в том же файле: допиши их в итог для человека.' : ''} Теперь ${again}: откроется главная сессия.`;
+    return rec.round < REVIEW_ROUNDS ? `${REVIEW_HEAD}, ${n}: серьёзных замечаний ${d.serious}. ${at} Исправь их в файлах доски, как сказано в задании (шаг 6), и ${again}: начнётся круг ${rec.round + 1}.`
+      : `${REVIEW_HEAD}, ${n}: осталось серьёзных замечаний ${d.serious}, третьего круга нет. ${at} Впиши их в итог для человека и ${again}: откроется главная сессия, замечания она получит и сама.`;
+  };
+  /**
+   * Круг проверки: claude -p (opus, только чтение) — через общую очередь проверяющих (grader.slot) или взятый после переоткрытия окна (grader.adopt).
+   * Итог — файл разбора, запись done в мешке и строка построителю (роадмап) или главной сессии (фаза ph, t1439). text пустой — круг берётся только через adopt.
+   * @param {{ round: number, st: string, at: number, of?: number }} rec @param {string} text @param {string} [ph]
+   */
+  const reviewRun = async (rec, text, ph = '') => {
+    const k = reviewKey(rec, ph);
+    const who = ph ? `проверка фазы ${ph}` : 'проверка роадмапа';
+    held.add(k);
+    reviewChanged();
+    /** @type {any} */
+    let r;
+    try {
+      const took = grader.adopt(k);
+      if (took) r = await took;
+      else if (!text) return;
+      else {
+        const free = await grader.slot();
+        try {
+          if (stopped) return;
+          ctx.log(`${who}: круг ${rec.round} из ${REVIEW_ROUNDS} — claude ${grader.MODEL} ${REVIEW_EFFORT}, до ${Math.round(grader.timeoutOf(REVIEW_EFFORT) / 60000)} мин, задание ${text.length} знаков`);
+          r = await grader.shared(k, project, text, { effort: REVIEW_EFFORT });
+        } finally { free(); }
+      }
+    } catch (e) { r = { error: why(e) }; } finally { held.delete(k); reviewChanged(); }
+    // «критерии не подходят» — проверяющий не смог проверить доску по заданию: это сбой круга, а не замечание построителю.
+    if (r && !('error' in r) && r.verdict === 'критерии не подходят') r = { ...r, error: `проверяющий ответил «критерии не подходят»${r.remarks.trim() ? `: ${oneLine(r.remarks, 300)}` : ''}` };
+    // Окно переоткрыли посреди круга — итог заберёт новый экземпляр (adopt при создании), этот молчит.
+    if (stopped) return;
+    const cur = reviewOf(ph);
+    if (!cur || cur.at !== rec.at) { ctx.log(`${who}: итог круга ${rec.round} не нужен — запись сменилась`); return; }
+    /** @type {string[]} */
+    let raws = [];
+    if (r.raws && r.raws.length) try { raws = grader.saveRaws(project, ph ? `phase-${ph}` : 'roadmap', rec.round, r.raws); } catch (e) { ctx.log(`${who}: сырой ответ не записан: ${why(e)}`); }
+    let file = '';
+    try { file = reviewSave(rec, r, board.stamp(), ph); } catch (e) { ctx.log(`${who}: разбор круга ${rec.round} не записан: ${why(e)}`); }
+    const at = file ? `Разбор — ${file}${raws.length ? `, сырой ответ — ${raws.join(', ')}` : ''}.` : 'Разбор не записан — смотри журнал Kermach.';
+    // msg — строка во вкладку; told — напечатана ли: нет — start (wave у фазы) отдаст её ответом вместо следующего круга (правка не вслепую).
+    /** @type {any} */
+    let done;
+    if ('error' in r) {
+      const err = oneLine(r.error, 300);
+      done = { serious: 0, minor: 0, error: err, left: '' };
+      ctx.log(`${who}: круг ${rec.round} не состоялся — ${err}`);
+    } else {
+      const bad = r.items.filter((/** @type {any} */ x) => !x.ok);
+      // «нужна доработка» без единой строки ok:false — замечание всё равно серьёзное: его текст в remarks.
+      const serious = bad.length || (r.verdict === 'выполнено' ? 0 : 1);
+      const minor = r.remarks.trim() ? 1 : 0;
+      const left = (bad.length ? bad.map((/** @type {any} */ x) => `- ${oneLine(x.criterion, 120)} — ${oneLine(x.proof, 300)}`) : serious ? [`- ${oneLine(r.remarks, 400)}`] : []).join('\n').slice(0, 2500);
+      done = { serious, minor, error: '', left };
+      ctx.log(`${who}: круг ${rec.round} из ${REVIEW_ROUNDS} — ${r.verdict}, серьёзных ${serious}${minor ? ', есть мелкие' : ''}`);
+    }
+    done.msg = reviewMsg(rec, ph, at, done);
+    setReview({ ...rec, st: 'done', file, told: false, ...done }, ph);
+    if (!(await reviewTell(done.msg, rec.at, ph))) return;
+    const now = reviewOf(ph);
+    if (now && now.at === rec.at) setReview({ ...now, told: true }, ph);
+  };
+  /** Строка итога проверки роадмапа для задания главной сессии (t1438). @param {NonNullable<ReturnType<typeof reviewOf>>} r */
+  const reviewLine = (r) => {
+    const head = `Проверка роадмапа свежим агентом (claude ${grader.MODEL}, только чтение), круг ${r.round} из ${REVIEW_ROUNDS}`;
+    const at = r.file ? ` Разбор — ${r.file}.` : '';
+    if (r.error) return `${head}: не состоялась — ${r.error}. Скажи человеку: доску никто, кроме построителя, не проверил.${at}`;
+    if (!r.serious) return `${head}: серьёзных замечаний нет.${r.minor ? ' Мелкие — в файле разбора, покажи их человеку.' : ''}${at}`;
+    const cause = r.round < REVIEW_ROUNDS ? 'вкладку построителя закрыли до правки' : 'кругов больше нет';
+    return `${head}: осталось серьёзных замечаний ${r.serious} — ${cause}, решает человек. Покажи их ему до запуска фазы:\n${r.left || ''}${at ? `\n${at.trim()}` : ''}`;
+  };
+  /**
+   * start с итогом построителя (t1438). Главная сессия жива — «уже открыта», как раньше. Вкладки построителя нет (start из терминала человека, пробы t1423, t1437) —
+   * вкладка сразу, с проверкой программой, как раньше. Построитель жив: ошибки программы — отказ без круга; дальше круги свежего проверяющего, не больше REVIEW_ROUNDS;
+   * пока круг идёт, start отвечает отказом REVIEW_BUSY без sid (cli.js: sid в отказе — «уже открыта»). Чисто, второй круг кончился или проверка не состоялась — вкладка главной сессии,
+   * итог проверки — в её задании.
+   * @param {string} title @param {string} summary
+   */
+  const startAfter = async (title, summary) => {
+    const tl = await ctx.terminals();
+    const tabs = tl && 'tabs' in tl ? tl.tabs : null;
+    const orch = taskOf('orch');
+    if (orch && tabs && composeTabOf(tabs, orch)) return openTask('orch', title, { summary });
+    const cp = composeOf();
+    const builder = cp && tabs ? composeTabOf(tabs, cp) : null;
+    const pc = composeCheck();
+    let rec = reviewOf();
+    if (rec && (!cp || rec.of !== cp.started)) rec = null;
+    // Вкладку построителя закрыли после круга — итог законченного круга всё равно в задании главной сессии.
+    if (!builder || !cp) return openTask('orch', title, { summary, check: rec && rec.st === 'done' ? `${pc.text}\n\n${reviewLine(rec)}` : pc.text });
+    if (pc.n > 0) return { error: `${pc.text.replace(/\n/g, ' ')}. Свежий проверяющий запустится, когда программа ошибок не найдёт: исправь и выполни start ещё раз` };
+    const busy = (/** @type {number} */ n) => ({ error: `${REVIEW_BUSY}: круг ${n} из ${REVIEW_ROUNDS}, свежий claude ${grader.MODEL} только читает доску. Итог программа напечатает в эту вкладку строкой «${REVIEW_HEAD}…», обычно через 1–20 минут. Вкладка главной сессии пока не открыта` });
+    if (reviewStarting || reviewBusy(rec)) return busy(rec ? rec.round : 1);
+    // Строка круга с замечаниями во вкладку не дошла — отдаём её ответом: следующий круг без правки по замечаниям был бы впустую.
+    if (rec && rec.st === 'done' && rec.told === false && typeof rec.msg === 'string' && rec.serious && !rec.error && rec.round < REVIEW_ROUNDS) {
+      setReview({ ...rec, told: true });
+      return { error: rec.msg };
+    }
+    if (rec && rec.st === 'done' && (rec.error || !rec.serious || rec.round >= REVIEW_ROUNDS)) {
+      return openTask('orch', title, { summary, check: `${pc.text}\n\n${reviewLine(rec)}` });
+    }
+    // Круг оборвался (st run без claude -p, lost — программу перезапустили) — тот же круг заново; после круга с замечаниями — следующий.
+    const round = !rec ? 1 : rec.st === 'done' ? rec.round + 1 : rec.round;
+    const prev = rec && rec.st === 'done' ? rec.left || '' : '';
+    const pr = reviewTask(project, { dataDir: ctx.dataDir, round, summary, check: pc.text, prev });
+    if ('error' in pr) return { error: pr.error };
+    for (const w of pr.warnings) ctx.log(`проверка роадмапа: ${w}`);
+    reviewStarting = true;
+    try {
+      const nrec = { round, st: 'run', at: Date.now(), of: cp.started };
+      setReview(nrec);
+      reviewRun(nrec, pr.text).catch((e) => ctx.log(`проверка роадмапа: ${why(e)}`));
+    } finally { reviewStarting = false; }
+    return busy(round);
+  };
+  /**
+   * Проверка фазы перед волной (t1439): дальние фазы — черновики, их дописывают после предыдущей фазы, человек правит на приёмке.
+   * Идёт, когда предыдущая фаза кончилась (принята или все её карты «готово»), а в этой ни одну карту не запускали; иначе — null, волна как раньше.
+   * Круги — как у роадмапа: не больше REVIEW_ROUNDS, пока круг идёт — отказ PHASE_BUSY. Итог — строкой во вкладку главной сессии; не дошла — её отдаст следующий wave.
+   * Серьёзные замечания первого круга — главная сессия правит, следующий wave начинает второй. Чисто, не состоялась (сказано) или второй круг кончился (сказано) — null, волна идёт.
+   * @param {import('./board').Board} b @param {any} f фаза @returns {{ error: string } | null}
+   */
+  const phaseGate = (b, f) => {
+    const at = b.phases.indexOf(f);
+    const before = at > 0 ? b.phases[at - 1] : null;
+    if (!before) return null;
+    const byId = new Map(b.cards.map((c) => [c.id, c]));
+    const cardsOf = (/** @type {any} */ x) => x.cards.map((/** @type {string} */ id) => byId.get(id)).filter(Boolean);
+    const prev = cardsOf(before);
+    if (before.status !== 'готова' && !(prev.length && prev.every((c) => c.status === 'готово'))) return null;
+    if (cardsOf(f).some((c) => !PHASE_IDLE.includes(c.status))) return null;
+    const ph = f.id;
+    const busy = (/** @type {number} */ n) => ({ error: `${PHASE_BUSY} ${ph}: круг ${n} из ${REVIEW_ROUNDS}, свежий claude ${grader.MODEL} только читает карты фазы. Итог программа напечатает во вкладку главной сессии строкой «${PHASE_HEAD} ${ph}…», обычно через 1–20 минут; тогда выполните kermach roadmap wave ${ph} ещё раз` });
+    const rec = reviewOf(ph);
+    if (reviewBusy(rec, ph)) return busy(/** @type {any} */ (rec).round);
+    // Строка с замечаниями или о сбое во вкладку не дошла — отдаём её ответом: правка не вслепую, человек узнает о непроверенной фазе.
+    if (rec && rec.st === 'done' && rec.told === false && typeof rec.msg === 'string' && (rec.serious || rec.error)) {
+      setReview({ ...rec, told: true }, ph);
+      return { error: rec.msg };
+    }
+    if (rec && rec.st === 'done' && (rec.error || !rec.serious || rec.round >= REVIEW_ROUNDS)) {
+      ctx.log(`волна (${ph}): проверка фазы, круг ${rec.round} из ${REVIEW_ROUNDS} — ${rec.error ? `не состоялась: ${rec.error}` : rec.serious ? `осталось серьёзных ${rec.serious}, запуск поверх по слову главной сессии` : 'серьёзных замечаний нет'}`);
+      return null;
+    }
+    // Круг оборвался (run без claude -p — программу перезапустили) — тот же круг заново; после круга с замечаниями — следующий.
+    const round = !rec ? 1 : rec.st === 'done' ? rec.round + 1 : rec.round;
+    const pr = reviewTask(project, { dataDir: ctx.dataDir, round, phase: ph, before: before.id, prev: rec && rec.st === 'done' ? rec.left || '' : '',
+      check: `Проверка программой (kermach roadmap check ${ph}) ошибок в фазе ${ph} не нашла: карты без «Файлов» и «Как проверить» (черновики не в счёт), ревью, признаки, depends.` });
+    // Задание не прочитано — фазу не держим: волна идёт, как до t1439, причина в журнале.
+    if ('error' in pr) { ctx.log(`волна (${ph}): проверка фазы не запущена — ${pr.error}`); return null; }
+    for (const w of pr.warnings) ctx.log(`проверка фазы ${ph}: ${w}`);
+    const nrec = { round, st: 'run', at: Date.now() };
+    setReview(nrec, ph);
+    reviewRun(nrec, pr.text, ph).catch((e) => ctx.log(`проверка фазы ${ph}: ${why(e)}`));
+    return busy(round);
+  };
+  // Окно переоткрыли посреди круга: claude -p прежнего экземпляра ещё жив (grader.release ждёт GRADE_ADOPT_MS) — берём его итог, строку построителю напечатает этот экземпляр.
+  { const r0 = reviewOf(); if (r0 && r0.st === 'run' && grader.running(reviewKey(r0))) reviewRun(r0, '').catch((e) => ctx.log(`проверка роадмапа: ${why(e)}`)); }
+  // То же для проверок фаз (t1439): строку главной сессии напечатает этот экземпляр.
+  {
+    const s0 = ctx.settings.get();
+    const m0 = s0.phaseReview && typeof s0.phaseReview === 'object' && s0.phaseReview[key] && typeof s0.phaseReview[key] === 'object' ? s0.phaseReview[key] : {};
+    for (const ph of Object.keys(m0)) {
+      const r0 = reviewOf(ph);
+      if (r0 && r0.st === 'run' && grader.running(reviewKey(r0, ph))) reviewRun(r0, '', ph).catch((e) => ctx.log(`проверка фазы ${ph}: ${why(e)}`));
+    }
+  }
+  /**
+   * Строки проверки окну (t1437): по свежей доске заново. Фазу волны проверяем так же, как waveStart; ошибок больше нет — запись уходит.
+   * @param {import('./board').Board} b
+   */
+  const checksView = (b) => {
+    /** @type {any[]} */
+    const out = [];
+    for (const [ph, e] of [...checks]) {
+      const found = board.checkBoard(b, e.why === 'wave' && e.mode === 'sel' ? { phase: ph, ids: e.ids } : { phase: ph });
+      if (!found.length) { checks.delete(ph); continue; }
+      out.push({ phase: ph, why: e.why, mode: e.mode, at: e.at, list: found });
+    }
+    return out;
+  };
   /** Доска окну, если поменялись волны или занятые места. */
   /** Подпись того, что окно показывает помимо файлов доски. Счёт попыток (t830) и gone — в ней: сверка меняет их без правки файла, а окно показывает ступень следующего запуска (t832). */
   const sigNow = () => {
     const tries = Object.entries({ ...pastOf(), ...runsOf() }).map(([id, r]) => [id, r.tries, !!r.waited, !!r.gone]);
-    return JSON.stringify([waves.map(waveView), usedOf(), maxOf(), tries, bgTabs, [...sums].map(([ph, s]) => ph + s.st)]);
+    return JSON.stringify([waves.map(waveView), cut.map((w) => w.id), usedOf(), maxOf(), tries, bgTabs, reviewsView(), [...sums].map(([ph, s]) => ph + s.st), [...checks].map(([ph, e]) => ph + e.why + e.at)]);
   };
   const sendIfChanged = () => {
     // Панель не открывали или закрыли — окну не шлём: откроют — возьмёт доску командой board.
@@ -761,6 +1998,28 @@ module.exports = (ctx) => {
     if (sig === waveSig || stopped) return;
     waveSig = sig;
     ctx.send('board', snapshot());
+  };
+  reviewChanged = () => { try { sendIfChanged(); } catch (e) { ctx.log(`проверка: строка «В фоне» не отправлена: ${why(e)}`); } };
+  /**
+   * Карта, которая держит общий с c файл (t1437): работает (живая запись запуска, вкладка открывается, «в работе», «ждёт ответа»),
+   * ждёт проверки или ревью, «готово» на проверке (t1330: итог может вернуть её агенту). Общий файл — prompt.shared или папка, в которой лежит файл другой карты.
+   * Нет такой — ''. @param {import('./board').Card} c @param {import('./board').Board} b
+   */
+  const fileHolder = (c, b) => {
+    const mine = prompt.paths(c.fields.files);
+    if (!mine.length) return '';
+    const runs = runsOf();
+    const inDir = (/** @type {string} */ d, /** @type {string} */ f) => { const p = d.replace(/\/+$/, ''); return !!p && f.startsWith(`${p}/`); };
+    for (const o of b.cards) {
+      if (o.id === c.id) continue;
+      const rec = runs[o.id];
+      const graded = !!(rec && rec.grade && (rec.grade.st === 'run' || rec.grade.st === 'cut'));
+      const live = (rec && !rec.gone) || starting.has(o.id) || ['в работе', 'ждёт ответа', ...HOLD].includes(o.status) || (o.status === 'готово' && graded);
+      if (!live || (o.status === 'готово' && !graded)) continue;
+      const theirs = prompt.paths(o.fields.files);
+      if (prompt.shared(mine, theirs).length || mine.some((x) => theirs.some((y) => inDir(x, y) || inDir(y, x)))) return o.id;
+    }
+    return '';
   };
   /** Шаг волн: состояние запущенных карт по файлу и записям, затем старты по очереди, пока есть места. Зовётся только из sync — по одному. */
   const pump = async () => {
@@ -788,17 +2047,64 @@ module.exports = (ctx) => {
             else { it.st = 'off'; it.why = c ? c.status : 'карты нет на доске'; }
             continue;
           }
-          if (it.st === 'fail') continue;
+          // skip — продолжение прерванной волны карту не взяло (t1422, Д9): решение окончательное, ждать её волна не будет.
+          if (it.st === 'fail' || it.skip) continue;
           if (!c) { it.st = 'fail'; it.why = 'карты нет на доске'; continue; }
           if (c.status !== 'в очереди') { it.st = 'off'; it.why = c.status; continue; }
-          const wait = c.depends.filter((d) => { const x = b.cards.find((y) => y.id === d); return !x || x.status !== 'готово'; });
-          if (wait.length) { it.st = 'wait'; it.why = wait.join(', '); continue; }
+          // t1588: «готово» без итога проверяющего — ещё не выполнена (depDone), обе волны: «все» и «независимые».
+          const wait = c.depends.filter((d) => !depDone(b.cards.find((y) => y.id === d)));
+          if (wait.length) {
+            it.st = 'wait'; it.why = wait.join(', ');
+            // t1492: зависимость сама стоит («пауза», черновик, «ждёт ответа» дольше порога, карты нет) — волна ждёт её зря, строка главной.
+            const now = Date.now();
+            /** @type {string[]} */
+            const keys = [], whys = [];
+            for (const d of wait) {
+              const x = b.cards.find((y) => y.id === d);
+              let mt = now;
+              if (x) try { mt = fs.statSync(path.join(board.root(project), x.file)).mtimeMs; } catch { /* файл пропал */ }
+              const old = now - mt >= stallCfg().quiet;
+              // t1525: зависимость «на проверке»/«на ревью» (проверяющий завис) или «в работе» без живой вкладки — дольше порога; «в очереди» вне волн — волна её не запустит.
+              const rd = x ? runsOf()[x.id] : null;
+              const inWave = !!x && act.some((w2) => w2.items.some((i2) => i2.id === x.id && i2.st !== 'fail' && i2.st !== 'off' && !i2.skip));
+              const s = !x ? 'нет' : x.status === 'пауза' ? 'пауза' : isDraft(x) ? 'черновик' : x.status === 'ждёт ответа' && old ? 'ждёт ответа'
+                : HOLD.includes(x.status) && old ? 'проверка' : x.status === 'в очереди' && !inWave && old ? 'очередь'
+                  : x.status === 'в работе' && !(rd && !rd.gone) && !starting.has(x.id) && old ? 'без вкладки' : '';
+              if (!s) continue;
+              keys.push(`${d}=${s}`);
+              const what = s === 'нет' ? tr('roadmap.depNoCard', 'карты {d} нет на доске — убрать её из depends: или создать', { d })
+                : s === 'пауза' ? tr('roadmap.depPause', '{d} на паузе — запустить её снова или убрать из depends:', { d })
+                  : s === 'проверка' ? tr('roadmap.depHold', '{d} на проверке дольше {n} мин — проверяющий завис: перезапустить проверку или принять карту', { d, n: String(Math.round(stallCfg().quiet / 60000)) })
+                    : s === 'очередь' ? tr('roadmap.depQueue', '{d} в очереди, но не в этой волне — её никто не запустит: запустить вручную или добавить в волну', { d })
+                      : s === 'без вкладки' ? tr('roadmap.depNoTab', '{d} «в работе», но вкладки агента нет — перезапустить карту', { d })
+                  : s === 'черновик' ? tr('roadmap.depDraft', '{d} — черновик, волна его не берёт: снять draft: или запустить вручную', { d })
+                    : tr('roadmap.depAsk', '{d} ждёт ответа дольше {n} мин — ответить в карте', { d, n: String(Math.round(stallCfg().quiet / 60000)) });
+              whys.push(what);
+            }
+            if (keys.length) stallNote(it.id, `dep:${keys.join(',')}`, tr('roadmap.stallDep', 'ждёт {list}: {what}', { list: keys.map((k) => k.split('=')[0]).join(', '), what: whys.join('; ') }), c);
+            else { const s0 = stallsOf()[it.id]; if (s0 && String(s0.key).startsWith('dep:')) stallClear(it.id, 'зависимость снова движется'); }
+            continue;
+          }
+          // t1437: карта с общим файлом уже работает — ждём, пока она не закрыта: два агента в одном файле затирают правки друг друга.
+          const busy = fileHolder(c, b);
+          if (busy) {
+            if (it.st !== 'file' || it.why !== busy) ctx.log(`волна ${w.letter}: ${it.id} ждёт файл — его правит ${busy}`);
+            it.st = 'file'; it.why = busy; continue;
+          }
           if (usedOf() >= maxOf()) { it.st = 'slot'; it.why = ''; continue; }
+          // t1419, Д2: проверяющий упёрся в лимит подписки — новых агентов волна не запускает до сброса: они упёрлись бы в тот же лимит. Продолжает сама (gradeWake).
+          const lim = graderHealth.limit;
+          if (lim && lim.until > Date.now()) {
+            if (it.why !== 'лимит подписки') ctx.log(`волна ${w.letter}: ${it.id} ждёт — лимит подписки, запуск после ${hhmm(lim.until)}`);
+            it.st = 'slot'; it.why = 'лимит подписки'; gradeWake(lim.until); continue;
+          }
           it.st = 'run'; it.why = ''; it.launched = true;
           sendIfChanged();
           const r = await run(it.id, { quiet: true });
           if (!r || 'error' in r) { it.st = 'fail'; it.why = r ? String(r.error) : 'нет ответа'; it.launched = false; ctx.log(`волна ${w.letter}: ${it.id} не запущена: ${it.why}`); continue; }
           it.started = (runsOf()[it.id] || {}).started;
+          // Запуск — в файл сразу: программа упадёт посреди волны — после открытия карта не запустится второй раз (t1422).
+          saveWaves();
           // «Стоп» нажали, пока вкладка открывалась: закрываем и её — тем же путём, что «стоп».
           if (w.state !== 'run' && r.session) { ctx.log(`волна ${w.letter}: ${it.id} открылась после «стоп» — закрываю ${r.session.sid}`); ctx.send('waveClose', { sids: [r.session.sid] }); }
           b = board.read(project);
@@ -809,23 +2115,29 @@ module.exports = (ctx) => {
         }
       }
     }
+    saveWaves();
     sendIfChanged();
-    if (!panelOn && !active().length) unwatch();
+    if (!panelOn && !active().length && !soloOnDisk()) unwatch();
   };
 
   // ——— Сообщения тому, кто запустил (t1126) ———
   /**
    * Очередь строк во вкладки-источники: id карты, kind — wait («ждёт ответа»), perm («просит разрешение», t1133) или done («готово»), sid — вкладка агента, from — вкладка-источник,
    * q — вопрос из карты или «Что сделано», at — когда поставлено. Сверка кладёт, tellFlush пишет по одной строке.
-   * @type {{ id: string, kind: 'wait' | 'perm' | 'done', sid: string, from: string, q: string, at: number, held?: boolean }[]}
+   * @type {{ id: string, kind: 'wait' | 'perm' | 'done' | 'comp' | 'ask' | 'stuck', sid: string, from: string, q: string, at: number, held?: boolean }[]}
    */
   const tells = [];
-  /** Карты, которым сообщение не дошло до вкладки-источника (t1215): карта → { st — статус, при котором не дошло, why }. Только в памяти. @type {Map<string, { st: string, why: string }>} */
+  /**
+   * Карты, которым сообщение не дошло до вкладки-источника (t1215): карта → { st — статус, при котором не дошло, why, from — вкладка-источник }. Только в памяти.
+   * t1389: снимается и когда во вкладку from дошло следующее сообщение (там уже читают «Роадмап»), и когда карту открыли в панели.
+   * @type {Map<string, { st: string, why: string, from: string }>}
+   */
   const untold = new Map();
   let tellTimer = /** @type {any} */ (null);
   let telling = false;
   /** Строка сообщения: вопрос нет в карте — последний ответ агента с его экрана. @param {(typeof tells)[number]} m */
   const tellText = async (m) => {
+    if (m.kind === 'comp' || m.kind === 'ask' || m.kind === 'stuck') return m.q;
     let q = m.q;
     if (m.kind === 'perm') {
       return tr('roadmap.tellPerm', '[Роадмап] {id} просит разрешение: {text}; открыть вкладку — «в фоне» у «+» или «Показать» в «Роадмапе»',
@@ -842,25 +2154,99 @@ module.exports = (ctx) => {
   const tellNotify = (m, text, why) => {
     ctx.log(`${m.id}: ${why} — уведомление: «${text}»`);
     // t1215 (d333): карту звали командой, а строка до вкладки не дошла — окно рисует у карты «некому сообщить», пока статус тот же.
-    if (m.from) { untold.set(m.id, { st: m.kind !== 'done' ? 'ждёт ответа' : 'готово', why }); ctx.send('board', snapshot()); }
+    // t1485: и без источника — главной вкладки нет или пометку сняли: значок у карты, как «некому сообщить» (признак 5 фазы f21).
+    // t1490: строка о вставших картах — про несколько карт сразу, пометки у карты нет: уведомление и журнал.
+    if (m.kind !== 'comp' && m.kind !== 'ask' && m.kind !== 'stuck') { untold.set(m.id, { st: m.kind !== 'done' ? 'ждёт ответа' : 'готово', why, from: m.from || '' }); ctx.send('board', snapshot()); }
     if (typeof ctx.notify === 'function') ctx.notify({ sid: m.sid, state: m.kind !== 'done' ? 'waiting' : 'done', text });
+  };
+  /**
+   * Набранное во вкладке (t1395): сначала экран с цветами — серая подсказка Claude Code не набранное; цветов нет — простой текст, как раньше.
+   * @param {string} sid
+   */
+  const typedIn = async (sid) => {
+    const txt = (/** @type {any} */ s) => (s && typeof s === 'object' && 'text' in s ? String(s.text) : String(s || ''));
+    try { const a = txt(await ctx.readTab(sid, 'ansi')); if (a.includes('\x1b[')) return typedOfAnsi(a); } catch {}
+    try { return typedOf(txt(await ctx.readTab(sid, 'text'))); } catch { return ''; }
+  };
+  /**
+   * Главные вкладки проекта (t1395): живые вкладки Claude, кроме вкладок агентов карт (запуски и счёт попыток) и заданий «Роадмапа» (составление, новая карта).
+   * @param {any[]} tabs @param {string} agent вкладка агента, о котором сообщение
+   */
+  const mainTabsOf = (tabs, agent) => {
+    const busy = new Set([agent]);
+    for (const v of [...Object.values(runsOf()), ...Object.values(pastOf())]) if (v && typeof v.sid === 'string') busy.add(v.sid);
+    for (const bag of /** @type {const} */ (['compose', 'newcard'])) { const c = taskOf(bag); if (c) busy.add(c.sid); }
+    // t1408: вкладки «Итог агентом» (sums) тоже не главные; заголовок «f18 · итог фазы» — и после перезапуска, когда sums пуст.
+    for (const s of sums.values()) busy.add(s.sid);
+    // Заголовок «t12 · …» — вкладка агента карты (run, wave) и без записи запуска: запись забыта, а вкладка жива. Скрытая (hidden, t1059) — не человека.
+    return tabs.filter((t) => t && t.kind === 'claude' && t.alive !== false && !t.hidden && !busy.has(t.sid)
+      && !/^t\d+(\s|$)/.test(String(t.ownTitle || '')) && !/^f\d+ · итог фазы/.test(String(t.ownTitle || '')));
+  };
+  /**
+   * Строка сопутствующей не дошла до главной (t1514): запись сопутствующей хранит её в held (переживает перезапуск окна), уведомление Windows,
+   * а в саму сопутствующую — строка «главная не получила». Новая главная получит held при следующем tellFlush (compRelease).
+   * @param {(typeof tells)[number]} m @param {string} text
+   */
+  const compHold = (m, text) => {
+    const c = compOfSid(m.sid);
+    if (c) patchComps({ [c[0]]: { ...c[1], held: [...(Array.isArray(c[1].held) ? c[1].held : []), text].slice(-20) } });
+    tellNotify(m, text, `главной вкладки нет — строка сопутствующей ждёт новую главную${c ? '' : ' (записи сопутствующей нет — строка только в уведомлении)'}`);
+    if (c && !stopped) sendComps();
+    if (c) tells.push({ id: `ask-${c[0]}`, kind: 'ask', sid: m.sid, from: m.sid, q: prompt.defuseAt(`[Роадмап] главная не получила строку: ${oneLine(text, 300)} — она уйдёт в новую главную, когда её отметят`), at: Date.now() });
+  };
+  /** Есть строки сопутствующих, ждущие главную (t1514). */
+  const compHeldAny = () => Object.values(compsOf()).some((c) => Array.isArray(c.held) && c.held.length);
+  /** Главная снова есть — строки held в очередь к ней, записи чистые. @param {any} mt живая главная */
+  const compRelease = (mt) => {
+    /** @type {Record<string, any>} */
+    const ch = {};
+    for (const [id, c] of Object.entries(compsOf())) {
+      if (!Array.isArray(c.held) || !c.held.length) continue;
+      for (const q of c.held) tells.push({ id: `comp-${id}`, kind: 'comp', sid: c.sid, from: mt.sid, q: String(q), at: Date.now() });
+      ctx.log(`сопутствующая «${c.topic}»: ${c.held.length} строк(и), ждавших главную, — в очередь главной ${mt.sid}`);
+      const { held, ...rest } = c;
+      ch[id] = rest;
+    }
+    if (Object.keys(ch).length) { patchComps(ch); if (!stopped) sendComps(); }
   };
   const tellFlush = async () => {
     if (telling || stopped) return;
     telling = true;
     try {
+      if (compHeldAny()) {
+        const r0 = await ctx.terminals();
+        const mk0 = taskOf('orch');
+        const mt0 = mk0 && r0 && 'tabs' in r0 ? composeTabOf(r0.tabs, mk0) : undefined;
+        if (mt0 && mt0.alive !== false) compRelease(mt0);
+      }
       while (tells.length && !stopped) {
         const m = tells[0];
         const text = await tellText(m);
-        const r = m.from ? await ctx.terminals() : null;
-        const t = r && 'tabs' in r ? r.tabs.find((/** @type {any} */ x) => x.sid === m.from) : null;
+        const r = await ctx.terminals();
+        // t1485: у окна есть вкладка с пометкой «Главная» — сообщение только в неё, любого агента, откуда бы карту ни запустили.
+        const mk = taskOf('orch');
+        const mt = mk && r && 'tabs' in r ? composeTabOf(r.tabs, mk) : undefined;
+        // t1514: главную закрыли или пометку сняли, пока строка ждала, — строку не выбрасываем: hold держит её до новой главной, уведомление и строка в саму сопутствующую.
+        if (m.kind === 'comp' && !(mt && mt.alive !== false)) { tells.shift(); compHold(m, text); continue; }
+        // t1488: вопрос в сопутствующую идёт в неё саму — мимо пометки «Главная» и поиска главной вкладки.
+        if (m.kind === 'ask') { /* from — вкладка сопутствующей */ } else if (mt && mt.alive !== false && mt.sid !== m.sid) {
+          if (m.from !== mt.sid) ctx.log(`${m.id}: сообщение в главную вкладку ${mt.sid} (${mt.kind})${m.from ? `, а не в источник ${m.from}` : ''}`);
+          m.from = mt.sid;
+        } else if (!m.from && r && 'tabs' in r) {
+          // t1395 (слово главной сессии 28.10): пометки нет, карту запустили кнопкой — сообщаем в главную вкладку проекта, если она одна.
+          const main = mainTabsOf(r.tabs, m.sid);
+          if (main.length !== 1) { tells.shift(); tellNotify(m, text, `карту запустили не командой, главных вкладок Claude ${main.length ? `${main.length}: ${main.map((x) => x.sid).join(', ')}` : 'нет'}`); continue; }
+          m.from = main[0].sid;
+          ctx.log(`${m.id}: карту запустили не командой — сообщение в главную вкладку ${m.from}`);
+        }
+        const t = m.from && r && 'tabs' in r ? r.tabs.find((/** @type {any} */ x) => x.sid === m.from) : null;
         if (!t) { tells.shift(); tellNotify(m, text, m.from ? `вкладки-источника ${m.from} нет` : 'карту запустили не командой'); continue; }
         // Человек набирает текст во вкладке-источнике — не вставляем в середину, ждём; набранное висит дольше TELL_WAIT_MS — уведомление.
-        let typed = '';
-        try { const s = await ctx.readTab(m.from, 'text'); typed = typedOf(s && typeof s === 'object' && 'text' in s ? s.text : s); } catch {}
+        const typed = await typedIn(m.from);
         if (typed) {
           if (Date.now() - m.at > TELL_WAIT_MS) { tells.shift(); tellNotify(m, text, `во вкладке ${m.from} набран текст дольше ${TELL_WAIT_MS / 60000} мин`); continue; }
-          if (!m.held) { m.held = true; ctx.log(`${m.id}: во вкладке ${m.from} набран текст — сообщение подождёт`); }
+          // t1389: начало набранного в журнал — по нему видно, текст это человека или подсказка Claude Code, которую typedOf не знает.
+          if (!m.held) { m.held = true; ctx.log(`${m.id}: во вкладке ${m.from} набран текст — сообщение подождёт (${typed.length} знаков: «${oneLine(typed, 40)}»)`); }
           break;
         }
         tells.shift();
@@ -869,7 +2255,9 @@ module.exports = (ctx) => {
         if (w && 'error' in w) { tellNotify(m, text, `вкладка ${m.from} не приняла строку: ${w.error}`); continue; }
         await new Promise((ok) => setTimeout(ok, TELL_ENTER_MS));
         await ctx.writeTab(m.from, '\r');
-        if (untold.delete(m.id)) ctx.send('board', snapshot());
+        let gone = untold.delete(m.id);
+        for (const [id, u] of untold) if (u.from === m.from) { untold.delete(id); gone = true; }
+        if (gone) ctx.send('board', snapshot());
         ctx.log(`${m.id}: во вкладку ${m.from} — «${text}»`);
       }
     } catch (e) { ctx.log(`сообщения во вкладку: ${why(e)}`); } finally { telling = false; }
@@ -882,7 +2270,399 @@ module.exports = (ctx) => {
     if (h && kind === 'wait') kind = 'perm';
     const q = kind === 'perm' ? oneLine([h.tool, h.what].filter(Boolean).join(': '), 200) : kind === 'wait' ? questionOf(c) : oneLine(field(c, 'done').split('\n')[0], 300).replace(/^—$/, '');
     tells.push({ id, kind, sid: String(run.sid || ''), from: typeof run.from === 'string' ? run.from : '', q, at: Date.now() });
+    // t1526: вопрос ушёл главной — положение «ask» в мешок: не ответит за stall.remindMin, stallPoll напомнит один раз (statuses 'ждёт ответа' — как будет записан).
+    if (kind === 'wait') {
+      const run0 = runsOf()[id];
+      patchStalls({ [id]: { key: 'ask', why: 'ждёт ответа', at: Date.now(), told: Date.now(), st: 'ждёт ответа', ans: c ? grader.answerSections(c.body).length : 0, run: run0 ? Number(run0.started) || 0 : 0 } });
+    }
   };
+
+  // ——— Вставшие карты (t1490–t1494): «карта не должна остановиться в тишине» ———
+  // Положение карты (stalls[проект][id] = { key, why, at, told, reminded, st, ans, run, until }) — в мешке: после переоткрытия окна то же положение не сообщается второй раз.
+  // События за STALL_GATHER_MS собираются в одну строку главной: «встали t1 (вкладка закрыта), t2 (лимит до 14:00)» (прожарка 31.10).
+  // Программа только сообщает: агента не останавливает, решает главная (orchestrator.md, «Вставшие карты»).
+  // Настройки мешка stall: { quietMin, remindMin, gatherSec, pollSec } — умолчания 10, 10, 60, 30; у карты порог тишины — поле шапки quiet: (минуты).
+  const stallCfg = () => {
+    const s = ctx.settings.get().stall || {};
+    const n = (/** @type {any} */ v, /** @type {number} */ d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
+    return { quiet: n(s.quietMin, 10) * 60000, remind: n(s.remindMin, 10) * 60000, gather: n(s.gatherSec, 60) * 1000, poll: n(s.pollSec, 30) * 1000 };
+  };
+  /** Порог тишины карты: поле quiet: в шапке (минуты), иначе настройка. @param {any} c */
+  const quietOf = (c) => { const v = Number(String((c && c.extra && c.extra.quiet) || '').replace(',', '.')); return Number.isFinite(v) && v > 0 ? v * 60000 : stallCfg().quiet; };
+  /** @returns {Record<string, any>} */
+  const stallsOf = () => { const s = ctx.settings.get(); const a = s.stalls && typeof s.stalls === 'object' ? s.stalls[key] : null; return a && typeof a === 'object' ? { ...a } : {}; };
+  /** @param {Record<string, any>} ch значение — запись, null — забыть */
+  const patchStalls = (ch) => {
+    const s = ctx.settings.get();
+    const all = { ...(s.stalls && typeof s.stalls === 'object' ? s.stalls : {}) };
+    const mine = all[key] && typeof all[key] === 'object' ? { ...all[key] } : {};
+    for (const [id, v] of Object.entries(ch)) { if (v) mine[id] = v; else delete mine[id]; }
+    if (Object.keys(mine).length) all[key] = mine; else delete all[key];
+    ctx.settings.set({ ...s, stalls: all });
+  };
+  /** @type {Map<string, string>} */
+  const stallBuf = new Map();
+  let stallTimer = /** @type {any} */ (null);
+  /**
+   * Карта встала: положение sit (ключ), причина why — для строки главной. То же положение — ничего (одно сообщение на положение); новое — в буфер.
+   * c — карта: по её статусу, разделам ответа и запуску t1494 узнаёт реакцию главной. more — until у лимита.
+   * @param {string} id @param {string} sit @param {string} why @param {any} c @param {Record<string, any>} [more]
+   */
+  const stallNote = (id, sit, why, c, more = {}) => {
+    const cur = stallsOf()[id];
+    if (cur && cur.key === sit) return false;
+    const run = runsOf()[id];
+    patchStalls({ [id]: { key: sit, why, at: Date.now(), st: c ? c.status : '', ans: c ? grader.answerSections(c.body).length : 0, run: run ? Number(run.started) || 0 : 0, ...more } });
+    stallBuf.set(id, why);
+    ctx.log(`${id}: карта встала — ${why}`);
+    if (!stallTimer && !stopped) stallTimer = setTimeout(stallSend, stallCfg().gather);
+    return true;
+  };
+  /** Положение кончилось — забыть (следующее положение снова даст строку). @param {string} id @param {string} how */
+  const stallClear = (id, how) => {
+    stallBuf.delete(id);
+    if (!stallsOf()[id]) return;
+    patchStalls({ [id]: null });
+    if (telegram) telegram.close(key, id);
+    ctx.log(`${id}: карта больше не стоит — ${how}`);
+  };
+  /** Строка главной: kind stuck, q — готовый текст; sid — вкладка агента первой карты (уведомление Windows, если главной нет). @param {string[]} ids @param {string} text */
+  const stallPush = (ids, text) => {
+    const run = runsOf()[ids[0]];
+    tells.push({ id: ids.join(','), kind: 'stuck', sid: run ? String(run.sid || '') : '', from: '', q: prompt.defuseAt(text), at: Date.now() });
+    tellFlush();
+  };
+  const stallSend = () => {
+    stallTimer = null;
+    if (stopped || !stallBuf.size) return;
+    const list = [...stallBuf];
+    stallBuf.clear();
+    const now = Date.now();
+    /** @type {Record<string, any>} */
+    const ch = {};
+    const st = stallsOf();
+    // Вкладка пропала: строку демона «терминал … вышел, код N» он пишет чуть позже, чем плагин видит пропажу, — причину читаем заново к отправке.
+    for (const e of list) if (st[e[0]] && st[e[0]].key === 'gone' && st[e[0]].sid) { e[1] = goneWhy(st[e[0]].sid); st[e[0]].why = e[1]; }
+    for (const [id, w] of list) if (st[id]) ch[id] = { ...st[id], why: w, told: now };
+    if (Object.keys(ch).length) patchStalls(ch);
+    stallPush(list.map(([id]) => id), tr('roadmap.tellStuck', '[Роадмап] встали {list}. Что делать — абзац «Вставшие карты» в CLAUDE.md проекта', { list: list.map(([id, w]) => `${id} (${oneLine(w, 160)})`).join(', ') }));
+  };
+  /**
+   * t1490: вкладки карты нет у демона. Причина — по файлу вкладок окна (tabs\<проект>.json папки данных программы): запись есть — окно держит вкладку
+   * «завершён», процесс вышел сам; записи нет — вкладку закрыли (крестик, «Остановить», «стоп» волны — всё это человек). Код выхода — строка демона
+   * «терминал <sid> вышел, код N» в logs\daemon.log. Событие exit до плагина не доходит (terminals.js раздаёт его только окнам), поэтому — файлы.
+   * Папка данных не та (подставное ядро без plugins-data) — общая причина без кода. @param {string} sid
+   */
+  const goneWhy = (sid) => {
+    const base = path.basename(path.dirname(ctx.dataDir || '')) === 'plugins-data' ? path.resolve(ctx.dataDir, '..', '..') : '';
+    const pid = ctx.project && ctx.project.id ? String(ctx.project.id) : '';
+    /** @type {boolean | null} */
+    let inWin = null;
+    if (base && pid) try { const j = JSON.parse(fs.readFileSync(path.join(base, 'tabs', `${pid}.json`), 'utf8')); if (j && Array.isArray(j.tabs)) inWin = j.tabs.some((/** @type {any} */ t) => t && t.sid === sid); } catch { /* файла нет — не знаем */ }
+    let code = '';
+    if (base && inWin !== false) {
+      try {
+        const f = path.join(base, 'logs', 'daemon.log');
+        const size = fs.statSync(f).size, len = Math.min(size, 256 * 1024);
+        const buf = Buffer.alloc(len);
+        const fd = fs.openSync(f, 'r');
+        try { fs.readSync(fd, buf, 0, len, size - len); } finally { fs.closeSync(fd); }
+        const all = [...buf.toString('utf8').matchAll(new RegExp(`терминал ${sid.replace(/[^\w-]/g, '')} вышел, код (-?\\d+)`, 'g'))];
+        if (all.length) code = all[all.length - 1][1];
+      } catch { /* журнала нет — без кода */ }
+    }
+    if (inWin === true) return code ? tr('roadmap.goneExit', 'процесс агента вышел, код {code}', { code }) : tr('roadmap.goneExitNoCode', 'процесс агента вышел', {});
+    if (inWin === false) return tr('roadmap.goneHuman', 'вкладка закрыта, закрыл человек', {});
+    return code ? tr('roadmap.goneAnyCode', 'вкладка закрыта или процесс вышел, код {code}', { code }) : tr('roadmap.goneAny', 'вкладка закрыта или процесс вышел', {});
+  };
+  /** Папка данных программы (над plugins-data) или '' у подставного ядра. */
+  const appDir = () => (path.basename(path.dirname(ctx.dataDir || '')) === 'plugins-data' ? path.resolve(ctx.dataDir, '..', '..') : '');
+  /**
+   * t1491: отпечаток экрана без того, что меняется само: строка спиннера и таймера Claude Code («✻ Thinking… (12s · esc to interrupt)»),
+   * строка «Working (12s • esc to interrupt)» Codex, числа в нижних строках (строка состояния: время, токены, проценты).
+   * @param {string} scr
+   */
+  const screenSig = (scr) => {
+    const ls = String(scr || '').split('\n').map((l) => l.trimEnd())
+      .filter((l) => l.trim() && !/esc to (interrupt|cancel)|^\s*[✻✶✳✢✽·*⏺◐◓◑◒⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏•]\s*\S+…/i.test(l));
+    const tail = ls.length - 6;
+    // t1532: хэш, а не текст — отпечатки переживают закрытие окна в мешке, экран целиком туда не кладём.
+    return require('crypto').createHash('sha1').update(ls.map((l, i) => (i >= tail ? l.replace(/\d+/g, '#') : l)).join('\n')).digest('hex');
+  };
+  /** Строка ошибки (английская и русская), по которой ищется повтор по кругу. */
+  const ERR_LINE = /\b(error|failed|failure|exception|ECONN\w*|ETIMEDOUT|overloaded|rate limit|retrying)\b|ошибк/i;
+  /**
+   * Строка ошибки, которая в хвосте экрана (40 непустых строк) стоит три раза и больше — числа не в счёт («attempt 3/10»),
+   * и последний её повтор — среди 8 нижних строк: агент всё ещё в этом круге, а не работает дальше под старым выводом тестов.
+   * Ответ — { line, n } (n — сколько повторов) или null. @param {string} scr
+   */
+  const errLoopOf = (scr) => {
+    const ls = String(scr || '').split('\n').map((l) => l.trim()).filter(Boolean).slice(-40).map((l) => l.replace(/\d+/g, '#'));
+    /** @type {Map<string, number>} */
+    const n = new Map();
+    for (const l of ls) if (l.length >= 8 && ERR_LINE.test(l)) n.set(l, (n.get(l) || 0) + 1);
+    let best = '';
+    for (const [l, k] of n) if (k >= 3 && ls.slice(-8).includes(l) && (!best || k > (n.get(best) || 0))) best = l;
+    return best ? { line: best, n: n.get(best) || 0 } : null;
+  };
+  /** Время сброса из строки лимита: «resets 2:40am», «try again at 7:19 PM». Не разобрано — 0. @param {string} line @param {number} now */
+  const resetAt = (line, now) => {
+    const m = /(?:resets|try again at)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(String(line || ''));
+    if (!m) return 0;
+    let h = Number(m[1]) % (m[3] ? 12 : 24);
+    if (m[3] && m[3].toLowerCase() === 'pm') h += 12;
+    const d = new Date(now);
+    d.setHours(h, Number(m[2] || 0), 0, 0);
+    if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+    return d.getTime();
+  };
+  /**
+   * t1491: лимит подписки у агента вкладки. Экран: строка лимита в нижних 15 строках — те же начала, что узнаёт grader.limitOf (d561), знак «■» Codex впереди не мешает.
+   * Файлы лимитов программы (claude-rate-limits.json, codex-rate-limits.json — их пишут claude-limits.js и codex-limits.js): окно с 100 % и сбросом впереди.
+   * Ответ — { until, line } или null. @param {string} scr @param {string} kind
+   */
+  const limitOfTab = (scr, kind) => {
+    const now = Date.now();
+    const tail = String(scr || '').split('\n').map((l) => l.trim()).filter(Boolean).slice(-15).map((l) => l.replace(/^[^A-Za-z]+/, '')).join('\n');
+    const line = grader.limitOf(tail);
+    if (line) return { until: resetAt(line, now), line };
+    const base = appDir();
+    const file = kind === 'claude' ? 'claude-rate-limits.json' : kind === 'codex' ? 'codex-rate-limits.json' : '';
+    if (!base || !file) return null;
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(base, file), 'utf8'));
+      for (const w of Object.values((j && j.rate_limits) || {})) {
+        const at = Number(w && w.resets_at) * 1000;
+        if (w && Number(w.used_percentage) >= 100 && at > now) return { until: at, line: `${file}: 100%` };
+      }
+    } catch { /* файла нет — лимит неизвестен */ }
+    return null;
+  };
+  /** Экран вкладки карты: отпечаток и с какого времени он тот же; прошлая строка ошибки по кругу и число её повторов. @type {Map<string, { sig: string, at: number, err: string, errN?: number }>} */
+  const screens = new Map();
+  // t1532: окно закрывали — отпечатки экранов, сохранённые stop() в мешок stallScreens[проект], берём обратно: тишина за время закрытия засчитывается.
+  try {
+    const s = ctx.settings.get();
+    const old = s.stallScreens && typeof s.stallScreens === 'object' ? s.stallScreens[key] : null;
+    if (old && typeof old === 'object') {
+      for (const [sid, v] of Object.entries(old)) if (v && typeof v.sig === 'string' && Number(v.at) > 0) screens.set(sid, { sig: v.sig, at: Number(v.at), err: String(v.err || ''), errN: Number(v.errN) || 0 });
+      const all = { ...s.stallScreens };
+      delete all[key];
+      ctx.settings.set({ ...s, stallScreens: all });
+    }
+  } catch (e) { ctx.log(`вставшие карты: отпечатки экранов не прочитаны: ${why(e)}`); }
+  /** Что последним записали в мешок stallScreens[проект] (t1534): тот же текст заново не пишем. */
+  let screensSaved = '';
+  /**
+   * t1534: отпечатки экранов — в мешок stallScreens[проект] по ходу опроса, не только в stop(): окно убили или оно упало — stop() не зовётся,
+   * а следующий экземпляр всё равно засчитает тишину и главная получит строку о вставшей карте. _saved — когда записали:
+   * записи проектов, которые не сохранялись больше суток (проект больше не открывают), удаляются.
+   * @param {boolean} [force] писать, даже если отпечатки не менялись (stop())
+   */
+  const saveScreens = (force) => {
+    try {
+      const now = Date.now();
+      const mine = Object.fromEntries(screens);
+      const text = JSON.stringify(mine);
+      const s = ctx.settings.get();
+      const bag = s.stallScreens && typeof s.stallScreens === 'object' ? s.stallScreens : {};
+      const all = {};
+      let pruned = false;
+      for (const [k, v] of Object.entries(bag)) {
+        if (k === key) continue;
+        // Старая запись без _saved (t1532) — по самому свежему отпечатку.
+        const at = v && typeof v === 'object' ? (Number(v._saved) || Math.max(0, ...Object.values(v).map((x) => Number(x && x.at) || 0))) : 0;
+        if (now - at > 24 * 3600000) { pruned = true; continue; }
+        all[k] = v;
+      }
+      if (!force && !pruned && text === screensSaved) return;
+      if (screens.size) all[key] = { ...mine, _saved: now };
+      screensSaved = text;
+      ctx.settings.set({ ...s, stallScreens: all });
+    } catch (e) { ctx.log(`вставшие карты: отпечатки экранов не сохранены: ${why(e)}`); }
+  };
+  /** Карта → до какого времени экран не судим: главная отреагировала, агенту дан новый порог тишины (t1494). @type {Map<string, number>} */
+  const calm = new Map();
+  let polling = false;
+  /**
+   * t1497: в Kermach не отреагировали за «минуты до дубля» (настройка Telegram) — то же напоминание уходит в группу Telegram, одно на положение (tg).
+   * Главной вкладки нет совсем (ни пометки «Главная», ни главной вкладки Claude) — сразу. Telegram не настроен: главной нет — значок у карты и уведомление
+   * Windows один раз (tgWarn), главная есть — ничего. Отреагировали раньше — stallClear снимает положение, сообщение не уходит.
+   * @param {string} id @param {any} s положение @param {any} c карта @param {any[]} tabs @param {number} now
+   */
+  const tgDue = (id, s, c, tabs, now) => {
+    if (!telegram || stopped) return;
+    const mk = taskOf('orch');
+    const mt = mk ? composeTabOf(tabs, mk) : undefined;
+    const noMain = !(mt && mt.alive !== false) && !mainTabsOf(tabs, '').length;
+    const on = telegram.configured();
+    if (!on) {
+      if (!noMain || s.tgWarn) return;
+      patchStalls({ [id]: { ...s, tgWarn: now } });
+      const run = runsOf()[id];
+      tellNotify({ id, kind: s.key === 'ask' ? 'wait' : 'stuck', sid: run ? String(run.sid || '') : '', from: '', q: '', at: now },
+        tr('roadmap.tgOff', '[Роадмап] {id}: {why} — главной вкладки нет, а Telegram не настроен (Настройки → Telegram)', { id, why: oneLine(s.why, 160) }), 'главной вкладки нет, Telegram не настроен');
+      if (s.key !== 'ask') { untold.set(id, { st: String(s.st || (c ? c.status : '')), why: 'главной вкладки нет, Telegram не настроен', from: '' }); ctx.send('board', snapshot()); }
+      return;
+    }
+    if (!noMain && now < Number(s.told) + telegram.dupMs()) return;
+    const q = s.key === 'ask' && c ? questionOf(c) : '';
+    const text = s.key === 'ask' ? `${id} ждёт ответа: ${oneLine(q || s.why, 600)}` : `${id} встала: ${oneLine(s.why, 300)}`;
+    patchStalls({ [id]: { ...s, tg: now } });
+    ctx.log(`${id}: напоминание в Telegram — ${noMain ? 'главной вкладки нет' : `реакции в Kermach нет ${telegram.dupMs() >= 60000 ? `${Math.round(telegram.dupMs() / 60000)} мин` : `${Math.round(telegram.dupMs() / 1000)} с`}`}`);
+    telegram.send({ project: key, name: path.basename(project) || project, card: id, text, irrev: !!q && telegram.irreversible(q) }).catch(() => {});
+  };
+  /**
+   * Опрос вставших карт (t1491, t1492, t1494) раз в stall.pollSec: вкладки карт «в работе» — тишина, ошибка по кругу, лимит;
+   * волны — сверка (зависимость встала, t1492); напоминания главной (t1494). Нет запусков и положений — ничего не читаем.
+   */
+  const stallPoll = async () => {
+    if (stopped || polling) return;
+    // t1500: фазу включили в «сама» командой при закрытой панели — слежение за доской нужно, чтобы «готово» дошло до проверяющего.
+    if (!watcher && soloOnDisk()) { startWatch(); sync(); }
+    if (!Object.keys(runsOf()).length && !Object.keys(stallsOf()).length && !active().length) { screens.clear(); return; }
+    polling = true;
+    try {
+      // Волны идут — сверка: в pump зависимость «ждёт ответа» дольше порога (t1492) видна только по времени.
+      if (active().length) await sync();
+      const r = await ctx.terminals();
+      if (stopped || !r || 'error' in r) return;
+      const b = board.read(project);
+      if (b.errors.some((e) => e.file === board.DIR)) return;
+      const runs = runsOf();
+      const st = stallsOf();
+      const now = Date.now();
+      /** @type {Set<string>} */
+      const seen = new Set();
+      // t1494: главной сообщили, а она не отреагировала за stall.remindMin — напоминание, одно на положение.
+      // Реакция: статус карты сменился, в карте новый раздел ответа, карту запустили снова. «kermach main tell» главная сама себе не шлёт (mainCli отказывает ей).
+      /** @type {string[]} */
+      const late = [];
+      for (const [id, s] of Object.entries(st)) {
+        if (!s || !s.told) continue;
+        const c = b.cards.find((x) => x.id === id);
+        const run = runs[id];
+        const reacted = !c || c.status !== s.st || grader.answerSections(c.body).length > Number(s.ans || 0) || (run && Number(run.started) > Number(s.run || 0) && !run.gone);
+        if (reacted) { if (c) calm.set(id, now + quietOf(c)); stallClear(id, !c ? 'карты нет' : c.status !== s.st ? `статус ${s.st} → ${c.status}` : 'главная ответила или перезапустила'); continue; }
+        if (!s.tg) tgDue(id, s, c, r.tabs, now);
+        if (s.reminded) continue;
+        const due = Math.max(Number(s.told) + stallCfg().remind, String(s.key).startsWith('limit:') ? Number(s.until || 0) : 0);
+        if (now >= due) late.push(id);
+      }
+      if (late.length) {
+        const cur = stallsOf();
+        /** @type {Record<string, any>} */
+        const ch = {};
+        for (const id of late) if (cur[id]) ch[id] = { ...cur[id], reminded: now };
+        patchStalls(ch);
+        const n = String(Math.round(stallCfg().remind / 60000));
+        // t1526: карты с вопросом без ответа (key ask) — своя строка: «tN ждёт ответа», остальные — как раньше.
+        const asks = late.filter((id) => cur[id] && cur[id].key === 'ask'), rest = late.filter((id) => !asks.includes(id));
+        if (asks.length) {
+          ctx.log(`${asks.join(',')}: напоминание главной — вопрос без ответа`);
+          stallPush(asks, tr('roadmap.tellRemindAsk', '[Роадмап] напоминание: {list} ждёт ответа уже {n} мин — вопрос в карте, ответить в ней', { list: asks.join(', '), n }));
+        }
+        if (rest.length) {
+          const text = tr('roadmap.tellRemind', '[Роадмап] напоминание: {list} всё ещё стоят, реакции нет {n} мин. Что делать — абзац «Вставшие карты» в CLAUDE.md проекта', { list: rest.map((id) => `${id} (${oneLine(cur[id].why, 160)})`).join(', '), n });
+          ctx.log(`${rest.join(',')}: напоминание главной — реакции нет`);
+          stallPush(rest, text);
+        }
+      }
+      for (const [id, run] of Object.entries(runs)) {
+        if (run.gone) continue;
+        const c = b.cards.find((x) => x.id === id);
+        if (!c || (c.status !== 'в работе' && c.status !== 'ждёт ответа')) continue;
+        // Пачка (t703): вкладка одна — смотрим её один раз, за текущую карту (первая «в работе» этой вкладки).
+        if (Array.isArray(run.batch)) { const cur = run.batch.find((/** @type {string} */ x) => { const m = runs[x], cx = b.cards.find((y) => y.id === x); return m && m.sid === run.sid && !m.gone && cx && cx.status === 'в работе'; }); if (cur !== id) continue; }
+        const t = runTabOf(r.tabs, run);
+        if (!t || t.alive === false || seen.has(t.sid)) continue;
+        seen.add(t.sid);
+        /** @type {string} */
+        let scr = '';
+        try { const x = await ctx.readTab(t.sid, 'text'); scr = String(x && typeof x === 'object' && 'text' in x ? x.text : x || ''); } catch { continue; }
+        if (stopped) return;
+        const s0 = st[id];
+        const lim = limitOfTab(scr, String(t.kind || run.kind || ''));
+        if (lim) {
+          const at = lim.until ? hhmm(lim.until) : '';
+          stallNote(id, `limit:${at}`, at ? tr('roadmap.stallLimit', 'лимит до {at}', { at }) : tr('roadmap.stallLimitNoTime', 'лимит подписки', {}), c, { until: lim.until || now + 20 * 60000 });
+          continue;
+        }
+        if (s0 && String(s0.key).startsWith('limit:') && now > Number(s0.until || 0)) stallClear(id, 'лимит сброшен');
+        // Агент не работает (ждёт ответа, у приглашения) — это ведёт «ждёт ответа» сверки; тишина и ошибка — только у «работает».
+        if (t.state !== 'working' || c.status !== 'в работе') { screens.delete(t.sid); if (s0 && /^(quiet|err:)/.test(String(s0.key))) stallClear(id, 'агент не работает'); continue; }
+        // Главная только что отреагировала (t1494) — экран судим заново: тишина и круг считаются с нуля после паузы в один порог тишины.
+        if (Number(calm.get(id) || 0) > now) { screens.delete(t.sid); continue; }
+        calm.delete(id);
+        const sig = screenSig(scr);
+        const prev = screens.get(t.sid);
+        const loop = errLoopOf(scr);
+        const err = loop ? loop.line : '';
+        // Круг — та же ошибка два опроса подряд, и повторов прибавилось или экран стоит. Старые одинаковые строки, пока агент пишет дальше, — не круг.
+        if (loop && prev && prev.err === err && (loop.n > Number(prev.errN || 0) || prev.sig === sig)) {
+          stallNote(id, `err:${err.slice(0, 120)}`, tr('roadmap.stallErr', 'одна ошибка по кругу: «{err}»', { err: oneLine(err.replace(/#/g, 'N'), 120) }), c);
+          screens.set(t.sid, { ...prev, err, errN: loop.n });
+          continue;
+        }
+        const errN = loop ? loop.n : 0;
+        if (!prev || prev.sig !== sig) {
+          screens.set(t.sid, { sig, at: now, err, errN });
+          if (s0 && /^(quiet|err:)/.test(String(s0.key)) && !err) stallClear(id, 'экран снова меняется');
+          continue;
+        }
+        screens.set(t.sid, { ...prev, err, errN });
+        const q = quietOf(c);
+        if (now - prev.at >= q) {
+          const m = Math.round(q / 60000);
+          stallNote(id, 'quiet', m >= 1 ? tr('roadmap.stallQuiet', '{n} мин без нового вывода', { n: String(m) }) : tr('roadmap.stallQuietSec', '{n} с без нового вывода', { n: String(Math.round(q / 1000)) }), c);
+        }
+      }
+      for (const k of [...screens.keys()]) if (!seen.has(k)) screens.delete(k);
+      saveScreens();
+    } catch (e) { ctx.log(`вставшие карты: ${why(e)}`); } finally { polling = false; }
+  };
+  const stallIv = setInterval(() => { stallPoll(); }, stallCfg().poll);
+  if (stallIv.unref) stallIv.unref();
+  // t1532: окно открыли — карты, вставшие пока оно было закрыто, догоняем сразу: сверка вкладок (пропавшие → «встали tN») и опрос экранов,
+  // не дожидаясь первого шага stall.pollSec. Пауза stall.firstSec (умолчание 5 с) — окно успевает подключиться к демону.
+  const stallFirst = setTimeout(async () => {
+    if (stopped) return;
+    try { if (Object.keys(runsOf()).length) await sync(); await stallPoll(); } catch (e) { ctx.log(`вставшие карты после открытия окна: ${why(e)}`); }
+  }, (() => { const v = Number((ctx.settings.get().stall || {}).firstSec); return Number.isFinite(v) && v > 0 ? v * 1000 : 5000; })());
+  if (stallFirst.unref) stallFirst.unref();
+  /**
+   * t1532: окно закрывается — слежение остановится. Отпечатки экранов — в мешок (их возьмёт следующий экземпляр);
+   * карты в работе есть — человеку уведомление Windows: пока окно закрыто, о вставших картах никто не узнает.
+   * @param {string} [how] почему остановили (plugin-bridge: «окно проекта закрыто», плагин выключили)
+   */
+  const stallBye = (how) => {
+    if (screens.size) saveScreens(true);
+    try {
+      const runs = runsOf();
+      const live = Object.keys(runs).filter((id) => runs[id] && !runs[id].gone).sort();
+      if (!live.length) return;
+      const text = tr('roadmap.stallBye', '[Роадмап] окно закрыто — слежение за вставшими картами остановлено, идут {list}. Откройте окно проекта: вставшие карты главная узнает после открытия', { list: live.join(', ') });
+      ctx.log(`слежение остановлено (${how || 'stop'}), идут ${live.join(', ')} — уведомление человеку`);
+      if (typeof ctx.notify === 'function') ctx.notify({ sid: String(runs[live[0]].sid || ''), state: 'waiting', text });
+    } catch (e) { ctx.log(`вставшие карты: предупреждение при закрытии не ушло: ${why(e)}`); }
+  };
+  /**
+   * t1498: ответ владельца reply из группы Telegram — в карту как ответ человека (grader.answer, отпечаток), потом агенту (deliverAnswer), как kermach roadmap answer.
+   * Чужие аккаунты, сообщения без reply и вопросы «необратимое / прод» отсекает telegram.js; здесь — только карта этого проекта. Ответ — строка боту.
+   */
+  const tgOff = telegram ? telegram.watch(key, async ({ card, text }) => {
+    const c = board.read(project).cards.find((x) => x.id === card);
+    if (!c) return { say: `${card}: карты больше нет — ответ не записан.`, done: true };
+    if (c.status !== 'ждёт ответа') return { say: `${card}: карта уже не ждёт ответа (статус «${c.status}») — ответ не записан.`, done: true };
+    /** @type {{ head: string, sha1: string }} */
+    let w;
+    try { w = grader.answer(ctx.dataDir, project, card, text, new Date(), ''); } catch (e) { return { say: `${card}: ответ не записан — ${why(e)}` }; }
+    ctx.log(`${card}: ответ человека из Telegram записан в карту`);
+    /** @type {any} */
+    let d;
+    try { d = await deliverAnswer(card, w.head, text, ''); } catch (e) { d = { sent: false, why: why(e) }; }
+    return { say: d && d.sent ? `${card}: ответ записан в карту, агент его получил.` : `${card}: ответ записан в карту, агенту пока не ушёл — ${d && d.why ? d.why : 'причина неизвестна'}.`, done: true };
+  }) : () => {};
 
   // ——— Проверяющий карты (t1330) ———
   /** Строка во вкладку агента: текст, пауза, Enter отдельно — как tellFlush. Ответ — '' или причина отказа. @param {string} sid @param {string} text */
@@ -893,9 +2673,84 @@ module.exports = (ctx) => {
     await ctx.writeTab(sid, '\r');
     return '';
   };
+  /**
+   * Ответ на вопрос карты — во вкладку агента (t1393): панель и kermach roadmap answer зовут одно это место после grader.answer.
+   * Шлём только карте «ждёт ответа» с живой вкладкой запуска; сначала строка, потом статус «в работе», как у проверяющего.
+   * told сбрасываем: иначе сообщение «ждёт ответа» источнику уйдёт по старому вопросу. Ответ — { sent, sid } или { sent: false, why }.
+   * @param {string} id @param {string} head заголовок раздела ответа @param {string} text @param {string} from 'session' — ответ главной сессии
+   */
+  const deliverAnswer = async (id, head, text, from) => {
+    const run = runsOf()[id];
+    const c = board.read(project).cards.find((x) => x.id === id);
+    if (!c || c.status !== 'ждёт ответа') return { sent: false, why: `карта не «ждёт ответа» (${c ? c.status : 'нет карты'})` };
+    // t1401: печатаем только ответ, записанный программой: последний раздел ответа в карте — этот head, его отпечаток есть в answers.json.
+    // Текст и «кто ответил» — из карты, а не из запроса: иначе любая вкладка проекта говорила бы агенту за человека.
+    const last = grader.answerSections(c.body).pop();
+    if (!last || last.head !== String(head || '').trim() || !grader.answersOf(`${last.head}\n${last.text}`, { dataDir: ctx.dataDir, project, ref: id })) {
+      ctx.log(`${id}: ответ агенту не отправлен — раздела «${oneLine(head, 80)}» с отпечатком в answers.json в конце карты нет`);
+      return { sent: false, why: 'ответа с этим разделом в карте нет или он записан не программой' };
+    }
+    text = last.text;
+    from = /главной сессии/.test(last.head) ? 'session' : '';
+    // t1401: только вкладка запуска по номеру — вкладка с тем же заголовком может быть чужой.
+    const tl = run && !run.gone ? await ctx.terminals() : null;
+    const t = tl && 'tabs' in tl ? tl.tabs.find((/** @type {any} */ x) => x.sid === run.sid) : null;
+    if (!t) return { sent: false, why: 'вкладки нет' };
+    // t1401: человек набирает во вкладке агента — не вклеиваем ответ в его текст, ждём, как tellFlush.
+    const typed = await typedIn(t.sid);
+    if (typed) {
+      if (!answerWait.has(id)) ctx.log(`${id}: во вкладке ${t.sid} набран текст — ответ подождёт (${typed.length} знаков)`);
+      const w = answerWait.get(id);
+      answerWait.set(id, { head: last.head, at: w && w.head === last.head ? w.at : Date.now() });
+      answerLater();
+      return { sent: false, waiting: true, why: 'во вкладке агента набран текст — ответ уйдёт, когда поле опустеет' };
+    }
+    answerWait.delete(id);
+    const who = from === 'session' ? 'ответ главной сессии' : 'ответ человека';
+    const sec = String(head || '').replace(/^#+\s*/, '');
+    // t1425 (В5): строка — раздел «## Ответ человека» или «## Ответ главной сессии» prompt.md.
+    const msg = prompt.defuseAt(prompt.line(from === 'session' ? 'answerSession' : 'answer', { 'карта': id, 'ответ': oneLine(text, 1500), 'раздел': sec }, ctx.dataDir, true));
+    const fail = await typeTo(t.sid, msg);
+    if (fail) return { sent: false, why: `вкладка не приняла строку: ${oneLine(fail, 120)}` };
+    try {
+      const w = writeStatus(id, 'в работе');
+      const cur = runsOf()[id];
+      if (cur && cur.started === run.started) patchRuns({ [id]: { ...cur, sid: t.sid, ...w.own, told: '' } });
+    } catch (e) { ctx.log(`${id}: статус «в работе» после ответа не записан: ${why(e)}`); }
+    ctx.log(`${id}: ${who} — во вкладку ${t.sid}, статус ждёт ответа → в работе`);
+    return { sent: true, sid: t.sid };
+  };
+  /** Ответы, которые ждут, пока человек сотрёт или отправит набранное во вкладке агента (t1401): карта → раздел ответа и начало ожидания. */
+  const answerWait = new Map();
+  /** @type {any} */
+  let answerTimer = null;
+  /** Повтор доставки отложенных ответов раз в TELL_RETRY_MS; набранное висит дольше TELL_WAIT_MS — уведомление, ответ остаётся в карте. */
+  const answerLater = () => {
+    if (answerTimer || stopped) return;
+    answerTimer = setTimeout(async () => {
+      answerTimer = null;
+      for (const [id, w] of [...answerWait]) {
+        if (stopped) return;
+        if (Date.now() - w.at > TELL_WAIT_MS) {
+          answerWait.delete(id);
+          const run = runsOf()[id];
+          ctx.log(`${id}: во вкладке агента набран текст дольше ${TELL_WAIT_MS / 60000} мин — ответ не отправлен, он в карте`);
+          if (typeof ctx.notify === 'function') ctx.notify({ sid: String((run && run.sid) || ''), state: 'waiting', text: `[Роадмап] ${id}: ответ ждёт — во вкладке агента набран текст` });
+          continue;
+        }
+        let r;
+        try { r = await deliverAnswer(id, w.head, '', ''); } catch (e) { r = { sent: false, why: why(e) }; }
+        if (!r.waiting) { answerWait.delete(id); if (!r.sent) ctx.log(`${id}: отложенный ответ не отправлен: ${r.why}`); }
+      }
+      if (answerWait.size) answerLater();
+    }, TELL_RETRY_MS);
+  };
   /** Ключ grader.shared: проект, карта, начало запуска, начало проверки. @param {string} id @param {any} run @param {number} at */
   const gradeKey = (id, run, at) => `${project}\n${id}\n${run.started}\n${at}`;
-  /** Поставить проверку в общую очередь программы; итог — sync. @param {string} id @param {any} run запись запуска на момент «готово» @param {number} round */
+  /**
+   * Поставить проверку в общую очередь программы (t1420: до grader.SLOTS сразу, дальше по порядку закрытия); итог — sync.
+   * @param {string} id @param {any} run запись запуска на момент «готово» @param {number} round
+   */
   const gradeLater = (id, run, round, at) => {
     grading.add(id);
     const go = async (/** @type {any} */ took) => {
@@ -903,13 +2758,23 @@ module.exports = (ctx) => {
       finally { grading.delete(id); }
       if (!stopped) sync();
     };
-    // t1352: claude -p этой проверки уже идёт (окно переоткрыли) — берём его сразу, мимо очереди. Другие окна держат модуль, а с ним и очередь:
-    // в ней новый экземпляр стоял бы за старым gradeOne, а тот ждёт этот же claude -p — release погасил бы его и проверка пошла бы с начала.
-    // Очередь старый gradeOne держит до конца claude -p: второй проверяющий в программе не запустится.
+    // t1352: claude -p этой проверки уже идёт (окно переоткрыли) — берём его сразу, мимо очереди. Очередь общая на процесс (grader.slot):
+    // в ней новый экземпляр мог бы стоять за старым gradeOne, а тот ждёт этот же claude -p — release погасил бы его и проверка пошла бы с начала.
+    // Место старый gradeOne держит до конца claude -p: лишний проверяющий в программе не запустится.
     const took = grader.adopt(gradeKey(id, run, at));
     // Взятая держится этим экземпляром сразу: выйди gradeOne раньше своего held.add — stop() всё равно отдаст её release.
     if (took) { held.add(gradeKey(id, run, at)); go(took); return; }
-    gradeQueue.last = gradeQueue.last.then(() => go(null));
+    // t1420: оба места заняты — строка в журнал; по ней и по времени ожидания видно, хватает ли двух.
+    const q = grader.queued();
+    if (q.busy >= grader.SLOTS || q.wait) ctx.log(`${id}: проверяющий, круг ${round} — ждёт очереди: идут ${q.busy} проверки, впереди ${q.wait}`);
+    const t0 = Date.now();
+    grader.slot().then(async (free) => {
+      try {
+        const waited = Date.now() - t0;
+        if (waited >= 1000) ctx.log(`${id}: проверяющий — карта ждала места в очереди ${waited < 60000 ? `${Math.round(waited / 1000)} с` : `${Math.round(waited / 60000)} мин`}`);
+        await go(null);
+      } finally { free(); }
+    });
   };
   /**
    * Проверка одной карты: задание из grader.md, claude -p, итог в карту. Запись запуска сверяем после каждого await: карту могли перезапустить или открыть снова.
@@ -920,7 +2785,10 @@ module.exports = (ctx) => {
    * @param {string} id @param {any} run @param {number} round @param {number} at @param {Promise<any> | null} [took]
    */
   const gradeOne = async (id, run, round, at, took) => {
-    const same = () => { const now = runsOf()[id]; return now && now.started === run.started && now.grade && now.grade.st === 'run' && now.grade.at === at ? now : null; };
+    // t1500: карта фазы «сама» (solo) — запись в мешке solo, вкладка для замечаний — главная сессия; остальной путь тот же, что у карты агента.
+    const recs = run.solo ? soloOf : runsOf;
+    const patch = run.solo ? patchSolo : patchRuns;
+    const same = () => { const now = recs()[id]; return now && now.started === run.started && now.grade && now.grade.st === 'run' && now.grade.at === at ? now : null; };
     const cardNow = () => board.read(project).cards.find((x) => x.id === id);
     const c = cardNow();
     if (!c || c.status !== 'готово' || !same()) return;
@@ -928,8 +2796,24 @@ module.exports = (ctx) => {
     const keep = (line) => {
       try { board.update(project, id, { checked: line }); } catch (e) { ctx.log(`${id}: checked не записан: ${why(e)}`); }
       const now = same();
-      if (now) patchRuns({ [id]: { ...now, grade: { st: 'done', round } } });
+      if (now) patch({ [id]: { ...now, grade: { st: 'done', round } } });
     };
+    /**
+     * Карта человеку: «ждёт ответа», строка тому, кто запустил. wby (t1421) — причина для счёта попыток, коды — у CALM_STOP.
+     * @param {string} checked @param {string} q @param {'rounds' | 'notab' | 'criteria' | 'twice' | 'build'} wby
+     */
+    const toHuman = (checked, q, wby) => {
+      try {
+        const w = writeStatus(id, 'ждёт ответа', { checked });
+        const cur = same();
+        if (cur) patch({ [id]: { ...cur, ...w.own, grade: { st: 'stop', round, at: Date.now() }, waited: true, wby, told: 'ждёт ответа' } });
+        tells.push({ id, kind: 'wait', sid: String(run.sid || ''), from: typeof run.from === 'string' ? run.from : '', q, at: Date.now() });
+        tellFlush();
+      } catch (e) { ctx.log(`${id}: статус «ждёт ответа» не записан: ${why(e)}`); }
+    };
+    // t1419, В1: варианты для человека, когда проверка не состоялась. Вопрос — в checked: и строкой тому, кто запустил; в тело карты не пишем:
+    // тело правят агент и answer(), запись сюда гонялась бы с ними.
+    const CHOICES = 'Варианты: 1) проверить ещё раз; 2) принять без проверки; 3) вернуть агенту.';
     // Один claude -p на проверку и после переоткрытия окна: ключ общий для всех экземпляров процесса (grader.shared).
     const key = gradeKey(id, run, at);
     /** @type {Promise<any>} */
@@ -938,16 +2822,39 @@ module.exports = (ctx) => {
       ctx.log(`${id}: проверяющий, круг ${round} — идущая проверка взята после переоткрытия, второй claude не запускается`);
       wait = took;
     } else {
+      // t1419, Д7: две карты подряд упали одной ошибкой — claude не зовём, кроме пробного запуска раз в GRADE_PROBE_MS. Вопросов по каждой карте нет.
+      const hb = graderHealth.broken;
+      if (hb && Date.now() - hb.tried < GRADE_PROBE_MS) {
+        ctx.log(`${id}: проверяющий не запускается (с ${hhmm(hb.at)}) — карта остаётся «готово», не проверена; пробный запуск после ${hhmm(hb.tried + GRADE_PROBE_MS)}`);
+        keep(`не проверена: проверяющий не запускается — ${oneLine(hb.error, 150)}`);
+        return;
+      }
+      if (hb) { hb.tried = Date.now(); ctx.log(`${id}: проверяющий не запускался — пробный запуск на этой карте`); }
       // Запись без base (git ответил после «готово» или запуск до t1330) — начало по времени запуска.
-      const base = run.base || (same() || {}).base || await grader.baseAt(project, run.started);
+      // t1522: карта сделана на кредитах — правки лежат в копии задания (до «Принять»), проверяющий смотрит их там.
+      const where = run.copy && fs.existsSync(String(run.copy)) ? String(run.copy) : project;
+      const base = run.base || (same() || {}).base || await grader.baseAt(where, run.started);
       let text;
-      try { text = grader.build(grader.template(ctx.dataDir), c, await grader.changesOf(project, { base, since: run.started, files: c.fields.files }), { dataDir: ctx.dataDir, project }); }
-      catch (e) { ctx.log(`${id}: задание проверяющему не собрано: ${why(e)}`); keep(`не проверена: задание не собрано — ${oneLine(why(e), 150)}`); return; }
+      let effort;
+      try {
+        const chg = await grader.changesInfo(where, { base, since: run.started, files: c.fields.files, id });
+        // t1419, А3: усилие по ступени, на которой карту делали бы без лестницы (ярус или поля карты), не по run.model — его подняла лестница.
+        const t = size.stepOf(c);
+        effort = grader.effortOf({ model: t ? t.model : c.model, effort: t ? t.effort : c.effort, card: c.effort, round, tries: run.tries, big: chg.big });
+        text = grader.build(grader.template(ctx.dataDir, board.boardLang(project)), c, chg.text, { dataDir: ctx.dataDir, project, log: (m) => ctx.log(`${id}: ${m}`) });
+      } catch (e) {
+        // В1: задание не собралось — ошибка программы, повтор дал бы то же: сразу человеку.
+        ctx.log(`${id}: задание проверяющему не собрано: ${why(e)}`);
+        toHuman(`не проверена: задание не собрано — ${oneLine(why(e), 150)}`, `Проверяющему не собрано задание: ${oneLine(why(e), 200)}. ${CHOICES}`, 'build');
+        return;
+      }
       // Пока собиралось задание (t1352), окно закрыли — claude -p не запускаем: его некому было бы отдать release, новый экземпляр начнёт сам;
       // карту увели из «готово» (cut) или перезапустили — итог был бы выброшен.
       if (stopped || !same()) return;
-      ctx.log(`${id}: проверяющий, круг ${round} — claude sonnet низкое, задание ${text.length} знаков`);
-      wait = grader.shared(key, project, text);
+      ctx.log(`${id}: проверяющий, круг ${round} — claude ${grader.MODEL} ${effort}, до ${Math.round(grader.timeoutOf(effort) / 60000)} мин, задание ${text.length} знаков`);
+      // t1546: claude запускается там же, откуда diff (where — копия задания на кредитах), иначе Read видит файлы проекта без правки.
+      // Разборы grades и сырые ответы по-прежнему пишутся в проект (saveRaws(project…)).
+      wait = grader.shared(key, where, text, { effort });
     }
     held.add(key);
     const r = await wait;
@@ -956,7 +2863,58 @@ module.exports = (ctx) => {
     const now = same();
     const c2 = cardNow();
     if (!now || !c2 || c2.status !== 'готово') { ctx.log(`${id}: итог проверяющего не нужен — карту перезапустили или сменили статус`); return; }
-    if ('error' in r) { ctx.log(`${id}: проверяющий не дал итога: ${r.error}`); keep(`не проверена: ${oneLine(r.error, 200)}`); return; }
+    const how = grader.howLine(r);
+    if ('error' in r) {
+      // t1445: сырой ответ при любой ошибке разбора — файлами tN-K-raw.txt (raw2…): в checked: и журнал идёт только начало ответа.
+      // До лимита: первая попытка ответила текстом, повтор упёрся в лимит — первый ответ не теряется.
+      /** @type {string[]} */
+      let raws = [];
+      try { raws = grader.saveRaws(project, id, round, r.raws || []); } catch (e) { ctx.log(`${id}: сырой ответ проверяющего не записан: ${why(e)}`); }
+      const rawAt = raws.length ? `; сырой ответ — ${raws.join(', ')}` : '';
+      // Д2: лимит подписки — не сбой: круг и повтор не тратятся, проверка снова после сброса, волна ждёт (pump).
+      if (r.limit) {
+        const until = Date.now() + grader.limitWait(r.limit);
+        graderHealth.limit = { until, line: r.limit };
+        ctx.log(`${id}: проверяющий упёрся в лимит подписки — «${r.limit}»; проверка снова в ${hhmm(until)}, круг не тратится${rawAt}`);
+        patch({ [id]: { ...now, grade: { ...now.grade, retry: until } } });
+        gradeWake(until);
+        return;
+      }
+      graderHealth.limit = null;
+      // Вопрос источнику режется на 300 знаках (tellWait): ошибку укорачиваем на длину остального — пути и варианты доходят целыми.
+      const qOf = (/** @type {string} */ head) => `${head}${oneLine(r.error, Math.max(40, 300 - head.length - rawAt.length - 2 - CHOICES.length))}${rawAt}. ${CHOICES}`;
+      // t1445: не разобран и после повтора с напоминанием (grade) — ещё один claude дал бы то же: сразу человеку, без повтора В1.
+      if (r.unparsed) {
+        ctx.log(`${id}: проверяющий дважды ответил не по образцу${how ? ` (${how})` : ''}: ${r.error}${rawAt} — карта ждёт ответа`);
+        toHuman(grader.withRaw(`не проверена: проверяющий дважды ответил не по образцу — ${oneLine(r.error, 150)}`, raws), qOf('Проверяющий дважды ответил не JSON по образцу: '), 'twice');
+        return;
+      }
+      const H = graderHealth;
+      const sig = failSig(r.error);
+      if (sig && !H.broken && H.last && H.last.sig === sig && H.last.id !== id) {
+        H.broken = { sig, error: String(r.error), at: Date.now(), tried: Date.now() };
+        ctx.log(`проверяющий не запускается: ${H.last.id} и ${id} подряд упали с одной ошибкой — ${r.error}. Дальше карты остаются «готово», не проверена; пробный запуск раз в ${Math.round(GRADE_PROBE_MS / 60000)} мин`);
+        sendIfChanged();
+      }
+      if (sig) H.last = { sig, id };
+      if (H.broken) { ctx.log(`${id}: проверяющий не дал итога: ${r.error}${rawAt}`); keep(grader.withRaw(`не проверена: проверяющий не запускается — ${oneLine(H.broken.error, 150)}`, raws)); return; }
+      // В1: первый сбой — повтор через GRADE_RETRY_MS на том же усилии (круг, попытка и изменения те же — effortOf даст то же); второй — человеку.
+      const fails = (Number(now.grade.fails) || 0) + 1;
+      if (fails < 2) {
+        const retry = Date.now() + GRADE_RETRY_MS;
+        ctx.log(`${id}: проверяющий не дал итога${how ? ` (${how})` : ''}: ${r.error}${rawAt}; повтор в ${hhmm(retry)}`);
+        patch({ [id]: { ...now, grade: { ...now.grade, fails, retry } } });
+        gradeWake(retry);
+        return;
+      }
+      ctx.log(`${id}: проверяющий второй раз не дал итога${how ? ` (${how})` : ''}: ${r.error}${rawAt} — карта ждёт ответа`);
+      toHuman(grader.withRaw(`не проверена: проверяющий дважды не смог проверить — ${oneLine(r.error, 150)}`, raws), qOf('Проверяющий дважды не смог проверить: '), 'twice');
+      return;
+    }
+    // Итог есть: лимита и поломки нет.
+    graderHealth.limit = null;
+    graderHealth.last = null;
+    if (graderHealth.broken) { ctx.log(`${id}: проверяющий снова работает`); graderHealth.broken = null; sendIfChanged(); }
     let file = '';
     try {
       const dir = ownDir(project, GRADES_DIR, 'разборы проверяющего карт «Роадмапа»');
@@ -964,33 +2922,30 @@ module.exports = (ctx) => {
       file = `${GRADES_DIR.split(path.sep).join('/')}/${id}-${round}.md`;
     } catch (e) { ctx.log(`${id}: разбор проверяющего не записан: ${why(e)}`); }
     const line = grader.checkedLine(round, GRADE_ROUNDS, r);
-    ctx.log(`${id}: проверяющий, круг ${round} — ${line}${typeof r.cost === 'number' ? `, $${r.cost}` : ''}`);
+    // t1445: итог со второго раза — после напоминания «только JSON»; первый ответ лежит в raw-файле.
+    /** @type {string[]} */
+    let rawFirst = [];
+    if (r.raws && r.raws.length) { try { rawFirst = grader.saveRaws(project, id, round, r.raws); } catch (e) { ctx.log(`${id}: сырой ответ проверяющего не записан: ${why(e)}`); } }
+    const again = r.reminded ? `; со второго раза — после напоминания «только JSON»${rawFirst.length ? `, первый ответ — ${rawFirst.join(', ')}` : ''}` : '';
+    ctx.log(`${id}: проверяющий, круг ${round} — ${line}${typeof r.cost === 'number' ? `, $${r.cost}` : ''}${again}`);
     if (r.verdict === 'выполнено') { keep(line); return; }
-    /** Карта человеку: «ждёт ответа», строка тому, кто запустил. @param {string} checked @param {string} q */
-    const toHuman = (checked, q) => {
-      try {
-        const w = writeStatus(id, 'ждёт ответа', { checked });
-        const cur = same();
-        if (cur) patchRuns({ [id]: { ...cur, ...w.own, grade: { st: 'stop', round, at: Date.now() }, waited: true, told: 'ждёт ответа' } });
-        tells.push({ id, kind: 'wait', sid: String(run.sid || ''), from: typeof run.from === 'string' ? run.from : '', q, at: Date.now() });
-        tellFlush();
-      } catch (e) { ctx.log(`${id}: статус «ждёт ответа» не записан: ${why(e)}`); }
-    };
     const where = file ? ` (разбор: ${file})` : '';
     const rem = (n) => oneLine(r.remarks, n).replace(/[.\s]+$/, '');
-    if (r.verdict === 'критерии не подходят') { toHuman(line, `проверяющий: критерии «Как проверить» не подходят к заданию — ${rem(200)}${where}.`); return; }
-    if (round >= GRADE_ROUNDS) { toHuman(`${line}; кругов больше нет — решает человек`, `проверяющий: после ${GRADE_ROUNDS} кругов карта не выполнена — ${rem(200)}${where}.`); return; }
+    if (r.verdict === 'критерии не подходят') { toHuman(line, `проверяющий: критерии «Как проверить» не подходят к заданию — ${rem(200)}${where}.`, 'criteria'); return; }
+    if (round >= GRADE_ROUNDS) { toHuman(`${line}; кругов больше нет — решает человек`, `проверяющий: после ${GRADE_ROUNDS} кругов карта не выполнена — ${rem(200)}${where}.`, 'rounds'); return; }
     const tl = await ctx.terminals();
-    const t = tl && 'tabs' in tl ? runTabOf(tl.tabs, now) : null;
-    if (!t) { toHuman(`${line}; вкладки агента нет`, `проверяющий нашёл недоделки, а вкладки агента нет — ${rem(200)}${where}.`); return; }
+    // t1401: печать — только во вкладку запуска по номеру, вкладка с тем же заголовком может быть чужой.
+    const t = tl && 'tabs' in tl ? tl.tabs.find((/** @type {any} */ x) => x.sid === now.sid) : null;
+    if (!t) { toHuman(`${line}; вкладки агента нет`, `проверяющий нашёл недоделки, а вкладки агента нет — ${rem(200)}${where}.`, 'notab'); return; }
     // Сначала строка, потом статус: агент у приглашения, сверка по вкладке не затрёт «в работе» GRADE_BACK_MS (grade.st back).
-    const msg = prompt.defuseAt(`[Роадмап] ${id}: проверяющий нашёл недоделки, круг ${round} из ${GRADE_ROUNDS} — ${rem(600)}${where}. Доделай и закрой карту снова той же командой kermach roadmap close.`);
+    // t1425 (В5): строка — раздел «## Замечания проверяющего» prompt.md.
+    const msg = prompt.defuseAt(prompt.line('remarks', { 'карта': id, 'круг': String(round), 'кругов': String(GRADE_ROUNDS), 'замечания': rem(600), 'разбор': where }, ctx.dataDir, true));
     const fail = await typeTo(t.sid, msg);
-    if (fail) { toHuman(`${line}; замечания во вкладку не ушли`, `проверяющий нашёл недоделки, а вкладка агента не приняла строку (${oneLine(fail, 80)}) — ${rem(200)}${where}.`); return; }
+    if (fail) { toHuman(`${line}; замечания во вкладку не ушли`, `проверяющий нашёл недоделки, а вкладка агента не приняла строку (${oneLine(fail, 80)}) — ${rem(200)}${where}.`, 'notab'); return; }
     try {
       const w = writeStatus(id, 'в работе', { checked: line });
       const cur = same();
-      if (cur) patchRuns({ [id]: { ...cur, sid: t.sid, ...w.own, grade: { st: 'back', round, at: Date.now() }, told: '' } });
+      if (cur) patch({ [id]: { ...cur, sid: t.sid, ...w.own, grade: { st: 'back', round, at: Date.now() }, told: '' } });
       ctx.log(`${id}: замечания проверяющего — во вкладку ${t.sid}, статус готово → в работе`);
     } catch (e) { ctx.log(`${id}: статус «в работе» после проверки не записан: ${why(e)}`); }
   };
@@ -1012,7 +2967,8 @@ module.exports = (ctx) => {
    * Волна открывает вкладку без фокуса (quiet): человек остаётся в своей вкладке; одиночный «Запустить» — с фокусом.
    * bg (t1060) — скрытая вкладка: kermach roadmap run --bg или настройка «в фоне» (ctx.settings bg).
    * from (t1126) — вкладка, из которой позвали kermach roadmap run: ей строки «ждёт ответа» и «готово».
-   * @param {string} ref @param {{ quiet?: boolean, bg?: boolean, from?: string }} [opt]
+   * credits (t1358) — вкладка «Claude Agent · кредиты» вместо обычного Claude: kermach roadmap run --credits или «Запустить на кредитах».
+   * @param {string} ref @param {{ quiet?: boolean, bg?: boolean, from?: string, credits?: boolean }} [opt]
    */
   const run = async (ref, opt) => {
     // t1295: холодную доску — в память асинхронно. Защита t554 держится тем, что starting.has и starting.add ниже идут одним синхронным отрезком после этого await.
@@ -1023,13 +2979,14 @@ module.exports = (ctx) => {
     // Фаза в файле есть, а такой фазы на доске нет (f9) — карта тоже во «Входящих» (t516).
     if (!c.phase || b.inbox.includes(ref)) return { error: 'карта во «Входящих»: запускаются только карты фазы' };
     if (c.status === 'готово') return { error: 'карта уже готова' };
+    if (isSolo(b.phases.find((x) => x.id === c.phase))) return { error: soloRefuse(c.phase) };
     // Любой агент каталога ядра (t576): не установлен, выключен, неизвестен, не берёт задание при запуске — причину называет ядро в ответе openTab.
     const agent = c.agent || 'claude';
     // До первого await: второй вызов, пока первый ждёт демона или вкладку, видит флаг (t554).
     if (starting.has(ref)) return { error: `карта ${ref} уже запускается` };
     starting.add(ref);
     const bg = !!(opt && opt.bg) || !!ctx.settings.get().bg;
-    try { return await start(ref, c, agent, !!(opt && opt.quiet), bg, (opt && opt.from) || ''); } finally { starting.delete(ref); }
+    try { return await start(ref, c, agent, !!(opt && opt.quiet), bg, (opt && opt.from) || '', !!(opt && opt.credits)); } finally { starting.delete(ref); }
   };
   /**
    * «Показать» (t1060): скрытая вкладка карты появляется в полосе и становится активной (ctx.showTab, t1059); запись больше не hidden.
@@ -1107,6 +3064,30 @@ module.exports = (ctx) => {
     ctx.log(`${who}: повтор со ссылкой на файл тоже не открылся: ${again ? again.error : 'нет ответа'}`);
     return r;
   };
+  /**
+   * Вкладка на кредитах (t1358): первое сообщение ядро виду credits не передаёт (terminals.js checkExtra), обёртка daemon\credits-tab.js
+   * берёт его со строки ввода. Поэтому промпт — всегда файлом, во вкладку — одна строка-ссылка и Enter (typeTo), когда обёртка готова:
+   * многострочный текст обёртка отправила бы по кускам, а набранное до её строки ввода пропало бы.
+   * @param {any} o параметры ctx.openTab @param {string} ref @param {string} text
+   */
+  const openCredits = async (o, ref, text) => {
+    /** @type {{ rel: string, first: string }} */
+    let lp;
+    try { lp = longPrompt(project, ref, text); } catch (e) { return { error: `промпт не записан в файл: ${why(e)}` }; }
+    ctx.log(`${ref}: на кредитах — промпт целиком в файле ${lp.rel}, первое сообщение — ссылка на него`);
+    const r = await ctx.openTab(o);
+    if (!r || 'error' in r) return r;
+    const sid = r.session.sid;
+    let ready = false;
+    for (const end = Date.now() + CREDITS_READY_MS; !ready && Date.now() < end && !stopped;) {
+      try { const t = await ctx.readTab(sid, 'text'); ready = CREDITS_READY.test(String(t && typeof t === 'object' && 'text' in t ? t.text : t || '')); } catch {}
+      if (!ready) await new Promise((ok) => setTimeout(ok, 250));
+    }
+    if (!ready) ctx.log(`${ref}: строка ввода вкладки ${sid} не появилась за ${CREDITS_READY_MS / 1000} с — отправляю ссылку на промпт всё равно`);
+    const e = await typeTo(sid, lp.first);
+    if (e) ctx.log(`${ref}: ссылка на промпт во вкладку ${sid} не ушла: ${e}`);
+    return r;
+  };
   /** Агенты для списка «агент» карты: { id, title, prompt }[]; ядро без ctx.agents (до t576) — null. */
   const ready = async () => {
     if (typeof ctx.agents !== 'function') return null;
@@ -1116,12 +3097,29 @@ module.exports = (ctx) => {
    * Номер попытки (t830). prev — запись прошлого запуска или её счёт в past. Карта ушла в «готово» или «в очередь» — sync забывает и то и другое: счёт с 1.
    * Растёт, если прошлая попытка остановилась на «ждёт ответа» (красная проверка, вопрос, ход кончился без «готово», статус от человека): waited — «пауза» после закрытия вкладки его не стирает,
    * снова «в работе» в той же вкладке (человек ответил) — снимает. Прошлую закрыли посреди работы («пауза» без waited), «на проверке», «на ревью» — номер прежний.
-   * @param {any} prev запись прошлого запуска, счёт из past или undefined @param {string} status статус карты в файле сейчас
+   * t1421, Б1: «ждёт ответа» — не всегда неудача агента. Номер прежний, если остановил проверяющий не по работе агента (wby из CALM_STOP:
+   * двойной сбой, задание не собрано, критерии не подходят, у замечаний нет вкладки) или если после вопроса в карте есть ответ с отпечатком (answered).
+   * Неудача — круги проверяющего кончились, ход кончился без «готово» и без ответа, «ждёт ответа» поставил человек.
+   * Записи без asks (до t1421, счёт в past) — как раньше: ступень выше.
+   * @param {any} prev запись прошлого запуска, счёт из past или undefined @param {string} status статус карты в файле сейчас @param {any} [c] карта доски — для ответов
    */
-  const triesOf = (prev, status) => {
+  const triesOf = (prev, status, c) => {
     if (!prev || status === 'в очереди') return 1;
     const n = Number.isInteger(prev.tries) && prev.tries >= 1 ? prev.tries : 1;
-    return prev.waited || prev.st === 'ждёт ответа' || status === 'ждёт ответа' ? n + 1 : n;
+    if (!(prev.waited || prev.st === 'ждёт ответа' || status === 'ждёт ответа')) return n;
+    if (prev.wby) return CALM_STOP.includes(prev.wby) ? n : n + 1;
+    return answered(prev, c) ? n : n + 1;
+  };
+  /**
+   * После вопроса этой попытки человек ответил (t1421, Б1): раздел «## Ответ …» с номером не меньше asks — столько их было в карте,
+   * когда попытка дошла до «ждёт ответа», — и его отпечаток есть в answers.json. Ответ на вопрос прошлой попытки не считается; строку, которую
+   * вписал сам агент, программа не записывала — её отпечатка нет. Отпечаток ищет grader.answersOf, тот же, что у проверяющего.
+   * @param {any} prev @param {any} c
+   */
+  const answered = (prev, c) => {
+    if (!c || !Number.isInteger(prev.asks) || prev.asks < 0) return false;
+    const fresh = grader.answerSections(c.body).slice(prev.asks);
+    return fresh.some((a) => !!grader.answersOf(`${a.head}\n${a.text}`, { dataDir: ctx.dataDir, project, ref: c.id }));
   };
   /**
    * Лёгкий старт агента карты (t1322): флаги из шапки паспорта (board.cardStart, agents.lightArgs). Ошибки настройки и то, что агенту
@@ -1131,6 +3129,8 @@ module.exports = (ctx) => {
   const light = (project, agent, who) => {
     const st = board.cardStart(project);
     for (const w of st.warn) ctx.log(`${who}: ${w}`);
+    const gap = board.passportEmpty(project);
+    if (gap) ctx.log(`${who}: ${gap}`);
     const lt = agents.lightArgs(agent, st);
     if (lt.skipped) ctx.log(`${who}: ${lt.skipped}`);
     return lt;
@@ -1141,15 +3141,18 @@ module.exports = (ctx) => {
    * @returns {{ tries: number, model: string, effort: string, note: string }}
    */
   const nextOf = (c, runs = runsOf(), past = pastOf()) => {
-    const tries = triesOf(runs[c.id] || past[c.id], c.status);
+    const tries = triesOf(runs[c.id] || past[c.id], c.status, c);
     const t = size.stepOf(c);
     const up = agents.raise(c.agent || 'claude', t ? t.model : c.model, t ? t.effort : c.effort, tries, c.extra && c.extra.pick);
     // Ярус не в файле карты: при запуске агент вот-вот откроет тот же файл, а size.js детерминирован — окно и prompt.js считают то же.
     const note = t ? [`ярус ${t.tier}: ${t.model} ${t.effort} — ${t.why}`, t.hint, up.note].filter(Boolean).join('; ') : up.note;
-    return { tries, model: up.model, effort: up.effort, note, tier: t ? t.tier : '' };
+    return { tries, model: up.model, effort: up.effort, note, tier: t ? t.tier : '', ...(up.over ? { over: true } : {}) };
   };
-  /** Запуск после проверок карты; run держит флаг «запуск идёт». @param {string} ref @param {any} c @param {string} agent @param {boolean} quiet @param {boolean} bg @param {string} [from] */
-  const start = async (ref, c, agent, quiet, bg, from) => {
+  /** Запуск после проверок карты; run держит флаг «запуск идёт». @param {string} ref @param {any} c @param {string} agent @param {boolean} quiet @param {boolean} bg @param {string} [from] @param {boolean} [credits] */
+  const start = async (ref, c, agent, quiet, bg, from, credits) => {
+    // На кредитах (t1358) — только Claude и только с сохранённым ключом: обёртку вкладки ядро иначе не откроет.
+    if (credits && agent !== 'claude') return { error: `на кредитах запускается только карта агента claude, у ${ref} — ${agent}` };
+    if (credits && !creditsKey()) return { error: 'ключ API не задан: «Настройки» → «Кредиты API»' };
     const prev = runsOf()[ref];
     if (prev && !prev.gone) {
       const r = await ctx.terminals();
@@ -1163,13 +3166,24 @@ module.exports = (ctx) => {
     // Промпт — после ступени: у попытки на sonnet (ярус или лестница) в задании строка советника (prompt.js, t1046).
     const pr = prompt.build(project, ref, { dataDir: ctx.dataDir, model: up.model });
     if ('error' in pr) return { error: `промпт не собран: ${pr.error}` };
+    staleLog(ref);
     const la = agents.launchArgs(agent, up.model, up.effort);
     if (la.skipped) ctx.log(`${ref}: ${la.skipped}`);
     const lt = light(project, agent, ref);
+    // На кредитах (t1478): обёртке идут модель и усилие карты и запрет субагентов (ALLOW_FLAGS.credits в terminals.js); флаги лёгкого старта и mcp — нет,
+    // ядро их виду credits не пропустит. Модель — из карты (поле model, с лестницей попыток), иначе из «Кредиты API», а не ярус по умолчанию;
+    // усилие — карты или яруса, launchArgs отбросит его у модели без усилия. Потолок — всегда из настроек.
+    const own = credits && !!String(c.model || '').trim();
+    const cm = credits ? (own ? up.model : creditsModel()) : '';
+    const cla = credits ? agents.launchArgs('claude', cm, up.effort) : { args: [] };
+    const ce = credits && cla.args.includes('--effort') ? up.effort : '';
+    const ca = credits ? [...cla.args, '--disallowedTools=Agent'] : [];
+    if (credits) ctx.log(`${ref}: на кредитах — модель ${cm || 'по умолчанию'}${own ? ' из карты' : ' из настроек «Кредиты API»'}${ce ? `, усилие ${ce}` : ''}, без субагентов`);
     const title = `${ref} · ${c.title || ''}`.trim().slice(0, 64);
-    const kind = agents.kindOf(agent);
+    const kind = credits ? 'credits' : agents.kindOf(agent);
     // Claude следует настройке проекта «без вопросов о разрешениях» (t852): режим включает человек в окне «Проекты», ядро решает само. Другие агенты — как были.
-    const follow = kind === 'claude' ? { followBypass: true } : {};
+    // Вкладка на кредитах — тоже (terminals.js: bypass у credits): без него обёртка идёт в acceptEdits, и Bash агенту карты отклоняется сам.
+    const follow = kind === 'claude' || kind === 'credits' ? { followBypass: true } : {};
     // KERMACH_CARD и KERMACH_BOARD (t1043): по ним хуки Claude узнают агента карты и молчат — журнал оркестратора ему не нужен. revive повторяет env из записи вкладки.
     const env = { KERMACH_CARD: ref, KERMACH_BOARD: path.join(project, '.kermach', 'roadmap') };
     // В фоне (t1060): вкладка скрыта, экран при выходе — в .kermach/runs/<карта>-<время>.log (t1079): не в git, повторный запуск не затирает прошлый.
@@ -1184,7 +3198,8 @@ module.exports = (ctx) => {
     // t1330: начало карты для проверяющего — HEAD проекта до вкладки; папка не под git — пусто, проверяющий возьмёт файлы по времени.
     // git спрашиваем до вкладки, а ждём после: вкладка не ждёт git (волна открывает карты подряд), запись запуска — сразу, base дописывается ниже.
     const baseP = grader.baseOf(project);
-    const r = await openWith({ kind, args: [...la.args, ...lt.args], ...lt.mcp ? { mcp: lt.mcp } : {}, env, title, ...follow, ...(quiet ? { focus: false } : {}), ...hid }, ref, ref, pr.text, 'промпт');
+    const r = credits ? await openCredits({ kind, args: ca, env, title, ...follow, ...(quiet ? { focus: false } : {}), ...hid }, ref, pr.text)
+      : await openWith({ kind, args: [...la.args, ...lt.args], ...lt.mcp ? { mcp: lt.mcp } : {}, env, title, ...follow, ...(quiet ? { focus: false } : {}), ...hid }, ref, ref, pr.text, 'промпт');
     if (!r || 'error' in r) {
       const e = r ? r.error : 'нет ответа';
       ctx.log(`${ref}: вкладка не открылась: ${e}`);
@@ -1194,22 +3209,25 @@ module.exports = (ctx) => {
     // title и kind — чтобы узнать вкладку после revive демона, когда номер у неё новый (t577); title — ownTitle ядра, freeTitle делает его единственным в проекте.
     // agent, model, effort (t1073) — для строки списка «В фоне»: ярус в файл карты не пишется, без записи модели не узнать.
     const started = Date.now();
-    patchRuns({ [ref]: { sid, started, title: String(r.session.ownTitle || ''), kind, tries, agent, model: up.model, effort: up.effort, ...(bg ? { hidden: true } : {}), ...(from ? { from } : {}) } });
+    patchRuns({ [ref]: { sid, started, title: String(r.session.ownTitle || ''), kind, tries, agent, model: credits ? cm : up.model, effort: credits ? ce : up.effort, spec: specOf(c), ...(bg ? { hidden: true } : {}), ...(from ? { from } : {}) } });
     // base — в ту же запись запуска, если её не сменил новый запуск.
     baseP.then((base) => { const now = runsOf()[ref]; if (base && now && now.started === started) patchRuns({ [ref]: { ...now, base } }); }, () => {});
     // Сверка могла перенести запись в past, пока открывалась вкладка: чистим по мешку сейчас, а не по прочитанному до await.
     if (pastOf()[ref]) patchPast({ [ref]: null });
     // Grok (t587): модель и усилие ядро передаёт не флагами, а через GROK_CONFIG (terminals.js grokConfig) — журнал пишет так же. Флаги парами: -m X, --reasoning-effort Y.
     const grok = agent === 'grok' ? la.args.map((a, i) => (i % 2 ? '' : `${a === '-m' ? 'модель' : 'усилие'} ${la.args[i + 1]}`)).filter(Boolean).join(', ') : '';
-    const all = [...la.args, ...lt.args, ...lt.mcp ? [`MCP ${lt.mcp.join(', ')}`] : []];
-    const how = grok ? `, ${grok} через GROK_CONFIG` : all.length ? ` ${all.join(' ')}` : '';
+    const all = credits ? ca : [...la.args, ...lt.args, ...lt.mcp ? [`MCP ${lt.mcp.join(', ')}`] : []];
+    const how = credits ? ` на кредитах API, модель ${cm || 'по умолчанию'}${ca.length ? ` ${ca.join(' ')}` : ''}` : grok ? `, ${grok} через GROK_CONFIG` : all.length ? ` ${all.join(' ')}` : '';
     ctx.log(`${ref}: запущена во вкладке ${sid}, ${agent}${how}${r.session.bypass ? ', без вопросов о разрешениях' : ''}, промпт ${pr.text.length} знаков`
       + `, подано записей ${pr.served.length}${pr.served.length ? ` (${pr.served.join(', ')})` : ''}`);
     // t1008: какие d<N> поданы — в served: карты, повторный запуск дописывает новые. addServed и update читают файл заново: used: агента не теряется.
     if (pr.served.length) { try { board.addServed(project, ref, pr.served); } catch (e) { ctx.log(`${ref}: served не записан: ${why(e)}`); } }
+    // t1440, Б7: номер попытки — в tries: карты при каждом запуске. Счёт в мешке окна стирается на «готово», а приёмка фазы (accept.js) считает по нему ярусы.
+    try { board.update(project, ref, { tries: String(tries) }); } catch (e) { ctx.log(`${ref}: tries не записан: ${why(e)}`); }
     // Что открылось (t1050): kermach roadmap run печатает агента, модель и усилие — те же, что ушли в launchArgs.
-    const launch = { agent, model: up.model, effort: up.effort };
-    const bgOut = bg ? { hidden: true, log } : {};
+    const launch = credits ? { agent: 'claude · кредиты', model: cm, effort: ce } : { agent, model: up.model, effort: up.effort };
+    // t1421, В4: попытка выше верхней ступени — строка человеку в ответе run (поле top), не только в журнале.
+    const bgOut = { ...(bg ? { hidden: true, log } : {}), ...(up.over ? { top: agents.OVER } : {}) };
     try {
       if (c.status === 'в работе') return { session: r.session, item: c, skipped: la.skipped, launch, ...bgOut };
       const w = writeStatus(ref, 'в работе');
@@ -1222,9 +3240,13 @@ module.exports = (ctx) => {
     }
   };
 
+  /** t1417: своя копия prompt.md отстала от встроенного — строкой в журнал запуска, не только в «Замечаниях» панели. @param {string} who */
+  const staleLog = (who) => { try { const st = prompt.stale(ctx.dataDir); if (st) ctx.log(`${who}: своя копия ${st.file}: ${st.reason}`); } catch (e) { ctx.log(`${who}: своя копия prompt.md не сверена: ${why(e)}`); } };
+
   /**
-   * Промпт пачки (t703): правила и паспорт один раз, затем карты по порядку — шаблон вида работы, карта, заметки. «Свежее» не входит: у каждой карты оно
-   * своё и большое (сотни тысяч знаков), агенту пачки его заменяет kermach roadmap notes. Правила собраны для первой карты — её номер в них заменён на «<номер карты>».
+   * Промпт пачки (t703): правила и паспорт один раз, затем карты по порядку — шаблон вида работы, карта, заметки. Части «Свежее» с решениями и тупиками
+   * по дате больше нет (ЗАМЕЧАНИЯ-роадмапа.md, раздел З, п. 4; карта t1433): договорённости, закрытые карты фазы и «Входящие» по тем же файлам — в «Заметках».
+   * Правила собраны для первой карты — её номер в них заменён на «<номер карты>». Части — по key, а не по номеру: номера сдвигались (t1433).
    * @param {import('./board').Board} b @param {any[]} list @param {string} model
    */
   const oneText = (b, list, model) => {
@@ -1235,15 +3257,14 @@ module.exports = (ctx) => {
       prs.push(pr);
     }
     const ids = list.map((c) => c.id);
-    const [rules, pass] = prs[0].parts;
-    const head = [`Карт в пачке для одного агента: ${ids.length} — ${ids.join(', ')}. Делай их по порядку, по одной.`,
-      'Общие правила ниже — для каждой карты пачки: вместо <номер карты> подставь номер той карты, над которой работаешь.',
-      'Карту закрывай kermach roadmap close <номер карты> сразу после её проверки, потом бери следующую.',
-      'Нужен ответ человека — у этой карты status: ждёт ответа и вопрос в карте, и остановись: следующие карты пачки не начинай.',
-      'Раздела «Свежее» в пачке нет: свежие записи по ошибке или теме — kermach roadmap notes "слова".'].join('\n');
+    /** @param {any} pr @param {string} key */
+    const part = (pr, key) => pr.parts.find((/** @type {any} */ p) => p.key === key) || { title: '', text: '' };
+    const rules = part(prs[0], 'rules'), pass = part(prs[0], 'passport');
+    // t1425 (В5): текст начала пачки — раздел «## Пачка» prompt.md; вопрос пачку не останавливает (В2), зависимую от карты с вопросом агент ставит в очередь.
+    const head = prompt.line('batch', { 'число': String(ids.length), 'карты': ids.join(', ') }, ctx.dataDir);
     const own = new RegExp(`\\b${ids[0]}(?!\\d)`, 'g');
-    const cards = prs.map((pr, i) => `## Карта ${i + 1} из ${ids.length}: ${ids[i]}\n### Шаблон вида работы\n${pr.parts[2].text}\n\n### Карта\n${pr.parts[3].text}\n\n### Заметки к задаче\n${pr.parts[5].text}`);
-    return { text: [`## Пачка\n${head}`, `## ${rules.title}\n${rules.text.replace(own, '<номер карты>')}`, `## ${pass.title}\n${pass.text}`, ...cards].join('\n\n') + '\n', served: Object.fromEntries(ids.map((id, i) => [id, prs[i].served.filter((d) => new RegExp(`\\b${d}(?!\\d)`).test(prs[i].parts[5].text))])) };
+    const cards = prs.map((pr, i) => `## Карта ${i + 1} из ${ids.length}: ${ids[i]}\n### Шаблон вида работы\n${part(pr, 'kind').text}\n\n### Карта\n${part(pr, 'card').text}\n\n### Заметки к задаче\n${part(pr, 'notes').text}`);
+    return { text: [`## Пачка\n${head}`, `## ${rules.title}\n${rules.text.replace(own, '<номер карты>')}`, `## ${pass.title}\n${pass.text}`, ...cards].join('\n\n') + '\n', served: Object.fromEntries(ids.map((id, i) => [id, prs[i].served.filter((d) => new RegExp(`\\b${d}(?!\\d)`).test(part(prs[i], 'notes').text))])) };
   };
   /**
    * «Выполнить одним агентом» (t703): несколько карт — один промпт, одна вкладка. ids — выбранные карты по порядку фазы; пусто — карты фазы phase, как волна «все».
@@ -1257,6 +3278,7 @@ module.exports = (ctx) => {
     const ph = want.length ? (b.cards.find((x) => x.id === want[0]) || {}).phase || '' : phase;
     const f = b.phases.find((x) => x.id === ph);
     if (!f) return { error: want.length ? `карты ${want[0]} нет в фазе на доске` : `фазы ${phase} нет на доске` };
+    if (isSolo(f)) return { error: soloRefuse(f.id) };
     if (want.length > ONE_MAX) return { error: `в пачке больше ${ONE_MAX} карт: ${want.length}` };
     const mine = runsOf();
     const busy = inWaves();
@@ -1282,6 +3304,7 @@ module.exports = (ctx) => {
       const up = nextOf(list[0]);
       const pr = oneText(b, list, up.model);
       if ('error' in pr) return { error: `промпт не собран: ${pr.error}` };
+      staleLog(`пачка ${refs.join(', ')}`);
       const la = agents.launchArgs(agent, up.model, up.effort);
       // t1113: как у одиночного запуска — флаг, которого агент не знает, в журнал.
       if (la.skipped) ctx.log(`пачка ${refs.join(', ')}: ${la.skipped}`);
@@ -1304,12 +3327,14 @@ module.exports = (ctx) => {
       const started = Date.now();
       /** @type {Record<string, any>} */
       const ch = {};
-      for (const c of list) ch[c.id] = { sid, started, title: String(r.session.ownTitle || ''), kind, tries: nextOf(c).tries, agent, model: up.model, effort: up.effort, batch: refs, ...(bg ? { hidden: true } : {}), ...(opt && opt.from ? { from: opt.from } : {}) };
+      for (const c of list) ch[c.id] = { sid, started, title: String(r.session.ownTitle || ''), kind, tries: nextOf(c).tries, agent, model: up.model, effort: up.effort, spec: specOf(c), batch: refs, ...(bg ? { hidden: true } : {}), ...(opt && opt.from ? { from: opt.from } : {}) };
       patchRuns(ch);
-      // t1112: как у одиночного запуска (t1008) — какие d<N> поданы, в served: каждой карты пачки; в пачку входят только «Заметки» (parts[5]).
+      // t1112: как у одиночного запуска (t1008) — какие d<N> поданы, в served: каждой карты пачки; в пачку входят только «Заметки» (часть с key notes).
       for (const id of refs) {
         const sv = pr.served[id] || [];
         if (sv.length) { try { board.addServed(project, id, sv); } catch (e) { ctx.log(`${id}: served не записан: ${why(e)}`); } }
+        // t1440: номер попытки каждой карты пачки — в tries:, как у одиночного запуска.
+        try { board.update(project, id, { tries: String(ch[id].tries) }); } catch (e) { ctx.log(`${id}: tries не записан: ${why(e)}`); }
       }
       const pc =Object.fromEntries(refs.filter((id) => pastOf()[id]).map((id) => [id, null]));
       if (Object.keys(pc).length) patchPast(pc);
@@ -1327,14 +3352,17 @@ module.exports = (ctx) => {
   };
 
   /** Вкладка задания открывается (t519, t818) — флаг на каждую кнопку. Номер открытой — в мешке (taskOf): пока она жива у демона, вторую не открываем. */
-  const opening = { compose: false, newcard: false };
+  const opening = { compose: false, newcard: false, orch: false };
   /**
    * Вкладка Claude в папке проекта, первое сообщение — задание из шаблона: «Составить роадмап» на пустом проекте (t519, compose.md)
    * или «Новая карта», когда доска есть (t818, newcard.md). Файлы доски заводит агент, панель видит их слежением.
    * Модель и усилие — по умолчанию claude: человек их ещё не выбирал, а имя модели в коде устарело бы.
-   * @param {'compose' | 'newcard'} bag @param {string} title заголовок вкладки — от окна, на языке программы
+   * Главная сессия (orch, t1423) — opus, среднее усилие (слово человека 28.10, А2): общее имя без номера версии не устареет; сменить человек может в самой вкладке.
+   * @param {'compose' | 'newcard' | 'orch'} bag @param {string} title заголовок вкладки — от окна, на языке программы
+   * @param {{ summary?: string, check?: string, lang?: string }} [opt] summary — итог сверки построителя для задания главной сессии, check — итог проверки роадмапа (t1437);
+   * lang — язык окна для новой доски (t1429, только compose)
    */
-  const openTask = async (bag, title) => {
+  const openTask = async (bag, title, opt = {}) => {
     const k = TASKS[bag];
     if (board.read(project).exists !== k.board) return { error: k.board ? 'доски нет: сначала «Составить роадмап»' : 'доска уже есть: папка .kermach\\roadmap заведена' };
     // До первого await: второй щелчок, пока первый ждёт демона или вкладку, видит флаг (как t554).
@@ -1354,20 +3382,37 @@ module.exports = (ctx) => {
         if (waitingOf(r).has(was.sid)) return { error: `вкладка ${k.of} уже открыта: она ещё подключается после перезапуска` };
         ctx.log(`${k.who}: вкладки ${was.sid} нет у демона — открываю новую`);
       }
-      const pr = k.make(project, { dataDir: ctx.dataDir });
+      // Язык новой доски (t1429): только у составления — у остальных доска уже есть, её язык в паспорте.
+      const lang = bag === 'compose' && board.LANGS.includes(String(opt.lang || '')) && opt.lang !== 'ru' ? String(opt.lang) : '';
+      const pr = k.make(project, { dataDir: ctx.dataDir, summary: String(opt.summary || ''), check: String(opt.check || ''), ...(lang ? { lang } : {}) });
       if ('error' in pr) return { error: pr.error };
       for (const w of pr.warnings) ctx.log(`${k.who}: ${w}`);
+      const main = bag === 'orch';
+      // t1488: новая главная получает список открытых сопутствующих — его хранит программа, а не прошлая главная.
+      if (main) {
+        const rt = await ctx.terminals();
+        const n = compsNote(rt && 'tabs' in rt ? rt.tabs : []);
+        if (n) { pr.text += n; ctx.log(`${k.who}: в задании список сопутствующих — ${n.split('\n').filter((l) => l.startsWith('- ')).length}`); }
+      }
       // KERMACH_CARD (t1323): построитель и «Новая карта» работают по своему заданию — журнал и правила главной сессии хукам им не подавать. Хуки смотрят только, что он не пустой.
-      const env = { KERMACH_CARD: bag };
-      const r = await openWith({ kind: 'claude', args: [], env, title: String(title || 'Роадмап').slice(0, 64), followBypass: true }, bag, k.who, pr.text, 'задание', { title: k.subj, it: 'Оно' });
+      // Главной сессии (t1423) переменной нет вовсе: хуки подают ей журнал и правила, как обычной главной сессии, а команды kermach не путают её с агентом карты.
+      const env = main ? {} : { KERMACH_CARD: bag };
+      // t1485: главная — на агенте из настройки «Агент главной сессии» (mainAgent, по умолчанию claude); opus среднее — только у claude, другим — их модель по умолчанию.
+      const ag = main ? mainAgentOf() : 'claude';
+      const kind = agents.kindOf(ag);
+      const la = main ? (ag === 'claude' ? agents.launchArgs('claude', 'opus', 'среднее') : agents.launchArgs(ag)) : { args: [], skipped: '' };
+      if (la.skipped) ctx.log(`${k.who}: ${la.skipped}`);
+      const r = await openWith({ kind, args: la.args, env, title: String(title || (main ? 'Главная сессия' : 'Роадмап')).slice(0, 64), ...(kind === 'claude' ? { followBypass: true } : {}) }, bag, k.who, pr.text, 'задание', { title: k.subj, it: 'Оно' });
       if (!r || 'error' in r) {
         const e = r ? r.error : 'нет ответа';
         ctx.log(`${k.who}: вкладка не открылась: ${e}`);
         return { error: e };
       }
-      setTask(bag, { sid: r.session.sid, started: Date.now(), title: String(r.session.ownTitle || '') });
-      ctx.log(`${k.who}: вкладка ${r.session.sid}, claude${r.session.bypass ? ' без вопросов о разрешениях' : ''}, задание ${pr.text.length} знаков${pr.templates.own ? ' (своя копия шаблона)' : ''}`);
-      return { session: r.session };
+      const sess = String(r.session.claudeSessionId || r.session.codexSessionId || '');
+      setTask(bag, { sid: r.session.sid, started: Date.now(), title: String(r.session.ownTitle || ''), ...(lang ? { lang } : {}), ...(main ? { kind, ...(sess ? { sess } : {}) } : {}) });
+      ctx.log(`${k.who}: вкладка ${r.session.sid}, ${ag}${la.args.length ? ` ${la.args.join(' ')}` : ''}${r.session.bypass ? ' без вопросов о разрешениях' : ''}, задание ${pr.text.length} знаков${pr.templates.own ? ' (своя копия шаблона)' : ''}`);
+      if (main) sendMain();
+      return { session: r.session, ...(main ? { launch: ag === 'claude' ? { agent: 'claude', model: 'opus', effort: 'среднее' } : { agent: ag, model: '', effort: '' } } : {}) };
     } finally { opening[bag] = false; }
   };
 
@@ -1392,6 +3437,196 @@ module.exports = (ctx) => {
     const c = b.cards.find((t) => t.status !== 'готово' && (t.title === head || t.title.startsWith(`${head},`)));
     return c ? c.id : '';
   };
+  // ——— Карты на кредитах (t1522; макет — экраны 1 и 2) ———
+  // «На кредиты» кладёт карту заданием «агент» плагина «Кредиты» (.kermach\credits\cN.md, поле card), карта — «в работе»: волна и второй щелчок её не возьмут.
+  // «Фазу на кредиты…» — карты фазы «в очереди» по порядку depends, каждая отдельным заданием; очередь заданий идёт сверху вниз (credits runQueue).
+  // Задание прошло — карта «готово», запись запуска без вкладки (credits: cN, copy, base) и проверяющий, как у карты агента: изменения он смотрит в копии задания.
+  // Не прошло — карта «ждёт ответа», итог задания в checked:.
+  /** Хранилище заданий; нет плагина — null. */
+  const credStore = () => { try { return require('../credits/main'); } catch { return null; } };
+  /** Папка данных Kermach: у плагинов ctx.dataDir — <данные>\plugins-data\<плагин>. */
+  const credData = path.resolve(ctx.dataDir, '..', '..');
+  /** Слова карты о проде и необратимом; тяжёлые пробы — в «Как проверить». Эвристика: человек снимет или поставит галочку сам. */
+  const CRED_PROD = /боев|\bпрод\b|продакшн|production|на сервер|деплой|deploy|необратим/i;
+  const CRED_HEAVY = /electron|capturepage|полный гейт|сборк|shot\.ps1|снимок окна|настоящ(?:ий|его|им) (?:claude|codex)/i;
+  /** Последнее задание каждой карты: карта → задание. @returns {Record<string, any>} */
+  const credJobs = () => {
+    const cs = credStore();
+    /** @type {Record<string, any>} */
+    const out = {};
+    if (!cs) return out;
+    let all = [];
+    try { all = cs.read(project); } catch { return out; }
+    for (const j of all) {
+      if (j.error || !j.head.card) continue;
+      const o = out[j.head.card];
+      if (!o || o.num < j.num) out[j.head.card] = j;
+    }
+    return out;
+  };
+  /** Почему карта не уходит на кредиты (галочка выключена); '' — уходит. @param {any} c */
+  const credWhy = (c) => {
+    if (c.human === 'нужен человек') return 'нужен человек';
+    if (c.agent && c.agent !== 'claude') return `агент ${c.agent}, на кредитах только claude`;
+    if (CRED_PROD.test([c.title, c.fields.what, c.fields.notes, c.fields.check].join('\n'))) return 'прод или необратимое';
+    if (CRED_HEAVY.test(String(c.fields.check || ''))) return 'тяжёлая проба: Electron, сборка или снимок окна';
+    return '';
+  };
+  /** Предложение Kermach: большая карта (opus или усилие высокое) — opus · среднее · $6, иначе sonnet · низкое · $3. @param {any} c */
+  const credSuggest = (c) => (/opus/i.test(c.model || '') || /высок|максим/.test(c.effort || '')
+    ? { model: 'opus', effort: 'среднее', budget: '6' } : { model: 'sonnet', effort: 'низкое', budget: '3' });
+  /** Текст задания — урезанная карта (без правил доски и kermach: в копии привратник их отклонит). @param {any} c */
+  const credBody = (c) => {
+    const part = (/** @type {string} */ k, /** @type {string} */ t) => { const v = String(c.fields[k] || '').trim(); return v ? `${t}: ${v}` : ''; };
+    return [`Карта «Роадмапа» ${c.id}: ${c.title}.`, part('what', 'Что сделать'), part('why', 'Зачем'), part('files', 'Файлы'), part('check', 'Как проверить'), part('notes', 'Особые указания')]
+      .filter(Boolean).join('\n\n');
+  };
+  /** «Как проверить» задания — первая команда в обратных кавычках; нет — пусто. @param {any} c */
+  const credCheck = (c) => {
+    for (const m of String(c.fields.check || '').matchAll(/`([^`\n]+)`/g)) if (grader.hasCommand(`\`${m[1]}\``)) return m[1].trim();
+    return '';
+  };
+  /** Порядок по depends внутри набора: сначала те, кого ждут; при равенстве — по номеру. @param {any[]} cards */
+  const credOrder = (cards) => {
+    const ids = new Set(cards.map((c) => c.id));
+    const done = new Set();
+    const left = [...cards].sort((a, b) => a.num - b.num);
+    const out = [];
+    while (left.length) {
+      const i = left.findIndex((c) => c.depends.every((/** @type {string} */ d) => !ids.has(d) || done.has(d)));
+      const c = left.splice(i < 0 ? 0 : i, 1)[0];
+      done.add(c.id);
+      out.push(c);
+    }
+    return out;
+  };
+  /** Остаток и очередь для плашки и окна фазы. */
+  const credBar = () => {
+    const cs = credStore();
+    if (!cs) return null;
+    let bal = null;
+    try { bal = cs.balanceNow(credData, Date.now()); } catch { /* начислений нет */ }
+    let queued = 0;
+    let going = 0;
+    try { for (const j of cs.read(project)) { if (j.error) continue; if (j.head.status === 'в очереди') queued++; else if (j.head.status === 'идёт' && cs.alive(j.head.pid)) going++; } } catch { /* папки заданий нет */ }
+    return { nearest: bal ? bal.nearest : null, next: bal ? bal.grants.filter((g) => !g.burned && (!bal.nearest || g.expires !== bal.nearest.expires || g.from !== bal.nearest.from)).slice(0, 1)[0] || null : null, queued, going };
+  };
+  /** Карта → задание «агент». o — из формы; пусто — предложение Kermach. @param {string} id @param {{ model?: string, effort?: string, budget?: string }} [o] */
+  const creditsSend = (id, o = {}) => {
+    const cs = credStore();
+    if (!cs) return { error: 'плагина «Кредиты» нет' };
+    const b = board.read(project);
+    const c = b.cards.find((x) => x.id === id);
+    if (!c) return { error: `нет карты ${id}` };
+    if (c.status !== 'в очереди') return { error: `${id}: на кредиты уходит карта «в очереди», а она «${c.status}»` };
+    if (c.agent && c.agent !== 'claude') return { error: `${id}: на кредитах только агент claude, у карты — ${c.agent}` };
+    const prev = credJobs()[id];
+    if (prev && ['в очереди', 'идёт'].includes(prev.head.status)) return { error: `${id} уже на кредитах: задание ${prev.id}` };
+    const s = credSuggest(c);
+    const budget = String(o.budget || s.budget).replace(/^\s*\$/, '').replace(',', '.').trim();
+    const model = String(o.model || s.model);
+    const effort = String(o.effort || s.effort);
+    let jid;
+    try {
+      jid = cs.add(project, { title: `${id}: ${c.title}`.slice(0, 200), body: credBody(c), kind: 'агент', model, effort, budget,
+        files: grader.pathsOf(c.fields.files).join(', '), check: credCheck(c) || undefined, card: id });
+    } catch (e) { return { error: why(e) }; }
+    try { writeStatus(id, 'в работе'); } catch (e) { ctx.log(`${id}: статус «в работе» после «На кредиты» не записан: ${why(e)}`); }
+    ctx.log(`${id}: на кредиты — задание ${jid}, ${model} · ${effort}, потолок $${budget}`);
+    return { id: jid };
+  };
+  /** Окно «Фазу на кредиты…»: карты «в очереди» по порядку depends. @param {string} ph */
+  const creditsPlan = (ph) => {
+    const b = board.read(project);
+    const cards = b.cards.filter((c) => c.phase === ph && c.status === 'в очереди' && !b.inbox.includes(c.id));
+    const ids = new Set(cards.map((c) => c.id));
+    const rows = credOrder(cards).map((c) => ({ id: c.id, title: c.title, depends: c.depends.filter((/** @type {string} */ d) => ids.has(d)), why: credWhy(c), ...credSuggest(c) }));
+    return { phase: ph, rows, bar: credBar() };
+  };
+  /** Отмеченные карты фазы — по порядку плана, каждая отдельным заданием. @param {string} ph @param {any[]} picks [{ id, model, effort, budget }] */
+  const creditsPhase = (ph, picks) => {
+    const want = new Map((Array.isArray(picks) ? picks : []).map((p) => [String(p && p.id), p]));
+    const sent = [];
+    const fail = [];
+    for (const r of creditsPlan(ph).rows) {
+      const p = want.get(r.id);
+      if (!p) continue;
+      const x = creditsSend(r.id, { model: p.model, effort: p.effort, budget: p.budget });
+      if ('error' in x) fail.push({ id: r.id, error: x.error }); else sent.push({ card: r.id, id: x.id });
+    }
+    return { sent, fail };
+  };
+  /** Начало копии задания: общий коммит с проектом — с него проверяющий смотрит правки. @param {string} copy @returns {Promise<string>} */
+  const credBase = (copy) => new Promise((resolve) => {
+    const { execFile } = require('child_process');
+    execFile('git', ['-C', project, 'rev-parse', 'HEAD'], { windowsHide: true }, (e1, head) => {
+      if (e1) { resolve(''); return; }
+      execFile('git', ['-C', copy, 'merge-base', 'HEAD', String(head).trim()], { windowsHide: true }, (e2, mb) => resolve(e2 ? '' : String(mb).trim()));
+    });
+  });
+  /** Итоги заданий, уже перенесённые в карты. */
+  const credSeen = new Set();
+  let credSyncing = false;
+  /** Задание карты кончилось — карта «готово» к проверяющему или «ждёт ответа». Только карты «в работе». */
+  const creditsSync = async () => {
+    if (credSyncing || stopped) return;
+    credSyncing = true;
+    let moved = false;
+    try {
+      const jobs = credJobs();
+      if (!Object.keys(jobs).length) return;
+      const b = board.read(project);
+      for (const [cid, j] of Object.entries(jobs)) {
+        const c = b.cards.find((x) => x.id === cid);
+        const h = j.head;
+        const k = `${j.id} ${h.closed}`;
+        if (!c || c.status !== 'в работе' || credSeen.has(k)) continue;
+        if (h.status === 'не прошло') {
+          credSeen.add(k);
+          try { writeStatus(cid, 'ждёт ответа', { checked: `кредиты ${j.id}: ${oneLine(h.result, 250) || 'не прошло'}` }); moved = true; ctx.log(`${cid}: задание ${j.id} не прошло — карта ждёт ответа`); } catch (e) { ctx.log(`${cid}: статус после ${j.id} не записан: ${why(e)}`); }
+          continue;
+        }
+        if (h.status !== 'прошло') continue;
+        credSeen.add(k);
+        const r0 = runsOf()[cid];
+        if (r0 && r0.credits === j.id) continue;
+        const base = h.copy && fs.existsSync(h.copy) ? await credBase(h.copy) : '';
+        const started = Date.parse(String(h.created || '').replace(' ', 'T')) || Date.now() - 1000;
+        const log = `${credStore().DIR.split(path.sep).join('/')}/${j.id}.log`;
+        try {
+          const w = writeStatus(cid, 'готово', {
+            done: `Сделано на кредитах, задание ${j.id}: ${oneLine(h.result, 600) || 'прошло'}. Правки — в копии ${h.copy || '—'} (ветка ${h.branch || '—'}); в проект их переносит «Принять» в панели «Кредиты».`,
+            proof: `\`${log}\` — журнал задания с выводом «Как проверить»; цена $${h.cost || '0'}.`,
+          });
+          patchRuns({ [cid]: { sid: '', started, tries: 1, agent: 'claude', credits: j.id, ...(h.copy ? { copy: h.copy } : {}), ...(base ? { base } : {}), ...w.own } });
+          moved = true;
+          ctx.log(`${cid}: задание ${j.id} прошло — карта «готово», дальше проверяющий${base ? ` (правки копии с ${base.slice(0, 12)})` : ''}`);
+        } catch (e) { ctx.log(`${cid}: «готово» после ${j.id} не записано: ${why(e)}`); }
+      }
+    } finally { credSyncing = false; }
+    if (moved) sync();
+  };
+  /** Признак заданий: номер, состояние, цена, раннер. */
+  let credJobSig = '';
+  const credSigNow = () => { const cs = credStore(); if (!cs) return ''; try { return cs.read(project).filter((/** @type {any} */ j) => !j.error).map((/** @type {any} */ j) => `${j.id}:${j.head.status}:${j.head.cost}:${j.head.pid}:${j.head.card}`).join('|'); } catch { return ''; } };
+  /** Сверка без открытой панели: раз в CRED_POLL_MS, пока есть задания карт. @type {NodeJS.Timeout | null} */
+  let credTimer = null;
+  let credPolled = '';
+  const CRED_POLL_MS = 15000;
+  const credPollOn = () => {
+    if (credTimer || stopped) return;
+    credTimer = setInterval(() => {
+      if (stopped) { if (credTimer) clearInterval(credTimer); credTimer = null; return; }
+      const s = credSigNow();
+      if (s === credPolled) return;
+      credPolled = s;
+      creditsSync().catch((e) => ctx.log(`кредиты: ${why(e)}`));
+    }, CRED_POLL_MS);
+    if (credTimer.unref) credTimer.unref();
+  };
+
+  /** Признак credits последней собранной доски (t1509). @type {boolean | null} */
+  let credSig = null;
   const snapshot = (/** @type {import('./board').Board | undefined} */ read, stale = false) => {
     const b = read || board.read(project);
     for (const c of b.cards) {
@@ -1413,16 +3648,23 @@ module.exports = (ctx) => {
       if (u && u.st === c.status) /** @type {any} */ (c).untold = u.why;
       // Следующий запуск пойдёт не на модели и усилии карты (t832) — окно пишет строку «следующий запуск — попытка N, …».
       const n = m && !m.gone || c.status === 'готово' ? null : nextOf(c, mine, past);
-      if (n && n.tries > 1 && (n.model !== String(c.model || '') || n.effort !== String(c.effort || ''))) /** @type {any} */ (c).next = { tries: n.tries, model: n.model, effort: n.effort };
+      // over (t1421, В4) — ступеней больше нет: поле для окна, строку окно пока не пишет.
+      if (n && n.tries > 1 && (n.over || n.model !== String(c.model || '') || n.effort !== String(c.effort || ''))) /** @type {any} */ (c).next = { tries: n.tries, model: n.model, effort: n.effort, ...(n.over ? { over: true } : {}) };
     }
     // Вкладка составления (t568): окно рисует над доской строку «составляется…», пока вкладка с этим номером жива в окне.
     const cp = composeOf();
     /** @type {any} */ (b).compose = cp ? { sid: cp.sid } : null;
     // Волны окна (t687) и занятые места (t689): окно рисует строки волн и пометки «ждёт места» у карт.
     /** @type {any} */ (b).waves = waves.map(waveView);
+    // Прерванные волны (t1422): строка «прервана · продолжить?» — по полю cut, окно без него их не видит.
+    /** @type {any} */ (b).cut = cut.map((w) => cutView(w, b));
+    // Проверка роадмапа (t1437): строки «проверка нашла ошибки» под фазами и кнопка «запускать всё равно».
+    /** @type {any} */ (b).checks = checksView(b);
     /** @type {any} */ (b).slots = { used: usedOf(), max: maxOf(), top: MAX_RUNS_TOP };
     // Список «В фоне» (t1073): строки скрытых вкладок с кнопками «Показать» и «Остановить».
     /** @type {any} */ (b).bg = bgView(b);
+    // Идущие проверки роадмапа и фаз (t1571): строки в «В фоне» без кнопок — вкладки у claude -p нет.
+    /** @type {any} */ (b).reviews = reviewsView();
     // Повторы среди записей (t835): окно пишет «похожа на dN» и даёт кнопку «объединить».
     const alikeD = alikeOf(b);
     /** @type {any} */ (b).alikeD = alikeD;
@@ -1452,6 +3694,34 @@ module.exports = (ctx) => {
       if (s) rep[f.id].sumSt = s.st;
     }
     /** @type {any} */ (b).reports = rep;
+    // t1417: своя копия шаблона в папке данных отстала от встроенного — строкой в «Замечаниях» доски. Строки прошлого раза (доска из снимка keepShot) — долой.
+    try {
+      const st = prompt.staleAll(ctx.dataDir);
+      b.warnings = (b.warnings || []).filter((w) => !String(w.file).startsWith(ctx.dataDir + path.sep)).concat(st.map((x) => ({ file: x.file, reason: x.reason })));
+    } catch (e) { ctx.log(`доска: свои копии шаблонов не сверены: ${why(e)}`); }
+    // t1419, Д7: проверяющий сломан — одна строка в «Замечаниях», а не вопрос по каждой карте. Строка прошлого снимка — долой.
+    const hb = graderHealth.broken;
+    b.warnings = (b.warnings || []).filter((w) => w.file !== GRADER_WARN)
+      .concat(hb ? [{ file: GRADER_WARN, reason: `не запускается с ${hhmm(hb.at)}: ${oneLine(hb.error, 200)} — карты остаются «готово», не проверена; пробный запуск раз в ${Math.round(GRADE_PROBE_MS / 60000)} мин` }] : []);
+    // t1435 (И4): фаза, где карты закрыли без вкладки агента и проверяющего, — строкой в «Замечаниях» (имя — номер фазы). Строки прошлого снимка — долой.
+    /** @type {{ file: string, reason: string, tag?: string }[]} */
+    const bareW = [];
+    for (const f of b.phases) {
+      const line = acceptMod.bareLine(f, f.cards.map((id) => b.cards.find((x) => x.id === id)).filter((c) => !!c));
+      if (line) bareW.push({ file: f.id, reason: line, tag: BARE_WARN });
+    }
+    b.warnings = b.warnings.filter((w) => /** @type {any} */ (w).tag !== BARE_WARN).concat(bareW);
+    // t1358: ключ «Кредиты API» сохранён — у карты кнопка «Запустить на кредитах». Окно спрашивает доску и при открытии карты, ключ свежий.
+    /** @type {any} */ (b).credits = creditsKey();
+    credSig = /** @type {any} */ (b).credits;
+    // t1522: значок на карте («кредиты · в очереди / идёт · $X / не прошло: …») и плашка в шапке окна.
+    /** @type {Record<string, any>} */
+    const cj = {};
+    const cs = credStore();
+    for (const [cid, j] of Object.entries(credJobs())) cj[cid] = { id: j.id, status: j.head.status, cost: j.head.cost || '', result: j.head.result || '', running: j.head.status === 'идёт' && !!cs && cs.alive(j.head.pid) };
+    /** @type {any} */ (b).creditJobs = cj;
+    /** @type {any} */ (b).creditsBar = credBar();
+    credJobSig = credSigNow();
     return b;
   };
   // Счётчик «по смыслу» (t947): агент пишет asked.jsonl, а не файлы доски — board.watch этого не видит, и строка ждала бы правки доски.
@@ -1462,7 +3732,11 @@ module.exports = (ctx) => {
   const askPoll = () => {
     if (!panelOn || stopped) return;
     const c = askLog.counts(codemap.mapFile(project, { where: 'project' }));
-    if (`${c.asked}:${c.missed}` !== askSig) ctx.send('board', snapshot());
+    // t1509: ключ «Кредиты API» сохранён или удалён в «Настройках» — файлы доски не меняются; признак credits сменился — окну доска.
+    // t1522: задание карты на кредитах сменило состояние — значок на карте; кончилось — карта к проверяющему (сверку зовёт и credTimer без панели).
+    const cjs = credSigNow();
+    if (cjs !== credJobSig) creditsSync().catch((e) => ctx.log(`кредиты: ${why(e)}`));
+    if (`${c.asked}:${c.missed}` !== askSig || creditsKey() !== credSig || cjs !== credJobSig) ctx.send('board', snapshot());
   };
   const startWatch = () => {
     if (watcher || stopped) return;
@@ -1480,6 +3754,7 @@ module.exports = (ctx) => {
           changeAgain = false;
           await board.prime(project);
           if (stopped) return;
+          langNew();
           const r = snapshot(reports()); ctx.send('board', r); keepShot(r); sync(); usedTally();
         } while (changeAgain && !stopped);
       } catch (e) { ctx.log(`ошибка в обработчике изменений доски: ${why(e)}`); } finally { changing = false; }
@@ -1490,6 +3765,20 @@ module.exports = (ctx) => {
   /** Отзывы карт о записях общей базы («s5 помогла» в used:, t698) — в её state.json сразу по правке доски, не ждать следующей сборки промпта. */
   const usedTally = () => {
     try { if (known.tally(ctx.dataDir, project, board.read(project))) ctx.log('общая база: отзывы карт о записях s<N> записаны'); } catch (e) { ctx.log(`общая база: отзывы не записаны: ${why(e)}`); }
+  };
+  /**
+   * Язык новой доски (t1429): «Составить роадмап» запомнил язык окна. Агент завёл passport.md без строки lang: — ставим её,
+   * дальше программа пишет слова доски на этом языке. Строка lang: уже есть (любая, и ru) — её выбрал человек или агент, не трогаем.
+   */
+  const langNew = () => {
+    const c = composeOf();
+    if (!c || !c.lang) return;
+    const file = path.join(board.root(project), 'passport.md');
+    let text = '';
+    try { text = fs.readFileSync(file, 'utf8'); } catch { return; }
+    const head = /^﻿?---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+    if (head && /^lang:/m.test(head[1])) return;
+    try { board.update(project, 'passport', { lang: c.lang }); ctx.log(`составить роадмап: язык доски — ${c.lang}`); } catch (e) { ctx.log(`составить роадмап: язык доски не записан: ${why(e)}`); }
   };
   const unwatch = () => {
     if (askTimer) { clearInterval(askTimer); askTimer = null; }
@@ -1554,7 +3843,20 @@ module.exports = (ctx) => {
     }
   };
   /** Собрать отчёты по доске с диска; сбой чтения — в журнал. Возвращает прочитанную доску для snapshot: второй раз не читаем. */
-  const reports = () => { try { const b = board.read(project); writeReports(b); return b; } catch (e) { ctx.log(`отчёты фаз не собраны: ${why(e)}`); return undefined; } };
+  const reports = () => { try { const b = phaseRun(board.read(project)); writeReports(b); return b; } catch (e) { ctx.log(`отчёты фаз не собраны: ${why(e)}`); return undefined; } };
+  /**
+   * Фаза «запланирована», а её карта уже взята в работу или готова (t1394) — в файл фазы «идёт». «Готова» программа не ставит: её ставят после приёмки.
+   * Записали — доска читается заново, чтобы снимок окну был уже с новым статусом. @param {any} b
+   */
+  const phaseRun = (b) => {
+    const st = new Map(b.cards.map((/** @type {any} */ c) => [c.id, c.status]));
+    let wrote = false;
+    for (const f of b.phases) {
+      if (f.status !== 'запланирована' || !f.cards.some((/** @type {string} */ id) => { const s = st.get(id); return s && s !== 'в очереди'; })) continue;
+      try { board.update(project, f.id, { status: 'идёт' }); wrote = true; ctx.log(`${f.id}: фаза «идёт» — её карта взята в работу`); } catch (e) { ctx.log(`${f.id}: статус «идёт» не записан: ${why(e)}`); }
+    }
+    return wrote ? board.read(project) : b;
+  };
   /**
    * Фаза → вкладка «Итог агентом» (t1182): sid, раздел агента в отчёте до запуска (mark) и st — run (пишет), done (итог записан), lost (вкладку закрыли без итога).
    * sumOpening — вкладка открывается (как opening у заданий).
@@ -1631,7 +3933,9 @@ module.exports = (ctx) => {
         '',
         'Общими записи не делай: global: не ставь и файлы d<N>.md не меняй. Общими их делает человек галочкой «для всех проектов» на экране записей.',
         'Больше ничего не правь. Дописал раздел — работа закончена.'].join('\n');
-      const r = await openWith({ kind: 'claude', args: [], title: `${ph} · итог фазы`, followBypass: true }, `sum-${ph}`, `итог ${ph}`, text, 'задание', { title: `Задание итога фазы ${ph}`, it: 'Оно' });
+      // KERMACH_CARD (t1379): итог фазы работает по своему заданию — журнал и правила главной сессии хукам ему не подавать, как построителю в openTask.
+      const env = { KERMACH_CARD: `sum-${ph}` };
+      const r = await openWith({ kind: 'claude', args: [], env, title: `${ph} · итог фазы`, followBypass: true }, `sum-${ph}`, `итог ${ph}`, text, 'задание', { title: `Задание итога фазы ${ph}`, it: 'Оно' });
       if (!r || 'error' in r) {
         const e = r ? r.error : 'нет ответа';
         ctx.log(`итог ${ph}: вкладка не открылась: ${e}`);
@@ -1664,6 +3968,8 @@ module.exports = (ctx) => {
       primedOnce = true;
     } catch { /* панель откроют — прочитает и покажет ошибку сама */ }
   }, WARM_MS);
+  // t1522: у карт есть задания на кредитах — сверка итогов и без открытой панели.
+  if (Object.keys(credJobs()).length) { credPollOn(); setTimeout(() => creditsSync().catch((e) => ctx.log(`кредиты: ${why(e)}`)), WARM_MS).unref?.(); }
   return {
     handle(cmd, ...args) {
       if (cmd === 'board') {
@@ -1700,28 +4006,65 @@ module.exports = (ctx) => {
         let name = '';
         if (/^t\d{1,6}$/.test(id)) try { name = fs.readdirSync(board.root(project)).find((n) => cardOf(n) === id) || ''; } catch { /* папки доски нет — смотреть нечего */ }
         focusName = name;
+        // t1389: карту открыли в панели — человек её видит, пометка «некому сообщить» больше не нужна.
+        if (untold.delete(id)) ctx.send('board', snapshot());
         return {};
       }
       if (cmd === 'phaseSum') return phaseSum(String(args[0] || ''));
+      // «Принять фазу» в окне (t1394): тот же текст, что kermach roadmap accept fN, — человек отдаёт его главной сессии.
+      if (cmd === 'accept') { try { return require('./accept').accept(board.read(project), String(args[0] || ''), project); } catch (e) { return { error: why(e) }; } }
       if (cmd === 'prompt') { try { return prompt.build(project, String(args[0] || ''), { dataDir: ctx.dataDir }); } catch (e) { return { error: String((e && /** @type {any} */ (e).message) || e) }; } }
       // Поля по имени (t541): весь модуль с функцией launchArgs IPC не клонирует.
       // READY — агенты, найденные и включённые в системе (t576, ctx.agents); ядро без ctx.agents — null, окно берёт встроенные AGENTS.
       if (cmd === 'lists') return ready().then((READY) => ({ AGENTS: agents.AGENTS, MODELS: agents.MODELS, EFFORT: agents.EFFORT, EFFORTS: agents.EFFORTS, TUNE: agents.TUNE, READY }));
       // t1060: { bg: true } от kermach roadmap run --bg; без него — настройка «в фоне».
-      if (cmd === 'run') return run(String(args[0] || ''), { bg: !!(args[1] && args[1].bg === true), from: fromOf(args[1]) });
+      // t1358: { credits: true } — «Запустить на кредитах» и kermach roadmap run --credits.
+      // t1522: «На кредиты» у карты и «Фазу на кредиты…» у фазы.
+      if (cmd === 'creditsSend') { const o = args[1] && typeof args[1] === 'object' ? args[1] : {}; const r = creditsSend(String(args[0] || ''), { model: o.model, effort: o.effort, budget: o.budget }); if (!('error' in r)) { credPollOn(); sendIfChanged(); } return r; }
+      if (cmd === 'creditsPlan') return creditsPlan(String(args[0] || ''));
+      if (cmd === 'creditsPhase') { const r = creditsPhase(String(args[0] || ''), args[1]); if (r.sent.length) { credPollOn(); sendIfChanged(); } return r; }
+      if (cmd === 'run') return run(String(args[0] || ''), { bg: !!(args[1] && args[1].bg === true), from: fromOf(args[1]), ...(args[1] && args[1].credits === true ? { credits: true } : {}) });
       if (cmd === 'runOne') return runOne(args[0], String(args[1] || ''), { bg: !!(args[2] && args[2].bg === true), from: fromOf(args[2]) });
       if (cmd === 'show') return showRun(String(args[0] || ''));
       if (cmd === 'bgShow') return bgShow(String(args[0] || ''));
       if (cmd === 'bgStop') return bgStop(String(args[0] || ''));
-      if (cmd === 'compose') return openTask('compose', String(args[0] || ''));
+      if (cmd === 'compose') return openTask('compose', String(args[0] || ''), { lang: String(args[1] || '') });
+      // Язык доски (t1429): слова формата во всех файлах доски — на новом языке; прежние файлы — в бэкап рядом с папкой доски.
+      // Файл, который на новом языке читался бы иначе, — отказ целиком, ничего не записано.
+      if (cmd === 'setLang') {
+        try {
+          const r = board.setLang(project, String(args[0] || ''));
+          ctx.log(`язык доски — ${r.lang}: переписано файлов ${r.changed.length}, бэкап ${r.backup}${r.skipped.length ? `; не тронуто ${r.skipped.length}: ${r.skipped.map((x) => `${x.file} (${x.reason})`).join(', ')}` : ''}`);
+          if (!stopped) ctx.send('board', snapshot());
+          return r;
+        } catch (e) { return { error: why(e) }; }
+      }
       if (cmd === 'newcard') return openTask('newcard', String(args[0] || ''));
+      // t1423: kermach roadmap start — вкладка главной сессии; args[1].summary — итог сверки построителя (А2), без него — задание «Новая сессия» (Д8).
+      // t1437: построитель записал карты и передал итог — проверка роадмапа: в журнал, окну под фазами и в задание главной сессии.
+      // t1438: вкладка построителя жива — до главной сессии круги свежего проверяющего (startAfter).
+      if (cmd === 'start') {
+        const summary = args[1] && typeof args[1].summary === 'string' ? args[1].summary : '';
+        return summary.trim() ? startAfter(String(args[0] || ''), summary) : openTask('orch', String(args[0] || ''), { summary });
+      }
       if (cmd === 'sync') { sync(); return {}; }
+      // Волна без force: окно и kermach roadmap wave. «Запускать всё равно» — только кнопкой окна (waveForce): решает человек, а не главная сессия.
       if (cmd === 'wave') return waveStart(String(args[0] || ''), String(args[1] || ''), args[2]);
+      if (cmd === 'waveForce') {
+        const ph = String(args[0] || '');
+        const e = checks.get(ph);
+        if (!e || e.why !== 'wave') return { error: `у фазы ${ph} нет волны, остановленной проверкой роадмапа` };
+        return waveStart(ph, e.mode, e.ids, true);
+      }
+      if (cmd === 'checkDrop') { checks.delete(String(args[0] || '')); sendIfChanged(); return {}; }
       if (cmd === 'waveStop') return waveStop(String(args[0] || ''));
-      // Убрать строку законченной волны; идущую — только через «стоп».
+      if (cmd === 'waveResume') return waveResume(String(args[0] || ''));
+      // Убрать строку законченной или прерванной (t1422) волны; идущую — только через «стоп».
       if (cmd === 'waveDrop') {
         const i = waves.findIndex((w) => w.id === String(args[0] || '') && w.state !== 'run');
         if (i >= 0) waves.splice(i, 1);
+        const j = cut.findIndex((w) => w.id === String(args[0] || ''));
+        if (j >= 0) { ctx.log(`волна ${cut[j].letter}: прерванная убрана, не продолжится`); cut.splice(j, 1); saveWaves(); }
         sendIfChanged();
         return {};
       }
@@ -1730,11 +4073,39 @@ module.exports = (ctx) => {
         // Старое общее open — только пока openIn пуст: одноразовый переход со старого вида (t547). Дальше проекта нет в openIn — панель закрыта.
         const openIn = s.openIn && typeof s.openIn === 'object' ? s.openIn : {};
         const open = Object.keys(openIn).length ? Object.hasOwn(openIn, key) && !!openIn[key] : !!s.open;
-        return { open, hideDone: !!s.hideDone, maxRuns: maxOf(), bg: !!s.bg };
+        return { open, hideDone: !!s.hideDone, maxRuns: maxOf(), bg: !!s.bg, mainAgent: mainAgentOf() };
       }
+      // t1485: пометка «Главная» — окно рисует её у вкладки и ставит пунктом меню вкладки; sid '' — снять.
+      if (cmd === 'mainGet') {
+        const m = taskOf('orch');
+        if (!m) return { sid: '' };
+        return ctx.terminals().then((/** @type {any} */ r) => {
+          const t = r && 'tabs' in r ? composeTabOf(r.tabs, m) : undefined;
+          return { sid: t ? t.sid : m.sid, kind: t ? t.kind : m.kind || 'claude' };
+        });
+      }
+      if (cmd === 'mainSet') return setMain(String(args[0] || ''));
+      // t1486: сопутствующая сессия — пункт меню окна (тема, агент) и список для значка ◇.
+      if (cmd === 'companion') return openCompanion(String(args[0] || ''), String(args[1] || ''));
+      if (cmd === 'companions') return { list: compList() };
+      if (cmd === 'companionNamed') {
+        const c = compOfSid(String(args[0] || ''));
+        if (!c) return { error: 'нет сопутствующей с такой вкладкой' };
+        if (!c[1].named) patchComps({ [c[0]]: { ...c[1], named: true } });
+        return { ok: true };
+      }
+      // Команды kermach companion и kermach main (t1486–t1488) — через browser\cli.js: sub — подкоманда, a — её аргументы, from — вкладка, откуда позвали (KERMACH_TAB_KEY).
+      if (cmd === 'cli') return cliCmd(String(args[0] || ''), args[1] && typeof args[1] === 'object' ? args[1] : {}, String(args[2] || ''));
       // t1354: ответ человека из панели — раздел в карте и отпечаток в папке данных; проверяющий верит только таким ответам.
+      // t1393: после записи — во вкладку агента, если она жива и карта ждёт ответа. fromCli — запись уже сделал kermach roadmap answer, здесь только доставка.
       if (cmd === 'answer') {
-        try { return grader.answer(ctx.dataDir, project, String(args[0] || ''), String(args[1] || '')); } catch (e) { return { error: why(e) }; }
+        const ref = String(args[0] || ''), text = String(args[1] || '');
+        const o = args[2] && typeof args[2] === 'object' ? args[2] : {};
+        const from = o.from === 'session' ? 'session' : '';
+        /** @type {any} */
+        let r;
+        try { r = o.head ? { head: String(o.head), sha1: String(o.sha1 || '') } : grader.answer(ctx.dataDir, project, ref, text, new Date(), from); } catch (e) { return { error: why(e) }; }
+        return deliverAnswer(ref, r.head, text, from).catch((e) => ({ sent: false, why: why(e) })).then((agent) => ({ ...r, agent }));
       }
       if (cmd === 'update') {
         const [ref, changes, base] = args;
@@ -1758,7 +4129,7 @@ module.exports = (ctx) => {
           // Пометка grade done в том же синхронном куске, что и запись файла: сверка (слежение за папкой, onState) увидит «готово» уже с ней.
           // «Готово», которое пишется в файл мимо панели (kermach roadmap close, правка в редакторе), проверяется как прежде.
           const hr = all.status === 'готово' && c && c.status !== 'готово' && /** @type {any} */ (item).saved !== false ? runsOf()[String(ref)] : null;
-          if (hr && !hr.gone && !Array.isArray(hr.batch) && !(hr.grade && hr.grade.st === 'done')) {
+          if (hr && !hr.gone && !(hr.grade && hr.grade.st === 'done')) {
             patchRuns({ [String(ref)]: { ...hr, grade: { st: 'done', round: Number(hr.grade && hr.grade.round) || 0, by: 'человек' } } });
             ctx.log(`${ref}: проверяющий не запускается — готово поставил человек`);
           }
@@ -1919,10 +4290,12 @@ module.exports = (ctx) => {
         // Старое общее open не трогаем: пока openIn пуст, по нему открываются все проекты (state).
         if ('open' in a) next.openIn = { ...(next.openIn && typeof next.openIn === 'object' ? next.openIn : {}), [key]: !!a.open };
         // Панель закрыли, а волна идёт — слежение остаётся: «готово» в файле должно запустить зависимые. Снимет его pump, когда волн не останется.
-        if ('open' in a && !a.open) { panelOn = false; if (!active().length) unwatch(); }
+        if ('open' in a && !a.open) { panelOn = false; if (!active().length && !soloOnDisk()) unwatch(); }
         if ('hideDone' in a) next.hideDone = !!a.hideDone;
         // «Запускать в фоне» (t1060) — одна на программу, как предел.
         if ('bg' in a) next.bg = !!a.bg;
+        // «Агент главной сессии» (t1485) — один на программу, по умолчанию claude.
+        if ('mainAgent' in a && /^[\w.-]{1,40}$/.test(String(a.mainAgent))) next.mainAgent = String(a.mainAgent);
         // Предел (t689) — один на программу, считается по каждому проекту отдельно. Подняли — ждущие места карты стартуют сразу, во всех открытых проектах (t729).
         const lim = Number(a.maxRuns);
         if ('maxRuns' in a && Number.isInteger(lim) && lim >= 1 && lim <= MAX_RUNS_TOP) next.maxRuns = lim;
@@ -1932,7 +4305,12 @@ module.exports = (ctx) => {
       }
       return { error: `нет команды ${cmd}` };
     },
-    stop() { stopped = true; for (const k of held) grader.release(k, GRADE_ADOPT_MS); held.clear(); clearTimeout(warm); if (shotTimer) clearTimeout(shotTimer); live.delete(sync); if (tellTimer) clearTimeout(tellTimer); unwatch(); for (const t of closers.values()) clearTimeout(t); closers.clear(); if (mapWait) clearTimeout(mapWait); offMap(); },
+    // Идущие волны — в файл с временем остановки до stopped: после открытия окна они «прерваны» (t1422).
+    stop(/** @type {string} */ how) { if (!stopped) stallBye(how); clearTimeout(stallFirst); saveWaves(Date.now()); stopped = true; for (const k of held) grader.release(k, GRADE_ADOPT_MS); held.clear(); if (wake) { clearTimeout(wake.h); wake = null; } clearTimeout(warm); if (shotTimer) clearTimeout(shotTimer); live.delete(sync); if (tellTimer) clearTimeout(tellTimer); if (stallTimer) clearTimeout(stallTimer); clearInterval(stallIv); tgOff(); if (answerTimer) clearTimeout(answerTimer); unwatch(); for (const t of closers.values()) clearTimeout(t); closers.clear(); if (mapWait) clearTimeout(mapWait); offMap(); },
   };
 };
 module.exports.prune = prune;
+// t1500: kermach roadmap solo fN печатает раздел «Сама, без агентов» тем же разбором шаблона, что вкладка главной сессии.
+module.exports.orchestrate = orchestrate;
+module.exports.SOLO_HEAD = SOLO_HEAD;
+module.exports.isSolo = isSolo;

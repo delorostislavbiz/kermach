@@ -26,6 +26,7 @@
     reload: '<path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/>',
     shot: '<path d="M4 8h4l2-3h4l2 3h4v12H4z"/><circle cx="12" cy="13.5" r="3.5"/>',
     pick: '<path d="M4 4l6.5 16 2.3-6.7L19.5 11z"/><path d="M13.5 13.5l6 6"/>',
+    notes: '<path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M8 9h8M8 12h5"/>',
     desktop: '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/>',
     mobile: '<rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/>',
     tablet: '<rect x="4.5" y="3" width="15" height="18" rx="2"/><path d="M11 18h2"/>',
@@ -65,7 +66,44 @@
     .bvitem span:first-child { overflow: hidden; text-overflow: ellipsis; }
     .bvitem span:last-child { margin-left: auto; color: var(--muted); }
     .bvitem:hover { background: var(--hover); }
-    .bvitem.on { color: var(--accent); background: var(--accent-bg); }`;
+    .bvitem.on { color: var(--accent); background: var(--accent-bg); }
+    .bnotes { flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; max-height: 30%; overflow-y: auto; padding: 4px 8px; font-size: 12px; color: var(--text);
+      border-bottom: 1px solid var(--line, rgba(141,145,165,.14)); }
+    .bnotes[hidden] { display: none; }
+    .bnhead { display: flex; align-items: center; gap: 6px; }
+    .bnhead .t { color: var(--muted); margin-right: auto; }
+    .bnbtn { height: 22px; padding: 0 8px; border-radius: 4px; border: 1px solid var(--line, rgba(141,145,165,.3)); background: transparent; color: var(--text); font: inherit; cursor: default; }
+    .bnbtn:hover { background: var(--hover); }
+    .bnbtn.main { border-color: var(--accent); color: var(--accent); }
+    .bnbtn[disabled] { opacity: .5; }
+    .bnitem { display: flex; align-items: center; gap: 8px; padding: 2px 4px; border-radius: 4px; }
+    .bnitem:hover { background: var(--hover); }
+    .bnitem .n { flex-shrink: 0; min-width: 18px; height: 18px; border-radius: 9px; background: #21B568; color: #fff; text-align: center; font-weight: bold; font-size: 11px; line-height: 18px; }
+    .bnitem .el { flex-shrink: 0; max-width: 40%; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bnitem .tx { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bnitem .x { flex-shrink: 0; padding: 0 5px; color: var(--muted); cursor: default; }
+    .bnitem .x:hover { color: var(--text); }
+    .bnask { position: fixed; z-index: 20; display: flex; gap: 4px; padding: 6px; border-radius: 6px; background: var(--panel, var(--bg)); color: var(--text);
+      border: 1px solid var(--line, rgba(141,145,165,.3)); box-shadow: 0 6px 20px rgba(0,0,0,.3); font-size: 12px; }
+    .bnask input { width: 240px; height: 22px; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line, rgba(141,145,165,.3)); background: var(--bg); color: var(--text); font: inherit; }`;
+  /** Пометок на вкладке сайта не больше (t1474): текст уходит агенту одним сообщением. */
+  const NOTES_MAX = 50;
+  /** Управляющие знаки, кроме табуляции и перевода строки, — как CONTROL в grab.js. */
+  const CONTROL = /[\x00-\x08\x0B-\x1F\x7F-\x9F]/g;
+  /** Подпись человека: одной строкой, без управляющих, не длиннее 1000 знаков. @param {unknown} v */
+  const noteClean = (v) => String(typeof v === 'string' ? v : '').replace(CONTROL, '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+  /**
+   * Один текст для агента из пометок (t1474): описание каждой — как у «Выбрать элемент» (grab.js format, главный процесс уже вычистил),
+   * под ним строка «Что поменять» с подписью человека. В описании каждое поле одной строкой, поэтому строку «Что поменять:» страница начать не может.
+   * Пустая подпись — строки нет. Надписи «Пометка N» и «Что поменять:» — на языке окна (переводы плагина translate).
+   * @param {{ text: string, note: string }[]} list
+   */
+  const notesText = (list) => `${list.map((m, i) => {
+    const n = noteClean(m.note);
+    const head = I18n.t('browser.noteHead', 'Пометка {n}', { n: i + 1 });
+    const what = I18n.t('browser.noteWhatLine', 'Что поменять:');
+    return `${head}\n${String(m.text || '').replace(CONTROL, '').trimEnd()}${n ? `\n${what} ${n}` : ''}`;
+  }).join('\n\n')}\n`;
   /** Виды вкладки сайта (t207): кнопка — подпись. Считается при каждом показе — язык меняется на лету (t287). @param {'desktop' | 'mobile' | 'tablet'} k */
   const viewTitle = (k) => (k === 'mobile' ? I18n.t('browser.mobilnyy', 'Мобильный') : k === 'tablet' ? I18n.t('browser.planshet', 'Планшет') : I18n.t('browser.kompyuter', 'Компьютер'));
   /** Вид «свой размер» (t1146): 'c:' и номер размера из «Настроек». */
@@ -118,9 +156,11 @@
 
   /**
    * @typedef {{ sid: string, url: string, title: string, pane: HTMLElement, input: HTMLInputElement, view: any, msg: HTMLElement,
-   *   note: HTMLElement, btn: Record<'back' | 'fwd' | 'reload' | 'mark' | 'out' | 'shot' | 'pick' | 'desktop' | 'mobile' | 'tablet' | 'more' | 'dev' | 'human' | 'agent' | 'any', HTMLElement>, picking: boolean,
+   *   note: HTMLElement, btn: Record<'back' | 'fwd' | 'reload' | 'mark' | 'out' | 'shot' | 'pick' | 'notes' | 'desktop' | 'mobile' | 'tablet' | 'more' | 'dev' | 'human' | 'agent' | 'any', HTMLElement>, picking: boolean,
    *   tab: { pos: number }, savedPos: number, kind: string, box: HTMLElement, untitled: boolean, badUrl: boolean, agent: boolean, human: boolean, site: string, any: boolean,
-   *   bar: HTMLElement, menu: HTMLElement, acts: { at: number, text: string }[], agentLine: boolean, actsBox: HTMLElement }} BTab
+   *   bar: HTMLElement, menu: HTMLElement, acts: { at: number, text: string }[], agentLine: boolean, actsBox: HTMLElement,
+   *   pickKind?: string, notesBox: HTMLElement, notes: { text: string, short: string, selector: string, note: string }[], asking?: (() => void) | null, sending?: boolean }} BTab
+   * Пометки (t1474): pickKind 'note' — идёт выбор для пометки, notes — список панели, asking — открыто поле «Что поменять» (вызов закрывает его).
    * kind — 'desktop', 'mobile', 'tablet' или свой размер 'c:<id>' (t1146).
    * @typedef {{ url: string, title: string }} Mark
    */
@@ -224,9 +264,15 @@
       s.btn.shot.classList.toggle('off', !v || !to);
       s.btn.shot.title = to ? I18n.t('browser.skrinshotStranicyPutK', 'Скриншот страницы — путь к картинке в терминал агента') : I18n.t('browser.skrinshotVOkneNet', 'Скриншот: в окне нет {names}', { names: picNames() });
       // «Выбрать элемент» — то же условие; пока выбор идёт, кнопка подсвечена и выключает его.
+      // «Пометить элемент» (t1474): агент нужен только при отправке — там его и выбирают, поэтому кнопка нужна только страница.
+      const noting = s.picking && s.pickKind === 'note';
+      s.btn.notes.classList.toggle('off', !s.picking && !v);
+      s.btn.notes.classList.toggle('on', noting);
+      s.btn.notes.title = noting ? I18n.t('browser.notePicking', 'Пометка: щёлкните элемент на странице; Esc или эта кнопка — отмена')
+        : I18n.t('browser.noteBtn', 'Пометить элемент — подпись «что поменять», пометки копятся и уходят агенту одним сообщением');
       s.btn.pick.classList.toggle('off', !s.picking && (!v || !to));
-      s.btn.pick.classList.toggle('on', s.picking);
-      s.btn.pick.title = s.picking ? I18n.t('browser.vyborElementaIdetSchelknite', 'Выбор элемента идёт — щёлкните элемент на странице; Esc или эта кнопка — отмена')
+      s.btn.pick.classList.toggle('on', s.picking && !noting);
+      s.btn.pick.title = s.picking && !noting ? I18n.t('browser.vyborElementaIdetSchelknite', 'Выбор элемента идёт — щёлкните элемент на странице; Esc или эта кнопка — отмена')
         : to ? I18n.t('browser.vybratElementOpisanieV', 'Выбрать элемент — описание в терминал агента') : I18n.t('browser.vybratElementVOkne', 'Выбрать элемент: в окне нет {names}', { names: picNames() });
       for (const k of /** @type {const} */ (['desktop', 'mobile', 'tablet'])) s.btn[k].classList.toggle('on', s.kind === k);
       // «Свои размеры» (t1146): видна, когда в «Настройках» есть свои; горит, когда вкладка в одном из них, подпись — его имя.
@@ -249,7 +295,7 @@
       s.btn.agent.classList.toggle('on', s.agent);
       s.btn.agent.title = s.agent ? I18n.t('browser.agentuOn', 'Вкладка отдана агенту: Claude может нажимать, заполнять поля и открывать адреса в ней. Щёлкните, чтобы забрать.')
         : I18n.t('browser.agentuOff', 'Отдать вкладку агенту: Claude сможет нажимать, заполнять поля и открывать адреса в ней. Читать страницу он может и без этого.');
-      // «Все сайты» (решение Ростислава 09.10): видна при включённом «Агенту». Выключена — агент действует только на сайте, открытом при включении.
+      // «Все сайты» (решение пользователя 09.10): видна при включённом «Агенту». Выключена — агент действует только на сайте, открытом при включении.
       s.btn.any.style.display = s.agent ? '' : 'none';
       s.btn.any.classList.toggle('on', s.any);
       s.btn.any.title = s.any ? I18n.t('browser.vseSaytyOn', 'Агент может уходить на другие сайты. Щёлкните, чтобы оставить только {v1}.', { v1: s.site || '?' })
@@ -450,6 +496,7 @@
       if (!host.agentTarget()) { await loadPics(); note(s, I18n.t('browser.vOkneNetClaude2', 'В окне нет {names} — описание некуда вставить.', { names: picNames() })); return; }
       if (!id) { note(s, I18n.t('browser.snachalaOtkroyteStranicu', 'Сначала откройте страницу.')); return; }
       s.picking = true;
+      s.pickKind = 'pick';
       buttons(s);
       // Фокус — в страницу: там ловится Esc.
       s.view.focus();
@@ -461,6 +508,148 @@
       const to = host.agentTarget();
       if (!to || !(await host.pasteText(to, r.text))) { note(s, I18n.t('browser.vkladkaAgentaZakrylasOpisanie', 'Вкладка агента закрылась — описание не вставлено.')); return; }
       host.show(to);
+    }
+
+    /**
+     * «Пометить элемент» (t1474): тот же выбор, что у «Выбрать элемент» (описание чистит главный процесс, grab.js), но описание не уходит сразу:
+     * рядом с элементом — поле «Что поменять», «Добавить» кладёт пометку в список панели. Список уходит агенту кнопкой «Отправить агенту».
+     * Подпись набирает человек в окне программы: страница до поля не достаёт. Повторное нажатие кнопки — отмена.
+     * @param {BTab} s
+     */
+    async function notePick(s) {
+      let id = 0;
+      try { if (s.view && !s.view.hidden) id = s.view.getWebContentsId(); } catch {}
+      if (s.picking) { if (id) await b.pick(id, false); return; }
+      if (s.asking) { s.asking(); return; }
+      if (!id) { note(s, I18n.t('browser.snachalaOtkroyteStranicu', 'Сначала откройте страницу.')); return; }
+      if (s.notes.length >= NOTES_MAX) { note(s, I18n.t('browser.notesFull', 'Пометок уже {n} — отправьте или очистите список.', { n: NOTES_MAX })); return; }
+      s.picking = true;
+      s.pickKind = 'note';
+      buttons(s);
+      s.view.focus();
+      /** @type {any} */
+      let r;
+      try { r = await b.pick(id, true); } finally { s.picking = false; s.pickKind = ''; buttons(s); }
+      if (!r || r.cancelled) return;
+      if (r.error || typeof r.text !== 'string') { note(s, I18n.t('browser.elementNeVybran', 'Элемент не выбран: {error}', { error: r.error || '?' })); return; }
+      const text = await askNote(s, r.rect);
+      if (text === null) return;
+      s.notes.push({ text: r.text, short: String(r.short || ''), selector: String(r.selector || ''), note: noteClean(text) });
+      drawNotes(s);
+      badgesOut(s);
+    }
+
+    /**
+     * Поле «Что поменять» у выбранного элемента. Ответ — подпись («» — без подписи) или null — «Отмена», Esc.
+     * Место — под элементом по его месту в странице (rect от гостя), не влезает — над ним; поле всегда внутри окна.
+     * @param {BTab} s @param {any} rect @returns {Promise<string | null>}
+     */
+    function askNote(s, rect) {
+      return new Promise((resolve) => {
+        const box = document.createElement('div');
+        box.className = 'bnask';
+        box.innerHTML = '<input spellcheck="false"><button class="bnbtn main" data-a="add"></button><button class="bnbtn" data-a="cancel"></button>';
+        const input = /** @type {HTMLInputElement} */ (box.querySelector('input'));
+        const add = /** @type {HTMLElement} */ (box.querySelector('[data-a="add"]'));
+        const cancel = /** @type {HTMLElement} */ (box.querySelector('[data-a="cancel"]'));
+        input.placeholder = I18n.t('browser.noteWhat', 'Что поменять');
+        add.textContent = I18n.t('browser.noteAdd', 'Добавить');
+        cancel.textContent = I18n.t('common.cancel', 'Отмена');
+        s.pane.appendChild(box);
+        const vr = s.view ? s.view.getBoundingClientRect() : s.box.getBoundingClientRect();
+        const r = rect && typeof rect === 'object' ? rect : { x: 0, y: 0, width: 0, height: 0 };
+        const bw = box.offsetWidth, bh = box.offsetHeight;
+        let x = vr.left + (Number(r.x) || 0), y = vr.top + (Number(r.y) || 0) + (Number(r.height) || 0) + 6;
+        if (y + bh > Math.min(innerHeight, vr.bottom)) y = vr.top + (Number(r.y) || 0) - bh - 6;
+        x = Math.max(vr.left + 4, Math.min(x, innerWidth - bw - 8));
+        y = Math.max(vr.top + 4, Math.min(y, innerHeight - bh - 8));
+        box.style.left = `${Math.round(x)}px`;
+        box.style.top = `${Math.round(y)}px`;
+        const done = (/** @type {string | null} */ v) => { if (!box.isConnected) return; box.remove(); s.asking = null; resolve(v); };
+        s.asking = () => done(null);
+        add.onclick = () => done(input.value);
+        cancel.onclick = () => done(null);
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); done(input.value); } else if (e.key === 'Escape') { e.preventDefault(); done(null); }
+          e.stopPropagation();
+        });
+        input.focus();
+      });
+    }
+
+    /** Номера пометок на странице (t1474): весь список гостю через тег webview, preload гостя рисует их в своём закрытом слое. @param {BTab} s */
+    function badgesOut(s) {
+      try { if (s.view && s.notes) s.view.send('browser:marks-show', s.notes.map((m, i) => ({ n: i + 1, selector: m.selector }))); } catch {}
+    }
+
+    /** Список пометок на панели вкладки (t1474): номер, коротко элемент, подпись, «×»; сверху — «Отправить агенту» и «Очистить». @param {BTab} s */
+    function drawNotes(s) {
+      const box = s.notesBox;
+      if (!box || !s.notes) return;
+      box.hidden = !s.notes.length;
+      box.textContent = '';
+      if (!s.notes.length) return;
+      const head = document.createElement('div');
+      head.className = 'bnhead';
+      const t = document.createElement('span');
+      t.className = 't';
+      t.textContent = s.sending ? I18n.t('browser.notesStarting', 'Запускаю агента — пометки уйдут, когда он будет готов…') : I18n.t('browser.notesCount', 'Пометки: {n}', { n: s.notes.length });
+      const send = document.createElement('button');
+      send.className = 'bnbtn main';
+      send.dataset.a = 'send';
+      send.textContent = `${I18n.t('browser.notesSend', 'Отправить агенту')} ▾`;
+      send.disabled = !!s.sending;
+      send.onclick = () => { sendNotes(s, send).catch((e) => host.log(`пометки: ${e}`)); };
+      const clear = document.createElement('button');
+      clear.className = 'bnbtn';
+      clear.dataset.a = 'clear';
+      clear.textContent = I18n.t('browser.notesClear', 'Очистить');
+      clear.disabled = !!s.sending;
+      clear.onclick = () => { s.notes = []; drawNotes(s); badgesOut(s); };
+      head.append(t, send, clear);
+      box.appendChild(head);
+      for (const [i, m] of s.notes.entries()) {
+        const row = document.createElement('div');
+        row.className = 'bnitem';
+        const n = document.createElement('span'); n.className = 'n'; n.textContent = String(i + 1);
+        const el = document.createElement('span'); el.className = 'el'; el.textContent = m.short; el.title = m.selector;
+        const tx = document.createElement('span'); tx.className = 'tx'; tx.textContent = m.note || I18n.t('browser.noteEmpty', '(без подписи)'); tx.title = m.note;
+        const x = document.createElement('span'); x.className = 'x'; x.dataset.a = 'del'; x.textContent = '×'; x.title = I18n.t('browser.noteDel', 'Убрать пометку');
+        x.onclick = () => { if (s.sending) return; s.notes.splice(i, 1); drawNotes(s); badgesOut(s); };
+        row.append(n, el, tx, x);
+        box.appendChild(row);
+      }
+    }
+
+    /**
+     * «Отправить агенту» (t1474): меню — открытые в окне агенты, понимающие картинки (pics), и «Новый Claude Code», «Новый Codex».
+     * Все пометки одним текстом в терминал агента без Enter (как t39). Новый агент запускается только по выбору в меню — запуск тратит лимит;
+     * текст уходит, когда агент готов принять ввод (host.newAgent ждёт строку ввода): во время запуска вставка теряется.
+     * Список остаётся и после отправки, и после сбоя — убирает его только «Очистить».
+     * @param {BTab} s @param {HTMLElement} at
+     */
+    async function sendNotes(s, at) {
+      if (!s.notes.length || s.sending) return;
+      const r = at.getBoundingClientRect();
+      const agents = typeof host.agents === 'function' ? host.agents() : [];
+      /** @type {any[]} */
+      const items = agents.map((/** @type {{ sid: string, title: string }} */ a) => ({ id: `a:${a.sid}`, label: a.title }));
+      if (items.length) items.push('-');
+      items.push({ id: 'new:claude', label: I18n.t('browser.notesNewClaude', 'Новый Claude Code') }, { id: 'new:codex', label: I18n.t('browser.notesNewCodex', 'Новый Codex') });
+      const choice = await w.Dialogs.menu(r.left, r.bottom + 4, items);
+      if (typeof choice !== 'string' || !choice) return;
+      const text = notesText(s.notes);
+      let sid = '';
+      if (choice.startsWith('a:')) sid = choice.slice(2);
+      else if (choice.startsWith('new:') && typeof host.newAgent === 'function') {
+        s.sending = true;
+        drawNotes(s);
+        try { sid = await host.newAgent(choice.slice(4)); } catch (e) { host.log(`пометки: агент не запущен: ${e}`); } finally { s.sending = false; drawNotes(s); }
+        if (!sid) { note(s, I18n.t('browser.notesNoAgent', 'Агент не запустился или не дождался ввода — пометки не отправлены, список на месте.')); return; }
+      }
+      if (!sid || !(await host.pasteText(sid, text))) { note(s, I18n.t('browser.notesFailed', 'Вкладка агента закрылась — пометки не отправлены, список на месте.')); return; }
+      host.log(`пометки: отправлено ${s.notes.length} одним текстом во вкладку ${sid}`);
+      host.show(sid);
     }
 
     /** Адрес в закладках проекта. @param {string} url */
@@ -612,6 +801,8 @@
       v.addEventListener('did-stop-loading', () => buttons(s));
       // Вид (t207) — на каждой новой странице: после перезагрузки гость тот же, после краха — новый.
       v.addEventListener('dom-ready', () => { if (s.kind !== 'desktop') applyView(s).catch((e) => host.log(`вид вкладки сайта: ${e}`)); });
+      // Номера пометок (t1474) — заново на каждой странице: новая страница слоя с номерами не имеет.
+      v.addEventListener('dom-ready', () => badgesOut(s));
       v.addEventListener('devtools-opened', () => buttons(s));
       v.addEventListener('devtools-closed', () => buttons(s));
       // Клавиши вкладок из страницы (t131): Ctrl+Tab, Ctrl+PgUp / PgDn, конец выбора и отмена. Страница окна (host.tabKey) переключает вкладки
@@ -662,6 +853,7 @@
       /** @type {HTMLElement} */ (s.btn.agent.querySelector('span')).textContent = I18n.t('browser.agentu', 'Агенту');
       /** @type {HTMLElement} */ (s.btn.any.querySelector('span')).textContent = I18n.t('browser.vseSayty', 'Все сайты');
       msgText(s);
+      drawNotes(s);
       if (s.untitled) {
         s.title = I18n.t('browser.novayaVkladka', 'Новая вкладка');
         host.setTab(s.sid, { title: s.title });
@@ -729,8 +921,8 @@
         + `<div class="bb" data-b="agent" style="width:auto;padding:0 7px 0 5px;gap:4px;margin-left:6px">${glyph('agent')}<span></span></div>`
         + `<div class="bb" data-b="any" style="width:auto;padding:0 7px;margin-left:2px;display:none"><span></span></div>`
         + `<div class="bb" data-b="dev" style="margin-left:6px">${glyph('dev')}</div>`
-        + `<div class="bb" data-b="pick">${glyph('pick')}</div><div class="bb" data-b="shot">${glyph('shot')}</div></div>`
-        + `<div class="bmarks" hidden></div><div class="bview"><div class="bmsg"></div></div>`;
+        + `<div class="bb" data-b="pick">${glyph('pick')}</div><div class="bb" data-b="notes">${glyph('notes')}</div><div class="bb" data-b="shot">${glyph('shot')}</div></div>`
+        + `<div class="bmarks" hidden></div><div class="bnotes" hidden></div><div class="bview"><div class="bmsg"></div></div>`;
       s.input = /** @type {HTMLInputElement} */ (s.pane.querySelector('input'));
       s.bar = /** @type {HTMLElement} */ (s.pane.querySelector('.bmarks'));
       s.msg = /** @type {HTMLElement} */ (s.pane.querySelector('.bmsg'));
@@ -765,6 +957,9 @@
       s.btn.reload.onclick = () => { if (s.view) s.view.reload(); };
       s.btn.shot.onclick = () => { shot(s).catch((e) => host.log(`снимок: ${e}`)); };
       s.btn.pick.onclick = () => { pick(s).catch((e) => host.log(`выбор элемента: ${e}`)); };
+      s.notesBox = /** @type {HTMLElement} */ (s.pane.querySelector('.bnotes'));
+      s.notes = [];
+      s.btn.notes.onclick = () => { notePick(s).catch((e) => host.log(`пометка: ${e}`)); };
       // Подсказка без получателя называет агентов из каталога (t438): список — при первом наведении, потом подсказка перерисуется.
       for (const k of /** @type {const} */ (['shot', 'pick'])) s.btn[k].addEventListener('mouseenter', () => { if (!picTitles) loadPics().then(() => buttons(s)); });
       // Подсказка появляется раньше, чем приходит список, — первое наведение показало бы общую фразу (t443). Поэтому список читается
@@ -872,7 +1067,7 @@
           return { guest, url: x.url, title: x.untitled ? '' : x.title, active: x.sid === live, agent: x.agent, human: x.human, site: x.site, any: x.any };
         });
       };
-      // Агент действует во вкладке (t382): строка рядом с адресом — Ростислав видит, что сделал агент, если вкладка на виду.
+      // Агент действует во вкладке (t382): строка рядом с адресом — пользователь видит, что сделал агент, если вкладка на виду.
       w.KermachBrowserAct = (/** @type {number} */ guest, /** @type {unknown} */ what) => {
         const x = list.find((s) => { try { return !!s.view && s.view.getWebContentsId() === guest; } catch { return false; } });
         if (!x) return false;

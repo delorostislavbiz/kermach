@@ -125,8 +125,9 @@ const low = (s) => String(s || '').trim().toLowerCase().replace(/ё/g, 'е');
  * opus высокое выше верхней — не меняется; sonnet среднее → opus низкое. Пустые model и effort — ярус size.js подставляет nextOf (main.js) до вызова.
  * Не повышаем: не claude, модель назвал человек (pick: человек), модели карты нет в лестнице (haiku, fable, пусто).
  * note — строка для журнала плагина; первая попытка — пусто.
+ * over (t1421, В4) — попытке нужна ступень выше верхней: она идёт на верхней, а человеку пора посмотреть карту (OVER). Ступени выше opus среднее нет нарочно (решение В4).
  * @param {string} agent @param {string} model @param {string} effort @param {number} tries @param {unknown} pick
- * @returns {{ model: string, effort: string, note: string }}
+ * @returns {{ model: string, effort: string, note: string, over?: boolean }}
  */
 function raise(agent, model, effort, tries, pick) {
   const was = { model: String(model || ''), effort: String(effort || '') };
@@ -139,8 +140,11 @@ function raise(agent, model, effort, tries, pick) {
   const base = exact >= 0 ? exact : LADDER.map((s) => s.model).lastIndexOf(low(was.model));
   if (base < 0) return { ...was, note: `${head} — модель не повышаю: «${card}» нет в лестнице повторных попыток` };
   const top = Math.min(base + tries - 1, LADDER.length - 1);
-  if (top === base) return { ...was, note: `${head} — ${card}: выше ступени нет` };
-  return { ...LADDER[top], note: `${head} — ${LADDER[top].model} ${LADDER[top].effort} (в карте ${card})` };
+  const over = base + tries - 1 > LADDER.length - 1 ? { over: true } : {};
+  if (top === base) return { ...was, note: `${head} — ${card}: выше ступени нет${over.over ? `. ${OVER}` : ''}`, ...over };
+  return { ...LADDER[top], note: `${head} — ${LADDER[top].model} ${LADDER[top].effort} (в карте ${card})${over.over ? `. ${OVER}` : ''}`, ...over };
 }
+/** Попытка выше верхней ступени (t1421, В4): строка для журнала и ответа run. */
+const OVER = 'Ступеней больше нет. Посмотрите карту: возможно, её надо разбить или уточнить';
 
-module.exports = { AGENTS, MODELS, EFFORT, EFFORTS, TUNE, LADDER, kindOf, launchArgs, lightArgs, raise };
+module.exports = { AGENTS, MODELS, EFFORT, EFFORTS, TUNE, LADDER, OVER, kindOf, launchArgs, lightArgs, raise };

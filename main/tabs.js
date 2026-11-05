@@ -70,7 +70,12 @@ function load(dataDir, id, log) {
       const aside = `${file}.broken-${Date.now()}`;
       try { fs.renameSync(file, aside); } catch {}
       log(`${path.basename(file)} не читается (${e.message}) — отложил в ${aside}, вкладки начинаю заново`);
-    } else if (/** @type {any} */ (e).code !== 'ENOENT') log(`${file} не прочитан: ${e}`);
+    } else if (/** @type {any} */ (e).code !== 'ENOENT') {
+      // Файл есть, но не прочитан (занят — EBUSY, нет прав — EACCES): пустой список в кэш не кладём, иначе первая же
+      // запись затрёт вкладки проекта (t1573). Окно получает пустой список на этот раз; save без кэша не пишет; следующий вызов читает заново.
+      log(`${file} не прочитан: ${e} — вкладки не меняю, прочитаю в следующий раз`);
+      return data;
+    }
   }
   cache.set(id, data);
   return data;
@@ -83,9 +88,12 @@ function save(dataDir, id, log) {
   const p = pending.get(id);
   if (p && p.timer) clearTimeout(p.timer);
   pending.set(id, { last: Date.now(), timer: null, dataDir, log });
+  const data = cache.get(id);
+  // Файл не прочитан (load не положил его в кэш) — записать нечего: в памяти не все вкладки проекта (t1573).
+  if (!data) { log(`вкладки не сохранены в ${file}: файл не прочитан, старый не трогаю`); return; }
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file + '.tmp', JSON.stringify(cache.get(id), null, 2));
+    fs.writeFileSync(file + '.tmp', JSON.stringify(data, null, 2));
     fs.renameSync(file + '.tmp', file);
   } catch (e) { log(`вкладки не сохранены в ${file}: ${e}`); }
 }
@@ -129,7 +137,8 @@ function arrange(dataDir, id, live, log) {
     data.tabs.push(n);
     order.push({ sid: n.sid, live: true });
     changed = true;
-    log(`вкладка ${n.title} (терминал ${n.sid}) дописана в ${path.basename(fileOf(dataDir, id))}`);
+    // Файл не прочитан (нет в кэше) — save его не тронет, «дописана» было бы неправдой (t1573).
+    if (cache.has(id)) log(`вкладка ${n.title} (терминал ${n.sid}) дописана в ${path.basename(fileOf(dataDir, id))}`);
   }
   // Здесь меняется и тема Claude (autoTitle) — пачками, поэтому запись отложенная. Остальные правки (add, patch, remove) пишут сразу.
   if (changed) saveSoon(dataDir, id, log);

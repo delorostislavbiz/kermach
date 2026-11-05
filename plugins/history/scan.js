@@ -774,8 +774,11 @@ function run(wd) {
         items.push({ ...rec(byKey.get(h.key), kids), hit: { role: h.role, snippet: h.snippet, ts: h.ts || '' } });
       }
       const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+      // Имена переименованных вкладок (t1506) — главная часть шлёт их с запросом: разговор находится и по имени вкладки.
+      /** @type {Record<string, string>} */
+      const names = a.names && typeof a.names === 'object' ? a.names : {};
       const meta = out.filter((r) => !used.has(r.key)).map((r) => rec(r, kids)).filter((x) => {
-        const hay = [x.title, x.cwd, x.id, x.branch, x.model, x.agentName].join(' ').toLowerCase();
+        const hay = [x.title, names[String(x.id || '').toLowerCase()] || '', x.cwd, x.id, x.branch, x.model, x.agentName].join(' ').toLowerCase();
         return words.every((w) => hay.includes(w));
       }).sort((x, y) => String(y.updatedAt).localeCompare(String(x.updatedAt)));
       return { ...page(items.concat(meta), a.offset), agents };

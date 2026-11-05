@@ -11,6 +11,7 @@
 
 const { app, ipcMain, dialog, clipboard, session, shell, Menu } = require('electron');
 const sender = require('./sender');
+const appScheme = require('./app-scheme');
 const fs = require('fs');
 const path = require('path');
 const { DATA_DIR, MOVE_NOTE } = require('../daemon/protocol');
@@ -20,6 +21,7 @@ if (process.argv.includes('--automation')) { require('../plugins/automations/run
 const daemonLink = require('./daemon-link');
 const projects = require('./projects');
 const projectsWindow = require('./projects-window');
+const dashboardWindow = require('./dashboard-window');
 const projectWindow = require('./project-window');
 const terminals = require('./terminals');
 const plugins = require('./plugins');
@@ -45,6 +47,8 @@ const MAC = process.platform === 'darwin';
 
 // Иначе Chromium сложит кэш и настройки прямо в папку данных, рядом с sessions.json.
 app.setPath('userData', path.join(DATA_DIR, 'chromium'));
+// Своя схема окна проекта (t1404) — права до готовности программы, обработчик — после (start).
+appScheme.privileged();
 
 const LOG_FILE = path.join(DATA_DIR, 'logs', 'main.log');
 
@@ -79,6 +83,8 @@ singleInstance.acquire({ dataDir: DATA_DIR, project: asked ? path.resolve(asked)
 /** @param {string} asked папка из --project; пусто — окно «Проекты» */
 function start(asked) {
   const t0 = Date.now();
+  // Ловушка зависания при запуске (t1585): первые 2 минуты профиль главного потока, если он стоит дольше 3 с.
+  require('./hang-watch').start({ dataDir: DATA_DIR, log });
   // macOS: из Dock или Finder программа получает короткий PATH, без Homebrew и ~/.local/bin — claude не нашёлся бы.
   // До демона: он и вкладки наследуют окружение программы.
   if (MAC) {
@@ -98,6 +104,20 @@ function start(asked) {
 
   // Настройки (шрифты, звук; t181): до окон и звука, чтобы первое окно сразу взяло масштаб.
   settings.register({ dataDir: DATA_DIR, log });
+  // Ключ API для вкладки на кредитах (t1356): раздел «Кредиты API» в «Настройках».
+  require('./api-key').register({ dataDir: DATA_DIR, log });
+  // Начисления кредитов API (t1521): тот же раздел «Кредиты API»; хранилище и расчёт остатка — plugins\credits\main.js.
+  // op: list — { grants, nearest, uncovered, suggest }; add — { amount, expires, from? }; remove — дата, когда сгорает. Ошибка — { error }.
+  ipcMain.handle('credits:grants', (e, op, arg) => {
+    if (!sender.allowed(e, 'credits:grants')) return sender.refused();
+    try {
+      const cr = require('../plugins/credits/main');
+      if (op === 'add') cr.addGrant(DATA_DIR, arg || {});
+      else if (op === 'remove') cr.removeGrant(DATA_DIR, String(arg || ''));
+      else if (op !== 'list') return { error: `нет действия ${op}` };
+      return { ...cr.balanceNow(DATA_DIR), suggest: cr.suggestGrant(DATA_DIR) };
+    } catch (err) { return { error: err instanceof Error ? err.message : String(err) }; }
+  });
   // Windows: ID уведомлений в реестре и постоянный CLSID (t712) — до первого уведомления. ID процесса и окон не меняется.
   notify.register({ log });
   // Агенты из системы (t183): список для настроек и меню «+»; включены ли — по настройкам.
@@ -140,6 +160,8 @@ function start(asked) {
   link.onClient((c) => require('../plugins/git/auto-points').attach(c, { log }));
   terminals.register({ dataDir: DATA_DIR, log, daemon: daemonReady, link, t0 });
   plugins.register({ dataDir: DATA_DIR, log });
+  // Обработчик схемы — до открытия окон: этот then стоит раньше открывающего ниже.
+  app.whenReady().then(() => appScheme.register({ dataDir: DATA_DIR, log }));
   // Число дел на сегодня на значке в панели задач (t1186).
   require('./tasks-badge').start(log);
   // Лимиты Codex — в codex-rate-limits.json раз в 5 минут. Первое чтение через 5 с: app-server (node и codex.exe)
@@ -195,6 +217,8 @@ function start(asked) {
 
   /** @type {Parameters<typeof projectsWindow.open>[0]} */
   const ctx = { dataDir: DATA_DIR, log, daemon: daemonReady, link, data: data || undefined, openProject: (p) => projectWindow.open(ctx, p) };
+  // «Дашборд» (t1402): окно на все закреплённые проекты, кнопка — в окне «Проекты».
+  dashboardWindow.register(ctx);
 
   /** Окно проекта по папке из --project: нет в списке — проект добавляется в конец, окно «Проекты» его покажет. @param {string} dir */
   function openAsked(dir) {
@@ -236,12 +260,13 @@ function start(asked) {
   // Окна программы не уходят со своей страницы: ссылка, location.href, брошенный на окно файл и window.open отклоняются.
   // Иначе чужая страница в окне получает весь мост window.kermach — проект узнаётся по номеру webContents,
   // а он после перехода тот же (t35, spikes\t35-browser\diag-nav.txt). Как в Орке: пускается только тот же файл.
+  // Окно проекта открыто со своей схемы kermach-app (t1404), остальные окна — с file:; схема та же, что у открытого.
   // Гости webview (браузер в окне проекта) ходят по сайтам — их не трогаем.
   /** Тот же файл, что открыт сейчас (hash и параметры не важны). @param {string} from @param {string} to */
   const samePage = (from, to) => {
     try {
       const a = new URL(from), b = new URL(to);
-      return a.protocol === 'file:' && b.protocol === 'file:' && a.host === b.host && a.pathname === b.pathname;
+      return (a.protocol === 'file:' || a.protocol === `${appScheme.SCHEME}:`) && a.protocol === b.protocol && a.host === b.host && a.pathname === b.pathname;
     } catch { return false; }
   };
   app.on('web-contents-created', (_e, wc) => {
@@ -409,7 +434,7 @@ function start(asked) {
     log(`окно проекта открыто; от запуска ${Date.now() - t0} мс`);
   });
 
-  // Все окна закрыты — программа выходит (t176, решение Ростислава; прежде оставался значок у часов, t34).
+  // Все окна закрыты — программа выходит (t176, решение пользователя; прежде оставался значок у часов, t34).
   // Обработчика window-all-closed нарочно нет: без него Electron сам зовёт app.quit, и выход идёт через will-quit и quit ниже —
   // остановка опроса Codex, отложенная запись темы Claude, закрытие связи. Демон с вкладками живёт: он отдельный процесс.
   // Обработчик, поставленный где угодно в программе, этот выход отменит. Проверки, которые закрывают окна и живут дальше,
