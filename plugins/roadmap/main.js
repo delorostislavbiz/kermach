@@ -528,6 +528,11 @@ function orchestrate(project, opts = {}) {
 /** Правила сопутствующей сессии (t1486): шаблон companion.md на языке доски, своя копия — в папке данных плагина. */
 const COMP = 'companion.md';
 const COMP_HEAD = 'Сопутствующая сессия';
+/** t1619: раздел для проекта без папки .kermach\roadmap — без карт и без kermach main tell: их там не выполнить. */
+const COMP_HEAD_FREE = 'Сопутствующая сессия без доски';
+/** t1619: агент с prompt: false — сколько ждать успокоения экрана перед вводом правил и сколько шагов по 500 мс экран не должен меняться. */
+const COMP_TYPE_MS = 20000;
+const COMP_QUIET_STEPS = 4;
 /** Предел темы: она же заголовок вкладки. */
 const TOPIC_MAX = 64;
 /** Тема без управляющих знаков и лишних пробелов, не длиннее TOPIC_MAX. @param {unknown} v */
@@ -540,23 +545,29 @@ const topicOf = (v) => String(v || '').replace(/[\u0000-\u001f\u007f]/g, ' ').re
 function companion(project, topic, opts = {}) {
   /** @type {string[]} */
   const warnings = [];
+  /** @type {boolean} */
+  let hasBoard = false;
+  try { hasBoard = fs.statSync(path.join(project, '.kermach', 'roadmap')).isDirectory(); } catch { /* папки нет — доски нет */ }
+  const head = hasBoard ? COMP_HEAD : COMP_HEAD_FREE;
   const sectionOf = (/** @type {string} */ file) => {
     const lines = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n');
-    const at = lines.findIndex((l) => l.trim() === `## ${COMP_HEAD}`);
+    const at = lines.findIndex((l) => l.trim() === `## ${head}`);
     if (at < 0) return null;
     const end = lines.findIndex((l, i) => i > at && l.startsWith('## '));
     return lines.slice(at + 1, end < 0 ? undefined : end).join('\n').trim() || null;
   };
-  const lang = board.boardLang(project);
+  // t1619: без доски её языка нет — язык программы.
+  let lang = board.boardLang(project);
+  if (!hasBoard) { try { lang = String(require('../../main/settings').get().lang || ''); } catch { lang = ''; } }
   const tf = prompt.templateFile(opts.dataDir, COMP, lang);
   let text = null;
   try { text = sectionOf(tf.file); } catch (e) { if (!tf.own) return { error: `правила сопутствующей сессии не прочитаны: ${why(e)}` }; warnings.push(`своя копия ${tf.file}: ${why(e)} — взят встроенный текст`); }
   if (!text && tf.own) {
-    if (!warnings.length) warnings.push(`в своей копии ${tf.file} нет раздела «## ${COMP_HEAD}» — взят встроенный текст`);
+    if (!warnings.length) warnings.push(`в своей копии ${tf.file} нет раздела «## ${head}» — взят встроенный текст`);
     tf.file = prompt.builtinIn(COMP, lang); tf.own = false;
     try { text = sectionOf(tf.file); } catch (e) { return { error: `правила сопутствующей сессии не прочитаны: ${why(e)}` }; }
   }
-  if (!text) return { error: `в ${path.basename(tf.file)} нет раздела «## ${COMP_HEAD}»` };
+  if (!text) return { error: `в ${path.basename(tf.file)} нет раздела «## ${head}»` };
   /** @type {Record<string, string>} */
   const vars = { 'тема': topic, 'проект': project };
   const out = text.replace(/\{(тема|проект)\}/g, (_, k) => vars[k]) + '\n';
@@ -848,9 +859,13 @@ module.exports = (ctx) => {
     if (!topic) return { error: 'нужна тема: kermach companion "тема"', code: 1 };
     const ag = String(agentRaw || '').trim() || mainAgentOf();
     if (!/^[\w.-]{1,40}$/.test(ag)) return { error: `агент «${ag.slice(0, 40)}» — имя не той формы`, code: 1 };
+    // t1619: агент с prompt: false первое сообщение аргументом не берёт — правила вводятся во вкладку после старта.
+    let typed = false;
     if (!agents.AGENTS.includes(ag)) {
       const list = await ready();
-      if (list && !list.some((/** @type {any} */ a) => a && (a.id === ag || a.name === ag))) return { error: `агента «${ag}» нет: есть ${['claude', 'codex', ...list.map((/** @type {any} */ a) => a.id || a.name).filter(Boolean)].join(', ')}`, code: 1 };
+      const known = list ? list.find((/** @type {any} */ a) => a && (a.id === ag || a.name === ag)) : null;
+      if (list && !known) return { error: `агента «${ag}» нет: он не установлен или выключен в «Настройках» → «Агенты». Сейчас можно: ${['claude', 'codex', ...list.map((/** @type {any} */ a) => a.id || a.name).filter(Boolean)].join(', ')}`, code: 1 };
+      typed = !!known && known.prompt === false;
     }
     if (compOpening) return { error: 'сопутствующая сессия уже открывается', code: 4 };
     compOpening = true;
@@ -862,13 +877,32 @@ module.exports = (ctx) => {
       const la = agents.launchArgs(ag);
       if (la.skipped) ctx.log(`сопутствующая «${topic}»: ${la.skipped}`);
       const id = `c${Date.now()}`;
-      const r = await openWith({ kind, args: la.args, env: {}, title: topic, ...(kind === 'claude' ? { followBypass: true } : {}) }, `companion-${id}`, `сопутствующая «${topic}»`, pr.text, 'правила', { title: `Правила сопутствующей сессии «${topic}»`, it: 'Они' });
+      const opened = { kind, args: la.args, env: {}, title: topic, ...(kind === 'claude' ? { followBypass: true } : {}) };
+      let r = typed ? await ctx.openTab(opened) : await openWith(opened, `companion-${id}`, `сопутствующая «${topic}»`, pr.text, 'правила', { title: `Правила сопутствующей сессии «${topic}»`, it: 'Они' });
+      // Обёртка .cmd не от npm: текст через cmd.exe не передать, ни правила, ни ссылку на файл — тоже ввод после старта.
+      if (!typed && r && r.code === 'cmd-unsafe') { typed = true; r = await ctx.openTab(opened); }
       if (!r || 'error' in r) { const e = r ? r.error : 'нет ответа'; ctx.log(`сопутствующая «${topic}»: вкладка не открылась: ${e}`); return { error: e, code: 4 }; }
       const sess = String(r.session.claudeSessionId || r.session.codexSessionId || '');
       patchComps({ [id]: { sid: r.session.sid, topic, kind, ...(sess ? { sess } : {}), started: Date.now(), title: String(r.session.ownTitle || topic) } });
       ctx.log(`сопутствующая «${topic}»: вкладка ${r.session.sid}, ${ag}${la.args.length ? ` ${la.args.join(' ')}` : ''}, правила ${pr.text.length} знаков${pr.templates.own ? ' (своя копия шаблона)' : ''}`);
       sendComps();
-      return { session: r.session, topic, agent: ag };
+      if (!typed) return { session: r.session, topic, agent: ag };
+      const sid = r.session.sid;
+      const screen = async () => { try { const t = await ctx.readTab(sid, 'text'); return String(t && typeof t === 'object' && 'text' in t ? t.text : t || ''); } catch { return ''; } };
+      // Строка ввода незнакомого агента неизвестна: ждём, пока экран непуст и не меняется.
+      let last = '', same = 0;
+      for (const end = Date.now() + COMP_TYPE_MS; same < COMP_QUIET_STEPS && Date.now() < end && !stopped;) {
+        await new Promise((ok) => setTimeout(ok, 500));
+        const now = await screen();
+        same = now.trim() && now === last ? same + 1 : 0;
+        last = now;
+      }
+      const e = await typeTo(sid, oneLine(pr.text, 4000));
+      if (e) { ctx.log(`сопутствующая «${topic}»: правила во вкладку ${sid} не ушли: ${e}`); return { error: `вкладка ${sid} открыта, но правила в неё не ушли: ${e}. Закройте её и откройте заново или напишите агенту тему сами`, code: 4 }; }
+      await new Promise((ok) => setTimeout(ok, 1500));
+      const seen = (await screen()).replace(/\s+/g, '').includes(topic.replace(/\s+/g, ''));
+      ctx.log(`сопутствующая «${topic}»: правила введены во вкладку ${sid}${seen ? '' : ', на экране темы не видно'}`);
+      return { session: r.session, topic, agent: ag, rules: seen ? `${ag} не берёт первое сообщение при запуске: правила введены во вкладку после старта, тема на экране есть` : `${ag} не берёт первое сообщение при запуске: правила введены во вкладку после старта, но темы на экране не видно. Посмотрите вкладку; если агент их не получил, напишите ему тему сами` };
     } finally { compOpening = false; }
   };
   /**
@@ -879,7 +913,7 @@ module.exports = (ctx) => {
     if (sub === 'companion') {
       const r = await openCompanion(String(a.topic || ''), String(a.agent || ''));
       if (!r || 'error' in r) return r || { error: 'нет ответа', code: 4 };
-      return { sid: r.session.sid, title: String(r.session.ownTitle || r.topic), topic: r.topic, agent: r.agent };
+      return { sid: r.session.sid, title: String(r.session.ownTitle || r.topic), topic: r.topic, agent: r.agent, ...(r.rules ? { rules: r.rules } : {}) };
     }
     if (sub === 'main' || sub === 'main-tell') return mainCli(sub, a, from);
     if (sub === 'companion-list' || sub === 'companion-ask') return compCli(sub, a, from);
@@ -3359,8 +3393,9 @@ module.exports = (ctx) => {
    * Модель и усилие — по умолчанию claude: человек их ещё не выбирал, а имя модели в коде устарело бы.
    * Главная сессия (orch, t1423) — opus, среднее усилие (слово человека 28.10, А2): общее имя без номера версии не устареет; сменить человек может в самой вкладке.
    * @param {'compose' | 'newcard' | 'orch'} bag @param {string} title заголовок вкладки — от окна, на языке программы
-   * @param {{ summary?: string, check?: string, lang?: string }} [opt] summary — итог сверки построителя для задания главной сессии, check — итог проверки роадмапа (t1437);
-   * lang — язык окна для новой доски (t1429, только compose)
+   * @param {{ summary?: string, check?: string, lang?: string, plan?: boolean, file?: string }} [opt] summary — итог сверки построителя для задания главной сессии, check — итог проверки роадмапа (t1437);
+   * lang — язык окна для новой доски (t1429, только compose); plan (t1603, только compose) — задание adopt.md вместо compose.md, file — выбранный файл плана, пусто — план ищет модель.
+   * Запись остаётся compose и KERMACH_CARD=compose: start (startAfter) видит построителя, запускает проверяющего, а project-claude.md узнаёт роль.
    */
   const openTask = async (bag, title, opt = {}) => {
     const k = TASKS[bag];
@@ -3384,7 +3419,9 @@ module.exports = (ctx) => {
       }
       // Язык новой доски (t1429): только у составления — у остальных доска уже есть, её язык в паспорте.
       const lang = bag === 'compose' && board.LANGS.includes(String(opt.lang || '')) && opt.lang !== 'ru' ? String(opt.lang) : '';
-      const pr = k.make(project, { dataDir: ctx.dataDir, summary: String(opt.summary || ''), check: String(opt.check || ''), ...(lang ? { lang } : {}) });
+      const plan = bag === 'compose' && opt.plan === true;
+      const pr = plan ? prompt.adopt(project, { dataDir: ctx.dataDir, file: String(opt.file || ''), ...(lang ? { lang } : {}) })
+        : k.make(project, { dataDir: ctx.dataDir, summary: String(opt.summary || ''), check: String(opt.check || ''), ...(lang ? { lang } : {}) });
       if ('error' in pr) return { error: pr.error };
       for (const w of pr.warnings) ctx.log(`${k.who}: ${w}`);
       const main = bag === 'orch';
@@ -3402,7 +3439,7 @@ module.exports = (ctx) => {
       const kind = agents.kindOf(ag);
       const la = main ? (ag === 'claude' ? agents.launchArgs('claude', 'opus', 'среднее') : agents.launchArgs(ag)) : { args: [], skipped: '' };
       if (la.skipped) ctx.log(`${k.who}: ${la.skipped}`);
-      const r = await openWith({ kind, args: la.args, env, title: String(title || (main ? 'Главная сессия' : 'Роадмап')).slice(0, 64), ...(kind === 'claude' ? { followBypass: true } : {}) }, bag, k.who, pr.text, 'задание', { title: k.subj, it: 'Оно' });
+      const r = await openWith({ kind, args: la.args, env, title: String(title || (main ? 'Главная сессия' : 'Роадмап')).slice(0, 64), ...(kind === 'claude' ? { followBypass: true } : {}) }, bag, k.who, pr.text, 'задание', { title: plan ? 'Задание для переноса готового плана' : k.subj, it: 'Оно' });
       if (!r || 'error' in r) {
         const e = r ? r.error : 'нет ответа';
         ctx.log(`${k.who}: вкладка не открылась: ${e}`);
@@ -3410,10 +3447,41 @@ module.exports = (ctx) => {
       }
       const sess = String(r.session.claudeSessionId || r.session.codexSessionId || '');
       setTask(bag, { sid: r.session.sid, started: Date.now(), title: String(r.session.ownTitle || ''), ...(lang ? { lang } : {}), ...(main ? { kind, ...(sess ? { sess } : {}) } : {}) });
-      ctx.log(`${k.who}: вкладка ${r.session.sid}, ${ag}${la.args.length ? ` ${la.args.join(' ')}` : ''}${r.session.bypass ? ' без вопросов о разрешениях' : ''}, задание ${pr.text.length} знаков${pr.templates.own ? ' (своя копия шаблона)' : ''}`);
+      ctx.log(`${k.who}: вкладка ${r.session.sid}, ${ag}${la.args.length ? ` ${la.args.join(' ')}` : ''}${r.session.bypass ? ' без вопросов о разрешениях' : ''}, задание ${pr.text.length} знаков${pr.templates.own ? ' (своя копия шаблона)' : ''}${plan ? `, готовый план: ${opt.file || 'ищет модель'}` : ''}`);
       if (main) sendMain();
       return { session: r.session, ...(main ? { launch: ag === 'claude' ? { agent: 'claude', model: 'opus', effort: 'среднее' } : { agent: ag, model: '', effort: '' } } : {}) };
     } finally { opening[bag] = false; }
+  };
+  /** Окно выбора файла плана открыто (t1603): второе окно на тот же проект не нужно. */
+  let picking = false;
+  /**
+   * «Выбрать файл…» (t1603): системное окно выбора, папка по умолчанию — папка проекта, родитель — окно панели, чтобы окно не уходило за программу.
+   * Отмена — { canceled: true }: ни вкладки, ни ошибки. Вкладка создателя уже открыта или доска есть — окно не показываем: ответ сразу от openTask.
+   * @param {string} title заголовок вкладки @param {string} lang язык окна @param {string} heading заголовок окна выбора — от окна, на языке программы
+   */
+  const pickPlan = async (title, lang, heading) => {
+    const opt = { lang, plan: true };
+    if (board.read(project).exists) return openTask('compose', title, opt);
+    const was = composeOf();
+    if (was) {
+      const r = await ctx.terminals();
+      if (!r || 'error' in r || composeTabOf(r.tabs, was) || waitingOf(r).has(was.sid)) return openTask('compose', title, opt);
+    }
+    if (picking) return { error: 'окно выбора файла уже открыто' };
+    picking = true;
+    let file = '';
+    try {
+      const { dialog } = require('electron');
+      const parent = require('../../main/project-window').windowFor(/** @type {any} */ (ctx.project).id);
+      const o = { title: heading, defaultPath: project, properties: /** @type {'openFile'[]} */ (['openFile']) };
+      const r = parent ? await dialog.showOpenDialog(parent, o) : await dialog.showOpenDialog(o);
+      if (r.canceled || !r.filePaths[0]) return { canceled: true };
+      file = r.filePaths[0];
+    } catch (e) {
+      ctx.log(`составить роадмап: окно выбора файла не открылось: ${why(e)}`);
+      return { error: `окно выбора файла не открылось: ${why(e)}` };
+    } finally { picking = false; }
+    return openTask('compose', title, { ...opt, file });
   };
 
   /** Доска с временем последней правки файла карты (at, мс): его панель показывает в строке карты. */
@@ -4029,6 +4097,9 @@ module.exports = (ctx) => {
       if (cmd === 'bgShow') return bgShow(String(args[0] || ''));
       if (cmd === 'bgStop') return bgStop(String(args[0] || ''));
       if (cmd === 'compose') return openTask('compose', String(args[0] || ''), { lang: String(args[1] || '') });
+      // t1603: та же вкладка создателя с заданием adopt.md: модель ищет план сама или берёт выбранный файл.
+      if (cmd === 'adopt') return openTask('compose', String(args[0] || ''), { lang: String(args[1] || ''), plan: true });
+      if (cmd === 'pickPlan') return pickPlan(String(args[0] || ''), String(args[1] || ''), String(args[2] || ''));
       // Язык доски (t1429): слова формата во всех файлах доски — на новом языке; прежние файлы — в бэкап рядом с папкой доски.
       // Файл, который на новом языке читался бы иначе, — отказ целиком, ничего не записано.
       if (cmd === 'setLang') {

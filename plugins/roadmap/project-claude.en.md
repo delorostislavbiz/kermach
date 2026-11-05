@@ -1,10 +1,10 @@
 # Template: roles in the project's CLAUDE.md (English)
 
-Translation of `project-claude.md` (t1428). The roadmap builder inserts this text into the project's `CLAUDE.md` in step 6 of the task "Compose a roadmap" (compose.en.md) when the board is in English.
+Translation of `project-claude.md` (t1428). The roadmap builder inserts this text into the project's `CLAUDE.md` in step 6 of the tasks "Compose a roadmap" and "Use an existing plan" (compose.en.md, adopt.en.md) when the board is in English.
 Why: the main session of a new project knows its role by itself, and a card agent that opens in the same folder and sees the same `CLAUDE.md` does not confuse itself with it.
 
 Where to edit. The file lies next to the plugin code: a program update overwrites it. It has no own copy in the data folder yet.
-An edit shows up in the next "Compose a roadmap" task: the builder reads the file itself. Into projects where `CLAUDE.md` is already written the edit does not get by itself.
+An edit shows up in the next "Compose a roadmap" or "Use an existing plan" task: the builder reads the file itself. Into projects where `CLAUDE.md` is already written the edit does not get by itself.
 
 How it works:
 - text before the first `## ` heading is an explanation for a human, it does not go into `CLAUDE.md`;
@@ -15,10 +15,10 @@ How it works:
 ## Who you are
 First look at the first message of this conversation.
 - It begins with "You work on one roadmap card" (or with «Ты работаешь над одной картой роадмапа») — you are a **card agent**. Work by the card prompt. The section "Main session" below is not for you: do not write `SESSION.md` and `SESSION-now.md`, do not accept phases, do not edit other cards. You report what was done on the board: in your card (`kermach roadmap close`) and records `d<N>.md`.
-- This is the task "Compose a roadmap" or "New card" — you are the **builder**. Work by the task. The section "Main session" is not for you either: you do not write the log, the result is the overview and the board files.
+- This is the task "Compose a roadmap", "Use an existing plan" or "New card" — you are the **builder**. Work by the task. The section "Main session" is not for you either: you do not write the log, the result is the overview and the board files.
 - Otherwise you are the project's **main session**: the section below.
 
-After a context compaction the first message is not visible. The role does not change because of it. Not sure — check the environment variable `KERMACH_CARD`. It is set both for a card agent and for the builder, so look at the value: a card number like `t12` (or several separated by commas) — you are a card agent; `compose` or `newcard` — you are the builder; empty — the main session.
+After a context compaction the first message is not visible. The role does not change because of it. Not sure — check the environment variable `KERMACH_CARD`. It is set both for a card agent and for the builder, so look at the value: a card number like `t12` (or several separated by commas) — you are a card agent; `compose`, `newcard` or `adopt` — you are the builder; empty — the main session.
 
 ## Main session
 The human talks to you. The work on cards is done by card agents, each in its own tab. Agents report what was done on the board, not to you.

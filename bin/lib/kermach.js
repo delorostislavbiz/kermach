@@ -244,7 +244,7 @@ function parse(argv) {
   if (argv[0] === 'roadmap') return { roadmap: roadmapArgs(argv.slice(1)) };
   if (argv[0] === 'tab') return { tabCmd: tabArgs(argv.slice(1)) };
   if (argv[0] === 'sessions') return { sessions: sessionsArgs(argv.slice(1)) };
-  if (argv[0] !== 'browser') die(`нет такой команды: ${argv[0]}. Есть одиннадцать: kermach browser, kermach roadmap, kermach tasks, kermach tab, kermach sessions, kermach copy, kermach companion, kermach main, kermach code, kermach credits и kermach batch (справка — kermach browser --help, kermach roadmap --help, kermach tasks --help, kermach tab --help, kermach sessions --help, kermach copy --help, kermach companion --help, kermach main --help, kermach code --help, kermach credits --help, kermach batch --help)`, 1);
+  if (argv[0] !== 'browser') die(`нет такой команды: ${argv[0]}. Есть двенадцать: kermach browser, kermach roadmap, kermach tasks, kermach tab, kermach agent, kermach sessions, kermach copy, kermach companion, kermach main, kermach code, kermach credits и kermach batch (справка — kermach browser --help, kermach roadmap --help, kermach tasks --help, kermach tab --help, kermach agent --help, kermach sessions --help, kermach copy --help, kermach companion --help, kermach main --help, kermach code --help, kermach credits --help, kermach batch --help)`, 1);
   const rest = argv.slice(1);
   if (!rest.length || rest.includes('--help') || rest.includes('-h') || rest[0] === 'help') return { help: true };
   const cmd = rest[0];
@@ -1002,7 +1002,8 @@ const COMPANION_HELP = `kermach companion — сопутствующая сес�
   kermach companion "тема" [--agent claude|codex|имя]
       открыть вкладку: заголовок — тема, первое сообщение — правила сопутствующей сессии (companion.md, на языке доски).
       Без --agent — агент главной сессии (настройка «главная:» в панели «Роадмапа»). Вкладка помнит, что она сопутствующая,
-      и после перезапуска окна. Команда работает в терминале Kermach из папки проекта с доской .kermach\\roadmap.
+      и после перезапуска окна. Команда работает в терминале Kermach любого проекта, доска .kermach\\roadmap не нужна и не создаётся.
+      Без доски правила не говорят о картах и о kermach main tell. Доска другого проекта в текущей папке — отказ.
   kermach companion list
       открытые сопутствующие: вкладка, агент, тема, когда писала в главную последний раз. Список хранит программа.
   kermach companion ask <вкладка> "вопрос"
@@ -1023,12 +1024,12 @@ async function companionCmd(a) {
   const topic = words.join(' ').trim();
   if (!topic) die('companion: нужна тема — kermach companion "тема" [--agent codex]', 1);
   if (!ENV('BROWSER_PIPE') || !ENV('BROWSER_AUTH')) die('нет доступа: kermach companion работает только в терминале Kermach. Терминал открыт до обновления программы — откройте новую вкладку.', 2);
+  // t1619: доски может не быть — проект берётся из подписи терминала; найденную доску программа сверяет с проектом.
   const board = boardProject();
-  if (!board) die(`нет доступа: ни в ${process.cwd()}, ни выше нет доски .kermach\\roadmap — kermach companion запускают из папки проекта`, 2);
   const from = ENV('TAB_KEY') || '';
-  const r = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), cmd: 'roadmap-cli', sub: 'companion', board, a: { topic, ...(agent ? { agent } : {}) }, ...(from ? { from } : {}) });
+  const r = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), cmd: 'roadmap-cli', sub: 'companion', board, cwd: process.cwd(), a: { topic, ...(agent ? { agent } : {}) }, ...(from ? { from } : {}) });
   if (!r || !r.ok) die(r && r.error ? `companion: ${r.error}` : 'ответ не той формы', r && Number.isInteger(r.code) ? r.code : 3);
-  process.stdout.write(`${clean([`вкладка: ${r.sid} «${r.title || topic}»`, `агент: ${r.agent}`, `тема: ${r.topic}`].join('\n'))}\n`);
+  process.stdout.write(`${clean([`вкладка: ${r.sid} «${r.title || topic}»`, `агент: ${r.agent}`, `тема: ${r.topic}`, ...(r.rules ? [`правила: ${r.rules}`] : [])].join('\n'))}\n`);
 }
 /** kermach companion list и kermach companion ask <вкладка> «вопрос» (t1488). @param {string[]} a */
 async function companionSub(a) {
@@ -1038,15 +1039,55 @@ async function companionSub(a) {
   if (ask1 && (!sid || !text)) die('companion ask: нужны вкладка и вопрос — kermach companion ask <вкладка> "вопрос"; вкладки — kermach companion list', 1);
   if (!ENV('BROWSER_PIPE') || !ENV('BROWSER_AUTH')) die('нет доступа: kermach companion работает только в терминале Kermach. Терминал открыт до обновления Kermach — откройте вкладку заново', 2);
   const board = boardProject();
-  if (!board) die(`нет доступа: ни в ${process.cwd()}, ни выше нет доски .kermach\\roadmap — kermach companion запускают из папки проекта`, 2);
   const from = ENV('TAB_KEY') || '';
-  const r = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), cmd: 'roadmap-cli', sub: ask1 ? 'companion-ask' : 'companion-list', board, a: ask1 ? { sid, text } : {}, ...(from ? { from } : {}) });
+  const r = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), cmd: 'roadmap-cli', sub: ask1 ? 'companion-ask' : 'companion-list', board, cwd: process.cwd(), a: ask1 ? { sid, text } : {}, ...(from ? { from } : {}) });
   if (!r || !r.ok) die(r && r.error ? `companion ${a[0]}: ${r.error}` : 'ответ не той формы', r && Number.isInteger(r.code) ? r.code : 3);
   if (ask1) { process.stdout.write(`${clean(`вопрос — в очереди сопутствующей ${r.sid} «${r.topic}» (${r.agent}): дойдёт, когда там ничего не набрано`)}\n`); return; }
   const list = Array.isArray(r.list) ? r.list : [];
   if (!list.length) { process.stdout.write('сопутствующих сессий нет — открыть: kermach companion "тема"\n'); return; }
   const at = (/** @type {string} */ iso) => { const d = new Date(iso); if (Number.isNaN(d.getTime())) return 'нет'; const p = (/** @type {number} */ n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
   process.stdout.write(`${clean(list.map((/** @type {any} */ c) => `${c.sid}  ${c.agent}  «${c.topic}»  писала в главную: ${c.told ? at(c.told) : 'нет'}`).join('\n'))}\n`);
+}
+
+/** kermach agent (t1611): вкладка любого установленного агента с заданием, без доски и без плагинов. */
+const AGENT_HELP = `kermach agent — другие агенты программы: вкладка агента с заданием в окне этого проекта. Доска «Роадмапа» не нужна.
+  kermach agent list
+      агенты программы (claude, codex, остальные из каталога): установлен ли, включён ли.
+  kermach agent open <имя> "задание"
+      новая вкладка агента, задание — его первое сообщение. Печатает номер вкладки, дальше работает kermach tab list.
+  kermach agent open <имя> -
+      задание из потока ввода: для длинного текста и текста с кавычками и переводами строк.
+Разрешения у вкладки те же, что у вкладки из меню «+». Задание передаётся как есть, правил от программы к нему не добавляется.
+Задание длиннее 16000 знаков ложится файлом в .kermach\\prompts проекта, первое сообщение — ссылка на файл. Предел команды — 60000 байт.
+Агент не берёт сообщение при запуске (amp, hermes, devin, kimi, muse, zcode) — задание вводится во вкладку после старта, вывод об этом говорит.
+Коды выхода: 0 — да, 1 — нет задания, такого агента или он не установлен или выключен, 2 — нет доступа, 3 — окно проекта закрыто, 4 — вкладка не открылась.`;
+/** Предел запроса к программе 64 КиБ (cli.js LIMIT.req): заранее и понятным текстом. */
+const AGENT_REQ_MAX = 60000;
+/** Разбор и запуск kermach agent (t1611). @param {string[]} a */
+async function agentCmd(a) {
+  if (!a.length || a[0] === '--help' || a[0] === '-h' || a[0] === 'help') { process.stdout.write(`${AGENT_HELP}\n`); return; }
+  if (a[0] !== 'list' && a[0] !== 'open') die(`нет такой команды: agent ${a[0]}. Есть list и open, справка — kermach agent --help`, 1);
+  if (a[0] === 'list' && a.length > 1) die(`agent list: лишний аргумент ${a[1]}`, 1);
+  /** @type {any} */
+  const q = { v: 1, auth: ENV('BROWSER_AUTH'), cmd: `agent-${a[0]}`, cwd: process.cwd() };
+  if (a[0] === 'open') {
+    const name = String(a[1] || '').trim();
+    if (!name) die('agent open: нужно имя агента — kermach agent open <имя> "задание"; имена — kermach agent list', 1);
+    const piped = a[2] === '-' && a.length === 3;
+    const text = piped ? stdinText().text : a.slice(2).join(' ');
+    if (!text.trim()) die(`agent open: нужно задание — kermach agent open ${name} "задание"; вкладка не открыта`, 1);
+    q.name = name;
+    q.text = text;
+    if (Buffer.byteLength(JSON.stringify(q)) > AGENT_REQ_MAX) die(`agent open: задание больше предела команды (${AGENT_REQ_MAX} байт); вкладка не открыта. Положите текст файлом в папку проекта и попросите агента прочитать этот файл`, 1);
+  }
+  if (!ENV('BROWSER_PIPE') || !ENV('BROWSER_AUTH')) die('нет доступа: kermach agent работает только в терминале Kermach. Терминал открыт до обновления программы — откройте новую вкладку.', 2);
+  const r = await ask(q);
+  if (!r || !r.ok) die(r && r.error ? `agent ${a[0]}: ${r.error}` : 'ответ не той формы', r && Number.isInteger(r.code) ? r.code : 3);
+  if (a[0] === 'list') {
+    process.stdout.write(`${clean((r.agents || []).map((/** @type {any} */ x) => `${x.id}  ${x.title}  ${!x.found ? 'не установлен' : x.enabled ? 'установлен' : 'установлен, выключен в «Настройках» → «Агенты»'}${x.found && !x.prompt ? '  (задание вводится после старта)' : ''}`).join('\n'))}\n`);
+    return;
+  }
+  process.stdout.write(`${clean([`вкладка: ${r.sid} «${r.title}»`, `агент: ${r.agent}`, `задание: ${r.how}`, ...(r.unseen ? ['на экране задания не видно: посмотрите вкладку; если агент его не получил, напишите ему сами'] : []), ...(r.unlisted ? ['окно ещё не показало вкладку: kermach tab list увидит её чуть позже'] : [])].join('\n'))}\n`);
 }
 
 const MAIN_HELP = `kermach main — главная сессия окна проекта: вкладка с пометкой «Главная», куда приходят сообщения о картах.
@@ -1331,6 +1372,7 @@ async function main() {
     process.stdout.write(`${clean(`${r.text}\n\nпрофиль: ${r.profile}\nсводка: ${r.summary}`)}\n`);
     return;
   }
+  if (process.argv[2] === 'agent') return agentCmd(process.argv.slice(3));
   if (process.argv[2] === 'companion') return companionCmd(process.argv.slice(3));
   if (process.argv[2] === 'main') return mainCmd(process.argv.slice(3));
   if (process.argv[2] === 'copy') {
@@ -1357,7 +1399,7 @@ async function main() {
     return;
   }
   // Общая справка — все команды (t931, kermach tab — t1052, kermach sessions — t809); справка kermach code — из её cli.js, он при загрузке берёт только fs и path.
-  if ('help' in o) { process.stdout.write(`${'all' in o ? `${HELP}\n\n${ROADMAP_HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'tasks', 'cli.js')).HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'credits', 'cli.js')).HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'credits', 'batch-cli.js')).HELP}\n\n${TAB_HELP}\n\n${SESSIONS_HELP}\n\n${COPY_HELP}\n\n${COMPANION_HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'roadmap', 'codemap', 'cli.js')).HELP}` : HELP}\n`); return; }
+  if ('help' in o) { process.stdout.write(`${'all' in o ? `${HELP}\n\n${ROADMAP_HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'tasks', 'cli.js')).HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'credits', 'cli.js')).HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'credits', 'batch-cli.js')).HELP}\n\n${TAB_HELP}\n\n${SESSIONS_HELP}\n\n${COPY_HELP}\n\n${COMPANION_HELP}\n\n${AGENT_HELP}\n\n${require(require('path').join(__dirname, '..', '..', 'plugins', 'roadmap', 'codemap', 'cli.js')).HELP}` : HELP}\n`); return; }
   if (!ENV('BROWSER_PIPE') || !ENV('BROWSER_AUTH')) {
     die('нет доступа: команда работает только в терминале Kermach. Терминал открыт до обновления программы — откройте новую вкладку.', 2);
   }

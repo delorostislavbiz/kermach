@@ -335,4 +335,4 @@ function closeProject(projectId) {
 /** Сколько экземпляров живо — для проверок и журнала. */
 const count = () => insts.size;
 
-module.exports = { register, callFor, callOutside, closeProject, count };
+module.exports = { register, callFor, callOutside, closeProject, count, projectNow };

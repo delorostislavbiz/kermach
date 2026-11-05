@@ -139,7 +139,451 @@ const GIT_CSS = `
   .gitdiff .gap:hover { color: var(--text); }
   .gitdiff .note { margin: 10px 16px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); display: flex; gap: 10px; align-items: center; font: 13px "Segoe UI", system-ui, sans-serif; }
   .gitdiff .note .sp { flex: 1; }
+  .gitdlg label { display: block; margin: 12px 0 4px; font-weight: 600; }
+  .gitdlg textarea, .gitdlg select, .gitdlg input { background: var(--input); color: var(--text); border: 1px solid var(--line); border-radius: 6px; font: inherit; padding: 5px 8px; box-sizing: border-box; min-width: 0; }
+  .gitdlg textarea { width: 100%; height: 110px; resize: vertical; }
+  .gitdlg .marow { display: flex; gap: 8px; margin-bottom: 6px; align-items: center; }
+  .gitdlg .marow select, .gitdlg .marow input { flex: 1; }
+  .gitdlg p.err { color: var(--danger); }
+  .gitmulti { overflow: auto; }
+  .gitmulti .mh { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .gitmulti .mtop { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .gitmulti .mtop b { font-size: 14px; } .gitmulti .mtop .sp { flex: 1; }
+  .gitmulti .mtask { margin: 8px 0 0; color: var(--muted); white-space: pre-wrap; max-height: 66px; overflow: auto; }
+  .gitmulti .msay { margin: 8px 0 0; } .gitmulti .msay.bad { color: var(--danger); }
+  .gitmulti .mgrid { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(300px, 1fr); gap: 1px; background: var(--line); border-bottom: 1px solid var(--line); min-width: min-content; }
+  .gitmulti .mcol, .gitmulti .mdf { background: var(--bg); padding: 10px 12px; min-width: 0; }
+  .gitmulti .mname { font-weight: 600; } .gitmulti .mst { color: var(--muted); font-size: 12px; margin: 2px 0 6px; } .gitmulti .mst.err { color: var(--danger); }
+  .gitmulti .msum .p, .gitmulti .mf .p { color: var(--accent); margin-right: 6px; } .gitmulti .msum .m, .gitmulti .mf .m { color: var(--danger); }
+  .gitmulti .mfiles { margin: 6px 0 8px; max-height: 190px; overflow: auto; }
+  .gitmulti .mf { display: flex; gap: 8px; padding: 2px 6px; border-radius: 4px; cursor: default; font: 12px/19px Consolas, monospace; }
+  .gitmulti .mf span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gitmulti .mf:hover { background: var(--hover); } .gitmulti .mf.sel { background: var(--selected); }
+  .gitmulti .macts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .gitmulti .btn.pri { background: var(--button); color: var(--button-fg); border-color: transparent; font-weight: 600; }
+  .gitmulti .btn:disabled { opacity: .55; }
+  .gitmulti .mdf { padding: 0 0 10px; overflow-x: auto; font: 12.5px/20px Consolas, "Cascadia Mono", monospace; }
+  .gitmulti .mdf .note { font: 13px "Segoe UI", system-ui, sans-serif; }
 `;
+
+/**
+ * «Задача нескольким агентам» (t1476): пункт меню «+», форма выбора агентов, страница сравнения.
+ * Копии — каналами окна projects.copy, update, removeCopy, остальное — команды multi* главной части (multi.js).
+ * Опрос состояния — раз в 3 с и только пока страница открыта; git запускается, когда агент закончил или по «Обновить».
+ * @param {any} host @param {(n: string, size?: number) => string} icon @param {(s: string) => string} esc
+ * @returns {() => void} остановка
+ */
+function gitMultiSetup(host, icon, esc) {
+  const SID = 'gitmulti';
+  const COLOR = GIT_COLOR;
+  const call = (/** @type {string} */ cmd, /** @type {any[]} */ ...a) => host.call(cmd, ...a).catch((/** @type {any} */ e) => ({ error: String((e && e.message) || e) }));
+  let stopped = false;
+  /** @type {any[]} */
+  let runs = [];
+  /** Открытая страница. @type {null | { pane: HTMLElement, run: any, states: string[], files: any[], sel: string, diffs: any[], say: string, bad: boolean, rid: number, timer: any }} */
+  let page = null;
+
+  /** Окно поверх страницы. @param {string} html @returns {{ ov: HTMLElement, close: () => void }} */
+  function dialog(html) {
+    const ov = document.createElement('div');
+    ov.className = 'gitdlg';
+    ov.innerHTML = `<div class="dlg" role="dialog">${html}</div>`;
+    const key = (/** @type {KeyboardEvent} */ e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    const close = () => { ov.remove(); document.removeEventListener('keydown', key, true); };
+    document.addEventListener('keydown', key, true);
+    ov.onclick = (e) => { if (e.target === ov) close(); };
+    document.body.appendChild(ov);
+    return { ov, close };
+  }
+
+  /** Подтверждение: первая кнопка — отмена, вторая выполняет. @param {string} title @param {string} text @param {string} yes @param {() => void} act */
+  function confirm(title, text, yes, act) {
+    const d = dialog(`<h2>${esc(title)}</h2><p>${esc(text)}</p><div class="acts"><button class="btn cancel">${esc(I18n.t('common.cancel', 'Отмена'))}</button><button class="btn pri yes">${esc(yes)}</button></div>`);
+    /** @type {HTMLElement} */ (d.ov.querySelector('.cancel')).onclick = d.close;
+    /** @type {HTMLElement} */ (d.ov.querySelector('.yes')).onclick = () => { d.close(); act(); };
+    /** @type {HTMLElement} */ (d.ov.querySelector('.cancel')).focus();
+  }
+
+  /** Пункты меню «+». «Сравнить решения» — только когда есть запуск. */
+  function buttons() {
+    host.pages.addButton('addGitMulti', I18n.t('git.multiButton', 'Задача нескольким агентам'), ask, { icon: 'layers', color: COLOR });
+    if (runs.length) host.pages.addButton('addGitMultiShow', I18n.t('git.multiCompare', 'Сравнить решения'), () => openPage(runs[0].id), { icon: 'layers', color: COLOR });
+    else host.pages.removeButton('addGitMultiShow');
+  }
+
+  async function loadRuns() {
+    const r = await call('multiRuns');
+    if (stopped) return;
+    runs = r && Array.isArray(r.runs) ? r.runs : [];
+    buttons();
+  }
+
+  /** Имя каждого: «Claude (opus)»; одинаковые различаются номером. @param {{ title: string, model: string }[]} rows @returns {string[]} */
+  function labelsOf(rows) {
+    const base = rows.map((r) => (r.model ? `${r.title} (${r.model})` : r.title));
+    return base.map((b, i) => (base.filter((x) => x === b).length > 1 ? `${b} ${base.slice(0, i + 1).filter((x) => x === b).length}` : b));
+  }
+
+  /** Окно задачи и выбора агентов. Проект не под git — окно объясняет, почему нельзя. */
+  async function ask() {
+    const info = await call('multiInfo');
+    if (stopped) return;
+    if (!info || info.error || !info.git || !info.agents.length) {
+      const text = info && info.error ? info.error : info && info.git
+        ? I18n.t('git.multiNoAgents', 'Не найдено ни одного агента. Установите агента или включите его в настройках.')
+        : I18n.t('git.multiNoGit', 'Каждый агент работает в своей копии проекта, а копию можно сделать только у проекта под git. Включите git в этой папке и сделайте хотя бы один коммит.');
+      const d = dialog(`<h2>${esc(I18n.t('git.multiButton', 'Задача нескольким агентам'))}</h2><p class="nogit">${esc(text)}</p><div class="acts"><button class="btn pri cancel">${esc(I18n.t('git.multiClose', 'Закрыть'))}</button></div>`);
+      /** @type {HTMLElement} */ (d.ov.querySelector('.cancel')).onclick = d.close;
+      return;
+    }
+    /** @type {any[]} */
+    const agents = info.agents;
+    const d = dialog(`<h2>${esc(I18n.t('git.multiButton', 'Задача нескольким агентам'))}</h2>`
+      + `<p>${esc(I18n.t('git.multiHint', 'Каждый выбранный агент получит свою копию проекта и эту же задачу. Потом решения можно сравнить рядом и взять одно.'))}</p>`
+      + `<label>${esc(I18n.t('git.multiTaskLabel', 'Задача'))}</label><textarea class="mtext" placeholder="${esc(I18n.t('git.multiTaskPh', 'Что нужно сделать'))}"></textarea>`
+      + `<label>${esc(I18n.t('git.multiAgentsLabel', 'Агенты'))}</label><div class="marows"></div>`
+      + `<button class="btn madd">${esc(I18n.t('git.multiAdd', 'Добавить агента'))}</button>`
+      + '<p class="err" hidden></p>'
+      + `<div class="acts"><button class="btn cancel">${esc(I18n.t('common.cancel', 'Отмена'))}</button><button class="btn pri go"></button></div>`);
+    const box = /** @type {HTMLElement} */ (d.ov.querySelector('.marows'));
+    const go = /** @type {HTMLButtonElement} */ (d.ov.querySelector('.go'));
+    const text = /** @type {HTMLTextAreaElement} */ (d.ov.querySelector('.mtext'));
+    const err = /** @type {HTMLElement} */ (d.ov.querySelector('.err'));
+    const say = (/** @type {string} */ m) => { err.textContent = m; err.hidden = !m; };
+    const count = () => {
+      const n = box.children.length;
+      go.textContent = I18n.t('git.multiGo', 'Запустить, копий: {n}', { n });
+      go.disabled = n < 2 || !text.value.trim();
+    };
+    let uid = 0;
+    /** Строка «агент · модель · убрать». @param {string} id */
+    const addRow = (id) => {
+      const row = document.createElement('div');
+      row.className = 'marow';
+      const list = `gitmulti-models-${++uid}`;
+      row.innerHTML = `<select class="mag">${agents.map((a) => `<option value="${esc(a.id)}"${a.id === id ? ' selected' : ''}>${esc(a.title)}</option>`).join('')}</select>`
+        + `<input class="mmodel" list="${list}"><datalist id="${list}"></datalist>`
+        + `<button class="btn mdel" title="${esc(I18n.t('git.multiRemoveRow', 'Убрать'))}">×</button>`;
+      const sel = /** @type {HTMLSelectElement} */ (row.querySelector('.mag'));
+      const model = /** @type {HTMLInputElement} */ (row.querySelector('.mmodel'));
+      const look = () => {
+        const a = agents.find((x) => x.id === sel.value);
+        model.value = '';
+        model.disabled = !a.canModel;
+        model.placeholder = a.canModel ? I18n.t('git.multiModelPh', 'модель по умолчанию') : I18n.t('git.multiNoModel', 'модель выбрать нельзя');
+        /** @type {HTMLElement} */ (row.querySelector('datalist')).innerHTML = a.models.map((/** @type {string} */ m) => `<option value="${esc(m)}">`).join('');
+      };
+      sel.onchange = look;
+      look();
+      /** @type {HTMLElement} */ (row.querySelector('.mdel')).onclick = () => { row.remove(); count(); };
+      box.appendChild(row);
+      count();
+    };
+    addRow(agents[0].id);
+    addRow((agents[1] || agents[0]).id);
+    text.oninput = count;
+    /** @type {HTMLElement} */ (d.ov.querySelector('.madd')).onclick = () => {
+      const used = [...box.querySelectorAll('.mag')].map((s) => /** @type {HTMLSelectElement} */ (s).value);
+      addRow((agents.find((a) => !used.includes(a.id)) || agents[0]).id);
+    };
+    /** @type {HTMLElement} */ (d.ov.querySelector('.cancel')).onclick = d.close;
+    go.onclick = async () => {
+      const rows = [...box.children].map((r) => {
+        const id = /** @type {HTMLSelectElement} */ (r.querySelector('.mag')).value;
+        return { agent: id, title: agents.find((a) => a.id === id).title, model: /** @type {HTMLInputElement} */ (r.querySelector('.mmodel')).value.trim() };
+      });
+      const labels = labelsOf(rows);
+      go.disabled = true;
+      say('');
+      /** @type {any[]} */
+      const made = [];
+      for (let i = 0; i < rows.length; i++) {
+        go.textContent = I18n.t('git.multiCopying', 'Делаю копию {i} из {n}…', { i: i + 1, n: rows.length });
+        const c = await host.bridge.projects.copy(host.project.id).catch((/** @type {any} */ e) => ({ error: String((e && e.message) || e) }));
+        if (stopped) return;
+        if (!c || c.error || !c.project) {
+          // Агенты ещё не запущены: созданные копии пусты, убираем их, чтобы от неудачи не осталось следов.
+          for (const m of made) await host.bridge.projects.removeCopy(m.id, false).catch(() => {});
+          say(I18n.t('git.multiCopyFailed', 'Копия не создалась: {why}. Уже созданные копии убраны.', { why: (c && c.error) || '' }));
+          count();
+          return;
+        }
+        made.push(c.project);
+        await host.bridge.projects.update(c.project.id, { name: I18n.t('git.multiCopyName', '{name} — {label}', { name: host.project.name, label: labels[i] }) }).catch(() => {});
+      }
+      go.textContent = I18n.t('git.multiStarting', 'Запускаю агентов…');
+      const r = await call('multiStart', { task: text.value, items: rows.map((x, i) => ({ agent: x.agent, model: x.model, label: labels[i], copyId: made[i].id })) });
+      if (stopped) return;
+      if (!r || r.error) { say(String((r && r.error) || '')); count(); return; }
+      d.close();
+      await loadRuns();
+      openPage(r.run.id);
+    };
+    text.focus();
+  }
+
+  /** Страница сравнения запуска. @param {string} id */
+  function openPage(id) {
+    const run = runs.find((r) => r.id === id);
+    if (!run) return;
+    if (!page) {
+      const tab = host.pages.addTab({
+        sid: SID, kind: 'gitdiff', title: I18n.t('git.multiTab', 'Сравнение решений'), icon: 'layers', color: COLOR,
+        focus: () => { if (page) page.pane.focus(); },
+        close: () => { if (page) clearInterval(page.timer); page = null; return true; },
+      });
+      tab.pane.classList.add('gitdiff', 'gitmulti');
+      tab.pane.tabIndex = -1;
+      page = { pane: tab.pane, run, states: [], files: [], sel: '', diffs: [], say: '', bad: false, rid: 0, timer: setInterval(() => { poll(); }, 3000) };
+    }
+    page.run = run;
+    page.states = run.items.map(() => '');
+    page.files = run.items.map(() => null);
+    page.diffs = run.items.map(() => null);
+    page.sel = '';
+    page.say = '';
+    host.pages.show(SID);
+    paint();
+    refresh();
+  }
+
+  /** Агент кончил работу: дальше ждать нечего. @param {string} s */
+  const finished = (s) => ['done', 'exited', 'error', 'taken', 'removed'].includes(s);
+
+  /** Состояния и файлы всех заново — кнопка «Обновить» и открытие страницы. */
+  async function refresh() {
+    await poll();
+    const p = page;
+    if (!p) return;
+    await Promise.all(p.run.items.map((/** @type {any} */ _, /** @type {number} */ i) => loadFiles(i)));
+    if (page === p && !p.sel) {
+      const first = p.files.find((f) => f && f.files && f.files.length);
+      if (first) p.sel = first.files[0].path;
+    }
+    paint();
+    loadDiffs();
+  }
+
+  /** Опрос состояний. Агент только что закончил — его файлы перечитываются. */
+  async function poll() {
+    const p = page;
+    if (!p) return;
+    const id = p.run.id;
+    const r = await call('multiStatus', id);
+    if (stopped || page !== p || p.run.id !== id || !r || r.error || !Array.isArray(r.items)) return;
+    const was = p.states;
+    const now = r.items.map((/** @type {any} */ x) => x.state);
+    if (now.join() === was.join()) return;
+    p.states = now;
+    paint();
+    const ended = now.map((/** @type {string} */ s, /** @type {number} */ i) => (finished(s) && was[i] && !finished(was[i]) ? i : -1)).filter((/** @type {number} */ i) => i >= 0);
+    if (ended.length) {
+      await Promise.all(ended.map((/** @type {number} */ i) => loadFiles(i)));
+      if (page === p) {
+        if (!p.sel) { const first = p.files.find((f) => f && f.files && f.files.length); if (first) p.sel = first.files[0].path; }
+        paint();
+        loadDiffs();
+      }
+    }
+  }
+
+  /** @param {number} i */
+  async function loadFiles(i) {
+    const p = page;
+    if (!p) return;
+    const id = p.run.id;
+    const r = await call('multiFiles', id, i);
+    if (page === p && p.run.id === id) p.files[i] = r;
+  }
+
+  /** Изменения выбранного файла у каждого агента — рядом. */
+  async function loadDiffs() {
+    const p = page;
+    if (!p || !p.sel) return;
+    const rid = ++p.rid;
+    const file = p.sel;
+    const got = await Promise.all(p.run.items.map((/** @type {any} */ _, /** @type {number} */ i) => call('multiDiff', p.run.id, i, file)));
+    if (page !== p || rid !== p.rid) return;
+    p.diffs = got;
+    paintDiffs();
+  }
+
+  /** @param {string} s @param {any} it */
+  function stateWord(s, it) {
+    if (s === 'working') return I18n.t('git.multiWorking', 'работает');
+    if (s === 'waiting') return I18n.t('git.multiWaiting', 'ждёт ответа');
+    if (s === 'done') return I18n.t('git.multiDone', 'закончил');
+    if (s === 'exited') return I18n.t('git.multiExited', 'закончил, вкладка закрыта');
+    if (s === 'taken') return I18n.t('git.multiTakenWord', 'решение взято в проект');
+    if (s === 'removed') return I18n.t('git.multiRemoved', 'копия убрана');
+    if (s === 'error') return it.error ? I18n.t('git.multiFailed', 'не запустился: {why}', { why: it.error }) : I18n.t('git.multiErrorWord', 'ошибка');
+    if (s === 'unknown') return I18n.t('git.multiUnknown', 'нет связи с вкладкой');
+    return I18n.t('git.multiStarted', 'запущен');
+  }
+
+  /** Вся страница, кроме изменений файла: они перерисовываются отдельно, прокрутка не сбрасывается без причины. */
+  function paint() {
+    const p = page;
+    if (!p) return;
+    const run = p.run;
+    const busy = p.states.filter((s) => s && !finished(s)).length;
+    const n = run.items.length;
+    const line = busy ? I18n.t('git.multiSomeWork', 'Ещё работают: {k} из {n}. Сравнивать можно и сейчас: «Обновить» покажет, что уже изменено.', { k: busy, n })
+      : I18n.t('git.multiAllDone', 'Все агенты закончили. Можно сравнивать решения.');
+    let html = `<div class="mh"><div class="mtop"><b>${esc(I18n.t('git.multiTab', 'Сравнение решений'))}</b>`
+      + (runs.length > 1 ? `<select class="mruns">${runs.map((r) => `<option value="${esc(r.id)}"${r.id === run.id ? ' selected' : ''}>${esc(new Date(r.time).toLocaleString())}</option>`).join('')}</select>` : '')
+      + `<span class="sp"></span><button class="btn mrefresh">${esc(I18n.t('git.multiRefresh', 'Обновить'))}</button>`
+      + `<button class="btn mforget">${esc(I18n.t('git.multiForget', 'Убрать запуск из списка'))}</button></div>`
+      + `<p class="mtask">${esc(run.task)}</p><p class="mline">${esc(line)}</p>`
+      + (p.say ? `<p class="msay${p.bad ? ' bad' : ''}">${esc(p.say)}</p>` : '') + '</div><div class="mgrid mcols">';
+    run.items.forEach((/** @type {any} */ it, /** @type {number} */ i) => {
+      const s = p.states[i] || '';
+      const f = p.files[i];
+      const gone = s === 'removed';
+      html += `<div class="mcol" data-i="${i}"><div class="mname">${esc(it.label)}</div><div class="mst${s === 'error' ? ' err' : ''}">${esc(stateWord(s, it))} · ${esc(it.branch)}</div>`;
+      if (!f) html += `<div class="mst">${esc(I18n.t('git.multiReading', 'Читаю изменения…'))}</div>`;
+      else if (f.error) html += `<div class="mst err">${esc(I18n.t('git.neProchitano', 'Изменения не прочитаны: {why}', { why: f.error }))}</div>`;
+      else if (!gone) {
+        html += `<div class="msum">${esc(I18n.t('git.multiFilesN', 'Файлов: {n}', { n: f.files.length }))} <span class="p">+${f.add}</span><span class="m">−${f.del}</span></div>`;
+        html += `<div class="mfiles">${f.files.map((/** @type {any} */ x) => `<div class="mf${x.path === p.sel ? ' sel' : ''}" data-path="${esc(x.path)}" title="${esc(x.path)}"><span>${esc(x.path)}</span><span>${x.binary ? '' : `<span class="p">+${x.add}</span><span class="m">−${x.del}</span>`}</span></div>`).join('')}</div>`;
+      }
+      html += '<div class="macts">';
+      if (!gone && s !== 'taken') {
+        html += `<button class="btn pri mtake"${s === 'working' ? ` disabled title="${esc(I18n.t('git.multiStillWorking', 'Агент ещё работает. Дождитесь конца или остановите его.'))}"` : ''}>${esc(I18n.t('git.multiTake', 'Взять это решение'))}</button>`;
+      }
+      if (!gone) {
+        html += `<button class="btn mopen">${esc(I18n.t('git.multiOpen', 'Открыть копию'))}</button><button class="btn mrm">${esc(I18n.t('git.multiRemove', 'Убрать копию'))}</button>`;
+      }
+      html += '</div></div>';
+    });
+    html += '</div><div class="mgrid mdiffs"></div>';
+    p.pane.innerHTML = html;
+    wire();
+    paintDiffs();
+  }
+
+  /** Строки изменений одного агента. @param {any} d */
+  function diffHtml(d) {
+    if (!d) return `<div class="note">${esc(I18n.t('git.multiReading', 'Читаю изменения…'))}</div>`;
+    if (d.error) return `<div class="note">${esc(I18n.t('git.neProchitano', 'Изменения не прочитаны: {why}', { why: d.error }))}</div>`;
+    if (d.taken) return `<div class="note">${esc(I18n.t('git.multiInProject', 'Это решение уже в проекте, его изменения — в истории проекта.'))}</div>`;
+    if (d.none) return `<div class="note">${esc(I18n.t('git.multiNotChanged', 'Этот агент файл не менял'))}</div>`;
+    if (d.binary) return `<div class="note">${esc(I18n.t('git.multiBinary', 'Двоичный файл изменён'))}</div>`;
+    if (!d.hunks.length) return `<div class="note">${esc(I18n.t('git.netIzmeneniy', 'В этом файле изменений нет'))}</div>`;
+    let html = '';
+    for (const h of d.hunks) {
+      html += `<div class="hunk">@@ ${esc(I18n.t('git.stroki', 'строки {a}–{b}', { a: h.newStart, b: h.newStart + Math.max(h.newLines, 1) - 1 }))}</div>`;
+      for (const l of h.lines) {
+        html += `<div class="ln ${l.t === '+' ? 'a' : l.t === '-' ? 'd' : ''}"><i>${l.old || ''}</i><i>${l.new || ''}</i><s>${l.t === ' ' ? '' : l.t === '-' ? '−' : '+'}</s>${esc(l.text)}</div>`;
+      }
+    }
+    return html;
+  }
+
+  function paintDiffs() {
+    const p = page;
+    if (!p) return;
+    const box = /** @type {HTMLElement} */ (p.pane.querySelector('.mdiffs'));
+    if (!box) return;
+    if (!p.sel) { box.innerHTML = `<div class="mdf"><div class="note">${esc(I18n.t('git.multiPick', 'Здесь появятся изменения файла по каждому агенту рядом. Выберите файл в списке выше.'))}</div></div>`; return; }
+    // Папки убранной копии больше нет: что менял агент, прочитать нельзя, а «файл не менял» было бы неправдой.
+    box.innerHTML = p.run.items.map((/** @type {any} */ _, /** @type {number} */ i) => `<div class="mdf" data-i="${i}">${p.states[i] === 'removed' ? `<div class="note">${esc(I18n.t('git.multiRemoved', 'копия убрана'))}</div>` : diffHtml(p.diffs[i])}</div>`).join('');
+  }
+
+  /** Обработчики страницы после перерисовки. */
+  function wire() {
+    const p = page;
+    if (!p) return;
+    /** @type {HTMLElement} */ (p.pane.querySelector('.mrefresh')).onclick = () => { refresh(); };
+    /** @type {HTMLElement} */ (p.pane.querySelector('.mforget')).onclick = () => {
+      confirm(I18n.t('git.multiForget', 'Убрать запуск из списка'), I18n.t('git.multiForgetText', 'Забудется только эта запись. Копии и ветки останутся, их можно убрать в окне «Проекты».'), I18n.t('git.multiRemoveYes', 'Убрать'), async () => {
+        await call('multiForget', p.run.id);
+        host.pages.removeTab(SID);
+        if (page) clearInterval(page.timer);
+        page = null;
+        loadRuns();
+      });
+    };
+    const runsSel = /** @type {HTMLSelectElement | null} */ (p.pane.querySelector('.mruns'));
+    if (runsSel) runsSel.onchange = () => openPage(runsSel.value);
+    for (const f of p.pane.querySelectorAll('.mf')) {
+      /** @type {HTMLElement} */ (f).onclick = () => {
+        p.sel = /** @type {string} */ (/** @type {HTMLElement} */ (f).dataset.path);
+        p.diffs = p.run.items.map(() => null);
+        paint();
+        loadDiffs();
+      };
+    }
+    for (const col of p.pane.querySelectorAll('.mcol')) {
+      const i = Number(/** @type {HTMLElement} */ (col).dataset.i);
+      const it = p.run.items[i];
+      const take = /** @type {HTMLElement | null} */ (col.querySelector('.mtake'));
+      if (take) take.onclick = () => askTake(i);
+      const open = /** @type {HTMLElement | null} */ (col.querySelector('.mopen'));
+      if (open) open.onclick = () => host.bridge.projects.open(it.copyId);
+      const rm = /** @type {HTMLElement | null} */ (col.querySelector('.mrm'));
+      if (rm) rm.onclick = () => askRemove(i);
+    }
+  }
+
+  /** «Взять решение»: подтверждение, слияние, итог словами. @param {number} i */
+  function askTake(i) {
+    const p = /** @type {NonNullable<typeof page>} */ (page);
+    const it = p.run.items[i];
+    const n = p.files[i] && p.files[i].files ? p.files[i].files.length : 0;
+    confirm(I18n.t('git.multiTakeTitle', 'Взять решение: {label}?', { label: it.label }),
+      I18n.t('git.multiTakeText', 'Изменения этой копии (файлов: {n}) перейдут в проект слиянием ветки {branch}. Несохранённое в копии сначала сохранится коммитом в её ветке. Другие копии не изменятся.', { n, branch: it.branch }),
+      I18n.t('git.multiTakeYes', 'Взять'), async () => {
+        const r = await call('multiTake', p.run.id, i);
+        if (page !== p) return;
+        p.bad = true;
+        if (r && r.merged !== undefined) {
+          p.bad = false;
+          p.say = I18n.t('git.multiTaken', 'Решение «{label}» теперь в проекте: файлов {n}, коммит {commit}. Другие копии не тронуты, убрать их можно кнопкой «Убрать копию».', { label: it.label, n: r.merged, commit: String(r.commit).slice(0, 8) });
+        } else if (r && r.nothing) p.say = I18n.t('git.multiNothing', 'В этой копии нет изменений, переносить нечего.');
+        else if (r && r.conflict) p.say = I18n.t('git.multiConflict', 'Слить не получилось: одни и те же строки менялись и в проекте, и в копии. Проект не изменён. Файлы: {files}', { files: r.conflict.map((/** @type {any} */ c) => c.file).join(', ') });
+        else p.say = String((r && r.error) || '');
+        await loadRuns();
+        const fresh = runs.find((x) => x.id === p.run.id);
+        if (fresh && page === p) p.run = fresh;
+        refresh();
+      });
+  }
+
+  /** «Убрать копию» — только по слову человека. Правки в копии — второе подтверждение со списком. @param {number} i */
+  function askRemove(i) {
+    const p = /** @type {NonNullable<typeof page>} */ (page);
+    const it = p.run.items[i];
+    /** @param {boolean} force */
+    const go = async (force) => {
+      const r = await host.bridge.projects.removeCopy(it.copyId, force).catch((/** @type {any} */ e) => ({ error: String((e && e.message) || e) }));
+      if (page !== p) return;
+      if (r && r.dirty && !force) {
+        confirm(I18n.t('git.multiRemoveTitle', 'Убрать копию «{label}»?', { label: it.label }),
+          I18n.t('git.multiRemoveDirty', 'В копии есть несохранённые правки, они пропадут. Файлов: {n}.', { n: r.dirty.length }),
+          I18n.t('git.multiRemoveForce', 'Всё равно убрать'), () => { go(true); });
+        return;
+      }
+      p.bad = !!(r && r.error);
+      p.say = r && r.error ? String(r.error) : I18n.t('git.multiRemovedSay', 'Копия «{label}» убрана.', { label: it.label });
+      refresh();
+    };
+    confirm(I18n.t('git.multiRemoveTitle', 'Убрать копию «{label}»?', { label: it.label }),
+      I18n.t('git.multiRemoveText', 'Вкладки агента в копии остановятся, папка копии удалится. Ветка {branch} останется, если она ещё не слита с проектом.', { branch: it.branch }),
+      I18n.t('git.multiRemoveYes', 'Убрать'), () => { go(false); });
+  }
+
+  buttons();
+  loadRuns();
+  const offLang = /** @type {any} */ (window).I18n ? /** @type {any} */ (window).I18n.onChange(() => { buttons(); paint(); }) : null;
+  return () => {
+    stopped = true;
+    if (offLang) offLang();
+    if (page) { clearInterval(page.timer); page = null; host.pages.removeTab(SID); }
+    host.pages.removeButton('addGitMulti');
+    host.pages.removeButton('addGitMultiShow');
+  };
+}
 
 /** @param {any} host */
 function gitSetup(host) {
@@ -593,7 +1037,9 @@ function gitSetup(host) {
   window.addEventListener('focus', onFocus);
   // Сменился язык (t184) — строка, панель и вкладки заново, а не по следующему опросу.
   const offLang = /** @type {any} */ (window).I18n ? /** @type {any} */ (window).I18n.onChange(() => { draw(); for (const v of views.values()) render(v); }) : null;
+  const offMulti = gitMultiSetup(host, icon, esc);
   return () => {
+    offMulti();
     stopped = true; clearInterval(timer); window.removeEventListener('focus', onFocus); if (offLang) offLang();
     for (const v of [...views.values()]) host.pages.removeTab(v.sid);
     views.clear();

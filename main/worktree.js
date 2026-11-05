@@ -377,7 +377,7 @@ async function copies(main) {
 /**
  * Отличия копии от проекта (t1172, ГИТ-устройство.md (а), (в)): от общей основы (merge-base, как три точки) до рабочей папки копии
  * вместе с несохранёнными и новыми файлами (workTree). Правки самого проекта после создания копии не попадают.
- * @param {string} main @param {{ path: string, branch: string }} c @param {{ stat?: boolean }} [opt]
+ * @param {string} main @param {{ path: string, branch: string }} c @param {{ stat?: boolean, paths?: string[] }} [opt]
  * @returns {Promise<{ files: { path: string, add: number, del: number, binary: boolean }[], add: number, del: number } | { patch: string } | { error: string }>}
  */
 async function diffCopy(main, c, opt = {}) {
@@ -387,7 +387,9 @@ async function diffCopy(main, c, opt = {}) {
   if ('error' in w) return w;
   const range = [base.out.trim(), w.tree];
   if (!opt.stat) {
-    const d = await git(['-c', 'core.quotePath=false', 'diff', '-M', '--ignore-cr-at-eol', ...range], main);
+    // paths — только эти файлы (t1476, сравнение решений): :(literal) — скобки и звёзды в имени не шаблон.
+    const only = opt.paths && opt.paths.length ? ['--', ...opt.paths.map((p) => `:(literal)${p}`)] : [];
+    const d = await git(['-c', 'core.quotePath=false', 'diff', '-M', '--ignore-cr-at-eol', ...range, ...only], main);
     return d.code === 0 ? { patch: d.out } : { error: `git diff: ${d.err.trim()}` };
   }
   const d = await git(['-c', 'core.quotePath=false', 'diff', '-M', '--numstat', '-z', ...range], main);
@@ -405,8 +407,26 @@ async function diffCopy(main, c, opt = {}) {
   return { files, add: files.reduce((a, f) => a + f.add, 0), del: files.reduce((a, f) => a + f.del, 0) };
 }
 
+/**
+ * Несохранённое в копии — коммитом в её ветке (t1476, «взять решение»): mergeCopy такую копию не сливает.
+ * Настройки git и правила .gitignore копии действуют как обычно. Сохранять нечего — { saved: false }.
+ * @param {string} dir папка копии @param {string} message
+ * @returns {Promise<{ saved: boolean } | { error: string }>}
+ */
+async function saveCopy(dir, message) {
+  const st = await git(['status', '--porcelain'], dir);
+  if (st.code !== 0) return { error: `git status: ${st.err.trim()}` };
+  if (!st.out.trim()) return { saved: false };
+  const add = await git(['add', '-A'], dir);
+  if (add.code !== 0) return { error: `git add: ${add.err.trim()}` };
+  const who = { GIT_AUTHOR_NAME: 'Kermach', GIT_AUTHOR_EMAIL: 'copy@kermach.local', GIT_COMMITTER_NAME: 'Kermach', GIT_COMMITTER_EMAIL: 'copy@kermach.local' };
+  const c = await git(['-c', 'commit.gpgsign=false', 'commit', '-q', '-m', message], dir, who);
+  if (c.code !== 0) return { error: `git commit: ${(c.err.trim() || c.out.trim())}` };
+  return { saved: true };
+}
+
 /** Пути из вывода git с -z. @param {string} out */
-const zList = (out) => out.split('\0').filter(Boolean);
+const zList =(out) => out.split('\0').filter(Boolean);
 
 /** Строки с метками конфликта (<<<<<<<) в файле дерева слияния: «7, 12»; меток нет (двоичный, удалён с одной стороны) — ''. @param {string} main @param {string} tree @param {string} f */
 async function conflictLines(main, tree, f) {
@@ -549,4 +569,4 @@ async function mergeCopy(main, c) {
   return { merged: files.length, files, commit: M };
 }
 
-module.exports = { isGit, create, remove, extras, isSettings, target, slug, leftovers, placeOf, copies, diffCopy, mergeCopy, workTree, useText };
+module.exports = { isGit, create, remove, extras, isSettings, target, slug, leftovers, placeOf, copies, diffCopy, saveCopy, mergeCopy, workTree, useText };

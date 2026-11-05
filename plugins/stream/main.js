@@ -318,12 +318,16 @@ module.exports = (ctx) => {
         h.run.catch((e) => { ctx.log(`сцена стрима не запущена: ${e instanceof Error ? e.message : e}`); if (hub === h) hub = null; });
       }
       const h = hub;
+      // Панель зовёт start при каждом открытии (t1601): строка в журнале — только при первом.
+      const first = !on;
       if (!on) { on = true; h.users.push(me); }
       return h.run.then((r) => {
         r.setLang(me.lang);
-        if (!on) return { url: r.url, port: r.port };
-        ctx.log(`сцена стрима: проект ${ctx.project.name} — ${r.url}?project=${ctx.project.id}, выбор проекта — ${r.url} (порт ${r.port}, окон с плагином: ${h.users.length})`);
-        return { url: r.url, port: r.port };
+        // board — есть ли у этого проекта адрес ?project: в списке сервера только проекты с доской, иначе сцена ответит «проект не найден».
+        const reply = { url: r.url, port: r.port, board: readProjects(kermachDir).some((p) => p.id === ctx.project.id) };
+        if (!on) return reply;
+        if (first) ctx.log(`сцена стрима: проект ${ctx.project.name} — ${r.url}?project=${ctx.project.id}, выбор проекта — ${r.url} (порт ${r.port}, окон с плагином: ${h.users.length})`);
+        return reply;
       }, (e) => { if (on) { on = false; h.users.splice(h.users.indexOf(me), 1); } throw e; });
     },
     stop() {

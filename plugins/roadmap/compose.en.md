@@ -50,6 +50,10 @@ Read what is already written about the project. This is the first thing to do, i
 - The previous board, if any: files d<N>.md in {папка} — decisions, dead ends, agreements and patterns. A pattern (`type: pattern`, in old files `паттерн`) is one rule collected from the records in its `from`. A pattern with `approved:` was approved by the human: it goes into the overview as a project rule, instead of the records from `from`.
 Write out separately the agreements with the human and with their client: what was decided, what was forbidden, what was postponed, how work is usually done. Each with a date and where it is written.
 
+### A ready plan
+If in step 1 you found a ready plan of this project with phases or stages not yet passed, before step 2 ask me whether to use it: which file, how many stages it has and why you consider it in force. End the turn with this question and the line "Now: step 1 of 6, needed from you: an answer about the plan". If there is no plan, do not ask and do not write about it.
+Answer "yes": do steps 2, 3 and 6 as here, and instead of steps 4 and 5 work by the sections "Step 4" and "Step 5" of the file {перенос}. The substitutions in that file mean the same as here: the substitution "состав:5.3" in curly braces is item 5.3 of this task, "состав:5.4" is item 5.4, "состав:5.2-поля" is the list of card fields from item 5.2. Answer "no": go on by this task and write the plan into the overview, section "Started and broken".
+
 ### Step 2. Project kind
 Work out from the files what kind of project this is. There can be several kinds at once: a site and marketing, a program and documentation. For every kind answer its questions below.
 The kind is not in the list — make up the questions yourself after the same pattern and name the kind in the overview.

@@ -50,6 +50,10 @@ Lies, was über das Projekt schon aufgeschrieben ist. Das ist das Erste, was zu 
 - Das frühere Board, falls vorhanden: Dateien d<N>.md in {папка} — Entscheidungen, Sackgassen, Vereinbarungen und Regel-Muster. Ein Regel-Muster (`type: Muster`, in alten Dateien `паттерн`) ist eine Regel, gesammelt aus den Einträgen in seinem `from`. Ein Regel-Muster mit `approved:` hat der Mensch bestätigt: es geht als Projektregel in die Übersicht, statt der Einträge aus `from`.
 Schreib gesondert die Vereinbarungen mit dem Menschen und mit seinem Kunden heraus: was entschieden, was verboten, was verschoben wurde, wie üblicherweise gearbeitet wird. Bei jeder — Datum und wo es steht.
 
+### Fertiger Plan
+Hast du in Schritt 1 einen fertigen Plan dieses Projekts mit noch nicht durchlaufenen Phasen oder Etappen gefunden, frag mich vor Schritt 2, ob er verwendet werden soll: welche Datei, wie viele Etappen und warum du ihn für gültig hältst. Beende den Zug mit dieser Frage und der Zeile „Jetzt: Schritt 1 von 6, von dir nötig: Antwort zum Plan". Gibt es keinen Plan, frag nicht und schreib nichts darüber.
+Antwort „ja": mach die Schritte 2, 3 und 6 wie hier, und arbeite statt der Schritte 4 und 5 nach den Abschnitten „Schritt 4" und „Schritt 5" der Datei {перенос}. Die Ersetzungen in jener Datei bedeuten dasselbe wie hier: die Ersetzung „состав:5.3" in geschweiften Klammern ist Punkt 5.3 dieser Aufgabe, „состав:5.4" ist Punkt 5.4, „состав:5.2-поля" ist die Liste der Kartenfelder aus Punkt 5.2. Antwort „nein": arbeite nach dieser Aufgabe weiter und schreib den Plan in die Übersicht, Abschnitt „Begonnen und kaputt".
+
 ### Schritt 2. Projektart
 Bestimme anhand der Dateien, was für ein Projekt das ist. Es kann mehrere Arten zugleich geben: Website und Marketing, Programm und Dokumentation. Beantworte für jede Art ihre Fragen unten.
 Die Art fehlt in der Liste — stelle die Fragen selbst nach demselben Schema auf und nenne die Art in der Übersicht.

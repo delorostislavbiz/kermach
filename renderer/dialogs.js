@@ -815,7 +815,9 @@
         <div class="stepper"><input class="num tdup" type="number" min="1" step="1"><span class="hint tdh"></span></div></div>
       <div class="sec dirs"><div class="stepper"><button class="pick tchk"></button><span class="hint tres"></span></div></div></div>
       </div></div>
-      <div class="btns"><span class="ver set-off" style="margin-right:auto;align-self:center"></span><button class="reset"></button><button class="cancel ok"></button></div>`;
+      <div class="upd" hidden style="padding:0 0 8px;font-size:12px;overflow-wrap:anywhere"><div class="updm"></div><progress class="updp" max="100" value="0" hidden style="width:100%;margin-top:6px"></progress>
+        <div class="btns upb" style="justify-content:flex-start;flex-wrap:wrap;margin-top:6px"><button class="updl" hidden></button><button class="updg" hidden></button><button class="upds" hidden></button><button class="updn" hidden></button><button class="updy ok" hidden></button></div></div>
+      <div class="btns"><span class="ver set-off" style="align-self:center"></span><button class="upchk" style="margin-right:auto"></button><button class="reset"></button><button class="cancel ok"></button></div>`;
     /** Селектор, ключ, русский текст, свойство. @type {[string, string, string, string][]} */
     const STATIC = [
       ['.dlg-title .t', 'dialogs.nastroyki', 'Настройки', 'textContent'], ['.dlg-title .x', 'common.close', 'Закрыть', 'title'],
@@ -851,6 +853,9 @@
     ];
     /** @type {() => void} */
     let off = () => {};
+    /** Идёт скачивание обновления из этого окошка (t1623) и снятие подписки на его ход. */
+    let updBusy = false;
+    let updOff = () => {};
     const r = await modal(I18n.t('dialogs.nastroyki', 'Настройки'), 780, body, (dlg, done) => {
       const q = (/** @type {string} */ s) => /** @type {HTMLElement} */ (dlg.querySelector(s));
       // Надписи окна: ключ и русский текст запоминаются, смена языка ставит их заново (РЕШЕНИЯ «Разметка, которую строит код, — не через data-i18n»).
@@ -1227,10 +1232,101 @@
       };
       // Номер версии (t1264): из src\package.json через main, второго места с номером нет.
       { const v = window.kermach.settings.version && window.kermach.settings.version(); q('.ver').textContent = v ? `Kermach ${v}` : ''; }
+      // Проверка обновлений (t1623): только по нажатию. Вопрос об установке — внутри «Настроек»: modal() закрыл бы их, и «Отмена» не оставила бы всё как есть.
+      {
+        const up = window.kermach.update;
+        const box = q('.upd');
+        const msg = q('.updm');
+        const bar = /** @type {HTMLProgressElement} */ (q('.updp'));
+        const chk = /** @type {HTMLButtonElement} */ (q('.upchk'));
+        const link = q('.updl'), get = q('.updg'), stop = q('.upds'), no = q('.updn'), yes = q('.updy');
+        const newVer = { v: '' };
+        let fetched = false;
+        tx(chk, 'dialogs.updCheck', 'Проверить обновления');
+        tx(link, 'dialogs.updPage', 'Страница выпуска');
+        tx(stop, 'common.cancel', 'Отмена');
+        tx(no, 'common.cancel', 'Отмена');
+        tx(yes, 'dialogs.updYes', 'Закрыть программу и установить');
+        /** Какие кнопки видны. @param {HTMLElement[]} on */
+        const only = (...on) => { for (const b of [link, get, stop, no, yes]) b.hidden = !on.includes(b); bar.hidden = !on.includes(stop); box.hidden = false; };
+        const offer = () => {
+          if (fetched) retx(get, 'dialogs.updInstall', 'Установить');
+          else retx(get, 'dialogs.updGet', 'Скачать и установить');
+        };
+        const ask = () => {
+          retx(msg, 'dialogs.updConfirm', 'Версия {v} скачана. Для установки программа закроется, а агенты остановятся. Когда новая версия запустится, вкладки вернутся. Claude и Codex продолжат разговор, если он найдётся на диске. Остальные агенты запустятся заново, обычно с новым разговором. Установить сейчас?', 'textContent', newVer);
+          only(no, yes);
+          no.focus();
+        };
+        chk.onclick = async () => {
+          chk.disabled = true;
+          fetched = false;
+          only();
+          retx(msg, 'dialogs.updChecking', 'Проверяю…');
+          /** @type {any} */
+          let r;
+          try { r = await up.check(); } catch { r = { state: 'error', kind: 'net' }; }
+          chk.disabled = false;
+          if (r.state === 'latest') retx(msg, 'dialogs.updLatest', 'У вас последняя версия');
+          else if (r.state === 'none') retx(msg, 'dialogs.updNone', 'На GitHub нет выпуска для этой системы');
+          else if (r.state === 'new') {
+            newVer.v = r.version;
+            fetched = !!r.fetched;
+            retx(msg, 'dialogs.updNew', 'Есть новая версия: {v}', 'textContent', newVer);
+            offer();
+            if (r.canInstall) only(link, get); else only(link);
+          } else if (r.kind === 'limit') retx(msg, 'dialogs.updLimit', 'GitHub временно ограничил запросы. Попробуйте позже, обычно хватает часа.');
+          else if (r.kind === 'http') retx(msg, 'dialogs.updHttp', 'GitHub ответил ошибкой {c}. Попробуйте позже.', 'textContent', { c: r.code });
+          else if (r.kind === 'bad') retx(msg, 'dialogs.updBad', 'GitHub прислал непонятный ответ. Попробуйте позже.');
+          else retx(msg, 'dialogs.updNet', 'Нет связи с GitHub. Проверьте интернет и попробуйте снова.');
+        };
+        link.onclick = () => { up.open(); };
+        get.onclick = async () => {
+          if (fetched) { ask(); return; }
+          chk.disabled = true;
+          bar.value = 0;
+          only(stop);
+          retx(msg, 'dialogs.updProgress', 'Скачиваю: {p} %', 'textContent', { p: 0 });
+          updOff = up.onProgress((/** @type {number} */ p) => { bar.value = p; retx(msg, 'dialogs.updProgress', 'Скачиваю: {p} %', 'textContent', { p }); });
+          updBusy = true;
+          /** @type {any} */
+          let r;
+          try { r = await up.download(); } catch { r = { error: 'net' }; }
+          updBusy = false;
+          updOff();
+          updOff = () => {};
+          chk.disabled = false;
+          if (r.ok) { fetched = true; offer(); ask(); return; }
+          if (r.error === 'cancel') { retx(msg, 'dialogs.updCanceled', 'Скачивание отменено, файл удалён'); only(link, get); return; }
+          if (r.error === 'busy') { retx(msg, 'dialogs.updBusy', 'Файл уже скачивается в другом окне. Когда он скачается, нажмите кнопку снова.'); only(link, get); return; }
+          if (r.error === 'digest') retx(msg, 'dialogs.updDigest', 'Сумма файла не совпала, файл удалён и не запущен. Скачайте версию со страницы выпуска.');
+          else if (r.error === 'nodigest') retx(msg, 'dialogs.updNoDigest', 'GitHub не указал сумму файла, проверить его нельзя. Файл удалён и не запущен. Скачайте версию со страницы выпуска.');
+          else if (r.error === 'url') retx(msg, 'dialogs.updUrl', 'Файл предложен с чужого адреса, скачивание остановлено. Скачайте версию со страницы выпуска.');
+          else retx(msg, 'dialogs.updDlFail', 'Файл не скачался. Попробуйте снова или скачайте версию со страницы выпуска.');
+          only(link);
+        };
+        stop.onclick = () => { up.cancel(); };
+        no.onclick = () => { retx(msg, 'dialogs.updNew', 'Есть новая версия: {v}', 'textContent', newVer); only(link, get); };
+        yes.onclick = async () => {
+          only();
+          retx(msg, 'dialogs.updStarting', 'Запускаю установку. Программа скоро закроется.');
+          /** @type {any} */
+          let r;
+          try { r = await up.install(); } catch { r = { error: 'run' }; }
+          if (r.ok) return;
+          fetched = false;
+          if (r.error === 'stale') { retx(msg, 'dialogs.updStale', 'Версия {v} уже не последняя, её файл удалён и не запущен. Нажмите «Проверить обновления».', 'textContent', newVer); only(link); return; }
+          retx(msg, 'dialogs.updRunFail', 'Установка не запустилась. Скачайте версию со страницы выпуска.');
+          only(link);
+        };
+      }
       q('.reset').onclick = () => change(t, { uiZoom: 100, termFont: TERM_DEF, mdShift: 0, sound: true, notify: true, copySelect: true });
       return () => font(Number(num.value));
     }, 'set');
     off();
+    // Закрыли «Настройки» во время скачивания: подтверждать установку негде, файл удаляется (t1623).
+    updOff();
+    if (updBusy) window.kermach.update.cancel();
     return r;
   }
 

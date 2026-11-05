@@ -138,6 +138,7 @@ const COMMANDS = [
   ['roadmap', 'kermach code - code map: declarations, callers, search by words.'],
   ['tasks', 'kermach tasks - project to-do list.'],
   [null, 'kermach tab - tabs of this window.'],
+  [null, 'kermach agent - open a new tab of another agent (claude, codex, grok and others) with a task; kermach agent list shows them.'],
   [null, 'kermach sessions - tabs of all projects.'],
   [null, 'kermach copy - git copy of the project with own branch for risky edits.'],
 ];
@@ -666,6 +667,8 @@ async function handle(q) {
   if (q.cmd === 'roadmap-cli') return roadmapCli(q, id);
   // kermach tab list / close (t1052) — вкладки терминалов окна, тоже без «Браузера».
   if (q.cmd === 'tab-list' || q.cmd === 'tab-close') return termTab(q, id);
+  // kermach agent list / open (t1611) — агенты программы и вкладка агента с заданием, без «Браузера» и без «Роадмапа».
+  if (q.cmd === 'agent-list' || q.cmd === 'agent-open') return agentCmd(q, id);
   // kermach tab buffer (t1231) — экран вкладки в окне против текста демона.
   if (q.cmd === 'tab-buffer') return termBuffer(q, id);
   // kermach diag cpu (t1431) — профиль процессора главного процесса.
@@ -685,6 +688,18 @@ const samePath = (a, b) => {
   const n = (/** @type {string} */ s) => { const r = path.resolve(s).replace(/[\\/]+$/, ''); return process.platform === 'win32' ? r.toLowerCase() : r; };
   return n(a) === n(b);
 };
+
+/** Папка a — это папка b или лежит внутри неё (t1619). @param {string} a @param {string} b */
+const inFolder = (a, b) => {
+  const r = path.relative(path.resolve(b), path.resolve(a));
+  return !r || (r !== '..' && !r.startsWith(`..${path.sep}`) && !path.isAbsolute(r));
+};
+
+/** Папка команды — в проекте терминала или в его копиях (папка «<проект>-копии»). @param {unknown} cwd @param {string} root */
+const inProject = (cwd, root) => typeof cwd === 'string' && !!cwd && (inFolder(cwd, root) || inFolder(cwd, `${root}-копии`));
+
+/** Отказ команде из папки вне проекта терминала: задание ушло бы не в тот проект (t1611, t1621). @param {unknown} cwd @param {any} p проект */
+const outsideProject = (cwd, p) => ({ ...fail(2, `нет доступа: папка ${clean(cwd).slice(0, 300)} не в проекте этого терминала «${clean(p.name).slice(0, 200)}» (${clean(p.path).slice(0, 300)})`), signed: true });
 
 /**
  * kermach roadmap run tN (t1050): тот же run плагина «Роадмап», что у кнопки «Запустить» (проверки карты, t554, ярус, served, «в работе»).
@@ -797,7 +812,14 @@ async function roadmapCli(q, id) {
   const host = hostOf(id);
   const p = host ? /** @type {any} */ (projectOf(host)) : null;
   if (!p) return fail(3, 'окно проекта закрыто — откройте проект в Kermach и повторите');
-  if (typeof q.board !== 'string' || !q.board || !p.path || !samePath(q.board, p.path)) {
+  // t1619: сопутствующей сессии доска не нужна — проект берётся из подписи терминала. Найденная чужая доска по-прежнему отказ.
+  // Доска выше папки проекта, а команда запущена внутри проекта, — это не чужой проект: у него самого доски нет.
+  const companion = sub === 'companion' || sub === 'companion-list' || sub === 'companion-ask';
+  // t1621: доски нет и папка вне проекта — терминал ушёл в чужую папку: тот же отказ, что у kermach agent open.
+  if (companion && !q.board && p.path && !inProject(q.cwd, p.path)) return outsideProject(q.cwd, p);
+  const free = companion && !!p.path
+    && (!q.board || (typeof q.board === 'string' && typeof q.cwd === 'string' && !!q.cwd && inFolder(q.cwd, p.path) && inFolder(p.path, q.board) &&!samePath(p.path, q.board)));
+  if (!free && (typeof q.board !== 'string' || !q.board || !p.path || !samePath(q.board, p.path))) {
     /** @type {Ctx} */ (ctx).log(`kermach ${sub}: отказ — доска не в проекте терминала (${clean(p.path).slice(0, 300)})`);
     return { ...fail(2, `нет доступа: доска ${clean(q.board).slice(0, 300)} не в проекте этого терминала «${clean(p.name).slice(0, 200)}» (${clean(p.path).slice(0, 300)})`), signed: true };
   }
@@ -846,6 +868,44 @@ async function termTab(q, id) {
   if (!r.ok) return fail([3, 4].includes(r.code) ? r.code : 4, clean(r.error).slice(0, 500));
   /** @type {Ctx} */ (ctx).log(`tab close ${sid}${q.force === true ? ' --force' : ''}: закрыта`);
   return { ok: true, project, sid, title: clean(r.title).slice(0, 300) };
+}
+
+/**
+ * kermach agent list и kermach agent open имя «задание» (t1611): проект — из подписи терминала, вкладку открывает ядро.
+ * Рабочая папка вне проекта и его копий (папка «<проект>-копии») — отказ: задание ушло бы не в тот проект.
+ * @param {any} q @param {string} id номер проекта
+ */
+async function agentCmd(q, id) {
+  const agents = require('../../main/agents');
+  const list = await agents.listAsync();
+  const out = (/** @type {any} */ a) => ({ id: clean(a.id).slice(0, 80), title: clean(a.title).slice(0, 200), found: !!a.found, enabled: !!a.enabled, prompt: agents.promptFlag(a.id) !== false });
+  if (q.cmd === 'agent-list') return { ok: true, agents: list.map(out) };
+  const name = typeof q.name === 'string' ? q.name.trim() : '';
+  const text = typeof q.text === 'string' ? q.text : '';
+  if (!text.trim()) return fail(1, 'нужно задание: kermach agent open <имя> "задание"; вкладка не открыта');
+  if (text.includes('\0')) return fail(1, 'в задании нулевой знак: такой текст агенту не передать; вкладка не открыта');
+  const ready = list.filter((a) => a.found && a.enabled).map((a) => a.id).join(', ');
+  const a = list.find((x) => x.id === name);
+  if (!a) return fail(1, `агента «${clean(name).slice(0, 80)}» нет. Сейчас можно: ${ready}. Весь список — kermach agent list`);
+  if (!a.found) return fail(1, `${a.id} не установлен. Сейчас можно: ${ready}`);
+  if (!a.enabled) return fail(1, `${a.id} выключен: включите его в «Настройках» → «Агенты». Сейчас можно: ${ready}`);
+  const host = hostOf(id);
+  const own = host ? /** @type {any} */ (projectOf(host)) : null;
+  if (!own) return fail(3, 'окно проекта закрыто — откройте проект в Kermach и повторите');
+  const bridge = require('../../main/plugin-bridge');
+  const p = bridge.projectNow(own);
+  if (!inProject(q.cwd, p.path)) return outsideProject(q.cwd, p);
+  const r = await require('../../main/terminals').openAgentTask(p, a.id, text);
+  if (!r || 'error' in r) return fail(4, r ? clean(r.error).slice(0, 1000) : 'нет ответа');
+  // kermach tab list спрашивает страницу окна, а она узнаёт о вкладке позже ответа ядра: номер печатаем, когда список его уже видит.
+  const inList = `typeof window.KermachTermTabs === "function" && window.KermachTermTabs().some((t) => t && t.sid === ${JSON.stringify(String(r.session.sid))})`;
+  let listed = false;
+  for (const end = Date.now() + 10000; !listed && Date.now() < end;) {
+    listed = await within(/** @type {any} */ (host).executeJavaScript(inList, false), LIMIT.wait, 'окно не ответило').catch(() => false) === true;
+    if (!listed) await new Promise((ok) => setTimeout(ok, 200));
+  }
+  /** @type {Ctx} */ (ctx).log(`kermach agent open ${a.id}: вкладка ${r.session.sid}, задание ${text.length} знаков, ${r.how}`);
+  return { ok: true, project: clean(p.name).slice(0, 200), sid: clean(r.session.sid).slice(0, 80), title: clean(r.session.ownTitle || r.session.title).slice(0, 300), agent: a.id, how: clean(r.how).slice(0, 300), ...(r.seen === false ? { unseen: true } : {}), ...(listed ? {} : { unlisted: true }) };
 }
 
 /**

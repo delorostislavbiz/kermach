@@ -22,6 +22,7 @@ module.exports = (ctx) => {
     /** @param {string} cmd @param {any[]} args */
     async handle(cmd, ...args) {
       if (!dir) return { repo: false };
+      if (String(cmd).startsWith('multi')) return require('./multi').handle(ctx, cmd, args);
       if (cmd === 'status') return readStatus(dir, ex.run);
       if (cmd === 'numstat') return readNumstat(dir, ex.run);
       if (cmd === 'diff') {

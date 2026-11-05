@@ -631,4 +631,4 @@ function pluginAgents(log) {
   });
 }
 
-module.exports = { register, list, listAsync, pluginAgents, promptFlag, takesPics, launchOf, extra, named, LOOK, CATALOG, NAME_RE, watchShells, pokeShell, pokeShells, runningIn, onRunning, agentNow, isShell, agentOfProcess };
+module.exports = { register, list, listAsync, pluginAgents, kindOfAgent, promptFlag, takesPics, launchOf, extra, named, LOOK, CATALOG, NAME_RE, watchShells, pokeShell, pokeShells, runningIn, onRunning, agentNow, isShell, agentOfProcess };

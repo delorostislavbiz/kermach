@@ -84,7 +84,7 @@ function roadmapSetup(host) {
   /**
    * Счётчики пользы (t837) по полю used карт (t836), за всё время. У записи — сколько карт сказали «помогла», «не пригодилась», «неверна», «не открывал» (per[id][3]).
    * На доске: подано — записи из served карты (t1008) и отзывы used; необъединённые повторы — пометки «похожа на dN» (alikeD, t835); пропущенный повтор — новая запись
-   * карты tN похожа на dN, а в served tN записи dN нет: подбор её не подал. dN в утверждённом паттерне dM (alikeP, t1030) — подан, если подан dM.
+   * карты tN похожа на dN, а в served tN записи dN нет: подбор её не подал (старая — не заметка, не отменена, не просрочена, написана другой картой, t1599); reach — пары, где хотя бы одна запись не заметка. dN в утверждённом паттерне dM (alikeP, t1030) — подан, если подан dM.
    * Карта без served (запущена до t1008) — по used, как раньше; без обоих не считается.
    * @param {any} b
    */
@@ -92,7 +92,7 @@ function roadmapSetup(host) {
     if (useMemo.has(b)) return useMemo.get(b);
     /** @type {Record<string, number[]>} */
     const per = {};
-    const u = { per, given: 0, ok: 0, bad: 0, unmerged: 0, missed: 0 };
+    const u = { per, given: 0, ok: 0, bad: 0, unmerged: 0, reach: 0, missed: 0 };
     const cards = new Map((b.cards || []).map((/** @type {any} */ c) => [c.id, c]));
     for (const c of cards.values()) {
       // s<N> в used — отзыв о записи общей базы (t698): его считает state.json базы, статистика доски — только свои d<N>.
@@ -106,10 +106,18 @@ function roadmapSetup(host) {
         if (i === 2) u.bad++;
       }
     }
+    const decs = new Map((b.decisions || []).map((/** @type {any} */ d) => [d.id, d]));
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     for (const d of b.decisions || []) {
       const to = got(b.alikeD, d.id);
       if (!to) continue;
       u.unmerged++;
+      const old = decs.get(to);
+      if (d.type !== 'заметка' || (old && old.type !== 'заметка')) u.reach++;
+      // Пропуск — только если подбор мог подать старую запись карте (t1599): фильтр pool в notes() prompt.js; и старую писала не та же карта.
+      if (!old || old.type === 'заметка' || old.type === 'договорённость' || old.type === 'паттерн' || old.cancelled
+        || (old.wrong && old.wrong.length) || (old.until && old.until < today) || (old.card && old.card === d.card)) continue;
       const c = d.card && cards.get(d.card);
       if (!c) continue;
       const sv = Array.isArray(c.served) && c.served.length ? c.served : null;
@@ -312,6 +320,8 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .empty .ic { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line, rgba(141,145,165,.14)); background: var(--raised, transparent); color: var(--rm-info); }
     #plugin-roadmap-panel .empty button { height: 32px; padding: 0 18px; border: 0; border-radius: 6px; background: var(--accent); color: var(--on-accent, #fff); font: inherit; font-weight: 600; cursor: pointer; }
     #plugin-roadmap-panel .empty button:disabled { opacity: .55; cursor: default; }
+    #plugin-roadmap-panel .empty .ebtns { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+    #plugin-roadmap-panel .empty button.alt { background: transparent; color: var(--text); border: 1px solid var(--line, rgba(141,145,165,.14)); font-weight: 400; }
     #plugin-roadmap-panel .empty .cnote { color: var(--text); }
     #plugin-roadmap-panel .empty .cnote.bad { color: var(--rm-bad); }
     #plugin-roadmap-panel .ncnote { padding: 6px 10px; color: var(--text); line-height: 18px; }
@@ -606,7 +616,7 @@ function roadmapSetup(host) {
   /** Последняя доска от главной части. @type {any} */
   let last = null;
   /** «Составить роадмап» (t519): busy — вкладка открывается, note — строка под кнопкой. Держим здесь: draw перестраивает пустой экран на каждое событие доски. */
-  const comp = { busy: false, /** @type {{ bad: boolean, text: string } | null} */ note: null, sid: '', shown: '' };
+  const comp = { busy: false, /** @type {{ bad: boolean, text: string } | null} */ note: null, sid: '', shown: '', how: 'compose' };
   // sid — вкладка из ответа compose, пока доска не прислала свою запись (t568); shown — заголовок вкладки в нарисованной строке «составляется…».
   /** «Новая карта» (t818): busy — вкладка открывается, note — строка над доской; timer её убирает. */
   const nc = { busy: false, /** @type {{ bad: boolean, text: string } | null} */ note: null, /** @type {any} */ timer: null };
@@ -1003,13 +1013,17 @@ function roadmapSetup(host) {
     if (!b) { body.textContent = ''; return; }
     if (b.error) { body.innerHTML = `<div class="box errs"><div class="e">${esc(T('readFail', 'Доска не прочитана: {why}', { why: b.error }))}</div></div>`; return; }
     if (!b.exists) {
-      // Экран 01: пустой проект — кнопка и две строки подсказки (t519). Своё имя data-do: data-act="compose" был у значка шапки (убран в t823).
+      // Экран 01: пустой проект — три кнопки (t519, t1603) и две строки подсказки: первая — чем отличаются три пути. Своё имя data-do: data-act="compose" был у значка шапки (убран в t823).
       label.hidden = true;
       const n = comp.note;
-      body.innerHTML = `${ct ? composeLine(ct) : ''}<div class="empty"><div class="ic">${ICON(I_BOARD, 20)}</div>`
-        + `<button type="button" data-do="compose"${comp.busy ? ' disabled' : ''}>${esc(comp.busy ? T('composeBusy', 'Открываю вкладку…') : T('compose', 'Составить роадмап'))}</button>`
-        + `<div>${esc(T('emptyHint1', 'Откроется вкладка Claude: агент прочитает проект и предложит паспорт, фазы и карты.'))}<br>`
-        + `${esc(T('emptyHint2', 'Вы увидите их здесь по мере появления и сможете править до запуска.'))}</div>`
+      const off = comp.busy ? ' disabled' : '';
+      const busyText = esc(T('composeBusy', 'Открываю вкладку…'));
+      body.innerHTML = `${ct ? composeLine(ct) : ''}<div class="empty"><div class="ic">${ICON(I_BOARD, 20)}</div><div class="ebtns">`
+        + `<button type="button" data-do="compose"${off}>${comp.busy && comp.how === 'compose' ? busyText : esc(T('compose', 'Составить роадмап'))}</button>`
+        + `<button type="button" class="alt" data-do="adopt"${off}>${comp.busy && comp.how === 'adopt' ? busyText : esc(T('adopt', 'Использовать существующий'))}</button>`
+        + `<button type="button" class="alt" data-do="pickPlan"${off}>${esc(T('pickPlan', 'Выбрать файл…'))}</button></div>`
+        + `<div>${esc(T('emptyHint1', 'Составить — агент напишет план с нуля. Использовать существующий — сам найдёт готовый план в проекте. Выбрать файл — возьмёт план из файла, который вы укажете.'))}<br>`
+        + `${esc(T('emptyHint2', 'Откроется вкладка Claude. Паспорт, фазы и карты появятся здесь, и вы сможете править их до запуска.'))}</div>`
         + `${n ? `<div class="cnote${n.bad ? ' bad' : ''}">${esc(n.text)}</div>` : ''}</div>`;
       return;
     }
@@ -1034,9 +1048,9 @@ function roadmapSetup(host) {
     // 3 пропущенных повтора и больше — повод разобрать подбор (ВЫВОДЫ-память-14-10.md, вопрос 3): строка так и подписана.
     const use = useOf(b);
     if (use.given || use.unmerged) {
-      html += `<div class="box inbox use${use.missed >= 3 ? ' fix' : ''}" title="${esc(T('use.title', 'Отзывы агентов о поданных заметках — поле used карт, за всё время. Не объединены — записи с пометкой «похожа на dN»: та же причина записана ещё раз. Пропущенный повтор — новая запись карты похожа на старую, а старую этой карте не подали. Три таких случая — повод разобрать подбор заметок'))}">`
+      html += `<div class="box inbox use${use.missed >= 3 ? ' fix' : ''}" title="${esc(T('use.title', 'Отзывы агентов о поданных заметках — поле used карт, за всё время. Не объединены — записи с пометкой «похожа на dN»: та же причина записана ещё раз. Пропущенный повтор — новая запись карты похожа на старую, а старую этой карте не подали. Заметки в подсчёт пропусков не входят. Три таких случая — повод разобрать подбор заметок'))}">`
         + `<span>${esc(T('use.cap', 'Заметки агентам: подано {n}, помогло {ok}, неверна {bad}', { n: use.given, ok: use.ok, bad: use.bad }))}</span>`
-        + `<span class="uq">${esc(T('use.q', 'не объединены: {u}, пропущенный повтор: {m}', { u: use.unmerged, m: use.missed }))}`
+        + `<span class="uq">${esc(T('use.q', 'не объединены: {u} (до агентов доходят: {r}), пропущенный повтор: {m}', { u: use.unmerged, r: use.reach, m: use.missed }))}`
         + `${use.missed >= 3 ? esc(T('use.fix', ' — разобрать подбор')) : ''}</span></div>`;
     }
     // Запросы «по смыслу» (t842, решение 14.10): агент звал kermach code meaning — счётчик из журнала рядом с картой кода. Запросов не было — строки нет.
@@ -1121,7 +1135,7 @@ function roadmapSetup(host) {
       if (!cards.length) html += `<div class="card"><span class="tt" style="color:var(--muted)">${esc(T('noCards', 'В фазе пока нет карт'))}</span></div>`;
       html += '</div></div>';
     }
-    if (!b.phases.length && !probs.length) html += `<div class="why" style="padding:4px 4px">${esc(T('noPhases', 'Фаз пока нет: карты без фазы — во «Входящих».'))}</div>`;
+    if (!b.phases.length && !b.errors.length && !b.warnings.length) html += `<div class="why" style="padding:4px 4px">${esc(T('noPhases', 'Фаз пока нет: карты без фазы — во «Входящих».'))}</div>`;
     body.innerHTML = html;
   };
 
@@ -3151,15 +3165,22 @@ function roadmapSetup(host) {
   row.onclick = () => { if (tab && host.pages) host.pages.show(tab.sid); else setOpen(!open); };
   // Экран «Входящих» — тоже (t685): закрытые карты под списком прячутся и возвращаются сразу.
   hideBox.addEventListener('change', () => { hideDone = hideBox.checked; api('setState', { hideDone }); draw(); paintInbox(); });
-  /** «Составить роадмап» (t519): вкладку открывает главная часть. Доска появится — слежение пришлёт её, пустой экран уйдёт сам. */
-  const composeRun = async () => {
+  /**
+   * «Составить роадмап» (t519), «Использовать существующий» и «Выбрать файл…» (t1603): вкладку открывает главная часть. Доска появится — слежение пришлёт её, пустой экран уйдёт сам.
+   * @param {'compose' | 'adopt' | 'pickPlan'} [how]
+   */
+  const composeRun = async (how = 'compose') => {
     if (comp.busy) return;
-    comp.busy = true; comp.note = null;
+    comp.busy = true; comp.note = null; comp.how = how;
     draw();
     // Язык окна (t1429) — язык новой доски: main.js запишет его в паспорт, когда агент его заведёт.
-    const r = await api('compose', T('composeTab', 'Роадмап · составить'), I18n.lang());
+    const r = how === 'compose' ? await api('compose', T('composeTab', 'Роадмап · составить'), I18n.lang())
+      : how === 'adopt' ? await api('adopt', T('adoptTab', 'Роадмап · готовый план'), I18n.lang())
+        : await api('pickPlan', T('adoptTab', 'Роадмап · готовый план'), I18n.lang(), T('pickPlanTitle', 'Файл плана'));
     comp.busy = false;
     if (stopped) return;
+    // Окно выбора отменили: ни вкладки, ни строки под кнопками.
+    if (r && r.canceled) { draw(); return; }
     if (r && r.sid) {
       // Вкладка составления уже открыта (t568): её номер — в строке «составляется…», окно переходит на неё.
       comp.sid = String(r.sid);
@@ -3406,6 +3427,8 @@ function roadmapSetup(host) {
     }
     if (/** @type {HTMLElement} */ (ev.target).closest('.lim, .wave, .wnote, .bgl')) return;
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="compose"]')) { composeRun(); return; }
+    if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="adopt"]')) { composeRun('adopt'); return; }
+    if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="pickPlan"]')) { composeRun('pickPlan'); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="passport"]')) { openPassport(); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="inbox"]')) { openInbox(); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="decs"]')) { openDecs(); return; }

@@ -372,6 +372,8 @@ function register(c) {
   require('./layout').register(c);
   // Telegram (t1496): токен и группа — в telegram.json, не в settings.json. Окно «Настройки» зовёт его через settings:set с полем telegramOp.
   require('./telegram').init(c.dataDir, c.log);
+  // «Проверить обновления» (t1623): каналы update:*, запросов при запуске нет.
+  require('./update').register(c);
   // Новое окно берёт масштаб, как только страница загрузилась: настройка уже есть, окно её ещё не знает.
   app.on('web-contents-created', (_e, w) => {
     w.on('dom-ready', () => { if (w.getType() === 'window') w.setZoomFactor(cur.uiZoom / 100); });
