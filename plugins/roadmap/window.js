@@ -240,6 +240,7 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .wave button[data-wave="stop"].sure { background: var(--rm-bad); color: var(--on-accent, #fff); }
     /* t1098: «Сессий одновременно» и «В фоне» — одним блоком в рамке, как соседние .box. */
     #plugin-roadmap-panel .sess { display: flex; flex-direction: column; gap: 6px; padding: 6px 12px; }
+    #plugin-roadmap-panel .sess { border-color: var(--accent, #21B568); }  /* t1631: рамка ярче соседних, цвет из темы */
     #plugin-roadmap-panel .sess .lim, #plugin-roadmap-panel .sess .bgl { padding: 0; }
     #plugin-roadmap-panel .sess .lim + .bgl { border-top: 1px solid var(--line, rgba(141,145,165,.14)); padding-top: 6px; }
     #plugin-roadmap-panel .lim { display: flex; align-items: center; gap: 6px; padding: 0 4px; color: var(--muted); font-size: 11.5px; white-space: nowrap; }
@@ -464,6 +465,12 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .rinbox .moved b { color: var(--rm-ok); font-weight: 400; }
     #plugin-roadmap-panel .rinbox .none { padding: 4px; color: var(--muted); }
     #plugin-roadmap-panel .rinbox .idone .card { cursor: pointer; }
+    #plugin-roadmap-panel .rhuman .hmph { padding: 4px 4px 0; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+    #plugin-roadmap-panel .rhuman .hmtx { min-width: 0; overflow-wrap: anywhere; line-height: 18px; }
+    #plugin-roadmap-panel .rhuman .hmshut { color: var(--muted); }
+    #plugin-roadmap-panel .rhuman .hmmark { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+    #plugin-roadmap-panel .rhuman .iacts input[type="text"] { flex: 1 1 140px; min-width: 0; height: 26px; padding: 0 6px; color: var(--text); background: var(--input, transparent); border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 6px; }
+    #plugin-roadmap-panel .rhuman .iacts input[type="text"]:focus { outline: 0; border-color: var(--focus, var(--rm-info)); }
     #plugin-roadmap-panel .rinbox .idone .card .tt { color: var(--muted); }
     /* «Решения и тупики» во всю панель (t517, экран 16): фильтр по карте и файлу, «все / решения / тупики»; запись — вид, тема, дата · агент, суть, карта и файлы. */
     /* Поиск (t1100): поле над доской; пока в нём текст — список найденного вместо фаз. Поле видно только на доске и в списке найденного. */
@@ -579,7 +586,7 @@ function roadmapSetup(host) {
     <div class="crbar" hidden></div><label class="hd"><input type="checkbox"><span></span></label>
     <div class="rbtn" data-act="newcard" hidden>${ICON(I_NEWCARD)}</div><div class="rbtn" data-act="full"></div></div>
     <label class="rsearch">${ICON(I_FIND, 13)}<input type="text" spellcheck="false"></label><div class="rfound" hidden></div>
-    <div class="rbody"></div><div class="rcard" hidden></div><div class="rprompt" hidden></div><div class="rpass" hidden></div><div class="rphase" hidden></div><div class="rcrd" hidden></div><div class="rinbox" hidden></div><div class="rdecs" hidden></div>`;
+    <div class="rbody"></div><div class="rcard" hidden></div><div class="rprompt" hidden></div><div class="rpass" hidden></div><div class="rphase" hidden></div><div class="rcrd" hidden></div><div class="rinbox" hidden></div><div class="rinbox rhuman" hidden></div><div class="rdecs" hidden></div>`;
   // Под «Файлами», если они уже в колонке; список Git (appendChild) встаёт ниже.
   const files = host.right.querySelector('#plugin-files-panel');
   host.right.insertBefore(panel, files ? files.nextSibling : host.right.firstChild);
@@ -597,6 +604,10 @@ function roadmapSetup(host) {
   const passEl = $('.rpass');
   const phaseEl = $('.rphase');
   const inboxEl = $('.rinbox');
+  const humanEl = $('.rhuman');
+  /** Все части строк «Не проверено человеком» с доски (t1644). @returns {any[]} */
+  const humanAll = () => (last && Array.isArray(last.phases) ? last.phases : []).flatMap((/** @type {any} */ f) => f.human || []);
+  const humanOpen = () => humanAll().filter((/** @type {any} */ h) => h.state === 'open');
   const decsEl = $('.rdecs');
   const foundEl = $('.rfound');
   const findBox = /** @type {HTMLInputElement} */ ($('.rsearch input'));
@@ -1036,6 +1047,8 @@ function roadmapSetup(host) {
     // Счётчик — открытые карты, как список экрана «Входящие» (t516): закрытая карта уходит и из списка, и из числа.
     let html = nc.note ? `<div class="ncnote${nc.note.bad ? ' bad' : ''}">${esc(nc.note.text)}</div>` : '';
     html += `<div class="box inbox ibx" data-do="inbox"><span>${esc(T('inbox', 'Входящие'))}</span><span class="badge">${inboxCards().length}</span><span class="grow"></span>${chevron(false)}</div>`;
+    // Что проверить человеку (t1644): на доске без таких строк пункта нет, как у «Решений». Счётчик — открытые: всё закрыто — пункт с нулём, закрытые видны на экране.
+    if (humanAll().length) html += `<div class="box inbox ibx" data-do="human"><span>${esc(T('hm.title', 'Проверить человеку'))}</span><span class="badge">${humanOpen().length}</span><span class="grow"></span>${chevron(false)}</div>`;
     // Паспорта нет — строки нет: пустой блок «паспорт» на доске без паспорта ничего не говорит.
     if (b.passport) html += `<div class="box inbox pass" data-do="passport"><span>${esc(T('passport', 'Паспорт проекта'))}</span>${passBadge(b.passport)}<span class="grow"></span>${chevron(false)}</div>`;
     // Записей нет — строки нет, как у паспорта: агент заводит d<N>.md файлом, строка появится сама (t517).
@@ -2267,6 +2280,120 @@ function roadmapSetup(host) {
   document.addEventListener('pointerup', ibUp);
   document.addEventListener('pointercancel', ibUp);
 
+  // ——— «Проверить человеку» во всю панель (t1644): части строк «Не проверено человеком» файлов фаз. Источник — файл фазы, второго хранилища нет ———
+  /** @type {null | { ask: string, why: string, busy: Set<string>, err: string, later: boolean }} */
+  let hm = null;
+  let hmDown = false;
+  /** Набранную причину доска с событием не стирает: пока фокус в поле, перерисовка ждёт, значение живёт в hm.why. */
+  const paintHuman = () => {
+    if (!hm) return;
+    const st = hm;
+    const list = last && Array.isArray(last.phases) ? last.phases : [];
+    const open = humanOpen().length;
+    let html = `<div class="ctop"><div class="cbar"><span class="back" data-hact="back">‹ ${esc(T('back', 'роадмап'))}</span><span class="ttl">${esc(T('hm.title', 'Проверить человеку'))}</span>`
+      + `<span class="crumb">${esc(T('hm.open', 'открыто: {n}', { n: open }))}</span></div><div class="notes">`;
+    if (st.err) html += `<div class="note bad" data-n="err">${esc(st.err)}</div>`;
+    html += '</div></div>';
+    if (!open) html += `<div class="none">${esc(T('hm.empty', 'Открытых нет. Строка «Не проверено человеком» из файла фазы появится здесь.'))}</div>`;
+    for (const f of list) {
+      const rows = (f.human || []).filter((/** @type {any} */ h) => !hideDone || h.state === 'open');
+      if (!rows.length) continue;
+      html += `<div class="hmph">${esc(phaseName(f))}</div>`;
+      for (const h of rows) {
+        const id = esc(h.id);
+        if (h.state !== 'open') {
+          const mark = h.state === 'skip' ? T('hm.skipAt', 'не нужно {date}: {why}', { date: h.date, why: h.why }) : T('hm.doneAt', 'проверил {date}', { date: h.date });
+          html += `<div class="box ibox" data-hid="${id}"><div class="ih"><span class="num">${id}</span><span class="hmtx hmshut">${esc(h.text)}</span></div><div class="hmmark">${esc(mark)}</div></div>`;
+          continue;
+        }
+        const busy = st.busy.has(h.id) ? ' disabled' : '';
+        html += `<div class="box ibox" data-hid="${id}"><div class="ih"><span class="num">${id}</span><span class="hmtx">${esc(h.text)}</span></div><div class="iacts">`
+          + (st.ask === h.id
+            ? `<input type="text" data-hwhy="${id}" spellcheck="false" placeholder="${esc(T('hm.why', 'Почему не нужно'))}"><button type="button" class="btn" data-hsave="${id}"${busy}>${esc(T('hm.save', 'записать'))}</button>`
+              + `<button type="button" class="btn cl" data-hact="cancel">${esc(T('hm.cancel', 'отмена'))}</button>`
+            : `<button type="button" class="btn" data-hdone="${id}"${busy} title="${esc(T('hm.doneTitle', 'Дописать в строку файла фазы отметку с датой. Строка остаётся'))}">${esc(T('hm.done', 'проверил'))}</button>`
+              + `<button type="button" class="btn cl" data-hskip="${id}"${busy} title="${esc(T('hm.skipTitle', 'Дописать в строку файла фазы отметку с датой и причиной. Строка остаётся'))}">${esc(T('hm.skip', 'не нужно'))}</button>`)
+          + '</div></div>';
+      }
+    }
+    humanEl.innerHTML = html;
+    const box = /** @type {HTMLInputElement | null} */ (humanEl.querySelector('[data-hwhy]'));
+    if (box) box.value = st.why;
+  };
+  const openHuman = () => {
+    hm = { ask: '', why: '', busy: new Set(), err: '', later: false };
+    body.hidden = true;
+    humanEl.hidden = false;
+    humanEl.scrollTop = 0;
+    paintHuman();
+  };
+  const closeHuman = () => { hm = null; humanEl.hidden = true; humanEl.textContent = ''; body.hidden = false; draw(); };
+  const humanSoft = () => {
+    const a = document.activeElement;
+    if (hm && a && a.tagName === 'INPUT' && /** @type {HTMLInputElement} */ (a).type === 'text' && humanEl.contains(a)) { hm.later = true; return; }
+    paintHuman();
+  };
+  const hmFlush = () => {
+    if (!hm || !hm.later || hmDown) return;
+    const a = document.activeElement;
+    if (a && a.tagName === 'INPUT' && humanEl.contains(a)) return;
+    hm.later = false;
+    paintHuman();
+  };
+  /** Текст части уходит с отметкой: файл поменялся и под номером другая часть — главная часть откажет. @param {string} id @param {'done' | 'skip'} action @param {string} why */
+  const humanWrite = async (id, action, why) => {
+    const st = hm;
+    const h = humanAll().find((/** @type {any} */ x) => x.id === id);
+    if (!st || !h || st.busy.has(id)) return;
+    st.busy.add(id);
+    st.err = '';
+    paintHuman();
+    const r = await api('humanMark', id, action, why, h.text);
+    st.busy.delete(id);
+    if (!r || r.error) {
+      st.err = T('hm.fail', '{id}: не записано: {why}', { id, why: (r && r.error) || '?' });
+      host.log(`${id}: в «Проверить человеку» не записано: ${(r && r.error) || '?'}`);
+    } else { st.ask = ''; st.why = ''; }
+    st.later = false;
+    await load();
+  };
+  const humanSave = (/** @type {string} */ id) => {
+    if (!hm) return;
+    if (!hm.why.trim()) { const b = /** @type {HTMLInputElement | null} */ (humanEl.querySelector('[data-hwhy]')); if (b) b.focus(); return; }
+    humanWrite(id, 'skip', hm.why);
+  };
+  humanEl.addEventListener('click', (ev) => {
+    const t = /** @type {HTMLElement} */ (ev.target);
+    if (!hm) return;
+    if (t.closest('[data-hact="back"]')) { closeHuman(); return; }
+    if (t.closest('[data-hact="cancel"]')) { hm.ask = ''; hm.why = ''; paintHuman(); return; }
+    const d = /** @type {HTMLElement | null} */ (t.closest('[data-hdone]'));
+    if (d) { humanWrite(d.dataset.hdone || '', 'done', ''); return; }
+    const k = /** @type {HTMLElement | null} */ (t.closest('[data-hskip]'));
+    if (k) {
+      hm.ask = k.dataset.hskip || '';
+      hm.why = '';
+      paintHuman();
+      const b = /** @type {HTMLInputElement | null} */ (humanEl.querySelector('[data-hwhy]'));
+      if (b) b.focus();
+      return;
+    }
+    const sv = /** @type {HTMLElement | null} */ (t.closest('[data-hsave]'));
+    if (sv) humanSave(sv.dataset.hsave || '');
+  });
+  humanEl.addEventListener('input', (ev) => { if (hm && /** @type {HTMLElement} */ (ev.target).dataset.hwhy) hm.why = /** @type {HTMLInputElement} */ (ev.target).value; });
+  humanEl.addEventListener('keydown', (ev) => {
+    const t = /** @type {HTMLElement} */ (ev.target);
+    if (!hm || !t.dataset.hwhy) return;
+    if (ev.key === 'Enter') { ev.preventDefault(); humanSave(t.dataset.hwhy); }
+    if (ev.key === 'Escape') { ev.stopPropagation(); hm.ask = ''; hm.why = ''; paintHuman(); }
+  });
+  humanEl.addEventListener('focusout', () => setTimeout(hmFlush, 0));
+  humanEl.addEventListener('pointerdown', () => { hmDown = true; });
+  const hmUp = () => { if (hmDown) setTimeout(() => { hmDown = false; hmFlush(); }, 0); };
+  document.addEventListener('pointerup', hmUp);
+  document.addEventListener('pointercancel', hmUp);
+
   // ——— «Решения и тупики» во всю панель (t517, экран 16): записи d<N>.md с фильтром по виду, карте и файлу ———
   /**
    * Открытый экран: вид («all», «решение», «тупик», «договорённость»), строки фильтра карты и файла — часть заголовка карты или пути, без учёта регистра.
@@ -3084,6 +3211,7 @@ function roadmapSetup(host) {
     refreshPassport();
     refreshPhase();
     paintInbox();
+    humanSoft();
     paintDecs();
     if (cur) { refreshCard(); growAll(); }
     // Панель снова открыта: шаблон в ctx.dataDir или файлы доски могли поменяться, пока слежение было снято (t546).
@@ -3110,7 +3238,7 @@ function roadmapSetup(host) {
   /** Панель переехала: колонка, строка слева, кнопка шапки; поля карты — по новой ширине. */
   const moved = () => { paintRight(); paintRow(); paintFull(); if (cur) growAll(); };
   /** Прокрутка частей панели (t601): перенос узла в другое место обнуляет scrollTop — запомнить до переноса, вернуть, когда панель уже видна. */
-  const parts = [body, cardEl, promptEl, passEl, phaseEl, inboxEl, decsEl];
+  const parts = [body, cardEl, promptEl, passEl, phaseEl, inboxEl, humanEl, decsEl];
   const scrolls = () => parts.map((el) => el.scrollTop);
   const unscroll = (/** @type {number[]} */ s) => parts.forEach((el, i) => { if (s[i]) el.scrollTop = s[i]; });
   /** «Во всё окно» (t526): панель — во вкладку «Роадмап · проект»; вкладка уже есть — показать её, второй не будет. */
@@ -3163,8 +3291,8 @@ function roadmapSetup(host) {
   if (host.pages) host.onTerminals(saveTab);
   // Доска во вкладке — строка слева показывает вкладку, а не прячет панель.
   row.onclick = () => { if (tab && host.pages) host.pages.show(tab.sid); else setOpen(!open); };
-  // Экран «Входящих» — тоже (t685): закрытые карты под списком прячутся и возвращаются сразу.
-  hideBox.addEventListener('change', () => { hideDone = hideBox.checked; api('setState', { hideDone }); draw(); paintInbox(); });
+  // Экраны «Входящих» и «Проверить человеку» — тоже (t685, t1644): закрытые под списком прячутся и возвращаются сразу.
+  hideBox.addEventListener('change', () => { hideDone = hideBox.checked; api('setState', { hideDone }); draw(); paintInbox(); paintHuman(); });
   /**
    * «Составить роадмап» (t519), «Использовать существующий» и «Выбрать файл…» (t1603): вкладку открывает главная часть. Доска появится — слежение пришлёт её, пустой экран уйдёт сам.
    * @param {'compose' | 'adopt' | 'pickPlan'} [how]
@@ -3431,6 +3559,7 @@ function roadmapSetup(host) {
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="pickPlan"]')) { composeRun('pickPlan'); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="passport"]')) { openPassport(); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="inbox"]')) { openInbox(); return; }
+    if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="human"]')) { openHuman(); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="decs"]')) { openDecs(); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="decsWrong"]')) { openDecs({ type: 'wrong', card: '', file: '' }); return; }
     const op = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-ophase]'));
@@ -3539,7 +3668,7 @@ function roadmapSetup(host) {
     // Вкладка итога сменила состояние (t1182) — старая строка под фазой («уже пишется») уступает «записан» / «не записан».
     const sumSt = (/** @type {any} */ x, /** @type {string} */ ph) => x && x.reports && x.reports[ph] ? x.reports[ph].sumSt : undefined;
     if (waveNote && sumSt(b, waveNote.phase) && sumSt(b, waveNote.phase) !== sumSt(last, waveNote.phase)) waveNote = null;
-    last = b; if (open) drawSoft(); refreshPassport(); refreshPhase(); inboxSoft(); paintDecs(); if (!foundEl.hidden) paintFound(); if (dc) loadKnown(); if (cur) refreshCard(); if (pv) loadPrompt(); });
+    last = b; if (open) drawSoft(); refreshPassport(); refreshPhase(); inboxSoft(); humanSoft(); paintDecs(); if (!foundEl.hidden) paintFound(); if (dc) loadKnown(); if (cur) refreshCard(); if (pv) loadPrompt(); });
   // Скрытая вкладка карты «готово» (t1060): главная часть выждала паузу, окно закрывает её без вопроса; экран демон пишет в .kermach/runs/<карта>-<время>.log.
   host.on('runClose', (/** @type {any} */ x) => {
     const term = host.bridge && host.bridge.term;
@@ -3587,7 +3716,7 @@ function roadmapSetup(host) {
     if (typeof s.mainAgent === 'string' && s.mainAgent !== mainAg) { mainAg = s.mainAgent; if (open) draw(); }
     if (s.open) setOpen(true, false);
   });
-  const offLang = w.I18n ? w.I18n.onChange(() => { labels(); if (open) draw(); if (cur) { cardLabels(); refreshCard(); } if (pv) paintPrompt(); paintPassport(); paintPhase(); paintInbox(); if (dc) decsFrame(); }) : null;
+  const offLang = w.I18n ? w.I18n.onChange(() => { labels(); if (open) draw(); if (cur) { cardLabels(); refreshCard(); } if (pv) paintPrompt(); paintPassport(); paintPhase(); paintInbox(); humanSoft(); if (dc) decsFrame(); }) : null;
   // Вкладка прошлого раза — на своё место; была активной — снова активная.
   /** @type {{ pos: number | null, active?: boolean } | null} */
   let wasTab = null;

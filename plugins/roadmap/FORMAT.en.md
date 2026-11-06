@@ -75,6 +75,8 @@ Header:
 | `tries` | launch attempt number, written by the program (t1440) | a number `1`, `2`, `3`…; rewritten on every launch from "Run", `kermach roadmap run`, a wave or a batch. On a done card — the attempt it was delivered on: `kermach roadmap accept fN` sums up the `size.js` tiers by it. Do not edit by hand; no key — the card was launched before t1440 or not by the program |
 | `depends` | which cards it depends on | a list of numbers `[t09, t10]` or empty |
 | `human` | whether a human is needed | `no human`, `human needed` |
+| `bug_phase` | the card fixes something already accepted: in which phase the bug was accepted, optional (t1637) | `f12`; the phase is unclear — no key. A wrong value is a board remark, the card is still read |
+| `bug_by` | who found the bug in already accepted work, optional (t1637) | `human`, `live run`, `review`. A wrong value is a board remark, the card is still read. A bug found before the phase was accepted gets no mark. The count is the second table of `kermach roadmap stats` |
 | `draft` | draft, optional (t1325) | `да` — a card of a later phase without "How to check": the "All" and "Independent" waves skip it with the reason "draft", "Selected" launches it; the card row in the panel has the mark "draft". No key — an ordinary card. See "Card draft" below |
 | `created` | when it was created | `2026-10-12 11:20` |
 | `closed` | when it was closed, optional | `2026-10-12 15:40`; set by the agent on close, by the window when the status changes to "done". No key — this card gets into the prompt of a neighbouring card of the phase (part 5) only if created later (`created`), and the card row on the board has no time: the file time after `git clone` is wrong |
@@ -213,6 +215,7 @@ What it checks:
 - the criterion is visible in practice: command output, a page, a file; "all cards closed" is not a criterion;
 - "How to check" measures the card's goal, not "opens without an error";
 - if there is a sample, the first phase ends with a pilot comparing a whole page, every phase with pages has a criterion of comparison with the sample;
+- a phase that changes a program, a site or something else that works has a criterion of a real run and its card in the middle of the phase;
 - sample sections without data: the human's answer is recorded in the overview before the cards of those pages are created;
 - the order of phases and dependencies, an access card for cards with a server.
 
@@ -221,7 +224,7 @@ No more than two rounds:
 - the program prints the round result into the builder's tab as one line «[Роадмап] Проверка роадмапа, круг N из 2: …» (roadmap check, round N of 2) with the path to the review. If the line did not get through (a human is typing a long text, the tab did not accept it), the next `start` returns it as the answer and does not start the next round;
 - serious remarks — the builder fixes the board and calls `start` again: the second round;
 - clean, the second round is over, or the check did not happen (limit, no claude, longer than 20 minutes) — the next `start` opens the main session. What is left and why the check did not happen is in its task: it will tell the human.
-Serious — a card without a phase criterion, a criterion without a card, the criterion "all cards closed", a check of the wrong goal, no pilot or sample comparison, a section without the human's answer, a missing needed dependency. The rest is minor, for the human in the summary.
+Serious — a card without a phase criterion, a criterion without a card, the criterion "all cards closed", a check of the wrong goal, no pilot or sample comparison, a phase with a program has no real run in the middle, a section without the human's answer, a missing needed dependency. The rest is minor, for the human in the summary.
 The review of every round is `.kermach\grades\roadmap-N.md` in the project folder (the next free number, not for git). The program remembers the round: reopening the window does not restart the check, a new builder tab starts from round 1.
 The checker takes one of the two card-checker slots: with two card checks running, it waits its turn.
 
@@ -240,6 +243,7 @@ What it checks:
 - the human's edits from the previous phase's acceptance reached the cards: the main session writes them in "Now" as the line «Правки приёмки для fN: …»;
 - the phase criteria cover the cards and vice versa, the last card is a review;
 - the cards do not rely on what the previous phase did not do.
+- a phase that changes a program, a site or something else that works has a criterion of a real run and its card in the middle of the phase.
 
 The order is the same as for the roadmap, only the tab is the main session's and the command is `wave`:
 - while a round runs, `wave` answers with code 4 and the text «проверка фазы идёт» (the phase check is running) — no wave;
@@ -266,7 +270,13 @@ Body: `# …` — the phase name. The label `Goal:` — the goal of the phase.
 The label `Done criteria:` — a list below it, one criterion per line: `- [ ] …` not ticked, `- [x] …` ticked.
 A `- [ ]` line inside a code block ```…``` is an example, not a criterion: the window does not show it and a click does not change it.
 A phase is done when all criteria are ticked, not when the cards have run out.
+A criterion stayed without `[x]` because only a human can look at it — the file body gets the line `Not checked by a human: what to look at; one more thing`.
+Each thing after `;` is a separate item; `;` inside brackets, «…» quotes and `code` does not split. An item's address is `f<N>.<K>`, K is its order in the file, so add new things at the end.
+A mark is added at the end of the item, the line is not removed: `what to look at [checked 2026-11-06]` or `what to look at [not needed 2026-11-06: reason]`. The reason is required.
+Marks come from the buttons of the "For a human to check" entry in the window and from the commands `kermach roadmap human f<N>.<K> --done`, `kermach roadmap human f<N>.<K> --skip "reason"`. List — `kermach roadmap human [--all]`. The command refuses a card agent: it writes a mark into the file in the same form and only at the human's word.
+The label and mark words are read in all board languages and written in the board language. The old form — a section with such a heading and items — is read; do not create new ones.
 If there is a sample (markup, mockup, design, old site), the first phase and every later phase that changes pages have the criterion "the phase's pages match the sample over the whole page: every section is there or removed by the human's answer" (t1434). The comparison is not postponed to the last phase and not limited to the first screen.
+A phase changes a program, a site or something else that works — it has the criterion of a real run: it works in the real environment the human will deal with, not on a stand-in agent or a mockup. The run card stands in the middle of the phase: it waits for the main cards, and cards that need its result wait for it; a run only in the review at the end is too late. A real run is impossible — the criterion names what is left to the human and what it was checked on instead of the real environment. A phase with only text or research does not need such a criterion.
 
 ```
 ---
@@ -512,6 +522,8 @@ Words by language:
 | `догадка` | `здогадка` | `guess` | `Vermutung` |
 | `агент` | `агент` | `agent` | `Agent` |
 | `программа` | `програма` | `program` | `Programm` |
+| `человек` | `людина` | `human` | `Mensch` |
+| `живой прогон` | `живий прогін` | `live run` | `Live-Lauf` |
 | `Что сделать` | `Що зробити` | `What to do` | `Was tun` |
 | `Зачем` | `Навіщо` | `Why` | `Wozu` |
 | `Файлы` | `Файли` | `Files` | `Dateien` |
@@ -545,7 +557,7 @@ Task templates name a board word with the placeholder `{доска:<Russian word
 The number is shared across the project and is given as soon as the card appears, including in the Inbox. It does not change when the card is moved into a phase.
 
 A new card or entry — with a command in the Kermach terminal: `kermach roadmap new t "Title"` or `kermach roadmap new d "Gist" --card t12`. The program issues the number: two agents together will not take the same number.
-Card fields are flags: `--text` — "What to do", `--why` — "Why", `--files` — "Files", `--check` — "How to check" (t1439). Write the check in `--check`, not in `--text`: otherwise "How to check" stays empty and the roadmap check will not let the wave launch. A card in a phase without `--check` is a remark in the command output.
+Card fields are flags: `--text` — "What to do", `--why` — "Why", `--files` — "Files", `--check` — "How to check" (t1439). Write the check in `--check`, not in `--text`: otherwise "How to check" stays empty and the roadmap check will not let the wave launch. A card in a phase without `--check` is a remark in the command output. A card that fixes something already accepted — `--bug-phase fN --bug-by who`: a wrong value, a phase not on the board and `--bug-phase` without `--bug-by` are refused with code 1 (t1637).
 
 A new card by hand:
 1. Find the largest number — in `counter.json` and among the `t<N>.md` files.

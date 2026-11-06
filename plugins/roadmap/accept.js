@@ -51,6 +51,7 @@ const SAY = {
   ' (заведена {v})': [' (створено {v})', ' (created {v})', ' (angelegt {v})'],
   '  … ещё {n} — файлы t<номер>.md без phase: в {v}': ['  … ще {n} — файли t<номер>.md без phase: у {v}', '  … {n} more — files t<number>.md without phase: in {v}', '  … noch {n} — Dateien t<Nummer>.md ohne phase: in {v}'],
   'Карты в работе (не править; задело — сказать человеку): {v}': ['Картки в роботі (не правити; зачепило — сказати людині): {v}', 'Cards in progress (do not edit; if affected — tell the human): {v}', 'Karten in Arbeit (nicht ändern; betroffen — dem Menschen sagen): {v}'],
+  'Не проверено человеком, все фазы ({n}) — покажи человеку на шаге 7:': ['Не перевірено людиною, усі фази ({n}) — покажи людині на кроці 7:', 'Not checked by a human, all phases ({n}) — show the human at step 7:', 'Nicht vom Menschen geprüft, alle Phasen ({n}) — zeige es dem Menschen in Schritt 7:'],
   'Входящие': ['Вхідні', 'Inbox', 'Eingang'],
   'черновик': ['чернетка', 'draft', 'Entwurf'],
   'нет «Как проверить»': ['немає «{c}»', 'no «{c}»', 'kein «{c}»'],
@@ -183,6 +184,10 @@ function facts(b, ph, project, today = day(new Date())) {
   out.push('', inbox.length ? tr(L, '«Входящие» ({n}) — разбери каждую: в следующую фазу, отменить, оставить:', { n: inbox.length, w: inw }) : tr(L, '«Входящие» пусты — разбирать нечего.', { w: inw }));
   for (const c of inbox.slice(0, MAX_INBOX)) out.push(`${cardLine(c, L)}${c.created ? tr(L, ' (заведена {v})', { v: String(c.created).slice(0, 10) }) : ''}`);
   if (inbox.length > MAX_INBOX) out.push(tr(L, '  … ещё {n} — файлы t<номер>.md без phase: в {v}', { n: inbox.length - MAX_INBOX, v: b.root }));
+
+  // Что не проверил человек (t1644): по всем фазам и без обрезки, иначе долг снова скрыт. Открытых нет — ни строки.
+  const human = b.phases.flatMap((/** @type {any} */ x) => x.human || []).filter((/** @type {any} */ h) => h.state === 'open');
+  if (human.length) out.push('', tr(L, 'Не проверено человеком, все фазы ({n}) — покажи человеку на шаге 7:', { n: human.length }), ...human.map((/** @type {any} */ h) => `- ${h.id}: ${h.text}`));
 
   const busy = b.cards.filter((/** @type {any} */ c) => !ids.has(c.id) && ['в работе', 'ждёт ответа', 'на проверке', 'на ревью'].includes(c.status));
   if (busy.length) out.push('', tr(L, 'Карты в работе (не править; задело — сказать человеку): {v}', { v: busy.map((/** @type {any} */ c) => c.id).join(', ') }));

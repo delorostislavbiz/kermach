@@ -21,6 +21,8 @@ const CARD_STATUS = ['в очереди', 'в работе', 'ждёт отве�
 const PHASE_STATUS = ['запланирована', 'идёт', 'готова'];
 const HEALTH = ['зелёный', 'жёлтый', 'красный'];
 const HUMAN = ['без человека', 'нужен человек'];
+/** Кто нашёл ошибку в уже принятом (t1637): поле bug_by карты. */
+const BUG_BY = ['человек', 'живой прогон', 'ревью'];
 const KINDS = ['сделать', 'ревью', 'разведка'];
 /** Виды записей d<N>. «заметка» (t1046) — находка сбоку, которая не мешает сейчас: агентам не подаётся, в паттерны не идёт, живёт на доске для человека. */
 const DTYPES = ['решение', 'тупик', 'договорённость', 'паттерн', 'заметка'];
@@ -66,6 +68,7 @@ const WORDS = {
   'паттерн': ['патерн', 'pattern', 'Muster'], 'заметка': ['нотатка', 'note', 'Notiz'],
   'проверено': ['перевірено', 'verified', 'geprüft'], 'догадка': ['здогадка', 'guess', 'Vermutung'],
   'агент': ['агент', 'agent', 'Agent'], 'программа': ['програма', 'program', 'Programm'],
+  'человек': ['людина', 'human', 'Mensch'], 'живой прогон': ['живий прогін', 'live run', 'Live-Lauf'],
   'Что сделать': ['Що зробити', 'What to do', 'Was tun'], 'Зачем': ['Навіщо', 'Why', 'Wozu'], 'Файлы': ['Файли', 'Files', 'Dateien'],
   'Как проверить': ['Як перевірити', 'How to check', 'Wie prüfen'], 'Особые указания': ['Особливі вказівки', 'Special notes', 'Besondere Hinweise'],
   'Что сделано': ['Що зроблено', 'What was done', 'Was erledigt wurde'], 'Доказательство': ['Доказ', 'Proof', 'Nachweis'],
@@ -76,6 +79,8 @@ const WORDS = {
   'Где образцы и канон': ['Де зразки й канон', 'Samples and canon', 'Muster und Kanon'], 'Что не трогать': ['Що не чіпати', 'Do not touch', 'Nicht anfassen'],
   'Что ещё обязано быть, кроме зелёной проверки': ['Що ще має бути, крім зеленої перевірки', 'Required besides a green check', 'Pflicht außer grüner Prüfung'],
   'Журнал': ['Журнал', 'Log', 'Protokoll'],
+  'Не проверено человеком': ['Не перевірено людиною', 'Not checked by a human', 'Nicht vom Menschen geprüft'],
+  'проверил': ['перевірив', 'checked', 'geprüft'], 'не нужно': ['не потрібно', 'not needed', 'nicht nötig'],
 };
 /**
  * Другие написания значений шапки при чтении (t1429): агент написал понятное, но не то слово — карта всё равно читается.
@@ -93,7 +98,7 @@ const langCode = (v) => { const s = String(v || '').trim().toLowerCase(); return
 const say = (v, lang = '') => { const i = LANGS.indexOf(lang); return (i > 0 && WORDS[v] && WORDS[v][i - 1]) || v; };
 /** Ключи шапки, которые правит программа; остальные ключи файла — чужие, их сохраняем и не трогаем. */
 const HEAD_KEYS = {
-  t: ['phase', 'status', 'kind', 'agent', 'model', 'effort', 'depends', 'human', 'created', 'closed', 'source', 'used', 'served', 'from'],
+  t: ['phase', 'status', 'kind', 'agent', 'model', 'effort', 'depends', 'human', 'created', 'closed', 'source', 'used', 'served', 'from', 'bug_phase', 'bug_by'],
   f: ['status', 'health', 'health_why', 'health_by', 'health_at'],
   d: ['type', 'card', 'files', 'date', 'agent', 'how', 'until', 'repeats', 'cancelled', 'differs', 'wrong', 'stack', 'from', 'approved', 'pattern', 'global', 'for'],
   passport: [],
@@ -112,8 +117,9 @@ const OWN_HEAD = { t: ['pick', 'advisor', 'agent_why', 'checked', 'tries'], f: [
  * @typedef {{ text: string, done: boolean }} Criterion
  * @typedef {{ id: string, num: number, file: string, title: string, phase: string, status: string, kind: string, agent: string, model: string,
  *   effort: string, depends: string[], human: string, created: string, closed: string, source: string, used: Record<string, string>, served: string[], fields: Record<string, string>,
- *   body?: string, from: string, extra: Record<string, string> }} Card
+ *   body?: string, from: string, bug_phase: string, bug_by: string, extra: Record<string, string> }} Card
  * from — дело «Дел», из которого карта (t1163): k<N> в .kermach\tasks того же проекта.
+ * bug_phase, bug_by — карта чинит уже принятое (t1637): в какой фазе ошибка была принята и кто её нашёл (BUG_BY).
  * used — отзыв агента о поданных записях (t836): d<N> → «помогла», «не пригодилась», «неверна» или «не открывал» (t1336: запись не открыта — в долю «помогла» не входит).
  * served — какие d<N> программа подала агенту в задании (t1008), пишет addServed.
  * @typedef {{ id: string, num: number, file: string, title: string, status: string, health: string, healthWhy: string, healthBy: string, healthAt: string,
@@ -149,6 +155,8 @@ const norm = (s) => s.trim().toLowerCase().replace(/ё/g, 'е').replace(/[’ʼ`
  */
 const canon = (list, v) => list.find((x) => norm(x) === norm(v))
   || list.find((x) => [...(WORDS[x] || []), ...(ALIASES[x] || [])].some((w) => norm(w) === norm(v))) || '';
+/** Кто нашёл ошибку (t1637), слово любого языка доски → русское слово из BUG_BY или ''. Значение флага --bug-by проверяется им. @param {string} v */
+const bugByWord = (v) => canon(BUG_BY, v);
 /** Прочерк и пустое — пустое значение. @param {string} v */
 const blank = (v) => (/^[—–-]?$/.test(v.trim()) ? '' : v.trim());
 /** Настоящая дата ГГГГ-ММ-ДД: 2026-13-45 — нет. @param {string} v */
@@ -592,7 +600,7 @@ function boardLang(project) {
 }
 
 /** Значения шапки, у которых слово зависит от языка доски (t1429): вид файла → ключ → допустимые значения. @type {Record<string, Record<string, string[]>>} */
-const HEAD_LISTS = { t: { status: CARD_STATUS, kind: KINDS, human: HUMAN }, f: { status: PHASE_STATUS, health: HEALTH }, d: { type: DTYPES, how: HOW, for: FOR }, passport: {} };
+const HEAD_LISTS = { t: { status: CARD_STATUS, kind: KINDS, human: HUMAN, bug_by: BUG_BY }, f: { status: PHASE_STATUS, health: HEALTH }, d: { type: DTYPES, how: HOW, for: FOR }, passport: {} };
 /**
  * Значение шапки для записи (t1429): слово из списка — на языке доски. Русская доска пишет русское слово как прислали (регистр тоже),
  * слово другого языка — русским. Незнакомое значение — как есть: его отклонит проверка item.
@@ -603,6 +611,95 @@ function headWord(kind, key, v, lang) {
   if (!of || typeof v !== 'string') return v;
   const c = canon(of, v);
   return c && (lang || norm(c) !== norm(v)) ? say(c, lang) : v;
+}
+
+/** Подпись строки «что проверить человеку» на всех языках (t1644): смена языка доски старые строки не переписывает. */
+const HUMAN_LABEL = 'Не проверено человеком';
+const HUMAN_LABELS = [HUMAN_LABEL, ...WORDS[HUMAN_LABEL]];
+const HUMAN_DONE = ['проверил', ...WORDS['проверил']];
+const HUMAN_SKIP = ['не нужно', ...WORDS['не нужно']];
+const HUMAN_RE = new RegExp(`^\\s*(?:[-*]\\s+(?!\\[[ xX]\\]))?(?:${HUMAN_LABELS.join('|')})\\s*:(.*)$`, 'i');
+/** Заголовок старого вида: раздел вместо строки, пункты в нём — то же самое (f19). */
+const HUMAN_SEC = new RegExp(`^##\\s+(?:${HUMAN_LABELS.join('|')})\\s*:?\\s*$`, 'i');
+/** Отметка в конце части: [проверил ГГГГ-ММ-ДД] или [не нужно ГГГГ-ММ-ДД: причина], слова на любом из четырёх языков. */
+const HUMAN_MARK = new RegExp(`\\s*\\[(${[...HUMAN_DONE, ...HUMAN_SKIP].join('|')})\\s+(\\d{4}-\\d{2}-\\d{2})(?::\\s*([^\\]]*))?\\]\\s*$`, 'i');
+const isHumanSkip = (/** @type {string} */ w) => HUMAN_SKIP.some((x) => x.toLowerCase() === w.toLowerCase());
+/**
+ * Части одной строки: деление по «;» вне скобок, кавычек и `кода`. Скобка без пары дальше не делит: лучше одна длинная часть, чем обрывки.
+ * @param {string} line @param {number} from с какого знака значение @returns {{ at: number, end: number }[]}
+ */
+function humanSplit(line, from) {
+  /** @type {{ at: number, end: number }[]} */
+  const out = [];
+  let depth = 0, code = false, start = from;
+  for (let i = from; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '`') code = !code;
+    if (code) continue;
+    if ('([«'.includes(ch)) depth++;
+    else if (')]»'.includes(ch)) depth = Math.max(0, depth - 1);
+    else if (ch === ';' && !depth) { out.push({ at: start, end: i }); start = i + 1; }
+  }
+  out.push({ at: start, end: line.length });
+  return out;
+}
+/**
+ * Причина «не нужно» для отметки: одна строка без знаков, которые ломают разбор соседних частей. «;» делит части, «]» закрывает отметку,
+ * скобка или ёлочка без пары и обратная кавычка в humanSplit склеили бы эту часть со следующей. Парные скобки и ёлочки остаются.
+ * @param {unknown} why @returns {string}
+ */
+function humanReason(why) {
+  const s = [...String(why || '').replace(/\s+/g, ' ').replace(/;/g, ',').replace(/\[/g, '(').replace(/\]/g, ')').replace(/`/g, '')];
+  /** @type {number[]} */
+  const open = [];
+  /** @type {Set<number>} */
+  const drop = new Set();
+  s.forEach((ch, i) => {
+    if (ch === '(' || ch === '«') open.push(i);
+    else if ((ch === ')' || ch === '»') && open.pop() === undefined) drop.add(i);
+  });
+  for (const i of open) drop.add(i);
+  return s.filter((_, i) => !drop.has(i)).join('').replace(/\s+/g, ' ').trim();
+}
+/**
+ * Что посмотреть человеку (t1644): части строк «Не проверено человеком: …» файла фазы. Номер части — по порядку в файле, дописанные в конец
+ * номера прежних не сдвигают. Блоки кода и признаки `- [ ]` не считаются: там это слова, а не строка. Значение «—» и «нет» — не часть.
+ * @param {string} id номер фазы @param {Parsed} p
+ * @returns {{ id: string, n: number, phase: string, text: string, state: 'open' | 'done' | 'skip', date: string, why: string, line: number, at: number, end: number }[]}
+ */
+function humanParts(id, p) {
+  const code = codeMask(p.lines, p.headEnd);
+  /** @type {ReturnType<typeof humanParts>} */
+  const out = [];
+  /** @param {number} i @param {number} from */
+  const add = (i, from) => {
+    for (const r of humanSplit(p.lines[i], from)) {
+      const raw = p.lines[i].slice(r.at, r.end);
+      if (/^\s*(?:[—–-]|нет|ні|none|keine)?\s*\.?\s*$/i.test(raw)) continue;
+      const m = HUMAN_MARK.exec(raw);
+      const text = (m ? raw.slice(0, m.index) : raw).trim();
+      if (!text) continue;
+      const n = out.length + 1;
+      const end = r.at + raw.replace(/\s+$/, '').length;
+      out.push({ id: `${id}.${n}`, n, phase: id, text, state: !m ? 'open' : isHumanSkip(m[1]) ? 'skip' : 'done', date: m ? m[2] : '', why: m ? String(m[3] || '').trim() : '', line: i, at: r.at, end });
+    }
+  };
+  for (let i = p.headEnd; i < p.lines.length; i++) {
+    if (code[i]) continue;
+    const m = HUMAN_RE.exec(p.lines[i]);
+    if (m) { add(i, p.lines[i].length - m[1].length); continue; }
+    if (!HUMAN_SEC.test(p.lines[i])) continue;
+    // Старый вид: раздел до следующего заголовка. Есть пункты — части это они, а строка без маркера — пояснение; пунктов нет — все строки.
+    let end = i + 1;
+    while (end < p.lines.length && (code[end] || !/^#{1,2}\s/.test(p.lines[end]))) end++;
+    const rows = [];
+    for (let k = i + 1; k < end; k++) if (!code[k] && p.lines[k].trim() && !/^\s*[-*]\s+\[[ xX]\]/.test(p.lines[k])) rows.push(k);
+    const bullet = (/** @type {number} */ k) => /^\s*[-*]\s+/.exec(p.lines[k]);
+    const list = rows.some((k) => bullet(k)) ? rows.filter((k) => bullet(k)) : rows;
+    for (const k of list) { const b = bullet(k); add(k, b ? b[0].length : 0); }
+    i = end - 1;
+  }
+  return out;
 }
 
 /**
@@ -657,6 +754,12 @@ function item(kind, num, file, text, lang = '') {
     for (const s of list(blank(h.served || ''))) { if (/^d\d{1,6}$/.test(s)) served.push(s); else warn.push(`served: «${s}» — нужно d<номер>`); }
     const from = blank(h.from || '');
     if (from && !/^k\d{1,6}$/.test(from)) warn.push(`from: «${from}» — нужно k<номер> дела`);
+    // t1637: отметка для счёта ошибок, как и used (t836): опечатка не прячет карту с доски и из волны, а даёт замечание; его печатает stats.
+    const bugPhase = blank(h.bug_phase || '');
+    if (bugPhase && !/^f\d{1,6}$/.test(bugPhase)) warn.push(`bug_phase: «${bugPhase}» — нужно f<номер> или пусто`);
+    const bugWord = blank(h.bug_by || '');
+    const bugBy = bugWord ? canon(BUG_BY, bugWord) : '';
+    if (bugWord && !bugBy) warn.push(`bug_by: «${bugWord}» — допустимы ${BUG_BY.join(', ')}`);
     const sp = spans(p, CARD_FIELDS, lang);
     /** @type {Record<string, string>} */
     const fields = {};
@@ -664,7 +767,7 @@ function item(kind, num, file, text, lang = '') {
     // body (t1105) — весь текст после заголовка по порядку файла: поля, свободные строки, разделы «## Ответ оркестратора». Его подаёт часть 4 промпта.
     const body = (tl < 0 ? [] : p.lines.slice(tl + 1)).map((l) => l.replace(/\s+$/, '')).join('\n').trim();
     return { item: { id, num, file, title, phase, status, kind: kindOf, agent: blank(h.agent || ''), model: blank(h.model || ''), effort: blank(h.effort || ''),
-      depends, human, created: h.created || '', closed: blank(h.closed || ''), source: blank(h.source || ''), used, served, fields, body, from: /^k\d{1,6}$/.test(from) ? from : '', extra }, warn };
+      depends, human, created: h.created || '', closed: blank(h.closed || ''), source: blank(h.source || ''), used, served, fields, body, from: /^k\d{1,6}$/.test(from) ? from : '', bug_phase: /^f\d{1,6}$/.test(bugPhase) ? bugPhase : '', bug_by: bugBy, extra }, warn };
   }
   if (kind === 'f') {
     const status = canon(PHASE_STATUS, h.status || '');
@@ -675,7 +778,8 @@ function item(kind, num, file, text, lang = '') {
     const sp = spans(p, PHASE_FIELDS, lang);
     const crit = sp.criteria ? criteria(p, sp.criteria) : [];
     return { item: { id, num, file, title, status, health, healthWhy: h.health_why || '', healthBy: h.health_by || '', healthAt: h.health_at || '',
-      goal: sp.goal ? fieldValue(sp.goal.value) : '', criteria: crit, ready: crit.length > 0 && crit.every((c) => c.done), cards: [], extra } };
+      goal: sp.goal ? fieldValue(sp.goal.value) : '', criteria: crit, ready: crit.length > 0 && crit.every((c) => c.done), cards: [], extra,
+      human: humanParts(id, p).map(({ at: _a, end: _e, ...x }) => x) } };
   }
   const type = canon(DTYPES, h.type || '');
   if (!type) return { error: `type «${h.type || ''}»: допустимы ${DTYPES.join(', ')}` };
@@ -1362,6 +1466,41 @@ function reviewed(project, ref, card) {
   return was;
 }
 
+/**
+ * Отметить часть строки «Не проверено человеком» (t1644): отметка с датой дописывается в конец этой части, строка остаётся, остальные байты файла те же.
+ * Отмечают окно и команда; разбор — humanParts. Причина «не нужно» обязательна: без неё через полгода не понять, почему долг снят.
+ * @param {string} project @param {string} ref f<N>.<K> @param {'done' | 'skip'} action @param {string} [why]
+ * @param {string} [expect] текст части, который видел человек: файл поменялся и под номером теперь другое — отказ
+ * @returns {{ id: string, text: string, state: string, date: string, why: string, was: string, file: string }}
+ */
+function humanMark(project, ref, action, why = '', expect = '') {
+  const m = /^(f\d{1,6})\.(\d{1,4})$/.exec(String(ref));
+  if (!m) throw new Error(`неверная ссылка «${ref}»: нужно f<номер>.<номер части>, например f19.1`);
+  if (action !== 'done' && action !== 'skip') throw new Error('отметка — done или skip');
+  const reason = humanReason(why);
+  if (action === 'skip' && !reason) throw new Error('«не нужно»: напишите причину');
+  const { num, file } = locate(project, m[1]);
+  if (!fs.existsSync(file)) throw new Error(`фазы ${m[1]} на доске нет`);
+  const old = readSmall(file);
+  const lang = boardLang(project);
+  const before = item('f', num, path.basename(file), old, lang);
+  if ('error' in before) throw new Error(`файл с ошибкой не правим: ${before.error}`);
+  const p = parse(old);
+  const part = humanParts(m[1], p).find((x) => x.id === ref);
+  if (!part) throw new Error(`в ${m[1]} нет части ${ref}: посмотрите список заново`);
+  if (expect && expect !== part.text) throw new Error(`строка ${ref} изменилась: теперь «${part.text}». Посмотрите список заново`);
+  if (part.state !== 'open') throw new Error(`${ref} уже отмечена: ${part.state === 'skip' ? `не нужно (${part.why})` : 'проверил'} ${part.date}`);
+  const date = stamp().slice(0, 10);
+  const mark = action === 'skip' ? `[${say('не нужно', lang)} ${date}: ${reason}]` : `[${say('проверил', lang)} ${date}]`;
+  const was = p.lines[part.line];
+  p.lines[part.line] = `${was.slice(0, part.end)} ${mark}${was.slice(part.end)}`;
+  const text = joined(p);
+  const after = item('f', num, path.basename(file), text, lang);
+  if ('error' in after) throw new Error(`правка не принята: ${after.error}`);
+  save(file, text);
+  return { id: ref, text: part.text, state: action, date, why: action === 'skip' ? reason : '', was, file: path.basename(file) };
+}
+
 /** Выдать следующий номер карты (t) или записи (d) и записать его в счётчик. @param {string} project @param {'t' | 'd'} kind */
 function nextId(project, kind) {
   if (kind !== 't' && kind !== 'd') throw new Error('счётчик есть у карт (t) и записей (d)');
@@ -1717,4 +1856,4 @@ async function ownRootAsync(project, dir) {
   if (up(rel) || path.isAbsolute(rel)) throw new Error(`папка доски ведёт за пределы проекта: ${real}`);
 }
 
-module.exports = { DIR, MAX_SIZE, ERROR_LINE, LANGS, WORDS, stamp, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, KINDS, DTYPES, HOW, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, boardLang, setLang, say, cardStart, passportEmpty, prime, update, addServed, merge, reviewed, differ, section, nextId, create, watch, codeMask, edges, sameField, alike, usedWarn, checkBoard };
+module.exports = { DIR, MAX_SIZE, ERROR_LINE, LANGS, WORDS, stamp, humanMark, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, BUG_BY, bugByWord, KINDS, DTYPES, HOW, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, boardLang, setLang, say, cardStart, passportEmpty, prime, update, addServed, merge, reviewed, differ, section, nextId, create, watch, codeMask, edges, sameField, alike, usedWarn, checkBoard };

@@ -22,7 +22,8 @@ const DEFAULT_COLOR = '#737373';
 
 /**
  * openedAt — когда проект открывали последний раз (ISO); нет — ни разу не открывали в Kermach. По нему окно «Проекты» ставит недавние выше.
- * @typedef {{ id: string, name: string, path: string, color: string, icon: string, group: string | null, pinned?: boolean, bypass?: boolean, openedAt?: string }} Project
+ * image — картинка проєкту замість значка (data:URL, перевірка — isImage у renderer\icons.js); icon лишається запасним значком.
+ * @typedef {{ id: string, name: string, path: string, color: string, icon: string, image?: string, group: string | null, pinned?: boolean, bypass?: boolean, openedAt?: string }} Project
  * @typedef {{ at: string, count: number, note?: string }} OrcaImport
  * @typedef {{ v: 2, last: string, importedFromOrca?: OrcaImport, groups: { id: string, name: string }[], projects: Project[] }} ProjectsData
  */
@@ -37,6 +38,24 @@ const projectId = (dir) => crypto.createHash('sha1').update(normPath(dir).toLowe
 function newProject(dir) {
   const p = normPath(dir);
   return { id: projectId(p), name: path.basename(p) || p, path: p, color: DEFAULT_COLOR, icon: 'folder', group: null };
+}
+
+/**
+ * Картинка Орки для списку: завантажена людиною, зменшена до 128 точок, щоб projects.json не розростався.
+ * Адреса в мережі (аватар GitHub) не береться. Без Electron (nativeImage) — як є, якщо пройде перевірку.
+ * @param {unknown} src @returns {string} порожньо — картинки немає
+ */
+function orcaImage(src) {
+  if (typeof src !== 'string' || !/^data:image\/(png|jpeg|webp);base64,/i.test(src)) return '';
+  const { isImage } = require('../renderer/icons');
+  try {
+    const img = require('electron').nativeImage.createFromDataURL(src);
+    const { width, height } = img.getSize();
+    // nativeImage не читает WebP: размер 0. Такой файл берём как есть, без уменьшения; другие форматы с размером 0 испорчены (t1659).
+    if (!width || !height) return /^data:image\/webp;/i.test(src) && isImage(src) ? src : '';
+    const out = Math.max(width, height) > 128 ? img.resize({ ...(width >= height ? { width: 128 } : { height: 128 }), quality: 'best' }) : img;
+    return isImage(out.toDataURL()) ? out.toDataURL() : '';
+  } catch { return isImage(src) ? src : ''; }
 }
 
 /**
@@ -68,7 +87,11 @@ function readOrca(file) {
     const ic = r.repoIcon;
     if (ic && ic.type === 'emoji') p.icon = FROM_EMOJI[ic.emoji] || 'folder';
     else if (ic && ic.type === 'lucide') p.icon = FROM_LUCIDE[ic.name] || 'folder';
-    else if (ic && ic.type === 'image') p.icon = 'code'; // аватар GitHub — значит, репозиторий с кодом
+    else if (ic && ic.type === 'image') {
+      p.icon = 'code'; // запасний значок; аватар GitHub — значит, репозиторий с кодом
+      const image = orcaImage(ic.src);
+      if (image) p.image = image;
+    }
     if (rank.has(r.projectGroupId)) p.group = String(r.projectGroupId);
     if (pinned.has(r.id)) p.pinned = true;
     projects.push(p);
@@ -138,6 +161,27 @@ function save(dataDir, data) {
 }
 
 /**
+ * Убирает из записей негодное поле image: после ручной правки файла оно не давало открыть окно проекта и сменить цвет (t1661).
+ * Прежний файл остаётся рядом как projects.json.bad-image-<время>. Пустая строка и null — картинки просто нет, их не трогаем.
+ * @param {ProjectsData} data @param {string} file @param {(m: string) => void} log
+ * @returns {boolean} true — запись изменена, файл надо сохранить
+ */
+function dropBadImages(data, file, log) {
+  const { isImage } = require('../renderer/icons');
+  /** @type {any[]} */
+  const bad = data.projects.filter((/** @type {any} */ p) => p && p.image !== undefined && p.image !== null && p.image !== '' && !isImage(p.image));
+  if (!bad.length) return false;
+  const aside = `${file}.bad-image-${Date.now()}`;
+  fs.copyFileSync(file, aside);
+  for (const p of bad) {
+    const why = typeof p.image !== 'string' ? `не строка (${typeof p.image})` : p.image.length > 256 * 1024 ? 'строка больше 256 КБ' : 'нужен PNG, JPEG или WebP';
+    log(`картинка проекта ${p.path} не взята: ${why}; поле убрано, прежний файл: ${aside}`);
+    delete p.image;
+  }
+  return true;
+}
+
+/**
  * Читает список проектов. Версию 1 переводит во 2-ю, Орку переносит один раз (версия 1 или явный orcaFile; чистая папка — нет) и сразу сохраняет.
  * Испорченный файл не затирает — откладывает рядом как projects.json.broken-<время>.
  * @param {string} dataDir папка данных
@@ -163,6 +207,8 @@ function load(dataDir, opt = {}) {
   let data;
   if (raw && raw.v === 2) {
     data = { ...raw, groups: Array.isArray(raw.groups) ? raw.groups : [], projects: Array.isArray(raw.projects) ? raw.projects : [] };
+    // До переноса из Орки: он сохраняет поля своей записи, негодное поле пережило бы его.
+    if (dropBadImages(data, file, log)) changed = true;
   } else {
     if (raw) {
       fs.copyFileSync(file, path.join(dataDir, 'projects.v1.json'));
@@ -240,12 +286,13 @@ function add(dataDir, data, dir) {
  * Регистр цвета не меняется: у проектов из Орки цвета строчными буквами, в палитре — заглавными.
  * pinned — только true или false (t164): закрепление проекта в окне «Проекты».
  * bypass — только true или false (t851): все новые вкладки Claude проекта — без вопросов о разрешениях.
- * @param {any} f @param {('title' | 'color' | 'icon' | 'pinned' | 'bypass')[]} keys какие поля можно менять
- * @returns {{ fields: { title?: string, color?: string, icon?: string, pinned?: boolean, bypass?: boolean }, error?: undefined } | { error: string, fields?: undefined }}
+ * image — картинка проєкту: data:URL або порожній рядок (прибрати картинку).
+ * @param {any} f @param {('title' | 'color' | 'icon' | 'image' | 'pinned' | 'bypass')[]} keys какие поля можно менять
+ * @returns {{ fields: { title?: string, color?: string, icon?: string, image?: string, pinned?: boolean, bypass?: boolean }, error?: undefined } | { error: string, fields?: undefined }}
  */
 function checkLook(f, keys) {
   if (!f || typeof f !== 'object') return { error: 'нечего менять' };
-  /** @type {{ title?: string, name?: string, color?: string, icon?: string, pinned?: boolean, bypass?: boolean }} */
+  /** @type {{ title?: string, name?: string, color?: string, icon?: string, image?: string, pinned?: boolean, bypass?: boolean }} */
   const out = {};
   for (const k of keys) {
     if (!(k in f)) continue;
@@ -257,6 +304,12 @@ function checkLook(f, keys) {
     } else if (k === 'color') {
       if (typeof v !== 'string' || !/^#[0-9a-f]{6}$/i.test(v)) return { error: `не цвет: ${v}` };
       out.color = v;
+    } else if (k === 'image') {
+      if (v !== '' && !require('../renderer/icons').isImage(v)) {
+        const tooBig = typeof v === 'string' && v.length > 256 * 1024 && /^data:image\/(png|jpeg|webp);base64,/i.test(v);
+        return { error: tooBig ? 'картинка больше 256 КБ: выберите файл поменьше' : 'не картинка: нужен PNG, JPEG или WebP' };
+      }
+      out.image = v;
     } else if (k === 'pinned') {
       if (typeof v !== 'boolean') return { error: `закрепление — только true или false: ${JSON.stringify(v)}` };
       out.pinned = v;
@@ -275,7 +328,7 @@ function checkLook(f, keys) {
  * Цвет, значок и закрепление проекта. Меняются поля того же объекта, а не подменяется сам объект: окно проекта держит ссылку на него
  * (project-window.js), и после смены оно видит новые цвет и значок.
  * Открепленный проект поля pinned не держит: оно пропадает из записи, как у проекта, никогда не бывшего закреплённым. Так же bypass (t851).
- * @param {string} dataDir @param {ProjectsData} data @param {string} id @param {{ name?: string, color?: string, icon?: string, pinned?: boolean, bypass?: boolean }} look
+ * @param {string} dataDir @param {ProjectsData} data @param {string} id @param {{ name?: string, color?: string, icon?: string, image?: string, pinned?: boolean, bypass?: boolean }} look
  * @returns {Project | null} нет такого проекта — null
  */
 function setLook(dataDir, data, id, look) {
@@ -284,6 +337,8 @@ function setLook(dataDir, data, id, look) {
   if (look.name) p.name = look.name;
   if (look.color) p.color = look.color;
   if (look.icon) p.icon = look.icon;
+  if (look.image) p.image = look.image;
+  else if (look.image === '') delete p.image;
   if (look.pinned === true) p.pinned = true;
   else if (look.pinned === false) delete p.pinned;
   if (look.bypass === true) p.bypass = true;

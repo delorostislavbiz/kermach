@@ -45,6 +45,7 @@ aber die Phase bleibt nicht abgenommen (`status: fertig` nicht setzen), und die 
    Kriterien — als Tabelle: Kriterium | ja / nein / Mensch nötig | womit geprüft (Befehl und Ausgabe, Datei:Zeile, Seite).
    Dann kurz: was Agenten und Review bemerkt haben, die Stufenübersicht. Dann eine Liste der Änderungen: Karte, Eintrag oder Abschnitt der Übersicht — was ändern — warum.
    „Eingang" — als kurze Liste: Karte — wohin — warum.
+   „Nicht vom Menschen geprüft" aus den Fakten — als kurze Liste: Nummer — was anzusehen ist. Der Mensch markiert sie mit der Schaltfläche im Fenster oder sagt es dir, dann `kermach roadmap human <Nummer> --done` oder `kermach roadmap human <Nummer> --skip "Grund"`.
    Frage: „Nehmen wir Phase {фаза} ab, soll ich die Änderungen machen? Sieh selbst nach: …" — und was genau zu öffnen ist.
 8. Der Mensch sagte „nicht so". Lege Korrekturkarten in derselben Phase an:
    `kermach roadmap new t "Titel" --phase {фаза} --files … --text "was zu tun ist" --why "wozu" --check "wie prüfen"`.
@@ -52,12 +53,12 @@ aber die Phase bleibt nicht abgenommen (`status: fertig` nicht setzen), und die 
    Wenn sie fertig sind — wieder `kermach roadmap accept {фаза}`.
 9. Der Mensch sagte „ja". Einen Befehl dafür gibt es nicht — ändere die Dateien selbst:
    - in der Phasendatei {фаза} markiere `[x]` nur bei Kriterien mit „ja"; setze `status: fertig`;
+   - Kriterien „nein" und „Mensch nötig" blieben ohne `[x]` — ergänze in der Phasendatei {фаза} eine Zeile „Nicht vom Menschen geprüft: <Kriterium> — was anzusehen ist; <weiteres Kriterium> — was anzusehen ist". Jede einzelne Sache nach „;": der Mensch markiert sie einzeln. Schreibe diese Zeile nicht in „Jetzt";
    - korrigiere Karten, „Eingang" und Vereinbarungen nach der abgestimmten Liste; bei ergänzten Entwürfen entferne die Zeile `draft: да`;
    - korrigiere und ergänze `.kermach/обзор.md` nach der abgestimmten Liste: eine korrigierte Tatsache bekommt Datum und Quelle;
    - schreibe „Jetzt" (`SESSION-now.md` im Projektordner): „Phase {фаза} abgenommen <Datum>. Weiter <Phase>. Merken: …".
      Hat der Mensch bei der Abnahme etwas für die nächste Phase korrigiert — füge eine Zeile hinzu „Abnahme-Änderungen für <Phase>: <was der Mensch entschieden hat> — Karten <Nummern>".
      Danach prüft der Phasenprüfer vor dem Start, ob die Änderungen in den Karten angekommen sind.
-     Kriterien „nein" und „Mensch nötig" blieben ohne `[x]` — füge eine Zeile hinzu „Nicht vom Menschen geprüft: <Kriterium> — was anzusehen ist".
      Mitten in der Abnahme wurde der Kontext verdichtet — füge eine Zeile hinzu „nach dem Verdichten kermach roadmap accept {фаза} ausführen".
 10. Die nächste Phase. Die Fakten oben nennen die nächste Phase — beende den Zug mit der Frage „Starte ich <Phase>?".
    Darüber steht eine Zeile „Nicht abgenommen" — nenne in der Frage diejenigen, die noch immer nicht abgenommen sind (Phase {фаза} ist nach „ja" schon abgenommen):
