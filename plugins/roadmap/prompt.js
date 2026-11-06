@@ -7,6 +7,8 @@
 //   Копии нет — встроенный prompt.md рядом с этим файлом. Копию человек кладёт сам: кнопки для неё нет (t547).
 // Задание «Составить роадмап» (t519, compose) — шаблон compose.md, своя копия в той же папке данных; пути FORMAT.md и образцов подставляются абсолютные.
 // Задание «Новая карта» (t818, newcard) — шаблон newcard.md, устроен и читается так же.
+// Задание «Использовать существующий план» (t1602, adopt) — шаблон adopt.md, своя копия там же. Своё в нём — начало, шаг 0, шаги 4–5;
+//   общие шаги ({состав:…}) программа берёт из compose.md при каждой сборке, поэтому разойтись с ним они не могут.
 // «Заметки к задаче» (часть 5; до t1433 — часть 6, а частью 5 было «Свежее» с решениями и тупиками по дате) — по порядку:
 //   договорённости агенту полным текстом — все действующие, без отбора по файлам и дате (t833); «for: программа» и заметки не подаются (t1433);
 //   утверждённые человеком паттерны (t1004, patterns.served); записи из их from и неутверждённые паттерны не подаются;
@@ -30,8 +32,13 @@ const OWN = 'prompt.md';
 const COMPOSE = 'compose.md';
 /** Шаблон задания «Новая карта» (t818): своя копия — newcard.md в ctx.dataDir. */
 const NEWCARD = 'newcard.md';
+/** Шаблон задания «Использовать существующий план» (t1602): своя копия — adopt.md в ctx.dataDir. */
+const ADOPT = 'adopt.md';
+/** Разделы adopt.md, из которых берётся шаг 0: заголовки одни и те же, русские, во всех переводах (как у prompt.md). */
+const ADOPT_FILE = 'Файл выбран';
+const ADOPT_SEARCH = 'Файла нет';
 /** Шаблоны со своей копией в dataDir, которые сверяются со встроенным (t1417); язык в имени — prompt.uk.md (t1428). */
-const OWN_RE = /^(prompt|compose|newcard|grader|orchestrator)(\.[a-z]{2})?\.md$/;
+const OWN_RE = /^(prompt|compose|newcard|adopt|grader|orchestrator)(\.[a-z]{2})?\.md$/;
 /** Строка отметки основы в своей копии (t1417). */
 const BASE_RE = /^[ \t]*<!--[ \t]*основа:[ \t]*([0-9a-f]{12})[ \t]*-->[ \t]*$/im;
 const SAMPLES = 'samples';
@@ -941,7 +948,8 @@ function build(project, ref, opts = {}) {
  * Пути FORMAT.md и образцов — абсолютные, из папки плагина: агент читает их сам. Ошибка — { error }.
  * lang (t1429) — язык доски для подстановок {доска:…}: у «Составить роадмап» доски ещё нет, язык даёт окно; иначе — из паспорта.
  * t1428: по нему же — перевод задания (compose.uk.md), FORMAT и образцов этого языка, {язык}.
- * @param {string} project @param {string} name @param {{ dataDir?: string, lang?: string }} opts
+ * t1602: adopt.md собирается из своего текста и кусков compose.md (adoptBody), opts.file — выбранный файл плана.
+ * @param {string} project @param {string} name @param {{ dataDir?: string, lang?: string, file?: string }} opts
  */
 function task(project, name, opts) {
   const lang = langOf(board.LANGS.includes(String(opts.lang || '')) ? String(opts.lang) : board.boardLang(project));
@@ -965,12 +973,82 @@ function task(project, name, opts) {
   if (!text) return { error: `в ${path.basename(tf.file)} ${lack(text)}: задание пустое` };
   /** @type {Record<string, string>} */
   const vars = { ...boardWords(lang), 'проект': project, 'папка': board.root(project) + path.sep, 'формат': builtinIn('FORMAT.md', lang), 'образцы': builtinIn(SAMPLES, lang) + path.sep, 'язык': langName(lang) };
-  if (name === COMPOSE) vars['паттерны'] = patternList(project, warnings, lang);
+  if (name === ADOPT) {
+    // Выбранный файл: относительный путь — от папки проекта; файла нет — отказ, а не задание с неверным путём.
+    const file = String(opts.file || '').replace(/[\r\n]+/g, ' ').trim();
+    vars['файл'] = file ? path.resolve(project, file) : '';
+    if (file) { let ok = false; try { ok = fs.statSync(vars['файл']).isFile(); } catch { /* нет файла */ } if (!ok) return { error: `файл плана не найден: ${vars['файл']}` }; }
+    text = adoptBody(text, !!file, opts.dataDir, lang, warnings);
+  }
+  // {перенос} в compose.md (t1602): куда идти, если человек согласился использовать найденный план.
+  if (name === COMPOSE) vars['перенос'] = templateFile(opts.dataDir, ADOPT, lang).file;
+  if (name === COMPOSE || name === ADOPT) vars['паттерны'] = patternList(project, warnings, lang);
   // t1025: своя копия сделана до t1007 — кандидатов в ней нет, а человек об этом не знает.
   { const st = tf.own ? stale(opts.dataDir, path.basename(tf.file)) : null; if (st) warnings.push(`своя копия ${st.file}: ${st.reason}`); }
   if (name === COMPOSE && tf.own && !text.includes('{паттерны}')) warnings.push(`в своей копии ${tf.file} нет {паттерны}: кандидаты в паттерн агенту не попадут — допишите строку «Кандидаты в паттерн …» из встроенного compose.md, шаг 5`);
   const out = subst(text, vars) + '\n';
   return { text: out, chars: out.length, warnings, templates: tf };
+}
+
+/**
+ * Куски задания compose.md для adopt.md (t1602): как — правила вкладки, 1, 2, 3, 6 — шаги целиком, 5.3, 5.4 — пункты шага 5, 5.2-поля — список полей карты из 5.2.
+ * Шаг ищется по номеру в заголовке («### Шаг 1.», «### Krok»-переводы), поэтому один разбор на все языки.
+ * Раздел без номера между шагами (compose: «### Готовый план», «### Вид: …») остаётся у шага 2, только если стоит после его заголовка.
+ * @param {string} text текст задания compose.md без строки «## » @returns {Record<string, string>}
+ */
+function composeParts(text) {
+  const lines = text.split('\n');
+  const heads3 = lines.map((l, i) => (/^### /.test(l) ? i : -1)).filter((i) => i >= 0);
+  const stepAt = (/** @type {string} */ n) => lines.findIndex((l) => new RegExp(`^### +\\S+ +${n}\\.(\\s|$)`).test(l));
+  const nextHead = (/** @type {number} */ i) => { const n = heads3.find((h) => h > i); return n === undefined ? lines.length : n; };
+  const cut = (/** @type {number} */ a, /** @type {number} */ b) => lines.slice(a, b).join('\n').trim();
+  const [s1, s2, s3, s4, s5, s6] = ['1', '2', '3', '4', '5', '6'].map(stepAt);
+  /** @type {Record<string, string>} */
+  const out = {};
+  if (heads3.length && s1 > heads3[0]) out['как'] = cut(heads3[0], s1);
+  if (s1 >= 0) out['1'] = cut(s1, nextHead(s1));
+  if (s2 >= 0 && s3 > s2) out['2'] = cut(s2, s3);
+  if (s3 >= 0) out['3'] = cut(s3, nextHead(s3));
+  if (s6 >= 0) out['6'] = cut(s6, lines.length);
+  if (s5 >= 0) {
+    const end = s6 > s5 ? s6 : lines.length;
+    const pt = (/** @type {string} */ n) => { const i = lines.findIndex((l, k) => k > s5 && k < end && l.startsWith(`${n}. `)); return i; };
+    const [p2, p3, p4] = ['5.2', '5.3', '5.4'].map(pt);
+    if (p2 >= 0 && p3 > p2) out['5.2-поля'] = lines.slice(p2, p3).filter((l) => /^\s+- /.test(l)).join('\n');
+    if (p3 >= 0 && p4 > p3) out['5.3'] = cut(p3, p4);
+    if (p4 >= 0) out['5.4'] = cut(p4, end);
+  }
+  return s4 >= 0 ? out : {};
+}
+
+/**
+ * Текст adopt.md, собранный для агента (t1602): раздел «## Задание», {выбор} — шаг 0 из «## Файл выбран» или «## Файла нет», {состав:…} — куски compose.md
+ * того же языка и той же копии, что взяло бы «Составить роадмап». Своя копия без раздела или без куска — встроенный текст и предупреждение.
+ * @param {string} text текст после строки первого «## » adopt.md @param {boolean} chosen файл выбран @param {string | undefined} dataDir @param {string} lang @param {string[]} warnings
+ */
+function adoptBody(text, chosen, dataDir, lang, warnings) {
+  const body = (/** @type {string} */ s) => { const h = heads(s); return h.length ? s.split('\n').slice(0, h[0].at).join('\n').trim() : s.trim(); };
+  const sec = (/** @type {string} */ s, /** @type {string} */ n) => { const x = heads(s).find((h) => norm(headName(h.head)) === norm(n)); return x ? x.lines.join('\n').trim() : ''; };
+  const after = (/** @type {string} */ f) => { const s = unstamp(readSmall(f, MAX_TEMPLATES)); const h = heads(s); return h.length ? s.split('\n').slice(h[0].at + 1).join('\n') : ''; };
+  const name = chosen ? ADOPT_FILE : ADOPT_SEARCH;
+  let choice = sec(text, name);
+  if (!choice) {
+    choice = sec(after(builtinIn(ADOPT, lang)), name);
+    warnings.push(`в своей копии adopt.md нет раздела «## ${name}» — взят встроенный`);
+  }
+  const ctf = templateFile(dataDir, COMPOSE, lang);
+  { const w = skippedOwn(ctf); if (w) warnings.push(w); }
+  /** @type {Record<string, string>} */
+  let parts = {};
+  try { parts = composeParts(after(ctf.file)); } catch (e) { warnings.push(`своя копия ${ctf.file}: ${e instanceof Error ? e.message : e} — общие шаги из встроенного текста`); }
+  /** @type {Record<string, string> | null} */
+  let base = null;
+  return body(text).replace(/\{выбор\}/g, () => choice).replace(/\{состав:([^{}\n]+)\}/g, (all, k) => {
+    if (parts[k]) return parts[k];
+    if (!base) base = composeParts(after(builtinIn(COMPOSE, lang)));
+    if (ctf.own) warnings.push(`в копии ${ctf.file} не найден кусок «${k}» — взят из встроенного текста`);
+    return base[k] || all;
+  });
 }
 
 /** Сколько кандидатов в паттерн перечисляет задание «Составить роадмап»: на большой доске список не раздувает задание (t1007). */
@@ -1007,9 +1085,11 @@ function patternList(project, warnings, lang = '') {
 const compose = (project, opts = {}) => task(project, COMPOSE, opts);
 /** Задание «Новая карта» (t818) из newcard.md: доска уже есть, агент заводит одну карту. @param {string} project @param {{ dataDir?: string }} [opts] */
 const newcard = (project, opts = {}) => task(project, NEWCARD, opts);
+/** Задание «Использовать существующий план» (t1602) из adopt.md: файл задан — поиска нет; не задан — модель ищет план сама. @param {string} project @param {{ dataDir?: string, lang?: string, file?: string }} [opts] */
+const adopt = (project, opts = {}) => task(project, ADOPT, opts);
 
 /** Строки советника встроенного prompt.md (t830, t1046): пробы ищут их в промпте. Сборка берёт строку из своих шаблонов (lineOf). */
 const ADVISOR_LINE = lineOf('advisor', {});
 const ADVISOR_ONCE = lineOf('advisorOnce', {});
 
-module.exports = { TEMPLATES, defuseAt, langOf, langName, nameIn, builtinIn, tr, SAY, LINES, ADVISOR_LINE, ADVISOR_ONCE, line, templates, templateFile, stale, staleAll, paths, shared, fresh, pick, search, wrongNotes, noteLine, listLine, alikeNotes, alikePattern, mergeTitle, notes, build, compose, newcard };
+module.exports = { TEMPLATES, defuseAt, langOf, langName, nameIn, builtinIn, tr, SAY, LINES, ADVISOR_LINE, ADVISOR_ONCE, line, templates, templateFile, stale, staleAll, paths, shared, fresh, pick, search, wrongNotes, noteLine, listLine, alikeNotes, alikePattern, mergeTitle, notes, build, compose, newcard, adopt };

@@ -1086,6 +1086,90 @@ async function openFromPlugin(p, o, from) {
 }
 
 /**
+ * Файл с заданием в папке проекта (t1611): доска не нужна, агент читает файл проекта без вопроса о разрешении.
+ * Папки — по одной, с проверкой: ссылка увела бы запись за пределы проекта (как ownDir «Роадмапа», t556). Файл только новый (wx).
+ * @param {string} project @param {string} text @returns {{ file: string, rel: string, first: string }}
+ */
+function taskFile(project, text) {
+  const dir = path.join(project, '.kermach', 'prompts');
+  const root = fs.realpathSync(project);
+  for (const d of [path.dirname(dir), dir]) {
+    if (!fs.existsSync(d)) fs.mkdirSync(d);
+    const r = path.relative(root, fs.realpathSync(d));
+    if (!r || r.startsWith('..') || path.isAbsolute(r)) throw new Error(`папка ${path.relative(project, d)} ведёт за пределы проекта`);
+  }
+  try { fs.writeFileSync(path.join(dir, '.gitignore'), '# Kermach: длинные задания агентам — не для git.\n*\n', { flag: 'wx' }); } catch (e) { if (!e || /** @type {any} */ (e).code !== 'EEXIST') throw e; }
+  const ref = `agent-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+  const file = path.join(dir, `${ref}.md`);
+  fs.writeFileSync(file, text, { flag: 'wx' });
+  const rel = `.kermach/prompts/${ref}.md`;
+  // Только буквы, цифры и пробелы: ссылка идёт и через чужую обёртку .cmd.
+  return { file, rel, first: `Задание целиком в файле ${rel} в папке проекта. Прочитай этот файл полностью и выполняй его как первое сообщение.` };
+}
+
+/** Самая длинная строка, которую вводим во вкладку как есть (t1611); длиннее или в несколько строк — файл и ссылка. */
+const TYPED_MAX = 1000;
+/** Сколько ждём, пока экран вкладки перестанет меняться, перед вводом после старта: мс и подряд одинаковых снимков. Срок ответа команды — 70 с. */
+const TYPE_WAIT_MS = 20000;
+const TYPE_QUIET = 4;
+
+/**
+ * Вкладка агента с заданием (kermach agent open, t1611). Плагины не участвуют: работает и с выключенным «Роадмапом».
+ * Разрешения — как у вкладки из меню «+»: Claude следует настройке проекта, своих ключей нет.
+ * Берёт при запуске и текст влезает — аргумент; длиннее предела или начинается с «-» — файл и ссылка; чужая обёртка .cmd (cmd-unsafe) и prompt: false — ввод во вкладку после старта.
+ * @param {{ id: string, path: string, bypass?: boolean }} p @param {string} id агент каталога @param {string} text
+ * @returns {Promise<{ session: any, how: string, seen?: boolean } | { error: string }>}
+ */
+async function openAgentTask(p, id, text) {
+  const entry = agents.CATALOG.find((a) => a.id === id);
+  if (!entry) return { error: `агента ${id} нет в каталоге` };
+  const kind = agents.kindOfAgent(entry);
+  const base = { kind, ...(kind === 'claude' ? { followBypass: true } : {}) };
+  /** @param {any} [more] */
+  const open = (more) => openFromPlugin(p, { ...base, ...more }, { core: true });
+  /** @type {{ file: string, rel: string, first: string } | null} */
+  let tf = null;
+  const write = () => { tf = tf || taskFile(p.path, text); return tf; };
+  const fileHow = () => `файлом ${/** @type {any} */ (tf).rel}`;
+  let late = kind.startsWith('agent:') && agents.promptFlag(id) === false;
+  let r;
+  try {
+    if (!late) {
+      r = text.length > 16000 || text.startsWith('-') ? await open({ prompt: write().first }) : await open({ prompt: text });
+      if (r && /** @type {any} */ (r).code === 'cmd-unsafe' && !tf) r = await open({ prompt: write().first });
+      if (r && /** @type {any} */ (r).code === 'cmd-unsafe') late = true;
+    }
+    if (!late) {
+      if (!r || 'error' in r) { if (tf) { try { fs.unlinkSync(/** @type {any} */ (tf).file); } catch {} } return r || { error: 'нет ответа' }; }
+      return { session: r.session, how: tf ? fileHow() : 'первым сообщением при запуске' };
+    }
+    // Многострочный текст отправился бы по кускам, «/» агент принял бы за свою команду, управляющие знаки — за клавиши.
+    // eslint-disable-next-line no-control-regex
+    const line = text.length > TYPED_MAX || /[\x00-\x1f\x7f-\x9f]/.test(text) || text.startsWith('/') ? write().first : text;
+    r = await open();
+    if (!r || 'error' in r) { if (tf) { try { fs.unlinkSync(/** @type {any} */ (tf).file); } catch {} } return r || { error: 'нет ответа' }; }
+    const sid = r.session.sid;
+    const screen = async () => { const t = await readTab(p.id, sid, 'text').catch(() => null); return t && typeof t === 'object' && 'text' in t ? String(t.text) : ''; };
+    let last = '', same = 0;
+    for (const end = Date.now() + TYPE_WAIT_MS; same < TYPE_QUIET && Date.now() < end;) {
+      await new Promise((ok) => setTimeout(ok, 500));
+      const now = await screen();
+      same = now.trim() && now === last ? same + 1 : 0;
+      last = now;
+    }
+    const w = await writeTab(p.id, sid, line);
+    if (w && 'error' in w) return { error: `вкладка ${sid} открыта, но задание в неё не ушло: ${w.error}. Закройте её и откройте заново или напишите агенту задание сами` };
+    await new Promise((ok) => setTimeout(ok, 150));
+    await writeTab(p.id, sid, '\r');
+    await new Promise((ok) => setTimeout(ok, 1500));
+    const seen = (await screen()).replace(/\s+/g, '').includes(line.slice(0, 40).replace(/\s+/g, ''));
+    return { session: r.session, how: `введено во вкладку после старта${tf ? ` (${fileHow()})` : ''}`, seen };
+  } catch (e) {
+    return { error: `задание не записано в файл: ${/** @type {any} */ (e).message || e}` };
+  }
+}
+
+/**
  * Показать скрытую вкладку проекта (t1059, ctx.showTab): демон снимает meta.hidden, окно по updated → term:changed рисует её
  * с полной историей экрана (снимок при attach). focus: false — окно на неё не переходит.
  * @param {{ id: string, path: string }} p @param {string} sid @param {{ focus?: boolean }} [o]
@@ -1733,4 +1817,4 @@ const exitsSize = () => exits.size;
 /** Служебное, для проверки t117: сколько записей в notices. */
 const noticesSize = () => notices.size;
 
-module.exports = { register, resumeIdOf, readTab, writeTab, projectTabs, onState, openFromPlugin, showFromPlugin, hideFromPlugin, KINDS, STATE_WORDS, exitsSize, noticesSize };
+module.exports = { register, resumeIdOf, readTab, writeTab, projectTabs, onState, openFromPlugin, openAgentTask, showFromPlugin, hideFromPlugin, KINDS, STATE_WORDS, exitsSize, noticesSize };

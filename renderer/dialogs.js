@@ -52,8 +52,9 @@
   .dlg .prev .text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .dlg .prev .n { font-size: 13px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dlg .prev .s { font-size: 11px; line-height: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* 24 цвета (t484) — два ряда по 12 на всю ширину, «Свой цвет» — строкой под ними. */
-  .dlg .pal { display: grid; grid-template-columns: repeat(12, 26px); justify-content: space-between; align-items: center; gap: 8px 0; }
+  /* 30 цветов (t1662) — три ряда по 10 на всю ширину, «Свой цвет» — строкой под ними. */
+  .dlg .pal { display: grid; grid-template-columns: repeat(10, 26px); justify-content: space-between; align-items: center; gap: 8px 0; }
+  .dlg .sec:has(> .pal) { flex-shrink: 0; } /* В низком окне палитра не сжимается: иначе «Свой цвет» наезжает на подпись «Значок» (t1662). */
   .dlg .sw { width: 26px; height: 26px; border-radius: 4px; display: flex; align-items: center; justify-content: center; outline-offset: 2px; flex-shrink: 0; }
   .dlg .sw.on { outline: 2px solid var(--text); }
   .dlg .own { grid-column: 1 / -1; justify-self: start; margin-top: 2px; position: relative; height: 26px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid rgba(var(--muted-rgb),.25); border-radius: 4px; font-size: 12px; white-space: nowrap; }
@@ -195,7 +196,7 @@
   /* «Свой цвет» — капсула справа от подписи «Цвет», как в макете; в разметке она осталась в .pal, ставится поверх строки подписи. */
   ${K} .dlg .sec:has(> .pal) { position: relative; }
   ${K} .dlg .sec:has(> .pal) > .cap { height: 24px; display: flex; align-items: center; }
-  ${K} .dlg .pal { grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 8px; }
+  ${K} .dlg .pal { grid-template-columns: repeat(10, 34px); gap: 8px 0; }
   ${K} .dlg .sw { width: auto; height: auto; aspect-ratio: 1; border-radius: 50%; transition: transform .2s cubic-bezier(.3,1.6,.5,1); }
   ${K} .dlg .sw:hover { transform: scale(1.15); }
   ${K} .dlg .own { position: absolute; top: 0; right: 2px; margin: 0; height: 24px; padding: 0 10px; border: 1px solid var(--line); border-radius: 12px; }
@@ -320,14 +321,42 @@
   }
 
   /**
+   * Файл картинки → PNG як data:URL: не більше 128 точок за довшою стороною, пропорції зберігаються.
+   * @param {File} file @returns {Promise<string>}
+   */
+  async function imageFromFile(file) {
+    const src = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(String(r.result));
+      r.onerror = () => rej(r.error);
+      r.readAsDataURL(file);
+    });
+    const img = new Image();
+    img.src = src;
+    await img.decode();
+    if (!img.naturalWidth || !img.naturalHeight) throw new Error('порожня картинка');
+    const k = Math.min(1, 128 / Math.max(img.naturalWidth, img.naturalHeight));
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(img.naturalWidth * k));
+    cv.height = Math.max(1, Math.round(img.naturalHeight * k));
+    const g = /** @type {CanvasRenderingContext2D} */ (cv.getContext('2d'));
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(img, 0, 0, cv.width, cv.height);
+    return cv.toDataURL('image/png');
+  }
+
+  /**
    * «Цвет и значок» — для терминала и для проекта. Сверху — как это будет выглядеть в списке.
    * rename — ещё и поле имени («Цвет, значок и имя» у только что добавленной папки, t1212); пустое имя «Готово» не принимает.
-   * @param {{ name: string, sub: string, subColor?: string, color: string, icon: string, rename?: boolean }} o
-   * @returns {Promise<{ color: string, icon: string, name?: string } | null>} null — отмена
+   * image — лише для проєкту: кнопка «Завантажити картинку». Вибір значка із сітки картинку прибирає; у відповіді image — '' без картинки.
+   * @param {{ name: string, sub: string, subColor?: string, color: string, icon: string, image?: string, rename?: boolean }} o
+   * @returns {Promise<{ color: string, icon: string, image?: string, name?: string } | null>} null — отмена
    */
   function colorIcon(o) {
     let color = colorOf(o.color);
     let icon = GRID.includes(o.icon) ? o.icon : 'folder';
+    const withImage = o.image !== undefined;
+    let image = o.image || '';
     const body = `${o.rename ? `
       <div class="sec"><div class="cap">${I18n.t('dialogs.imya', 'Имя')}</div><input class="field ci-name" spellcheck="false" maxlength="60" value="${esc(o.name)}"></div>` : ''}
       <div class="sec"><div class="cap">${I18n.t('dialogs.takBudetVyglyadetV', 'Так будет выглядеть в списке')}</div>
@@ -336,6 +365,7 @@
         <div class="pal">${PALETTE.map((/** @type {string} */ c) => `<div class="sw" data-c="${c}" style="background:${c}" title="${c}"></div>`).join('')}
           <label class="own" title="${I18n.t('dialogs.vybratLyuboyCvet', 'Выбрать любой цвет')}"><b class="plus">${svg('plus', tc('text', '#C9D0DC'), 12)}</b><i></i><span>${I18n.t('dialogs.svoyCvet', 'Свой цвет')}</span><input type="color" tabindex="-1"></label></div></div>
       <div class="sec"><div class="head"><div class="cap">${I18n.t('dialogs.znachok', 'Значок')}</div><label class="find">${svg('search', tc('muted', '#8D91A5'), 13)}<input placeholder="${I18n.t('dialogs.poiskZnachka', 'Поиск значка')}" spellcheck="false"></label></div>
+        ${withImage ? `<div class="ci-image" style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><button type="button" class="bbtn ci-upload">${I18n.t('dialogs.zagruzitKartinku', 'Загрузить картинку')}</button><span class="ci-image-err" style="color:${tc('danger', '#F24E50')};font-size:12px"></span><input type="file" accept="image/*" hidden></div>` : ''}
         <div class="grid"></div></div>
       <div class="btns"><button class="cancel">${I18n.t('common.cancel', 'Отмена')}</button><button class="ok">${I18n.t('common.done', 'Готово')}</button></div>`;
     const title = o.rename ? I18n.t('dialogs.cvetZnachokIImya', 'Цвет, значок и имя') : I18n.t('dialogs.cvetIZnachok', 'Цвет и значок');
@@ -346,7 +376,7 @@
       const paint = () => {
         dlg.style.setProperty('--c', color);
         /** @type {HTMLElement} */ (dlg.querySelector('.prev .strip')).style.background = color;
-        /** @type {HTMLElement} */ (dlg.querySelector('.prev .pic')).innerHTML = svg(icon, color, 18);
+        /** @type {HTMLElement} */ (dlg.querySelector('.prev .pic')).innerHTML = /** @type {any} */ (window).Icons.projectArt({ icon, image }, color, 18);
         let inPalette = false;
         for (const sw of /** @type {NodeListOf<HTMLElement>} */ (dlg.querySelectorAll('.sw'))) {
           const on = sameColor(sw.dataset.c || '', color);
@@ -363,7 +393,7 @@
         const f = q.value.trim().toLowerCase();
         const shown = f ? GRID.filter((/** @type {string} */ n) => n.includes(f) || String(/** @type {any} */ (window).Icons.TITLES[n] || '').toLowerCase().includes(f)) : GRID;
         /** @type {HTMLElement} */ (dlg.querySelector('.grid')).innerHTML = shown.length
-          ? shown.map((/** @type {string} */ n) => `<div class="g${n === icon ? ' on' : ''}" data-n="${n}" title="${esc(/** @type {any} */ (window).Icons.TITLES[n] || n)}">${svg(n, n === icon ? color : tc('text', '#C9D0DC'), 18)}</div>`).join('')
+          ? shown.map((/** @type {string} */ n) => `<div class="g${n === icon && !image ? ' on' : ''}" data-n="${n}" title="${esc(/** @type {any} */ (window).Icons.TITLES[n] || n)}">${svg(n, n === icon && !image ? color : tc('text', '#C9D0DC'), 18)}</div>`).join('')
           : `<div class="none">${I18n.t('dialogs.takogoZnachkaNet', 'Такого значка нет')}</div>`;
       };
       /** @type {HTMLElement} */ (dlg.querySelector('.pal')).addEventListener('click', (e) => {
@@ -374,18 +404,31 @@
       own.addEventListener('input', () => { color = colorOf(own.value); paint(); });
       /** @type {HTMLElement} */ (dlg.querySelector('.grid')).addEventListener('click', (e) => {
         const g = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.g'));
-        if (g && g.dataset.n) { icon = g.dataset.n; paint(); }
+        if (g && g.dataset.n) { icon = g.dataset.n; image = ''; paint(); }
       });
       q.addEventListener('input', paint);
+      if (withImage) {
+        const file = /** @type {HTMLInputElement} */ (dlg.querySelector('.ci-image input'));
+        const err = /** @type {HTMLElement} */ (dlg.querySelector('.ci-image-err'));
+        /** @type {HTMLElement} */ (dlg.querySelector('.ci-upload')).onclick = () => file.click();
+        file.addEventListener('change', async () => {
+          const f = file.files && file.files[0];
+          file.value = '';
+          if (!f) return;
+          err.textContent = '';
+          try { image = await imageFromFile(f); paint(); } catch { err.textContent = I18n.t('dialogs.kartinkaNeChitaetsya', 'Этот файл не читается как картинка'); }
+        });
+      }
       // Имя — сразу в образце сверху; пустое — «Готово» неактивна.
       if (nameIn) nameIn.addEventListener('input', () => {
         /** @type {HTMLElement} */ (dlg.querySelector('.prev .n')).textContent = nameIn.value.trim() || o.name;
         /** @type {HTMLButtonElement} */ (dlg.querySelector('.btns .ok')).disabled = !nameIn.value.trim();
       });
       const ok = () => {
-        if (!nameIn) return done({ color, icon });
+        const look = withImage ? { color, icon, image } : { color, icon };
+        if (!nameIn) return done(look);
         const name = nameIn.value.trim();
-        if (name) done({ color, icon, name });
+        if (name) done({ ...look, name });
       };
       /** @type {HTMLElement} */ (dlg.querySelector('.btns .ok')).onclick = ok;
       paint();
@@ -818,7 +861,9 @@
         <div class="stepper"><input class="num tdup" type="number" min="1" step="1"><span class="hint tdh"></span></div></div>
       <div class="sec dirs"><div class="stepper"><button class="pick tchk"></button><span class="hint tres"></span></div></div></div>
       </div></div>
-      <div class="btns"><span class="ver set-off" style="margin-right:auto;align-self:center"></span><button class="reset"></button><button class="cancel ok"></button></div>`;
+      <div class="upd" hidden style="padding:0 0 8px;font-size:12px;overflow-wrap:anywhere"><div class="updm"></div><progress class="updp" max="100" value="0" hidden style="width:100%;margin-top:6px"></progress>
+        <div class="btns upb" style="justify-content:flex-start;flex-wrap:wrap;margin-top:6px"><button class="updl" hidden></button><button class="updg" hidden></button><button class="upds" hidden></button><button class="updn" hidden></button><button class="updy ok" hidden></button></div></div>
+      <div class="btns"><span class="ver set-off" style="align-self:center"></span><button class="upchk" style="margin-right:auto"></button><button class="reset"></button><button class="cancel ok"></button></div>`;
     /** Селектор, ключ, русский текст, свойство. @type {[string, string, string, string][]} */
     const STATIC = [
       ['.dlg-title .t', 'dialogs.nastroyki', 'Настройки', 'textContent'], ['.dlg-title .x', 'common.close', 'Закрыть', 'title'],
@@ -859,6 +904,9 @@
     ];
     /** @type {() => void} */
     let off = () => {};
+    /** Идёт скачивание обновления из этого окошка (t1623) и снятие подписки на его ход. */
+    let updBusy = false;
+    let updOff = () => {};
     const r = await modal(I18n.t('dialogs.nastroyki', 'Настройки'), 780, body, (dlg, done) => {
       const q = (/** @type {string} */ s) => /** @type {HTMLElement} */ (dlg.querySelector(s));
       // Надписи окна: ключ и русский текст запоминаются, смена языка ставит их заново (РЕШЕНИЯ «Разметка, которую строит код, — не через data-i18n»).
@@ -1239,10 +1287,101 @@
       };
       // Номер версии (t1264): из src\package.json через main, второго места с номером нет.
       { const v = window.kermach.settings.version && window.kermach.settings.version(); q('.ver').textContent = v ? `Kermach ${v}` : ''; }
+      // Проверка обновлений (t1623): только по нажатию. Вопрос об установке — внутри «Настроек»: modal() закрыл бы их, и «Отмена» не оставила бы всё как есть.
+      {
+        const up = window.kermach.update;
+        const box = q('.upd');
+        const msg = q('.updm');
+        const bar = /** @type {HTMLProgressElement} */ (q('.updp'));
+        const chk = /** @type {HTMLButtonElement} */ (q('.upchk'));
+        const link = q('.updl'), get = q('.updg'), stop = q('.upds'), no = q('.updn'), yes = q('.updy');
+        const newVer = { v: '' };
+        let fetched = false;
+        tx(chk, 'dialogs.updCheck', 'Проверить обновления');
+        tx(link, 'dialogs.updPage', 'Страница выпуска');
+        tx(stop, 'common.cancel', 'Отмена');
+        tx(no, 'common.cancel', 'Отмена');
+        tx(yes, 'dialogs.updYes', 'Закрыть программу и установить');
+        /** Какие кнопки видны. @param {HTMLElement[]} on */
+        const only = (...on) => { for (const b of [link, get, stop, no, yes]) b.hidden = !on.includes(b); bar.hidden = !on.includes(stop); box.hidden = false; };
+        const offer = () => {
+          if (fetched) retx(get, 'dialogs.updInstall', 'Установить');
+          else retx(get, 'dialogs.updGet', 'Скачать и установить');
+        };
+        const ask = () => {
+          retx(msg, 'dialogs.updConfirm', 'Версия {v} скачана. Для установки программа закроется, а агенты остановятся. Когда новая версия запустится, вкладки вернутся. Claude и Codex продолжат разговор, если он найдётся на диске. Остальные агенты запустятся заново, обычно с новым разговором. Установить сейчас?', 'textContent', newVer);
+          only(no, yes);
+          no.focus();
+        };
+        chk.onclick = async () => {
+          chk.disabled = true;
+          fetched = false;
+          only();
+          retx(msg, 'dialogs.updChecking', 'Проверяю…');
+          /** @type {any} */
+          let r;
+          try { r = await up.check(); } catch { r = { state: 'error', kind: 'net' }; }
+          chk.disabled = false;
+          if (r.state === 'latest') retx(msg, 'dialogs.updLatest', 'У вас последняя версия');
+          else if (r.state === 'none') retx(msg, 'dialogs.updNone', 'На GitHub нет выпуска для этой системы');
+          else if (r.state === 'new') {
+            newVer.v = r.version;
+            fetched = !!r.fetched;
+            retx(msg, 'dialogs.updNew', 'Есть новая версия: {v}', 'textContent', newVer);
+            offer();
+            if (r.canInstall) only(link, get); else only(link);
+          } else if (r.kind === 'limit') retx(msg, 'dialogs.updLimit', 'GitHub временно ограничил запросы. Попробуйте позже, обычно хватает часа.');
+          else if (r.kind === 'http') retx(msg, 'dialogs.updHttp', 'GitHub ответил ошибкой {c}. Попробуйте позже.', 'textContent', { c: r.code });
+          else if (r.kind === 'bad') retx(msg, 'dialogs.updBad', 'GitHub прислал непонятный ответ. Попробуйте позже.');
+          else retx(msg, 'dialogs.updNet', 'Нет связи с GitHub. Проверьте интернет и попробуйте снова.');
+        };
+        link.onclick = () => { up.open(); };
+        get.onclick = async () => {
+          if (fetched) { ask(); return; }
+          chk.disabled = true;
+          bar.value = 0;
+          only(stop);
+          retx(msg, 'dialogs.updProgress', 'Скачиваю: {p} %', 'textContent', { p: 0 });
+          updOff = up.onProgress((/** @type {number} */ p) => { bar.value = p; retx(msg, 'dialogs.updProgress', 'Скачиваю: {p} %', 'textContent', { p }); });
+          updBusy = true;
+          /** @type {any} */
+          let r;
+          try { r = await up.download(); } catch { r = { error: 'net' }; }
+          updBusy = false;
+          updOff();
+          updOff = () => {};
+          chk.disabled = false;
+          if (r.ok) { fetched = true; offer(); ask(); return; }
+          if (r.error === 'cancel') { retx(msg, 'dialogs.updCanceled', 'Скачивание отменено, файл удалён'); only(link, get); return; }
+          if (r.error === 'busy') { retx(msg, 'dialogs.updBusy', 'Файл уже скачивается в другом окне. Когда он скачается, нажмите кнопку снова.'); only(link, get); return; }
+          if (r.error === 'digest') retx(msg, 'dialogs.updDigest', 'Сумма файла не совпала, файл удалён и не запущен. Скачайте версию со страницы выпуска.');
+          else if (r.error === 'nodigest') retx(msg, 'dialogs.updNoDigest', 'GitHub не указал сумму файла, проверить его нельзя. Файл удалён и не запущен. Скачайте версию со страницы выпуска.');
+          else if (r.error === 'url') retx(msg, 'dialogs.updUrl', 'Файл предложен с чужого адреса, скачивание остановлено. Скачайте версию со страницы выпуска.');
+          else retx(msg, 'dialogs.updDlFail', 'Файл не скачался. Попробуйте снова или скачайте версию со страницы выпуска.');
+          only(link);
+        };
+        stop.onclick = () => { up.cancel(); };
+        no.onclick = () => { retx(msg, 'dialogs.updNew', 'Есть новая версия: {v}', 'textContent', newVer); only(link, get); };
+        yes.onclick = async () => {
+          only();
+          retx(msg, 'dialogs.updStarting', 'Запускаю установку. Программа скоро закроется.');
+          /** @type {any} */
+          let r;
+          try { r = await up.install(); } catch { r = { error: 'run' }; }
+          if (r.ok) return;
+          fetched = false;
+          if (r.error === 'stale') { retx(msg, 'dialogs.updStale', 'Версия {v} уже не последняя, её файл удалён и не запущен. Нажмите «Проверить обновления».', 'textContent', newVer); only(link); return; }
+          retx(msg, 'dialogs.updRunFail', 'Установка не запустилась. Скачайте версию со страницы выпуска.');
+          only(link);
+        };
+      }
       q('.reset').onclick = () => change(t, { uiZoom: 100, termFont: TERM_DEF, mdShift: 0, sound: true, notify: true, copySelect: true });
       return () => font(Number(num.value));
     }, 'set');
     off();
+    // Закрыли «Настройки» во время скачивания: подтверждать установку негде, файл удаляется (t1623).
+    updOff();
+    if (updBusy) window.kermach.update.cancel();
     return r;
   }
 

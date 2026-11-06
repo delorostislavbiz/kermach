@@ -9,7 +9,7 @@
 (async function () {
   const w = /** @type {any} */ (window);
   const t = w.kermach;
-  const { svg, tilePNG, DEFAULT_COLOR } = w.Icons;
+  const { svg, tilePNG, projectArt, DEFAULT_COLOR } = w.Icons;
   const $ = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.getElementById(id));
   // Имена — от демона и из файла пользователя, в разметку только через замену опасных знаков.
   const esc = (/** @type {string} */ s) => String(s).replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
@@ -27,14 +27,14 @@
   function paintProject(p) {
     const pColor = colorOf(p.color);
     $('pColor').style.background = pColor;
-    $('pIcon').innerHTML = svg(p.icon, pColor, 14);
+    $('pIcon').innerHTML = projectArt(p, pColor, 14);
     $('pName').textContent = p.name;
     // Шапка боковой панели (t655): плитка с тинтом цвета проекта, имя, путь.
     $('sideTint').style.background = pColor;
-    $('sideIcon').innerHTML = svg(p.icon, pColor, 17);
+    $('sideIcon').innerHTML = projectArt(p, pColor, 17);
     $('sideName').textContent = p.name;
     $('sidePath').textContent = $('sidePath').title = p.path || '';
-    tilePNG(p.icon, p.color).then((png) => t.project.setIcon(png));
+    tilePNG(p.icon, p.color, 256, p.image).then((png) => t.project.setIcon(png));
   }
   const p = await t.project.info();
   if (!p) return;

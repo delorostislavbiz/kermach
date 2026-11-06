@@ -198,6 +198,15 @@ const bridge = {
     // Отвечает функцией снятия подписки (t218): «Браузер» подписывается при каждом включении и снимает подписку при выключении.
     onChanged: (cb) => { const f = (_e, s) => cb(s); ipcRenderer.on('settings:changed', f); return () => ipcRenderer.removeListener('settings:changed', f); },
   },
+  // Проверка обновлений по нажатию (main\update.js, t1623): адресов и путей окно не передаёт. onProgress отвечает функцией снятия подписки.
+  update: {
+    check: () => ipcRenderer.invoke('update:check'),
+    download: () => ipcRenderer.invoke('update:download'),
+    cancel: () => ipcRenderer.invoke('update:cancel'),
+    install: () => ipcRenderer.invoke('update:install'),
+    open: () => ipcRenderer.invoke('update:open'),
+    onProgress: (cb) => { const f = (_e, v) => cb(v); ipcRenderer.on('update:progress', f); return () => ipcRenderer.removeListener('update:progress', f); },
+  },
   // Ключ API Anthropic для вкладки на кредитах (main\api-key.js, t1356): get — { mode, has, masked, cmd, budget, model }, без ключа;
   // save — { key } | { cmd } | { budget, model } | { clear: true }, ответ — то же или { error }; check — { ok, error?, cost? }.
   apiKey: {

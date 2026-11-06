@@ -45,6 +45,7 @@ but the phase stays unaccepted (do not set `status: done`), and the next phase w
    Criteria — as a table: criterion | yes / no / human needed | how checked (command and output, file:line, page).
    Then briefly: what the agents and the review noticed, the tier summary. Then a list of edits: card, record or overview section — what to change — why.
    "Inbox" — a short list: card — where — why.
+   "Not checked by a human" from the facts — as a short list: number — what to look at. The human marks them with the button in the window or tells you, then `kermach roadmap human <number> --done` or `kermach roadmap human <number> --skip "reason"`.
    Question: "Do we accept phase {фаза}, shall I make the edits? Have a look yourself: …" — and what exactly to open.
 8. The human said "not like that". Create fix cards in this same phase:
    `kermach roadmap new t "Title" --phase {фаза} --files … --text "what to do" --why "why" --check "how to check"`.
@@ -52,12 +53,12 @@ but the phase stays unaccepted (do not set `status: done`), and the next phase w
    When they are done — again `kermach roadmap accept {фаза}`.
 9. The human said "yes". There is no command for this — edit the files yourself:
    - in the phase file {фаза} mark `[x]` only for criteria with "yes"; set `status: done`;
+   - criteria "no" and "human needed" stayed without `[x]` — add to the phase file {фаза} one line "Not checked by a human: <criterion> — what to look at; <another criterion> — what to look at". Each separate thing goes after ";": the human marks them one by one. Do not write this line into "Now";
    - fix the cards, "Inbox" and agreements per the agreed list; remove the line `draft: да` from completed drafts;
    - fix and extend `.kermach/обзор.md` per the agreed list: a corrected fact gets a date and source;
    - write "Now" (`SESSION-now.md` in the project folder): "Phase {фаза} accepted <date>. Next <phase>. Remember: …".
      If the human corrected something for the next phase during acceptance — add a line "Acceptance edits for <phase>: <what the human decided> — cards <numbers>".
      By it the phase checker will verify before the run that the edits reached the cards.
-     Criteria "no" and "human needed" stayed without `[x]` — add a line "Not checked by a human: <criterion> — what to look at".
      There was a context compaction in the middle of acceptance — add a line "after compaction run kermach roadmap accept {фаза}".
 10. The next phase. The facts above name the next phase — end the turn with the question "Shall I start <phase>?".
    Above it there is a line "Not accepted" — name in the question those of them that are still not accepted (phase {фаза} is accepted after "yes"):

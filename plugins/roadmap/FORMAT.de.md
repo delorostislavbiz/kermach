@@ -75,6 +75,8 @@ Kopf:
 | `tries` | Nummer des Startversuchs, schreibt das Programm (t1440) | eine Zahl `1`, `2`, `3`…; wird bei jedem Start über „Starten“, `kermach roadmap run`, Welle und Stapel neu geschrieben. Bei einer fertigen Karte — mit welchem Versuch sie abgegeben wurde: danach fasst `kermach roadmap accept fN` die Stufen von `size.js` zusammen. Nicht von Hand ändern; kein Schlüssel — die Karte wurde vor t1440 oder nicht vom Programm gestartet |
 | `depends` | von welchen Karten sie abhängt | Liste von Nummern `[t09, t10]` oder leer |
 | `human` | ob ein Mensch nötig ist | `ohne Mensch`, `Mensch nötig` |
+| `bug_phase` | die Karte repariert bereits Abgenommenes: in welcher Phase der Fehler abgenommen wurde, optional (t1637) | `f12`; die Phase ist unklar — kein Schlüssel. Ein falscher Wert ist eine Board-Anmerkung, die Karte wird trotzdem gelesen |
+| `bug_by` | wer den Fehler in bereits Abgenommenem gefunden hat, optional (t1637) | `Mensch`, `Live-Lauf`, `Review`. Ein falscher Wert ist eine Board-Anmerkung, die Karte wird trotzdem gelesen. Ein vor der Abnahme der Phase gefundener Fehler bekommt keine Markierung. Die Zählung ist die zweite Tabelle von `kermach roadmap stats` |
 | `draft` | Entwurf, optional (t1325) | `да` — eine Karte einer späteren Phase ohne „Wie prüfen“: die Wellen „Alle“ und „Unabhängige“ überspringen sie mit dem Grund „Entwurf“, „Ausgewählte“ startet sie; die Kartenzeile im Panel trägt das Zeichen „Entwurf“. Kein Schlüssel — eine gewöhnliche Karte. Unten — „Kartenentwurf“ |
 | `created` | wann angelegt | `2026-10-12 11:20` |
 | `closed` | wann geschlossen, optional | `2026-10-12 15:40`; setzt der Agent beim Schließen, das Fenster beim Wechsel des Status auf „fertig“. Kein Schlüssel — in den Prompt einer Nachbarkarte der Phase (Teil 5) kommt diese Karte nur, wenn sie später angelegt ist (`created`), und die Kartenzeile auf dem Board hat keine Zeit: die Dateizeit nach `git clone` ist falsch |
@@ -213,6 +215,7 @@ Was er prüft:
 - das Kriterium ist in der Praxis sichtbar: Befehlsausgabe, Seite, Datei; „alle Karten geschlossen“ ist kein Kriterium;
 - „Wie prüfen“ misst das Ziel der Karte, nicht „öffnet sich ohne Fehler“;
 - gibt es eine Vorlage, endet die erste Phase mit einem Piloten mit vollem Seitenabgleich, jede Phase mit Seiten hat ein Kriterium des Abgleichs mit der Vorlage;
+- hat eine Phase, die ein Programm, eine Website oder anderes Laufendes ändert, ein Kriterium des echten Laufs und dessen Karte in der Mitte der Phase;
 - Abschnitte der Vorlage ohne Daten: die Antwort des Menschen steht in der Übersicht, bevor die Karten dieser Seiten angelegt werden;
 - Reihenfolge der Phasen und Abhängigkeiten, eine Zugangskarte bei Karten mit Server.
 
@@ -221,7 +224,7 @@ Höchstens zwei Runden:
 - das Ergebnis der Runde druckt das Programm in einer Zeile „[Роадмап] Проверка роадмапа, круг N из 2: …“ (Roadmap-Prüfung, Runde N von 2) mit dem Pfad zur Auswertung in den Tab des Erstellers. Kam die Zeile nicht an (ein Mensch tippt lange Text, der Tab hat sie nicht angenommen), gibt der nächste `start` sie als Antwort zurück und beginnt keine neue Runde;
 - ernste Anmerkungen — der Ersteller korrigiert das Board und ruft `start` noch einmal auf: die zweite Runde;
 - sauber, die zweite Runde ist vorbei oder die Prüfung fand nicht statt (Limit, kein claude, länger als 20 Minuten) — der nächste `start` öffnet die Hauptsitzung. Was übrig ist und warum die Prüfung nicht stattfand, steht in ihrer Aufgabe: sie sagt es dem Menschen.
-Ernst — eine Karte ohne Kriterium der Phase, ein Kriterium ohne Karte, das Kriterium „alle Karten geschlossen“, eine Prüfung des falschen Ziels, kein Pilot oder Abgleich mit der Vorlage, ein Abschnitt ohne Antwort des Menschen, eine fehlende nötige Abhängigkeit. Der Rest ist klein, für den Menschen in der Zusammenfassung.
+Ernst — eine Karte ohne Kriterium der Phase, ein Kriterium ohne Karte, das Kriterium „alle Karten geschlossen“, eine Prüfung des falschen Ziels, kein Pilot oder Abgleich mit der Vorlage, bei einer Phase mit Programm kein echter Lauf in der Mitte, ein Abschnitt ohne Antwort des Menschen, eine fehlende nötige Abhängigkeit. Der Rest ist klein, für den Menschen in der Zusammenfassung.
 Die Auswertung jeder Runde — `.kermach\grades\roadmap-N.md` im Projektordner (die nächste freie Nummer, nicht für git). Die Runde merkt sich das Programm: erneutes Öffnen des Fensters beginnt die Prüfung nicht neu, ein neuer Tab des Erstellers beginnt mit Runde 1.
 Der Prüfer belegt einen der zwei Plätze der Kartenprüfer: laufen zwei Kartenprüfungen, wartet er, bis er an der Reihe ist.
 
@@ -240,6 +243,7 @@ Was er prüft:
 - die Änderungen des Menschen aus der Abnahme der vorigen Phase sind bei den Karten angekommen: die Hauptsitzung schreibt sie in „Jetzt“ als Zeile „Правки приёмки для fN: …“;
 - die Kriterien der Phase decken die Karten ab und umgekehrt, die letzte Karte ist ein Review;
 - die Karten stützen sich nicht auf etwas, das die vorige Phase nicht gemacht hat.
+- hat eine Phase, die ein Programm, eine Website oder anderes Laufendes ändert, ein Kriterium des echten Laufs und dessen Karte in der Mitte der Phase.
 
 Der Ablauf ist derselbe wie bei der Roadmap, nur ist der Tab der der Hauptsitzung und der Befehl `wave`:
 - solange eine Runde läuft, antwortet `wave` mit Code 4 und dem Text „проверка фазы идёт“ (die Phasenprüfung läuft) — keine Welle;
@@ -266,7 +270,13 @@ Text: `# …` — der Name der Phase. Die Beschriftung `Ziel:` — das Ziel der 
 Die Beschriftung `Fertig-Kriterien:` — darunter eine Liste, ein Kriterium pro Zeile: `- [ ] …` nicht abgehakt, `- [x] …` abgehakt.
 Eine Zeile `- [ ]` in einem Codeblock ```…``` ist ein Beispiel, kein Kriterium: das Fenster zeigt sie nicht und ein Klick ändert sie nicht.
 Eine Phase ist fertig, wenn alle Kriterien abgehakt sind, nicht wenn die Karten ausgegangen sind.
+Ein Kriterium blieb ohne `[x]`, weil nur ein Mensch es ansehen kann — im Dateitext steht die Zeile `Nicht vom Menschen geprüft: was anzusehen ist; noch eine Sache`.
+Jede Sache nach `;` ist ein eigener Punkt; `;` in Klammern, «…»-Anführungszeichen und `Code` trennt nicht. Die Adresse eines Punktes ist `f<N>.<K>`, K ist seine Reihenfolge in der Datei, daher Neues ans Ende schreiben.
+Eine Markierung kommt ans Ende des Punktes, die Zeile wird nicht gelöscht: `was anzusehen ist [geprüft 2026-11-06]` oder `was anzusehen ist [nicht nötig 2026-11-06: Grund]`. Der Grund ist Pflicht.
+Markieren die Schaltflächen des Eintrags „Vom Menschen zu prüfen" im Fenster und die Befehle `kermach roadmap human f<N>.<K> --done`, `kermach roadmap human f<N>.<K> --skip "Grund"`. Liste — `kermach roadmap human [--all]`. Einem Karten-Agenten verweigert der Befehl: er schreibt die Markierung in derselben Form in die Datei und nur auf das Wort des Menschen.
+Bezeichnung und Markierungswörter werden in allen Board-Sprachen gelesen und in der Board-Sprache geschrieben. Die alte Form — ein Abschnitt mit solcher Überschrift und Punkten — wird gelesen, lege keine neuen an.
 Gibt es eine Vorlage (Markup, Mockup, Design, alte Seite), haben die erste Phase und jede spätere, die Seiten ändert, das Kriterium „die Seiten der Phase stimmen über die ganze Seite mit der Vorlage überein: jeder Abschnitt ist da oder auf Antwort des Menschen entfernt“ (t1434). Der Abgleich wird nicht in die letzte Phase verschoben und nicht auf den ersten Bildschirm beschränkt.
+Eine Phase ändert ein Programm, eine Website oder anderes Laufendes — sie hat das Kriterium eines echten Laufs: es läuft in der echten Umgebung, mit der der Mensch arbeiten wird, nicht an einem Ersatz-Agenten oder Mockup. Die Lauf-Karte steht in der Mitte der Phase: sie wartet auf die Hauptkarten, und Karten, die ihr Ergebnis brauchen, warten auf sie; ein Lauf nur im Review am Ende ist zu spät. Ein echter Lauf ist unmöglich — das Kriterium nennt, was dem Menschen bleibt und woran es statt der echten Umgebung geprüft wurde. Eine Phase nur mit Text oder Recherche braucht kein solches Kriterium.
 
 ```
 ---
@@ -512,6 +522,8 @@ Wörter nach Sprachen:
 | `догадка` | `здогадка` | `guess` | `Vermutung` |
 | `агент` | `агент` | `agent` | `Agent` |
 | `программа` | `програма` | `program` | `Programm` |
+| `человек` | `людина` | `human` | `Mensch` |
+| `живой прогон` | `живий прогін` | `live run` | `Live-Lauf` |
 | `Что сделать` | `Що зробити` | `What to do` | `Was tun` |
 | `Зачем` | `Навіщо` | `Why` | `Wozu` |
 | `Файлы` | `Файли` | `Files` | `Dateien` |
@@ -545,7 +557,7 @@ Aufgabenvorlagen nennen ein Board-Wort mit dem Platzhalter `{доска:<russisc
 Die Nummer ist im Projekt gemeinsam und wird vergeben, sobald die Karte erscheint, auch im Eingang. Beim Verschieben in eine Phase ändert sie sich nicht.
 
 Eine neue Karte oder ein neuer Eintrag — per Befehl im Kermach-Terminal: `kermach roadmap new t "Titel"` oder `kermach roadmap new d "Kern" --card t12`. Die Nummer vergibt das Programm: zwei Agenten zugleich nehmen nicht dieselbe Nummer.
-Felder der Karte — mit Flags: `--text` — „Was tun“, `--why` — „Wozu“, `--files` — „Dateien“, `--check` — „Wie prüfen“ (t1439). Die Prüfung gehört in `--check`, nicht in `--text`: sonst bleibt „Wie prüfen“ leer, und die Roadmap-Prüfung lässt die Welle nicht starten. Eine Karte in einer Phase ohne `--check` ist eine Anmerkung in der Ausgabe des Befehls.
+Felder der Karte — mit Flags: `--text` — „Was tun“, `--why` — „Wozu“, `--files` — „Dateien“, `--check` — „Wie prüfen“ (t1439). Die Prüfung gehört in `--check`, nicht in `--text`: sonst bleibt „Wie prüfen“ leer, und die Roadmap-Prüfung lässt die Welle nicht starten. Eine Karte in einer Phase ohne `--check` ist eine Anmerkung in der Ausgabe des Befehls. Eine Karte, die bereits Abgenommenes repariert — `--bug-phase fN --bug-by wer`: ein falscher Wert, eine Phase, die nicht auf dem Board ist, und `--bug-phase` ohne `--bug-by` werden mit Code 1 abgelehnt (t1637).
 
 Eine neue Karte von Hand:
 1. Finde die größte Nummer — in `counter.json` und unter den Dateien `t<N>.md`.

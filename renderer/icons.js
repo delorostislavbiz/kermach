@@ -88,11 +88,12 @@
     chart: I18n.t('icons.chart', 'График'), link: I18n.t('icons.link', 'Ссылка'), shield: I18n.t('icons.shield', 'Щит'), grid: I18n.t('icons.grid', 'Сетка'), play: I18n.t('icons.play', 'Пуск'), bookmark: I18n.t('icons.bookmark', 'Закладка'), wrench: I18n.t('icons.wrench', 'Ключ гаечный'),
     rocket: I18n.t('icons.rocket', 'Ракета'), bot: I18n.t('icons.bot', 'Робот'), palette: I18n.t('icons.palette', 'Палитра') });
 
-  // 24 цвета: первый ряд — 12 цветов из макета, второй (t484) — салатовый, оливковый, бирюзовый, голубой, индиго, фиолетовый,
-  // сиреневый, розовый, коричневый, жёлтый, кремовый, графитовый. Подобраны так, чтобы рамкой окна (плагин «Рамка проекта»)
-  // отличаться от всех остальных: ΔE не меньше 15 — расчёт spikes\t484-frame\colors.js.
-  const PALETTE = ['#21B568', '#41D68A', '#20A98C', '#008463', '#2091F6', '#62B0FA', '#C13282', '#D45CA0', '#F24E50', '#F46E70', '#ECA855', '#F0BE75',
-    '#A3E635', '#6B8E23', '#3FE0D0', '#38D5F5', '#5262E0', '#A855F7', '#C4A1FF', '#F9A8D4', '#A0643C', '#F5D90A', '#E8E6DC', '#8E9AAF'];
+  // 30 цветов, три ряда по 10 (t1662): первые два ряда — яркие резкие, третий — нежные пастельные. Зелёных два: яркий и пастельный.
+  // 36 не поместилось: перебор дал наименьший ΔE около 12, 33 без оливковых — около 14,8. Подобраны так, чтобы рамкой окна (плагин «Рамка проекта»)
+  // отличаться от всех остальных и от серого «без цвета»: ΔE не меньше 15 — расчёт spikes\t1662-palette\calc.js (формула из spikes\t484-frame\colors.js).
+  const PALETTE = ['#FF531A', '#FF8C00', '#FFBF00', '#FFF200', '#16C65A', '#3DD9F5', '#1AAFFF', '#2559F4', '#8C00FF', '#F200FF',
+    '#CC0014', '#B85E14', '#FF3352', '#CF1760', '#FF33A3', '#C20AA6', '#9B70FF', '#7B99F4', '#147EB8', '#149FB8',
+    '#F1D5D0', '#FFA985', '#FF99A8', '#FAF8C6', '#B4F0C4', '#D0ECF1', '#D0D5F1', '#B8A0E3', '#FAC6ED', '#FF85ED'];
   // Серый — проект или терминал, которому цвет не задавали (так же в main\projects.js).
   const DEFAULT_COLOR = '#737373';
   /** Логотипы со своим цветом: какой цвет ни попроси, рисуются им. currentColor — цвет текста вокруг. @type {Record<string, string>} */
@@ -103,6 +104,9 @@
   // Имя и цвет приходят из файлов пользователя — в разметку попадает только то, что прошло проверку.
   const iconOf = (/** @type {string} */ name) => (Object.prototype.hasOwnProperty.call(ICONS, name) ? ICONS[name] : ICONS.folder);
   const colorOf = (/** @type {string} */ c) => (/^#[0-9a-f]{6}$/i.test(c) ? c : DEFAULT_COLOR);
+  // Картинка проєкту (фавікон, логотип) — лише растровий data:URL розумного розміру: те, що пройшло перевірку, потрапляє в розмітку.
+  const MAX_IMAGE = 256 * 1024;
+  const isImage = (/** @type {unknown} */ s) => typeof s === 'string' && s.length <= MAX_IMAGE && /^data:image\/(png|jpeg|webp);base64,[a-z0-9+/]+=*$/i.test(s);
 
   /**
    * Значок строкой SVG — как в макете: линии 1.75, скруглённые концы и углы.
@@ -118,20 +122,54 @@
   }
 
   /**
+   * Значок проєкту: його картинка, якщо є, інакше звичайний значок svg().
+   * @param {{ icon: string, image?: string }} p @param {string} [color] @param {number} [size]
+   */
+  function projectArt(p, color = DEFAULT_COLOR, size = 18) {
+    if (!isImage(p.image)) return svg(p.icon, color, size);
+    const icon = String(p.icon).replace(/[^\w-]/g, '');
+    return `<img src="${p.image}" alt="" width="${size}" height="${size}" draggable="false" data-art-icon="${icon}" data-art-color="${colorOf(color)}" style="position:relative;flex:none;display:block;object-fit:contain;border-radius:22%">`;
+  }
+
+  // Строка прошла isImage, но картинка испорчена: вместо значка битого файла показываем обычный значок проекта (t1659).
+  // Событие error не всплывает, поэтому слушаем на перехвате: так видно и картинки, вставленные позже.
+  if (typeof document !== 'undefined') document.addEventListener('error', (e) => {
+    const img = e.target;
+    if (!(img instanceof HTMLImageElement) || !img.dataset.artIcon) return;
+    img.outerHTML = svg(img.dataset.artIcon, img.dataset.artColor, Number(img.getAttribute('width')));
+  }, true);
+
+  /**
    * Значок окна для панели задач и Alt-Tab — плитка: цветной квадрат со скруглёнными углами, на нём тёмный рисунок.
    * Тот же рисунок, что в пробе А (spikes\taskbar\page.html). Окно отдаёт картинку главному процессу, тот ставит её setIcon.
    * @param {string} name @param {string} color @param {number} [size] сторона в точках
+   * @param {string} [image] картинка проєкту: на білій плитці замість рисунка
    * @returns {Promise<string>} PNG как data:URL
    */
-  async function tilePNG(name, color, size = 256) {
+  async function tilePNG(name, color, size = 256, image = '') {
     const k = size / 256;
     const cv = document.createElement('canvas');
     cv.width = cv.height = size;
     const g = /** @type {CanvasRenderingContext2D} */ (cv.getContext('2d'));
-    g.fillStyle = colorOf(color);
+    // Строка прошла isImage, но картинка испорчена: decode отказывает. Тогда обычная плитка со значком, иначе окно осталось бы без значка (t1659).
+    /** @type {HTMLImageElement | null} */
+    let pic = null;
+    if (isImage(image)) {
+      pic = new Image();
+      pic.src = image;
+      try { await pic.decode(); } catch { pic = null; }
+    }
+    g.fillStyle = pic ? '#FFFFFF' : colorOf(color);
     g.beginPath();
     g.roundRect(8 * k, 8 * k, 240 * k, 240 * k, 52 * k);
     g.fill();
+    if (pic) {
+      const fit = (200 * k) / Math.max(pic.naturalWidth, pic.naturalHeight);
+      const w = pic.naturalWidth * fit;
+      const h = pic.naturalHeight * fit;
+      g.drawImage(pic, (size - w) / 2, (size - h) / 2, w, h);
+      return cv.toDataURL('image/png');
+    }
     // Линия толще, чем в интерфейсе: в 16 точках на панели задач тонкая пропадает.
     const img = new Image();
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg(name, DARK, 168 * k, 2.2));
@@ -140,7 +178,7 @@
     return cv.toDataURL('image/png');
   }
 
-  const api = { ICONS, GRID, get TITLES() { return TITLES(); }, PALETTE, DEFAULT_COLOR, svg, tilePNG };
+  const api = { ICONS, GRID, get TITLES() { return TITLES(); }, PALETTE, DEFAULT_COLOR, svg, tilePNG, isImage, projectArt };
   if (typeof window !== 'undefined') /** @type {any} */ (window).Icons = api;
   if (typeof module !== 'undefined') module.exports = api;
 })();

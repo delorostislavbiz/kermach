@@ -473,7 +473,16 @@ function tell(changed) {
  * Таблица не прочиталась — ''. Узнанное заодно обновляется. @param {{ sid: string, pid?: number }} s @returns {Promise<string>}
  */
 async function agentNow(s) {
-  const rows = s.pid ? await processTable().catch(() => null) : null;
+  return (await agentRead(s)) || '';
+}
+
+/**
+ * То же, но сбой виден (t1607): таблица не прочиталась — null, а не «агента нет». Подпись строки по '' назвала бы вкладку человеком.
+ * have — уже прочитанная таблица (t1655): подпись строки читает её один раз на всю проверку.
+ * @param {{ sid: string, pid?: number }} s @param {Proc[]} [have] @returns {Promise<string | null>}
+ */
+async function agentRead(s, have) {
+  const rows = s.pid ? (have || await processTable().catch(() => null)) : null;
   let k = '';
   if (rows) {
     /** @type {Map<number, Proc[]>} */
@@ -494,7 +503,76 @@ async function agentNow(s) {
   // Без pid таблицу не читали — это не сбой, отступ не растёт.
   const ms = s.pid ? nextPoll(!!rows) : retryMs;
   if (running.size || !rows) scheduleCheck(ms);
-  return k;
+  return s.pid && !rows ? null : k;
+}
+
+/**
+ * Из какой вкладки на самом деле запущена команда kermach (t1655): подпись строки не верит номеру вкладки из окружения клиента.
+ * От процесса команды идём вверх по родителям до процесса вкладки. Номер процесса объявляет клиент, поэтому процесс обязан быть живой командой kermach.js:
+ * номер оболочки чужой вкладки не подойдёт. Родитель моложе потомка — номер уже занял другой процесс, цепочка обрывается.
+ * Родителя нет в таблице Windows — так рвётся Git Bash: сценарий sh заменяет копию bash, и у sh.exe остаётся номер умершей копии. Тогда родителя называет msysTable.
+ * @param {string | number} pid процесс команды @param {{ sid: string, pid?: number, alive?: boolean }[]} tabs
+ * @returns {Promise<{ sid: string, rows: Proc[], trail?: string } | null>} sid '' — команда не из вкладки, trail — где оборвалась цепочка; null — таблица не прочиталась
+ */
+async function callerTab(pid, tabs) {
+  const rows = await processTable().catch(() => null);
+  if (!rows) return null;
+  const by = new Map(rows.map((r) => [r.pid, r]));
+  const of = new Map(tabs.filter((t) => t && t.pid && t.alive !== false).map((t) => [t.pid, t.sid]));
+  let p = by.get(Number(pid));
+  if (!p) return { sid: '', rows, trail: `процесса ${pid} нет в таблице` };
+  if (!/[\\/]kermach\.js(["\s]|$)/i.test(p.cmd)) return { sid: '', rows, trail: `${p.pid} ${p.name}: не kermach.js` };
+  const trail = [];
+  /** @type {{ byWin: Map<number, { cyg: number, ppid: number }>, byCyg: Map<number, number> } | null | undefined} */
+  let ms;
+  /** @type {Proc | null} */
+  let child = null;
+  for (let depth = 0; p && depth < 64; depth++) {
+    const sid = of.get(p.pid);
+    if (sid) return { sid, rows };
+    trail.push(`${p.pid} ${p.name}`);
+    let up = by.get(p.ppid);
+    if (!up && process.platform === 'win32') {
+      if (ms === undefined) ms = await msysTable();
+      // sh.exe заменил себя обычной программой (exec в обёртке kermach): в таблице Git его номер отдан ей, а сам он только ждёт её в Windows.
+      const me = ms ? ms.byWin.get(p.pid) || (child ? ms.byWin.get(child.pid) : undefined) : undefined;
+      const win = me && ms ? ms.byCyg.get(me.ppid) : undefined;
+      up = win ? by.get(win) : undefined;
+      if (up) trail.push('через ps Git');
+    }
+    if (!up) { trail.push(`родителя ${p.ppid} нет в таблице`); break; }
+    if (up === p || up.born > p.born) { trail.push(`родитель ${up.pid} моложе`); break; }
+    child = p;
+    p = up;
+  }
+  return { sid: '', rows, trail: trail.join(' < ') };
+}
+
+/**
+ * Таблица процессов Git Bash (t1655): номер в Git, номер его родителя в Git и номер в Windows. Каждая установка Git видит только свои процессы.
+ * ps.exe берём только из папок установки Git: путь из командной строки чужого процесса запускать нельзя, её пишет сам процесс.
+ * Git стоит в другом месте, ps нет или не ответил — null: цепочка оборвётся, подпись будет «[без вкладки]».
+ * @returns {Promise<{ byWin: Map<number, { cyg: number, ppid: number }>, byCyg: Map<number, number> } | null>}
+ */
+function msysTable() {
+  const roots = [process.env.ProgramW6432, process.env.ProgramFiles, process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs')];
+  const exe = roots.filter(Boolean).map((r) => path.join(/** @type {string} */ (r), 'Git', 'usr', 'bin', 'ps.exe')).find((f) => fs.existsSync(f));
+  if (!exe) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    execFile(exe, ['-e'], { windowsHide: true, timeout: 3000, maxBuffer: 1 << 24 }, (e, out) => {
+      if (e) return resolve(null);
+      const byWin = new Map();
+      const byCyg = new Map();
+      // Столбцы PID PPID PGID WINPID; перед PID бывает буква состояния. Дальше время, в нём у старых процессов другое число столбцов: его не разбираем.
+      for (const l of String(out).split(/\r?\n/)) {
+        const m = /^[\sA-Z]*?(\d+)\s+(\d+)\s+\d+\s+(\d+)\s/.exec(l);
+        if (!m) continue;
+        byWin.set(Number(m[3]), { cyg: Number(m[1]), ppid: Number(m[2]) });
+        byCyg.set(Number(m[1]), Number(m[3]));
+      }
+      resolve({ byWin, byCyg });
+    });
+  });
 }
 
 async function checkShells() {
@@ -631,4 +709,4 @@ function pluginAgents(log) {
   });
 }
 
-module.exports = { register, list, listAsync, pluginAgents, promptFlag, takesPics, launchOf, extra, named, LOOK, CATALOG, NAME_RE, watchShells, pokeShell, pokeShells, runningIn, onRunning, agentNow, isShell, agentOfProcess };
+module.exports = { register, list, listAsync, pluginAgents, kindOfAgent, promptFlag, takesPics, launchOf, extra, named, LOOK, CATALOG, NAME_RE, watchShells, agentRead, callerTab,pokeShell, pokeShells, runningIn, onRunning, agentNow, isShell, agentOfProcess };

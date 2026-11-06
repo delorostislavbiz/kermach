@@ -10,6 +10,7 @@ const sender = require('./sender');
 const appScheme = require('./app-scheme');
 const legacyStorage = require('./legacy-storage');
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const windowState = require('./window-state');
 const settings = require('./settings');
@@ -33,8 +34,8 @@ const windows = new Map();
 const byContents = new Map();
 
 const iconDir = () => path.join(/** @type {Ctx} */ (ctx).dataDir, 'icons');
-/** Цвет и рисунок — в имени файла: сменился цвет — значок рисуется заново. @param {Project} p */
-const iconFile = (p) => path.join(iconDir(), `${p.id}-${String(p.color).replace(/[^0-9a-z]/gi, '')}-${String(p.icon).replace(/[^0-9a-z-]/gi, '')}.png`);
+/** Цвет и рисунок — в имени файла: сменился цвет — значок рисуется заново. Так само з картинкою проєкту — за її хешем. @param {Project} p */
+const iconFile = (p) => path.join(iconDir(), `${p.id}-${String(p.color).replace(/[^0-9a-z]/gi, '')}-${String(p.icon).replace(/[^0-9a-z-]/gi, '')}${p.image ? `-${crypto.createHash('sha1').update(p.image).digest('hex').slice(0, 8)}` : ''}.png`);
 
 /** Обработчики — один раз на процесс. @param {Ctx} c */
 function register(c) {
@@ -54,7 +55,7 @@ function register(c) {
   ipcMain.handle('project:info', (e) => {
     if (!sender.allowed(e, 'project:info')) return sender.refused();
     const p = byContents.get(e.sender.id);
-    return p ? { id: p.id, name: p.name, path: p.path, color: p.color, icon: p.icon } : null;
+    return p ? { id: p.id, name: p.name, path: p.path, color: p.color, icon: p.icon, image: p.image } : null;
   });
   ipcMain.on('win:icon', (e, dataUrl) => {
     if (!sender.allowed(e, 'win:icon')) return;
