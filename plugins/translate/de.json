@@ -318,6 +318,8 @@
  "dialogs.vysota": "Höhe",
  "dialogs.yazykProgrammy": "Sprache der Oberfläche",
  "dialogs.znachok": "Symbol",
+ "dialogs.zagruzitKartinku": "Bild hochladen",
+ "dialogs.kartinkaNeChitaetsya": "Diese Datei lässt sich nicht als Bild lesen",
  "dialogs.zvukKogdaAgentZakonchil": "Ton, wenn ein Agent fertig ist oder auf Antwort wartet",
  "dialogs.notifyAgent": "Popup-Benachrichtigung, wenn ein Agent fertig ist oder auf Antwort wartet",
  "dialogs.copySelect": "Markierten Text sofort kopieren, ohne Strg+C",

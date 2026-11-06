@@ -3,7 +3,7 @@
 // Данные — от главного процесса через window.kermach.projects (preload.cjs). Значки — window.Icons (icons.js), агентов — window.AgentLogos (agent-logos.js).
 (function () {
   const t = /** @type {any} */ (window).kermach;
-  const { svg, DEFAULT_COLOR } = /** @type {any} */ (window).Icons;
+  const { svg, projectArt, DEFAULT_COLOR } = /** @type {any} */ (window).Icons;
   const $ = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.getElementById(id));
 
   /**
@@ -140,7 +140,7 @@
     // Цвет — только вида #rrggbb, иначе серый (так же делает svg()).
     const color = /^#[0-9a-f]{6}$/i.test(p.color) ? p.color : DEFAULT_COLOR;
     return `<div class="row${p.id === fresh ? ' fresh' : ''}${needOf(p.id) ? ' need' : ''}${p.id === kbSel ? ' kb' : ''}" data-id="${esc(p.id)}" title="${esc(p.path)}">
-      <div class="pic"><div class="strip" style="background:${color}"></div>${svg(p.icon, color, 18)}</div>
+      <div class="pic"><div class="strip" style="background:${color}"></div>${projectArt(p, color, 18)}</div>
       <div class="text"><div class="n">${esc(p.name)}</div><div class="p">${esc(p.path)}</div></div>${waitBadge(p.id)}${status}</div>`;
   }
 
@@ -148,7 +148,7 @@
   function tile(p) {
     const color = /^#[0-9a-f]{6}$/i.test(p.color) ? p.color : DEFAULT_COLOR;
     return `<div class="tile${p.id === fresh ? ' fresh' : ''}${needOf(p.id) ? ' need' : ''}${p.id === kbSel ? ' kb' : ''}" data-id="${esc(p.id)}" title="${esc(p.path)}" style="--c:${color}">
-      <div class="top">${svg(p.icon, color, 20)}<div class="n">${esc(p.name)}</div>${waitBadge(p.id)}</div><div class="sub">${kindsLine(p.id)}</div>`
+      <div class="top">${projectArt(p, color, 20)}<div class="n">${esc(p.name)}</div>${waitBadge(p.id)}</div><div class="sub">${kindsLine(p.id)}</div>`
       + `<div class="bot">${statesLine(p.id, true)}${bgOf(p.id) ? `<span class="bg" title="${esc(bgText(bgOf(p.id)).slice(3))}">${bgText(bgOf(p.id))}</span>` : ''}</div></div>`;
   }
 
@@ -421,7 +421,7 @@
     // Отмена — проект остаётся с именем папки и серым цветом. Папка уже была в списке — окна нет.
     if (!r.added) return;
     const p = r.project;
-    const look = await D.colorIcon({ name: p.name, sub: p.path, color: p.color, icon: p.icon, rename: true });
+    const look = await D.colorIcon({ name: p.name, sub: p.path, color: p.color, icon: p.icon, image: p.image || '', rename: true });
     if (!look) return;
     const u = await t.projects.update(p.id, look);
     if (u.error) return showError(u.error);
@@ -778,12 +778,13 @@
       if (r.error) return showError(r.error);
       await refresh();
     } else if (pick === 'look') {
-      const look = await D.colorIcon({ name: p.name, sub: p.path, color: p.color, icon: p.icon });
+      const look = await D.colorIcon({ name: p.name, sub: p.path, color: p.color, icon: p.icon, image: p.image || '' });
       if (!look) return;
       const r = await t.projects.update(p.id, look);
       if (r.error) return showError(r.error);
       p.color = look.color;
       p.icon = look.icon;
+      if (look.image) p.image = look.image; else delete p.image;
       render();
     } else if (pick === 'copy') {
       const r = await t.projects.copy(p.id);

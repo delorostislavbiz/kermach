@@ -319,14 +319,42 @@
   }
 
   /**
+   * Файл картинки → PNG як data:URL: не більше 128 точок за довшою стороною, пропорції зберігаються.
+   * @param {File} file @returns {Promise<string>}
+   */
+  async function imageFromFile(file) {
+    const src = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(String(r.result));
+      r.onerror = () => rej(r.error);
+      r.readAsDataURL(file);
+    });
+    const img = new Image();
+    img.src = src;
+    await img.decode();
+    if (!img.naturalWidth || !img.naturalHeight) throw new Error('порожня картинка');
+    const k = Math.min(1, 128 / Math.max(img.naturalWidth, img.naturalHeight));
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(img.naturalWidth * k));
+    cv.height = Math.max(1, Math.round(img.naturalHeight * k));
+    const g = /** @type {CanvasRenderingContext2D} */ (cv.getContext('2d'));
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(img, 0, 0, cv.width, cv.height);
+    return cv.toDataURL('image/png');
+  }
+
+  /**
    * «Цвет и значок» — для терминала и для проекта. Сверху — как это будет выглядеть в списке.
    * rename — ещё и поле имени («Цвет, значок и имя» у только что добавленной папки, t1212); пустое имя «Готово» не принимает.
-   * @param {{ name: string, sub: string, subColor?: string, color: string, icon: string, rename?: boolean }} o
-   * @returns {Promise<{ color: string, icon: string, name?: string } | null>} null — отмена
+   * image — лише для проєкту: кнопка «Завантажити картинку». Вибір значка із сітки картинку прибирає; у відповіді image — '' без картинки.
+   * @param {{ name: string, sub: string, subColor?: string, color: string, icon: string, image?: string, rename?: boolean }} o
+   * @returns {Promise<{ color: string, icon: string, image?: string, name?: string } | null>} null — отмена
    */
   function colorIcon(o) {
     let color = colorOf(o.color);
     let icon = GRID.includes(o.icon) ? o.icon : 'folder';
+    const withImage = o.image !== undefined;
+    let image = o.image || '';
     const body = `${o.rename ? `
       <div class="sec"><div class="cap">${I18n.t('dialogs.imya', 'Имя')}</div><input class="field ci-name" spellcheck="false" maxlength="60" value="${esc(o.name)}"></div>` : ''}
       <div class="sec"><div class="cap">${I18n.t('dialogs.takBudetVyglyadetV', 'Так будет выглядеть в списке')}</div>
@@ -335,6 +363,7 @@
         <div class="pal">${PALETTE.map((/** @type {string} */ c) => `<div class="sw" data-c="${c}" style="background:${c}" title="${c}"></div>`).join('')}
           <label class="own" title="${I18n.t('dialogs.vybratLyuboyCvet', 'Выбрать любой цвет')}"><b class="plus">${svg('plus', tc('text', '#C9D0DC'), 12)}</b><i></i><span>${I18n.t('dialogs.svoyCvet', 'Свой цвет')}</span><input type="color" tabindex="-1"></label></div></div>
       <div class="sec"><div class="head"><div class="cap">${I18n.t('dialogs.znachok', 'Значок')}</div><label class="find">${svg('search', tc('muted', '#8D91A5'), 13)}<input placeholder="${I18n.t('dialogs.poiskZnachka', 'Поиск значка')}" spellcheck="false"></label></div>
+        ${withImage ? `<div class="ci-image" style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><button type="button" class="bbtn ci-upload">${I18n.t('dialogs.zagruzitKartinku', 'Загрузить картинку')}</button><span class="ci-image-err" style="color:${tc('danger', '#F24E50')};font-size:12px"></span><input type="file" accept="image/*" hidden></div>` : ''}
         <div class="grid"></div></div>
       <div class="btns"><button class="cancel">${I18n.t('common.cancel', 'Отмена')}</button><button class="ok">${I18n.t('common.done', 'Готово')}</button></div>`;
     const title = o.rename ? I18n.t('dialogs.cvetZnachokIImya', 'Цвет, значок и имя') : I18n.t('dialogs.cvetIZnachok', 'Цвет и значок');
@@ -345,7 +374,7 @@
       const paint = () => {
         dlg.style.setProperty('--c', color);
         /** @type {HTMLElement} */ (dlg.querySelector('.prev .strip')).style.background = color;
-        /** @type {HTMLElement} */ (dlg.querySelector('.prev .pic')).innerHTML = svg(icon, color, 18);
+        /** @type {HTMLElement} */ (dlg.querySelector('.prev .pic')).innerHTML = /** @type {any} */ (window).Icons.projectArt({ icon, image }, color, 18);
         let inPalette = false;
         for (const sw of /** @type {NodeListOf<HTMLElement>} */ (dlg.querySelectorAll('.sw'))) {
           const on = sameColor(sw.dataset.c || '', color);
@@ -362,7 +391,7 @@
         const f = q.value.trim().toLowerCase();
         const shown = f ? GRID.filter((/** @type {string} */ n) => n.includes(f) || String(/** @type {any} */ (window).Icons.TITLES[n] || '').toLowerCase().includes(f)) : GRID;
         /** @type {HTMLElement} */ (dlg.querySelector('.grid')).innerHTML = shown.length
-          ? shown.map((/** @type {string} */ n) => `<div class="g${n === icon ? ' on' : ''}" data-n="${n}" title="${esc(/** @type {any} */ (window).Icons.TITLES[n] || n)}">${svg(n, n === icon ? color : tc('text', '#C9D0DC'), 18)}</div>`).join('')
+          ? shown.map((/** @type {string} */ n) => `<div class="g${n === icon && !image ? ' on' : ''}" data-n="${n}" title="${esc(/** @type {any} */ (window).Icons.TITLES[n] || n)}">${svg(n, n === icon && !image ? color : tc('text', '#C9D0DC'), 18)}</div>`).join('')
           : `<div class="none">${I18n.t('dialogs.takogoZnachkaNet', 'Такого значка нет')}</div>`;
       };
       /** @type {HTMLElement} */ (dlg.querySelector('.pal')).addEventListener('click', (e) => {
@@ -373,18 +402,31 @@
       own.addEventListener('input', () => { color = colorOf(own.value); paint(); });
       /** @type {HTMLElement} */ (dlg.querySelector('.grid')).addEventListener('click', (e) => {
         const g = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('.g'));
-        if (g && g.dataset.n) { icon = g.dataset.n; paint(); }
+        if (g && g.dataset.n) { icon = g.dataset.n; image = ''; paint(); }
       });
       q.addEventListener('input', paint);
+      if (withImage) {
+        const file = /** @type {HTMLInputElement} */ (dlg.querySelector('.ci-image input'));
+        const err = /** @type {HTMLElement} */ (dlg.querySelector('.ci-image-err'));
+        /** @type {HTMLElement} */ (dlg.querySelector('.ci-upload')).onclick = () => file.click();
+        file.addEventListener('change', async () => {
+          const f = file.files && file.files[0];
+          file.value = '';
+          if (!f) return;
+          err.textContent = '';
+          try { image = await imageFromFile(f); paint(); } catch { err.textContent = I18n.t('dialogs.kartinkaNeChitaetsya', 'Этот файл не читается как картинка'); }
+        });
+      }
       // Имя — сразу в образце сверху; пустое — «Готово» неактивна.
       if (nameIn) nameIn.addEventListener('input', () => {
         /** @type {HTMLElement} */ (dlg.querySelector('.prev .n')).textContent = nameIn.value.trim() || o.name;
         /** @type {HTMLButtonElement} */ (dlg.querySelector('.btns .ok')).disabled = !nameIn.value.trim();
       });
       const ok = () => {
-        if (!nameIn) return done({ color, icon });
+        const look = withImage ? { color, icon, image } : { color, icon };
+        if (!nameIn) return done(look);
         const name = nameIn.value.trim();
-        if (name) done({ color, icon, name });
+        if (name) done({ ...look, name });
       };
       /** @type {HTMLElement} */ (dlg.querySelector('.btns .ok')).onclick = ok;
       paint();

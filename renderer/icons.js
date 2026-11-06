@@ -97,6 +97,9 @@
   // Имя и цвет приходят из файлов пользователя — в разметку попадает только то, что прошло проверку.
   const iconOf = (/** @type {string} */ name) => (Object.prototype.hasOwnProperty.call(ICONS, name) ? ICONS[name] : ICONS.folder);
   const colorOf = (/** @type {string} */ c) => (/^#[0-9a-f]{6}$/i.test(c) ? c : DEFAULT_COLOR);
+  // Картинка проєкту (фавікон, логотип) — лише растровий data:URL розумного розміру: те, що пройшло перевірку, потрапляє в розмітку.
+  const MAX_IMAGE = 256 * 1024;
+  const isImage = (/** @type {unknown} */ s) => typeof s === 'string' && s.length <= MAX_IMAGE && /^data:image\/(png|jpeg|webp);base64,[a-z0-9+/]+=*$/i.test(s);
 
   /**
    * Значок строкой SVG — как в макете: линии 1.75, скруглённые концы и углы.
@@ -112,20 +115,40 @@
   }
 
   /**
+   * Значок проєкту: його картинка, якщо є, інакше звичайний значок svg().
+   * @param {{ icon: string, image?: string }} p @param {string} [color] @param {number} [size]
+   */
+  function projectArt(p, color = DEFAULT_COLOR, size = 18) {
+    if (!isImage(p.image)) return svg(p.icon, color, size);
+    return `<img src="${p.image}" alt="" width="${size}" height="${size}" draggable="false" style="position:relative;flex:none;display:block;object-fit:contain;border-radius:22%">`;
+  }
+
+  /**
    * Значок окна для панели задач и Alt-Tab — плитка: цветной квадрат со скруглёнными углами, на нём тёмный рисунок.
    * Тот же рисунок, что в пробе А (spikes\taskbar\page.html). Окно отдаёт картинку главному процессу, тот ставит её setIcon.
    * @param {string} name @param {string} color @param {number} [size] сторона в точках
+   * @param {string} [image] картинка проєкту: на білій плитці замість рисунка
    * @returns {Promise<string>} PNG как data:URL
    */
-  async function tilePNG(name, color, size = 256) {
+  async function tilePNG(name, color, size = 256, image = '') {
     const k = size / 256;
     const cv = document.createElement('canvas');
     cv.width = cv.height = size;
     const g = /** @type {CanvasRenderingContext2D} */ (cv.getContext('2d'));
-    g.fillStyle = colorOf(color);
+    g.fillStyle = isImage(image) ? '#FFFFFF' : colorOf(color);
     g.beginPath();
     g.roundRect(8 * k, 8 * k, 240 * k, 240 * k, 52 * k);
     g.fill();
+    if (isImage(image)) {
+      const pic = new Image();
+      pic.src = image;
+      await pic.decode();
+      const fit = (200 * k) / Math.max(pic.naturalWidth, pic.naturalHeight);
+      const w = pic.naturalWidth * fit;
+      const h = pic.naturalHeight * fit;
+      g.drawImage(pic, (size - w) / 2, (size - h) / 2, w, h);
+      return cv.toDataURL('image/png');
+    }
     // Линия толще, чем в интерфейсе: в 16 точках на панели задач тонкая пропадает.
     const img = new Image();
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg(name, DARK, 168 * k, 2.2));
@@ -134,7 +157,7 @@
     return cv.toDataURL('image/png');
   }
 
-  const api = { ICONS, GRID, get TITLES() { return TITLES(); }, PALETTE, DEFAULT_COLOR, svg, tilePNG };
+  const api = { ICONS, GRID, get TITLES() { return TITLES(); }, PALETTE, DEFAULT_COLOR, svg, tilePNG, isImage, projectArt };
   if (typeof window !== 'undefined') /** @type {any} */ (window).Icons = api;
   if (typeof module !== 'undefined') module.exports = api;
 })();

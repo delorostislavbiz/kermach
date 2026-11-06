@@ -318,6 +318,8 @@
  "dialogs.vysota": "Висота",
  "dialogs.yazykProgrammy": "Мова програми",
  "dialogs.znachok": "Значок",
+ "dialogs.zagruzitKartinku": "Завантажити картинку",
+ "dialogs.kartinkaNeChitaetsya": "Цей файл не читається як картинка",
  "dialogs.zvukKogdaAgentZakonchil": "Звук, коли агент закінчив або чекає на відповідь",
  "dialogs.notifyAgent": "Спливне сповіщення, коли агент закінчив або чекає на відповідь",
  "dialogs.copySelect": "Копіювати виділений текст одразу, без Ctrl+C",

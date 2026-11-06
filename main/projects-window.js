@@ -204,12 +204,13 @@ function register(c) {
       c.log(`проект ${id}: настройку «без вопросов о разрешениях» прислало не окно «Проекты» — отказ`);
       return { error: 'настройку «без вопросов о разрешениях» меняет только окно «Проекты»' };
     }
-    const f = projects.checkLook(look, ['name', 'color', 'icon', 'pinned', 'bypass']);
+    const f = projects.checkLook(look, ['name', 'color', 'icon', 'image', 'pinned', 'bypass']);
     if (!f.fields) return f;
     const p = projects.setLook(c.dataDir, /** @type {any} */ (data), String(id), f.fields);
     if (!p) return { error: `нет проекта ${id}` };
     if (f.fields.name) c.log(`проект ${p.path}: имя «${p.name}»`);
     if (f.fields.color || f.fields.icon) c.log(`проект ${p.path}: цвет ${p.color}, значок ${p.icon}`);
+    if (f.fields.image !== undefined) c.log(`проект ${p.path}: ${f.fields.image ? 'своя картинка' : 'картинку прибрано'}`);
     if (f.fields.pinned !== undefined) c.log(`проект ${p.path}: ${f.fields.pinned ? 'закреплён' : 'откреплён'}`);
     if (f.fields.bypass !== undefined) c.log(`проект ${p.path}: новые вкладки Claude ${f.fields.bypass ? 'без вопросов о разрешениях' : 'с вопросами о разрешениях, как обычно'}`);
     changed();
@@ -248,6 +249,7 @@ function register(c) {
       added.project.name = i18n.t('projects.copyName', '{name} — копия', { name: src.name });
       added.project.color = src.color;
       added.project.icon = src.icon;
+      if (src.image) added.project.image = src.image;
       added.project.group = src.group;
       projects.save(c.dataDir, d);
       c.log(`копия проекта ${src.path}: ${r.path}, ветка ${r.branch}, скопировано файлов вне git: ${r.copied.length}`);
@@ -461,6 +463,7 @@ async function syncCopies() {
         added.project.name = i18n.t('projects.copyName', '{name} — копия', { name: main.name });
         added.project.color = main.color;
         added.project.icon = main.icon;
+        if (main.image) added.project.image = main.image;
         added.project.group = main.group;
         projects.save(c.dataDir, d);
         c.log(`копия проекта ${main.path} создана без окна: ${w.path}, ветка ${w.branch}`);
