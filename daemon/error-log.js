@@ -39,7 +39,7 @@ function init({ dataDir, who, version }) {
   WHO = who;
   if (version) VERSION = version;
   else {
-    try { VERSION = require('../package.json').version; } catch {}
+    try { const p = require('../package.json'); VERSION = p.macBuild ? `${p.version}.${p.macBuild}` : p.version; } catch {}
   }
   try {
     fs.mkdirSync(path.dirname(FILE), { recursive: true });

@@ -67,7 +67,7 @@ if (MOVE_NOTE) log(MOVE_NOTE);
 // Журнал ошибок (порт для macOS): logs/errors.log — необработанные ошибки, ошибки в окнах, упавшие процессы (daemon/error-log.js).
 // Нативные падения — дампы Crashpad в chromium/Crashpad, только на диске: uploadToServer выключен.
 const errorLog = require('../daemon/error-log');
-errorLog.init({ dataDir: DATA_DIR, who: 'main', version: app.getVersion() });
+errorLog.init({ dataDir: DATA_DIR, who: 'main', version: require('./app-version').appVersion() });
 errorLog.watchProcess();
 errorLog.watchConsole();
 try { crashReporter.start({ uploadToServer: false }); } catch (e) { errorLog.report('crash-reporter', e); }

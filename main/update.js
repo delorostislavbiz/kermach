@@ -135,7 +135,7 @@ let installing = null;
 let launched = false;
 
 const updatesDir = () => path.join(dataDir, 'updates');
-const current = () => require('../package.json').version;
+const current = () => require('./app-version').appVersion();
 /** Адрес API пробы. Пока он задан, проверка адреса скачивания снята. Обычная программа его не задаёт: окно и настройки до него не достают. */
 let probeApi = '';
 /** Только для кода проб. Пустая строка возвращает настоящий адрес и проверку. @param {string} url */

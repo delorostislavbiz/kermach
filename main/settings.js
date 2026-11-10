@@ -415,7 +415,7 @@ function register(c) {
   if (process.platform === 'darwin') { try { systemPreferences.on('accent-color-changed', sysChanged); } catch {} }
   // Тема до первой отрисовки (t257): preload спрашивает синхронно, renderer\theme.js ставит цвета в <head> — без тёмной вспышки.
   // Номер версии для «Настроек» (t1264): version из src\package.json, читается напрямую — app.getVersion() в пробах отдаёт номер Electron.
-  ipcMain.on('settings:version', (e) => { e.returnValue = sender.allowed(e, 'settings:version') ? require('../package.json').version : null; });
+  ipcMain.on('settings:version', (e) => { e.returnValue = sender.allowed(e, 'settings:version') ? require('./app-version').appVersion() : null; });
   ipcMain.on('settings:look', (e) => { e.returnValue = sender.allowed(e, 'settings:look') ? look() : null; });
   // Схемы для списка «Тема» (t723): синхронно, «Настройки» строят список при открытии.
   ipcMain.on('settings:schemes', (e) => { e.returnValue = sender.allowed(e, 'settings:schemes') ? schemes() : []; });
