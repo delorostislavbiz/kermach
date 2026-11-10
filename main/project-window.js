@@ -170,4 +170,7 @@ function windowFor(id) {
   return w && !w.isDestroyed() ? w : null;
 }
 
-module.exports = { open, projectOf, windowFor, showTab };
+/** Номера проектов с открытыми окнами — в порядке открытия (порт для macOS: открыть их снова после обновления). */
+const openIds = () => [...windows].filter(([, w]) => !w.isDestroyed()).map(([id]) => id);
+
+module.exports = { open, projectOf, windowFor, showTab, openIds };

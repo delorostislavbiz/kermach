@@ -9,7 +9,7 @@
 (async function () {
   const w = /** @type {any} */ (window);
   const t = w.kermach;
-  const { svg, tilePNG, projectArt, DEFAULT_COLOR } = w.Icons;
+  const { svg, tilePNG, projectArt, DEFAULT_COLOR, PALETTE } = w.Icons;
   const $ = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.getElementById(id));
   // Имена — от демона и из файла пользователя, в разметку только через замену опасных знаков.
   const esc = (/** @type {string} */ s) => String(s).replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
@@ -35,6 +35,28 @@
     $('sideName').textContent = p.name;
     $('sidePath').textContent = $('sidePath').title = p.path || '';
     tilePNG(p.icon, p.color, 256, p.image).then((png) => t.project.setIcon(png));
+    // Відтінок вікна кольором проєкту (порт для macOS): бокова панель, рядок вкладок і смуга вгорі — щоб розрізняти вікна, коли їх багато.
+    // Колір не вибрано (сірий за замовчуванням) — сталий відтінок із насичених кольорів палітри за номером проєкту: той самий для проєкту,
+    // різний для різних. Термінали й розмову не фарбуємо: текст має лишатися читабельним.
+    const root = document.documentElement;
+    let tint = pColor;
+    if (pColor.toLowerCase() === DEFAULT_COLOR.toLowerCase()) {
+      const pool = PALETTE.slice(0, 20).filter((c) => c !== '#FFF200');
+      let h = 0;
+      for (const ch of String(p.id || p.path || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+      tint = pool[h % pool.length];
+    }
+    root.classList.add('proj-tint');
+    root.style.setProperty('--proj', tint);
+    if (!document.getElementById('projTintCss')) {
+      const st = document.createElement('style');
+      st.id = 'projTintCss';
+      st.textContent = `
+        html.proj-tint #side { background-image: linear-gradient(color-mix(in srgb, var(--proj) 13%, transparent), color-mix(in srgb, var(--proj) 6%, transparent)); }
+        html.proj-tint #tabrow { background-image: linear-gradient(color-mix(in srgb, var(--proj) 9%, transparent), color-mix(in srgb, var(--proj) 9%, transparent)); }
+        html.proj-tint body::before { content: ''; position: fixed; inset: 0 0 auto 0; height: 3px; background: var(--proj); z-index: 2147483000; pointer-events: none; }`;
+      document.head.append(st);
+    }
   }
   const p = await t.project.info();
   if (!p) return;

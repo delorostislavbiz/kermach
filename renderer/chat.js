@@ -160,6 +160,7 @@
       if (e.k === 'user') { steps = null; out.push({ type: 'user', e }); continue; }
       if (e.k === 'text') { steps = null; out.push({ type: 'text', e }); continue; }
       if (e.k === 'turn') { steps = null; out.push({ type: 'turn', e }); continue; }
+      if (e.k === 'compact') { steps = null; out.push({ type: 'compact', e }); continue; }
       if (e.k === 'tool' || e.k === 'think') {
         if (!steps) { steps = { type: 'steps', list: [], start: e.at, think: 0 }; out.push(steps); }
         if (e.k === 'think') { steps.think++; steps.lastThink = true; continue; }
@@ -205,7 +206,7 @@
         <span class="cv-ttl"></span><span class="cv-sp"></span><span class="cv-meta"></span></div>
       <div class="cv-feed"><div class="cv-col"></div></div>
       <div class="cv-dock"><div class="cv-ask" hidden></div>
-        <div class="cv-comp"><textarea rows="1" spellcheck="false"></textarea>
+        <div class="cv-comp"><div class="cv-atts" hidden></div><textarea rows="1" spellcheck="false"></textarea>
           <div class="cv-tools"><select class="cv-pick cv-model"></select><select class="cv-pick cv-effort"></select><button class="cv-pick cv-cxmodel" hidden></button><span class="cv-hint"></span><span class="cv-sp"></span><button class="cv-stop" hidden>${ICON.stop}<span></span></button><button class="cv-send">${ICON.up}</button></div></div><div class="cv-lim"></div></div>`;
     tab.pane.append(root);
     const $ = (/** @type {string} */ s) => /** @type {HTMLElement} */ (root.querySelector(s));
@@ -264,15 +265,51 @@
     /** Путь файла для поля ввода: с пробелами и прочим — в кавычках. @param {string} p */
     const quote = (p) => (/^[a-zA-Z0-9_./@:\\-]+$/.test(p) ? p : `"${p}"`);
 
+    // ——— Миниатюры вложенных картинок (порт для macOS) ———
+    // В поле уходит путь картинки (агенту нужен он), над полем — её миниатюра. Путь стёрли из текста — миниатюра уходит;
+    // крестик убирает путь из текста. Миниатюра — уменьшенная копия data:URL: CSP окна не пускает blob: в img.
+    const atts = $('.cv-atts');
+    /** путь в поле (уже в кавычках, как вставлен) → миниатюра @type {Map<string, string>} */
+    const thumbs = new Map();
+    /** @param {Blob} f @returns {Promise<string>} */
+    const shrink = async (f) => {
+      const bm = await createImageBitmap(f);
+      const k = Math.min(1, 240 / Math.max(bm.width, bm.height));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(bm.width * k)); c.height = Math.max(1, Math.round(bm.height * k));
+      /** @type {CanvasRenderingContext2D} */ (c.getContext('2d')).drawImage(bm, 0, 0, c.width, c.height);
+      bm.close();
+      return c.toDataURL('image/png');
+    };
+    function drawAtts() {
+      for (const q of [...thumbs.keys()]) if (!ta.value.includes(q)) thumbs.delete(q);
+      atts.hidden = !thumbs.size;
+      atts.innerHTML = [...thumbs].map(([q, url]) => `<div class="cv-att" title="${esc(q.replace(/^"|"$/g, ''))}"><img src="${esc(url)}" alt=""><button class="cv-att-x" data-q="${esc(q)}" aria-label="×">×</button></div>`).join('');
+    }
+    atts.addEventListener('mousedown', (ev) => ev.preventDefault());
+    atts.addEventListener('click', (ev) => {
+      const b = /** @type {HTMLElement} */ (ev.target).closest('.cv-att-x');
+      if (!b) return;
+      const q = /** @type {HTMLElement} */ (b).dataset.q || '';
+      ta.value = ta.value.split(q).join('').replace(/ {2,}/g, ' ').replace(/^ +/, '');
+      grow(); drawAtts(); ta.focus();
+    });
+    /** Запомнить миниатюру для пути, если файл — картинка. @param {string} p @param {File} f */
+    const remember = (p, f) => {
+      if (!p || !/^image\//.test(f.type)) return;
+      shrink(f).then((url) => { thumbs.set(quote(p), url); drawAtts(); }).catch(() => {});
+    };
+
     function submit() {
       const v = ta.value;
       if (!v.trim()) return;
       ta.value = '';
       grow();
+      drawAtts();
       send(v);
     }
     const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, 220)}px`; };
-    ta.addEventListener('input', grow);
+    ta.addEventListener('input', () => { grow(); if (thumbs.size) drawAtts(); });
     ta.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); submit(); }
       else if (ev.key === 'Escape' && state === 'working') { ev.preventDefault(); key2('\x1b'); }
@@ -386,7 +423,7 @@
       const files = ev.dataTransfer ? [...ev.dataTransfer.files] : [];
       if (!files.length) return;
       ev.preventDefault();
-      const paths = files.map((f) => { try { return t.filePath(f); } catch { return ''; } }).filter(Boolean);
+      const paths = files.map((f) => { let p = ''; try { p = t.filePath(f); } catch {} remember(p, f); return p; }).filter(Boolean);
       const add = paths.map(quote).join(' ');
       ta.value = ta.value ? `${ta.value} ${add}` : add;
       grow();
@@ -404,9 +441,10 @@
       Promise.all(files.map(async (f) => {
         let p = '';
         try { p = t.filePath(f); } catch {}
-        if (p) return p;
+        if (p) { remember(p, f); return p; }
         if (!/^image\//.test(f.type)) return '';
         const r = await t.chat.image(new Uint8Array(await f.arrayBuffer()), f.type).catch(() => null);
+        if (r && r.ok) remember(r.path, f);
         return r && r.ok ? r.path : '';
       })).then((paths) => {
         const add = paths.filter(Boolean).map(quote).join(' ');
@@ -484,6 +522,7 @@
         const last = i === bl.length - 1;
         if (b.type === 'user') html.push(you(b.e, i, opened));
         else if (b.type === 'text') { if (!b.e.html) b.e.html = md(b.e.text); html.push(`<div class="cv-ans">${b.e.html}</div>`); }
+        else if (b.type === 'compact') html.push(`<div class="cv-compact"><span>${esc(b.e.auto ? tr('compactAuto', 'Контекст сжат автоматически') : tr('compact', 'Контекст сжат'))}</span></div>`);
         else if (b.type === 'steps') {
           const id = (b.list[0] && b.list[0].e.id) || `g${i}`;
           const live = last && working;

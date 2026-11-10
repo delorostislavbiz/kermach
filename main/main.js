@@ -9,7 +9,7 @@
 // Плагины окна проекта — main\plugins.js. Звук, когда агент закончил или ждёт, — main\sound.js.
 // Связь с демоном и переподключение после обрыва — main\daemon-link.js.
 
-const { app, ipcMain, dialog, clipboard, session, shell, Menu } = require('electron');
+const { app, ipcMain, dialog, clipboard, session, shell, Menu, crashReporter } = require('electron');
 const sender = require('./sender');
 const appScheme = require('./app-scheme');
 const fs = require('fs');
@@ -51,6 +51,8 @@ app.setPath('userData', path.join(DATA_DIR, 'chromium'));
 appScheme.privileged();
 
 const LOG_FILE = path.join(DATA_DIR, 'logs', 'main.log');
+/** Окна, открытые перед последним выходом (порт для macOS): по --restore-windows они открываются снова. */
+const OPEN_FILE = path.join(DATA_DIR, 'open-windows.json');
 
 fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
 try {
@@ -61,6 +63,14 @@ const log = (msg) => {
   try { fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} [${process.pid}] ${msg}\n`); } catch {}
 };
 if (MOVE_NOTE) log(MOVE_NOTE);
+
+// Журнал ошибок (порт для macOS): logs/errors.log — необработанные ошибки, ошибки в окнах, упавшие процессы (daemon/error-log.js).
+// Нативные падения — дампы Crashpad в chromium/Crashpad, только на диске: uploadToServer выключен.
+const errorLog = require('../daemon/error-log');
+errorLog.init({ dataDir: DATA_DIR, who: 'main', version: app.getVersion() });
+errorLog.watchProcess();
+errorLog.watchConsole();
+try { crashReporter.start({ uploadToServer: false }); } catch (e) { errorLog.report('crash-reporter', e); }
 
 /** @param {string[]} argv */
 function argProject(argv) {
@@ -269,6 +279,24 @@ function start(asked) {
       return (a.protocol === 'file:' || a.protocol === `${appScheme.SCHEME}:`) && a.protocol === b.protocol && a.host === b.host && a.pathname === b.pathname;
     } catch { return false; }
   };
+  // Сбои окон программы — в журнал ошибок. Гости webview (чужие сайты во встроенном браузере) не пишутся: их ошибки не наши.
+  app.on('web-contents-created', (_e, wc) => {
+    if (wc.getType() === 'webview') return;
+    const where = () => { try { return String(wc.getURL()).replace(/^.*\/renderer\//, 'renderer/').slice(0, 200); } catch { return '?'; } };
+    wc.on('console-message', (ev) => {
+      if (ev.level !== 'error') return;
+      errorLog.report('renderer', ev.message, { page: where(), source: String(ev.sourceId || '').replace(/^.*\/(renderer|plugins)\//, '$1/'), line: ev.lineNumber });
+    });
+    wc.on('preload-error', (_ev, file, err) => errorLog.report('preload', err, { page: where(), file }));
+    wc.on('did-fail-load', (_ev, code, desc, url, isMain) => {
+      if (code !== -3) errorLog.report('load-fail', `${desc} (${code})`, { page: where(), url: String(url).slice(0, 200), main: isMain });
+    });
+    wc.on('unresponsive', () => errorLog.report('unresponsive', 'окно не отвечает', { page: where() }));
+    wc.on('render-process-gone', (_ev, d) => errorLog.report('render-gone', `${d.reason} (код ${d.exitCode})`, { page: where() }));
+  });
+  app.on('child-process-gone', (_e, d) => {
+    if (d.reason !== 'clean-exit') errorLog.report('child-gone', `${d.type}${d.name ? ` ${d.name}` : ''}: ${d.reason} (код ${d.exitCode})`, d.serviceName ? { service: d.serviceName } : undefined);
+  });
   app.on('web-contents-created', (_e, wc) => {
     if (wc.getType() === 'webview') return;
     /** @param {import('electron').Event} ev @param {string} url */
@@ -419,10 +447,31 @@ function start(asked) {
   app.whenReady().then(() => {
     // macOS: без меню программы с «Правкой» не работают Cmd+C, Cmd+V, Cmd+A. Стандартное меню Electron не берём:
     // в нём Cmd+R перезагружает окно, а Cmd+Alt+I открывает инструменты разработчика.
-    if (MAC) Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
+    if (MAC) Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }, {
+      role: 'help',
+      submenu: [
+        // Журнал ошибок и соседние main.log, daemon.log — одной папкой в Finder: приложить к отчёту об ошибке.
+        { label: i18n.t('main.errorLog', 'Журнал ошибок'), click: () => { if (fs.existsSync(errorLog.file())) shell.showItemInFolder(errorLog.file()); else shell.openPath(path.dirname(errorLog.file())); } },
+      ],
+    }]));
     if (!data) {
       dialog.showErrorBox('Kermach', i18n.t('main.projectsUnread', 'Список проектов не прочитан: {file}\nПодробности — в {log}', { file: path.join(DATA_DIR, 'projects.json'), log: LOG_FILE }));
       app.quit();
+      return;
+    }
+    // Перезапуск после обновления (порт для macOS, tools/mac-update.sh): --restore-windows открывает окна, что были открыты перед выходом.
+    // Места окон — из windows.json, как всегда; вкладки подключаются к тем же терминалам демона.
+    if (!asked && process.argv.includes('--restore-windows')) {
+      let was = null;
+      try { was = JSON.parse(fs.readFileSync(OPEN_FILE, 'utf8')); } catch {}
+      const ids = was && Array.isArray(was.projects) ? was.projects : [];
+      let n = 0;
+      for (const id of ids) {
+        const p = /** @type {import('./projects').ProjectsData} */ (data).projects.find((x) => x.id === id);
+        if (p && fs.existsSync(p.path)) { projectWindow.open(ctx, p); n++; }
+      }
+      if (!n || (was && was.projectsWindow)) projectsWindow.open(ctx);
+      log(`перезапуск: открыто окон проектов ${n} из ${ids.length}${was && was.projectsWindow ? ' и окно «Проекты»' : ''}; от запуска ${Date.now() - t0} мс`);
       return;
     }
     if (!asked) {
@@ -453,6 +502,12 @@ function start(asked) {
   ipcMain.handle('app:autostart', (e) => {
     if (!sender.allowed(e, 'app:autostart')) return sender.refused();
     return autostart;
+  });
+  // Какие окна открыты — перед выходом, пока окна ещё живы (before-quit идёт до их закрытия). Читает --restore-windows выше.
+  // Только первый раз: will-quit может отложить выход и позвать app.quit снова — тогда окна уже закрыты и список был бы пуст.
+  app.once('before-quit', () => {
+    const ids = projectWindow.openIds();
+    try { fs.writeFileSync(OPEN_FILE, JSON.stringify({ v: 1, at: new Date().toISOString(), projects: ids, projectsWindow: !!projectsWindow.current() })); } catch (e) { log(`открытые окна не записаны: ${e}`); }
   });
   app.on('will-quit', () => log('will-quit'));
   app.on('quit', () => {

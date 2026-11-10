@@ -144,7 +144,12 @@ function fromClaude(d) {
   if (!d || typeof d !== 'object') return [];
   if (d.type === 'ai-title' && (d.aiTitle || d.title)) return [{ k: 'title', text: String(d.aiTitle || d.title) }];
   if (d.type === 'summary' && d.summary) return [{ k: 'title', text: String(d.summary) }];
-  if (d.isMeta || d.isSidechain) return [];
+  // Сжатие контекста (/compact или авто): граница — пометкой в ленте; пересказ прежней беседы, что Claude кладёт репликой человека, — прочь.
+  if (d.type === 'system' && d.subtype === 'compact_boundary') {
+    const cm = d.compactMetadata || {};
+    return [{ k: 'compact', auto: cm.trigger === 'auto', at: d.timestamp || '' }];
+  }
+  if (d.isMeta || d.isSidechain || d.isCompactSummary || d.isVisibleInTranscriptOnly) return [];
   const m = d.message;
   if (!m) return [];
   /** @type {Ev[]} */

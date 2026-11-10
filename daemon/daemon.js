@@ -57,6 +57,12 @@ const log = (msg) => {
   try { fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} [${process.pid}] ${msg}\n`); } catch {}
 };
 
+// Журнал ошибок (порт для macOS): необработанные ошибки и отклонённые обещания демона — ещё и в logs/errors.log (error-log.js).
+const errorLog = require('./error-log');
+errorLog.init({ dataDir: DATA_DIR, who: 'daemon' });
+errorLog.watchProcess();
+errorLog.watchConsole();
+
 // Необработанная ошибка (t1456) — в журнал: stderr демона никто не читает, daemon.log оставался пуст, окно ждало 10 с.
 // Строку «упал: …» окно показывает человеку (terminals.js, daemon). Только пока демон запускается: перед hookServer.listen
 // его сменяет обработчик, который лишь пишет в журнал (t116) — иначе ошибка одной команды погасила бы все терминалы.
