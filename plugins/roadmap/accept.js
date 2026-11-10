@@ -42,6 +42,8 @@ const SAY = {
   'Ревью {id}: {st} — находок ещё нет.': ["Рев'ю {id}: {st} — знахідок ще немає.", 'Review {id}: {st} — no findings yet.', 'Review {id}: {st} — noch keine Funde.'],
   'Записи фазы ({n}):': ['Записи фази ({n}):', 'Phase entries ({n}):', 'Einträge der Phase ({n}):'],
   'Записей у карт фазы нет.': ['Записів у карток фази немає.', 'The phase cards have no entries.', 'Die Karten der Phase haben keine Einträge.'],
+  'Новые заметки всего проекта, с других фаз и без фазы тоже ({n}) — разбери все, шаг 2. Если вывод обрезан, весь список даст kermach roadmap note --all, в нём и взятые со снятыми:': ['Нові нотатки всього проєкту, з інших фаз і без фази теж ({n}) — розбери всі, крок 2. Якщо вивід обрізано, весь список дасть kermach roadmap note --all, у ньому і взяті зі знятими:', 'New notes of the whole project, from other phases and without a phase too ({n}) — sort them all, step 2. If the output is cut off, kermach roadmap note --all gives the whole list, taken and dropped ones included:', 'Neue Notizen des ganzen Projekts, auch aus anderen Phasen und ohne Phase ({n}) — alle einordnen, Schritt 2. Ist die Ausgabe abgeschnitten, gibt kermach roadmap note --all die ganze Liste, auch aufgenommene und aufgehobene:'],
+  'Новых заметок в проекте нет — разбирать нечего.': ['Нових нотаток у проєкті немає — розбирати нічого.', 'No new notes in the project — nothing to sort.', 'Keine neuen Notizen im Projekt — nichts einzuordnen.'],
   ' — карта {id}': [' — картка {id}', ' — card {id}', ' — Karte {id}'],
   'Не начатые карты других фаз ({n}) — сверь с тем, что дала фаза:': ['Не розпочаті картки інших фаз ({n}) — звір із тим, що дала фаза:', 'Unstarted cards of other phases ({n}) — compare them with what the phase delivered:', 'Nicht begonnene Karten anderer Phasen ({n}) — mit dem Ergebnis der Phase abgleichen:'],
   'Не начатых карт в других фазах нет — сверять нечего.': ['Не розпочатих карток в інших фазах немає — звіряти нічого.', 'No unstarted cards in other phases — nothing to compare.', 'Keine nicht begonnenen Karten in anderen Phasen — nichts abzugleichen.'],
@@ -51,7 +53,22 @@ const SAY = {
   ' (заведена {v})': [' (створено {v})', ' (created {v})', ' (angelegt {v})'],
   '  … ещё {n} — файлы t<номер>.md без phase: в {v}': ['  … ще {n} — файли t<номер>.md без phase: у {v}', '  … {n} more — files t<number>.md without phase: in {v}', '  … noch {n} — Dateien t<Nummer>.md ohne phase: in {v}'],
   'Карты в работе (не править; задело — сказать человеку): {v}': ['Картки в роботі (не правити; зачепило — сказати людині): {v}', 'Cards in progress (do not edit; if affected — tell the human): {v}', 'Karten in Arbeit (nicht ändern; betroffen — dem Menschen sagen): {v}'],
+  'Закрыты поверх отказа проверяющего ({n}):': ['Закрито попри відмову перевіряльника ({n}):', 'Closed despite the checker\'s refusal ({n}):', 'Trotz Ablehnung des Prüfers geschlossen ({n}):'],
+  'Закрыты без файла-доказательства ({n}):': ['Закрито без файлу-доказу ({n}):', 'Closed without a proof file ({n}):', 'Ohne Nachweisdatei geschlossen ({n}):'],
+  'Фазу запустили поверх замечаний проверки: осталось серьёзных {n}. Разбор — {v}.': ['Фазу запустили попри зауваження перевірки: лишилося серйозних {n}. Розбір — {v}.', 'The phase was started despite the check\'s findings: {n} serious left. Details — {v}.', 'Die Phase wurde trotz der Befunde der Prüfung gestartet: {n} schwere übrig. Details — {v}.'],
+  'Проверка фазы перед запуском не состоялась: {w}. Разбор — {v}.': ['Перевірка фази перед запуском не відбулася: {w}. Розбір — {v}.', 'The phase check before the start did not take place: {w}. Details — {v}.', 'Die Phasenprüfung vor dem Start fand nicht statt: {w}. Details — {v}.'],
+  'файла нет': ['файлу немає', 'no file', 'keine Datei'],
+  'Карты без фазы закрыты без проверяющего после прошлой приёмки (граница — последнее закрытие карт принятых фаз, {d}): {v}.': ['Картки без фази закрито без перевіряльника після минулого приймання (межа — останнє закриття карток прийнятих фаз, {d}): {v}.', 'Cards without a phase closed without a checker after the last acceptance (boundary — the latest closing of cards in accepted phases, {d}): {v}.', 'Karten ohne Phase ohne Prüfer nach der letzten Abnahme geschlossen (Grenze — letzter Abschluss von Karten abgenommener Phasen, {d}): {v}.'],
+  'Карты без фазы закрыты без проверяющего, принятых фаз раньше этой нет: {v}.': ['Картки без фази закрито без перевіряльника, прийнятих фаз раніше цієї немає: {v}.', 'Cards without a phase closed without a checker, no accepted phases before this one: {v}.', 'Karten ohne Phase ohne Prüfer geschlossen, keine abgenommenen Phasen vor dieser: {v}.'],
   'Не проверено человеком, все фазы ({n}) — покажи человеку на шаге 7:': ['Не перевірено людиною, усі фази ({n}) — покажи людині на кроці 7:', 'Not checked by a human, all phases ({n}) — show the human at step 7:', 'Nicht vom Menschen geprüft, alle Phasen ({n}) — zeige es dem Menschen in Schritt 7:'],
+  'Вид проверки, готовых карт {n}: {a} {x}, {b} {y}, {c} {z}. Карта с несколькими видами считается в каждом.': ['Вид перевірки, готових карток {n}: {a} {x}, {b} {y}, {c} {z}. Картка з кількома видами рахується в кожному.', 'Kind of check, done cards {n}: {a} {x}, {b} {y}, {c} {z}. A card with several kinds counts in each.', 'Art der Prüfung, fertige Karten {n}: {a} {x}, {b} {y}, {c} {z}. Eine Karte mit mehreren Arten zählt in jeder.'],
+  'Только на подставной, настоящая среда их не видела ({n}): {v}': ['Лише на підставній, справжнє середовище їх не бачило ({n}): {v}', 'Only on a fake, the real environment has not seen them ({n}): {v}', 'Nur simuliert, die echte Umgebung hat sie nicht gesehen ({n}): {v}'],
+  'Проверить может только человек ({n}): {v}': ['Перевірити може лише людина ({n}): {v}', 'Only a human can check ({n}): {v}', 'Nur ein Mensch kann prüfen ({n}): {v}'],
+  'Старые карты или закрытые мимо close: вид проверки не указан ({n}): {v}': ['Старі картки або закриті повз close: вид перевірки не вказано ({n}): {v}', 'Old cards or cards closed without close: kind of check not given ({n}): {v}', 'Alte oder ohne close geschlossene Karten: Art der Prüfung nicht angegeben ({n}): {v}'],
+  'Замечания доски всего проекта ({n}) — разбери каждое, шаг 2:': ['Зауваження дошки всього проєкту ({n}) — розбери кожне, крок 2:', 'Board remarks of the whole project ({n}) — sort each one, step 2:', 'Board-Hinweise des ganzen Projekts ({n}) — jeden einordnen, Schritt 2:'],
+  'Замечания доски всего проекта ({n}):': ['Зауваження дошки всього проєкту ({n}):', 'Board remarks of the whole project ({n}):', 'Board-Hinweise des ganzen Projekts ({n}):'],
+  'Замечаний доски нет — разбирать нечего.': ['Зауважень дошки немає — розбирати нічого.', 'No board remarks — nothing to sort.', 'Keine Board-Hinweise — nichts einzuordnen.'],
+  'По записи окна от {d}: проверяющий карт не запускается с {v}: {w}. Новые «готово» остаются непроверенными.': ['За записом вікна від {d}: перевіряльник карток не запускається з {v}: {w}. Нові «готово» лишаються неперевіреними.', 'According to the window\'s record of {d}: the card checker has not been starting since {v}: {w}. New done cards stay unchecked.', 'Laut Eintrag des Fensters vom {d}: der Kartenprüfer startet seit {v} nicht: {w}. Neue fertige Karten bleiben ungeprüft.'],
   'Входящие': ['Вхідні', 'Inbox', 'Eingang'],
   'черновик': ['чернетка', 'draft', 'Entwurf'],
   'нет «Как проверить»': ['немає «{c}»', 'no «{c}»', 'kein «{c}»'],
@@ -117,6 +134,112 @@ function bareLine(f, cards, lang = '') {
   return tr(lang, 'Проверяющего не было, фаза не принята: карт {n} из {m} закрыты без вкладки агента и без проверяющего — {v}.', { n: ids.length, m: cards.length, v: `${ids.slice(0, MAX_BARE).join(', ')}${ids.length > MAX_BARE ? ', …' : ''}` });
 }
 
+/** Последний итог проверяющего — отказ (t1641): причина из checked:, иначе пусто. Статус фазы не важен: отказ написан в карте словами, у старых фаз он тоже верен. @param {any} c */
+const refusal = (c) => {
+  const s = String((c.extra && c.extra.checked) || '').trim();
+  return c.status === 'готово' && /^(нужна доработка|критерии не подходят)/.test(s) ? s : '';
+};
+/** Причина закрытия без файла (t1641): так поле пишет kermach roadmap close --no-file; иначе пусто. @param {any} c */
+const noFileWhy = (c) => { const m = /^Без файла, причина: ([^]*)$/.exec(String(c.fields.proof || '').trim()); return m ? m[1] : ''; };
+/** Запись о запуске фазы поверх замечаний (main.js launchNote); нет или не читается — null. @param {string} project @param {string} ph */
+function launchOf(project, ph) {
+  try {
+    const v = JSON.parse(fs.readFileSync(path.join(project, '.kermach', 'grades', `launch-${ph}.json`), 'utf8'));
+    return v && typeof v === 'object' ? v : null;
+  } catch { return null; }
+}
+/** Папка данных плагина: из окна её передают, из команды — та же, что у kermach.js. Пусто, если не определить: своих копий тогда не сверяем. */
+function dataDirOf() {
+  try { return path.join(require('../../daemon/protocol.js').DATA_DIR, 'plugins-data', 'roadmap'); } catch { return ''; }
+}
+/**
+ * Все замечания проекта (t1632): окно их больше не показывает, разбирает главная. Те же источники, что b.warnings в снимке доски main.js:
+ * разбор файлов доски (board.js), отставшие свои копии шаблонов (t1417), сломанный проверяющий (t1419, запись окна), «Проверяющего не было» других непринятых фаз (t1435).
+ * Строка этой фазы напечатана сверху — вдвойне её не показываем. Без обрезки: разбор не должен зависеть от числа строк (как заметки, t1629).
+ * @param {any} b @param {any} f эта фаза; null — все фазы (команда check) @param {string} project @param {string} L @param {string} [dataDir] @returns {string[]}
+ */
+function remarkLines(b, f, project, L, dataDir) {
+  /** @type {{ file: string, reason: string }[]} */
+  const all = [...(b.warnings || [])];
+  try { all.push(...require('./prompt').staleAll(dataDir || dataDirOf())); } catch {}
+  try {
+    const g = JSON.parse(fs.readFileSync(path.join(project, '.kermach', 'grades', 'grader-broken.json'), 'utf8'));
+    if (g && g.at) all.push({ file: say('проверяющий', L), reason: tr(L, 'По записи окна от {d}: проверяющий карт не запускается с {v}: {w}. Новые «готово» остаются непроверенными.', { d: g.at, v: g.since, w: g.error }) });
+  } catch {}
+  const byId = new Map(b.cards.map((/** @type {any} */ c) => [c.id, c]));
+  for (const x of b.phases) {
+    if (x === f) continue;
+    const line = bareLine(x, x.cards.map((/** @type {string} */ id) => byId.get(id)).filter(Boolean), L);
+    if (line) all.push({ file: x.id, reason: line });
+  }
+  return [...new Set(all.map((w) => `  ${w.file}: ${w.reason}`))];
+}
+/** Раздел замечаний в приёмке: с шагом разбора и строкой «нет». @param {any} b @param {any} f @param {string} project @param {string} L @param {string} [dataDir] @returns {string[]} */
+function warnLines(b, f, project, L, dataDir) {
+  const lines = remarkLines(b, f, project, L, dataDir);
+  return [lines.length ? tr(L, 'Замечания доски всего проекта ({n}) — разбери каждое, шаг 2:', { n: lines.length }) : tr(L, 'Замечаний доски нет — разбирать нечего.'), ...lines];
+}
+/**
+ * Замечания для kermach roadmap check (t1695): те же строки, что в приёмке, на доске с фазами и без. Замечаний нет — пусто: вывод команды не меняется.
+ * @param {any} b @param {string} project @param {string} [dataDir] @returns {string[]}
+ */
+function boardRemarks(b, project, dataDir) {
+  const L = langOf(b.lang);
+  const lines = remarkLines(b, null, project, L, dataDir);
+  return lines.length ? [tr(L, 'Замечания доски всего проекта ({n}):', { n: lines.length }), ...lines] : [];
+}
+
+/**
+ * Нарушения фазы (t1641): закрыто поверх отказа, закрыто без файла, запуск поверх замечаний, карты без фазы без проверяющего. Показывает, не запрещает; чистая фаза — ни строки.
+ * Даты приёмки в файле фазы нет, поэтому «после прошлой приёмки» — после последнего закрытия карт принятых фаз раньше этой: приёмка не раньше него, лишнюю карту покажем, нужную не скроем.
+ * Карты без фазы — только у непринятой фазы: у старых нет tries:, строка была бы ложной (d574). Принятая фаза этим не задета: остальные признаки написаны в карте словами.
+ * @param {any} b @param {any} f @param {any[]} own @param {string} project @param {string} L @returns {string[]}
+ */
+function breaches(b, f, own, project, L) {
+  const out = [];
+  const refused = own.filter(refusal);
+  if (refused.length) out.push(tr(L, 'Закрыты поверх отказа проверяющего ({n}):', { n: refused.length }), ...refused.map((c) => `  ${c.id}: ${cut(refusal(c), 240)}`));
+  const nofile = own.filter(noFileWhy);
+  if (nofile.length) out.push(tr(L, 'Закрыты без файла-доказательства ({n}):', { n: nofile.length }), ...nofile.map((c) => `  ${c.id}: ${cut(noFileWhy(c), 240)}`));
+  const run = launchOf(project, f.id);
+  if (run) {
+    const v = run.file || tr(L, 'файла нет');
+    if (run.error) out.push(tr(L, 'Проверка фазы перед запуском не состоялась: {w}. Разбор — {v}.', { w: cut(run.error, 240), v }));
+    else if (run.serious) out.push(tr(L, 'Фазу запустили поверх замечаний проверки: осталось серьёзных {n}. Разбор — {v}.', { n: run.serious, v }));
+  }
+  if (f.status !== 'готова') {
+    const byId = new Map(b.cards.map((/** @type {any} */ c) => [c.id, c]));
+    const passed = b.phases.slice(0, b.phases.indexOf(f)).filter((/** @type {any} */ x) => x.status === 'готова');
+    const edge = passed.flatMap((/** @type {any} */ x) => x.cards.map((/** @type {string} */ id) => String((byId.get(id) || {}).closed || ''))).reduce((a, s) => (s > a ? s : a), '');
+    const stray = b.inbox.map((/** @type {string} */ id) => byId.get(id)).filter((/** @type {any} */ c) => c && isBare(c) && (!edge || String(c.closed || '') > edge)).map((/** @type {any} */ c) => c.id);
+    const v = `${stray.slice(0, MAX_BARE).join(', ')}${stray.length > MAX_BARE ? `, … (${stray.length})` : ''}`;
+    if (stray.length) out.push(edge ? tr(L, 'Карты без фазы закрыты без проверяющего после прошлой приёмки (граница — последнее закрытие карт принятых фаз, {d}): {v}.', { d: edge, v }) : tr(L, 'Карты без фазы закрыты без проверяющего, принятых фаз раньше этой нет: {v}.', { v }));
+  }
+  return out;
+}
+
+/**
+ * Итог фазы по виду проверки (t1642): сколько готовых обычных карт в какой среде, какие не видели настоящей среды, какие может проверить только человек.
+ * Ревью и разведке поле не нужно, в счёт они не идут. Старая карта без поля — строка, а не ошибка. Смысл не проверяем: это работа проверяющего.
+ * @param {any[]} own карты фазы @param {string} [L] язык доски @returns {string[]}
+ */
+function testedLines(own, L = '') {
+  const done = own.filter((c) => c.status === 'готово' && c.kind === 'сделать');
+  if (!done.length) return [];
+  const [real, fake, human] = board.TESTED;
+  const has = (/** @type {any} */ c, /** @type {string} */ w) => (c.tested || []).includes(w);
+  const ids = (/** @type {(c: any) => boolean} */ fn) => done.filter(fn).map((c) => c.id);
+  const count = (/** @type {string} */ w) => ids((c) => has(c, w)).length;
+  const out = [tr(L, 'Вид проверки, готовых карт {n}: {a} {x}, {b} {y}, {c} {z}. Карта с несколькими видами считается в каждом.', { n: done.length, a: say(real, L), x: count(real), b: say(fake, L), y: count(fake), c: say(human, L), z: count(human) })];
+  const onlyFake = ids((c) => has(c, fake) && !has(c, real));
+  const onlyHuman = ids((c) => has(c, human));
+  const none = ids((c) => !(c.tested || []).length);
+  if (onlyFake.length) out.push(tr(L, 'Только на подставной, настоящая среда их не видела ({n}): {v}', { n: onlyFake.length, v: onlyFake.join(', ') }));
+  if (onlyHuman.length) out.push(tr(L, 'Проверить может только человек ({n}): {v}', { n: onlyHuman.length, v: onlyHuman.join(', ') }));
+  if (none.length) out.push(tr(L, 'Старые карты или закрытые мимо close: вид проверки не указан ({n}): {v}', { n: none.length, v: none.join(', ') }));
+  return out;
+}
+
 /** Строка карты для сверки: номер, пометки, заголовок, файлы. @param {any} c @param {string} [L] язык доски */
 function cardLine(c, L = '') {
   const marks = [isDraft(c) ? tr(L, 'черновик') : '', !String(c.fields.check || '').trim() ? tr(L, 'нет «Как проверить»', { c: say('Как проверить', L) }) : '', c.status !== 'в очереди' ? say(c.status, L) : ''].filter(Boolean);
@@ -127,9 +250,10 @@ function cardLine(c, L = '') {
 /**
  * Факты доски для приёмки фазы ph. @param {any} b результат board.read @param {string} ph @param {string} project
  * @param {string} [today] ГГГГ-ММ-ДД, по умолчанию сегодня — для срока until договорённостей
+ * @param {string} [dataDir] папка данных плагина: свои копии шаблонов (t1632)
  * @returns {{ lines: string[], error?: string }}
  */
-function facts(b, ph, project, today = day(new Date())) {
+function facts(b, ph, project, today = day(new Date()), dataDir = '') {
   const L = langOf(b.lang);
   const f = b.phases.find((/** @type {any} */ x) => x.id === ph);
   if (!f) return { lines: [], error: tr(L, 'фазы {id} на доске нет', { id: ph }) };
@@ -139,6 +263,7 @@ function facts(b, ph, project, today = day(new Date())) {
   const out = [tr(L, 'Приёмка фазы {id} «{title}» [{st}]: карт готово {n} из {m}.', { id: f.id, title: f.title, st: say(f.status, L), n: own.length - open.length, m: own.length })];
   const bare = bareLine(f, own, L);
   if (bare) out.push(bare, tr(L, 'Их работу чужими глазами не смотрел никто: скажи это человеку прямо, их «Как проверить» прогони сам.', { c: say('Как проверить', L) }));
+  out.push(...breaches(b, f, own, project, L));
   if (!own.length) out.push(tr(L, 'В фазе нет карт — принимать нечего, спроси человека.'));
   if (open.length) {
     out.push(tr(L, 'Фаза не кончилась — не готовы:'));
@@ -146,7 +271,9 @@ function facts(b, ph, project, today = day(new Date())) {
     out.push(tr(L, 'Скажи человеку, что фазу рано принимать. Приёмку продолжай, только если он так решил.'));
   }
   if (f.goal) out.push(`${say('Цель', L)}: ${cut(f.goal, 400)}`);
-  const rel = `.kermach/reports/${f.id}.md`;
+  // t1642: итог ниже цели. Сразу за шапкой идут только нарушения: чистая фаза начинается с цели (проба t1641-accept).
+  out.push(...testedLines(own, L));
+  const rel =`.kermach/reports/${f.id}.md`;
   out.push(`${tr(L, 'Отчёт фазы: {v}', { v: rel })}${fs.existsSync(path.join(project, rel)) ? '' : tr(L, ' — файла нет: программа собирает его, когда все карты готовы и открыта панель «Роадмапа»')}`);
 
   const crit = say('Признаки готовности', L);
@@ -159,9 +286,18 @@ function facts(b, ph, project, today = day(new Date())) {
     : rv.status === 'готово' ? tr(L, 'Ревью {id}: {v}', { id: rv.id, v: cut(rv.fields.done, 600) || '—' }) : tr(L, 'Ревью {id}: {st} — находок ещё нет.', { id: rv.id, st: say(rv.status, L) }));
 
   const ids = new Set(own.map((/** @type {any} */ c) => c.id));
-  const decs = b.decisions.filter((/** @type {any} */ d) => decOfPhase(d, ids));
+  // t1629: новая заметка фазы идёт в общий блок ниже, вдвойне её не показываем.
+  const decs = b.decisions.filter((/** @type {any} */ d) => decOfPhase(d, ids) && board.noteState(d) !== 'новая');
   out.push('', decs.length ? tr(L, 'Записи фазы ({n}):', { n: decs.length }) : tr(L, 'Записей у карт фазы нет.'));
   for (const d of decs) out.push(`  ${d.id} (${say(d.type, L)}): ${cut(d.title, 110)}${d.card ? tr(L, ' — карта {id}', { id: d.card }) : ''}`);
+
+  // t1629: все новые заметки проекта, без обрезки: разбор не должен зависеть от их числа. Отбор и порядок — как у счётчика окна и kermach roadmap note.
+  const fresh = b.decisions.filter((/** @type {any} */ d) => board.noteState(d) === 'новая')
+    .sort((/** @type {any} */ a, /** @type {any} */ z) => (z.date || '').localeCompare(a.date || '') || z.num - a.num);
+  out.push('', fresh.length ? tr(L, 'Новые заметки всего проекта, с других фаз и без фазы тоже ({n}) — разбери все, шаг 2. Если вывод обрезан, весь список даст kermach roadmap note --all, в нём и взятые со снятыми:', { n: fresh.length }) : tr(L, 'Новых заметок в проекте нет — разбирать нечего.'));
+  for (const d of fresh) out.push(`  ${d.id}: ${cut(d.title, 110)}${d.card ? tr(L, ' — карта {id}', { id: d.card }) : ''}`);
+
+  out.push('', ...warnLines(b, f, project, L, dataDir));
 
   out.push('', ...tiers(own, L));
 
@@ -301,13 +437,13 @@ function instruction(vars, lang = '') {
 
 /**
  * Вывод kermach roadmap accept fN: факты и инструкция. Ошибка (нет фазы) — { error }.
- * @param {any} b результат board.read @param {string} ph @param {string} project @returns {{ text: string } | { error: string }}
+ * @param {any} b результат board.read @param {string} ph @param {string} project @param {{ dataDir?: string }} [opts] окно передаёт свою папку данных @returns {{ text: string } | { error: string }}
  */
-function accept(b, ph, project) {
-  const r = facts(b, ph, project);
+function accept(b, ph, project, opts = {}) {
+  const r = facts(b, ph, project, undefined, opts.dataDir);
   if (r.error) return { error: r.error };
   const text = instruction({ 'фаза': ph, 'отчёт': `.kermach/reports/${ph}.md`, 'папка': b.root + path.sep }, b.lang);
   return { text: `${r.lines.join('\n')}\n\n${text}\n` };
 }
 
-module.exports = { accept, facts, instruction, MAX_CARDS, isBare, bareLine, SAY };
+module.exports = { accept, facts, instruction, boardRemarks, MAX_CARDS, isBare, bareLine, SAY };

@@ -138,7 +138,8 @@ const COMMANDS = [
   ['roadmap', 'kermach code - code map: declarations, callers, search by words.'],
   ['tasks', 'kermach tasks - project to-do list.'],
   [null, 'kermach tab - tabs of this window.'],
-  [null, 'kermach agent - open a new tab of another agent (claude, codex, grok and others) with a task; kermach agent list shows them.'],
+  // t1760: повторное задание тому же агенту — в его открытую вкладку, а не в новую; агент не должен просить «новую вкладку» сам.
+  [null, 'kermach agent - task for another agent: claude, codex, grok and others. A repeat task goes into its open tab, --new opens another. kermach agent list shows them.'],
   [null, 'kermach sessions - tabs of all projects.'],
   [null, 'kermach copy - git copy of the project with own branch for risky edits.'],
 ];
@@ -878,7 +879,14 @@ async function termTab(q, id) {
 async function agentCmd(q, id) {
   const agents = require('../../main/agents');
   const list = await agents.listAsync();
-  const out = (/** @type {any} */ a) => ({ id: clean(a.id).slice(0, 80), title: clean(a.title).slice(0, 200), found: !!a.found, enabled: !!a.enabled, prompt: agents.promptFlag(a.id) !== false });
+  // t1760: from — вкладка, из которой позвали (KERMACH_TAB_KEY): задание в неё саму не пойдёт. Номер объявляет клиент, он только исключает вкладку из выбора.
+  const from = typeof q.from === 'string' && /^[\w.:-]{1,80}$/.test(q.from) ? q.from : '';
+  /** @type {Record<string, string>} */
+  const opened = q.cmd === 'agent-list' ? await require('../../main/terminals').taskTabsOf(id, from).catch(() => ({})) : {};
+  const out = (/** @type {any} */ a) => {
+    const tab = opened[agents.kindOfAgent(a)];
+    return { id: clean(a.id).slice(0, 80), title: clean(a.title).slice(0, 200), found: !!a.found, enabled: !!a.enabled, prompt: agents.promptFlag(a.id) !== false, ...(tab ? { tab: clean(tab).slice(0, 80) } : {}) };
+  };
   if (q.cmd === 'agent-list') return { ok: true, agents: list.map(out) };
   const name = typeof q.name === 'string' ? q.name.trim() : '';
   const text = typeof q.text === 'string' ? q.text : '';
@@ -895,8 +903,8 @@ async function agentCmd(q, id) {
   const bridge = require('../../main/plugin-bridge');
   const p = bridge.projectNow(own);
   if (!inProject(q.cwd, p.path)) return outsideProject(q.cwd, p);
-  const r = await require('../../main/terminals').openAgentTask(p, a.id, text);
-  if (!r || 'error' in r) return fail(4, r ? clean(r.error).slice(0, 1000) : 'нет ответа');
+  const r = await require('../../main/terminals').openAgentTask(p, a.id, text, { cli: true, fresh: q.fresh === true, from });
+  if (!r || 'error' in r) return fail(r && 'code' in r && r.code === 5 ? 5 : 4, r ? clean(r.error).slice(0, 1000) : 'нет ответа');
   // kermach tab list спрашивает страницу окна, а она узнаёт о вкладке позже ответа ядра: номер печатаем, когда список его уже видит.
   const inList = `typeof window.KermachTermTabs === "function" && window.KermachTermTabs().some((t) => t && t.sid === ${JSON.stringify(String(r.session.sid))})`;
   let listed = false;
@@ -905,7 +913,7 @@ async function agentCmd(q, id) {
     if (!listed) await new Promise((ok) => setTimeout(ok, 200));
   }
   /** @type {Ctx} */ (ctx).log(`kermach agent open ${a.id}: вкладка ${r.session.sid}, задание ${text.length} знаков, ${r.how}`);
-  return { ok: true, project: clean(p.name).slice(0, 200), sid: clean(r.session.sid).slice(0, 80), title: clean(r.session.ownTitle || r.session.title).slice(0, 300), agent: a.id, how: clean(r.how).slice(0, 300), ...(r.seen === false ? { unseen: true } : {}), ...(listed ? {} : { unlisted: true }) };
+  return { ok: true, project: clean(p.name).slice(0, 200), sid: clean(r.session.sid).slice(0, 80), title: clean(r.session.ownTitle || r.session.title).slice(0, 300), agent: a.id, how: clean(r.how).slice(0, 300), ...(r.reused ? { reused: true } : {}), ...(r.seen === false ? { unseen: true } : {}), ...(listed ? {} : { unlisted: true }) };
 }
 
 /**

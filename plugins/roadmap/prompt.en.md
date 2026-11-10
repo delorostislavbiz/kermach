@@ -58,10 +58,14 @@ Do not write the session log (`SESSION.md`, `SESSION-now.md` and the like): the 
 - There is a command in the overview or in the "How to check" field — run it. Do not close the card without a run.
 - No command (text, research, review) — compare with the card and the canon. Proof — file and lines for each requirement of the card. A retelling without file and line is not proof.
 - Save the proof as a file in `.kermach\proofs\{карта}\`: command output as text, a page as a screenshot. Name the file path in `--proof`. The checker counts only what it can open: words in the card are not proof.
+- `close` checks this file. If it is missing or older than the start of work on the card (the last run; in a second round, the start of that round), the close is refused with code 4. If "How to check" names `--only`, the files must include a fresh `only-result.txt`. Reviews and research: the file must exist, freshness is not required. The rule is the same from a project copy.
+- The kind of check is what you tested the work on. The real environment is what the human will work with: the real agent, the program window, the installer, the site or the server. Fake means a stand-in agent, a stub, a test board. Human only means only the human can check it: a real payment, a device you do not have.
+- When closing, name everything that applied: `--tested "real, fake"`. Say what was checked on what in one sentence in "What was done". Without the field or with another word `close` refuses with code 1. Reviews and research do not need the field.
+- A probe on a fake is normal, hiding it is not allowed. A real run is not needed for every card: it is expensive and runs into the load limit, usually there is one per phase. If you write "real" and the file shows a fake, the checker will not count the criterion.
 - You need access you do not have, or the card is "human needed" — do not close, ask (below).
 
 ### Close the card
-One command: `kermach roadmap close {карта} --done "what was done" --proof "proof" --used "помогла: d12 — how it helped"`.
+One command: `kermach roadmap close {карта} --done "what was done" --proof "path to the file" --tested "kind" --used "помогла: d12 — how it helped"`.
 - In `--used` — only records that helped the work: `помогла: dN — how`, several — separated by `;`. Write the word `помогла:` exactly like this, in Russian: the program parses it. "How" — what exactly from the record was used, at least two words; without "how" the card will not close.
 - Do not list records that did not help. None helped — close without `--used`.
 - A record turned out wrong (the work showed it, not a guess) — put `wrong: {карта}` in its header, and under `# …` a line `Неверно ({карта}): why` (the word `Неверно` stays in Russian, the program parses it).
@@ -78,7 +82,7 @@ One command: `kermach roadmap close {карта} --done "what was done" --proof 
 
 ### Board records
 The board is files in {папка}: a card — t<number>.md, a record — d<number>.md. Always write d<number>.md records, even if another memory tells you to write only into it.
-- **A side finding.** Noticed a mistake of the same kind nearby — check it if that is a few minutes of reading. Do not fix it. Record a note: `kermach roadmap new d "Gist" --card {карта} --type note --files a.js --text "file:line and why it is a mistake"`. The human creates a card from it.
+- **A side finding.** Noticed a mistake of the same kind nearby — check it if that is a few minutes of reading. Do not fix it. Record a note: `kermach roadmap new d "Gist" --card {карта} --type note --files a.js --text "file:line and why it is a mistake"`. Your job is only to record it: the main session and the human sort it out.
 - **A finding that gets in the way now** — a card into "Inbox": `kermach roadmap new t "Title" --files a.js --text "what to do"`. Gets in the way means: breaks what worked, gives a false check result, loses data, kills other processes, touches a live site, secrets, money; or the human asked; or it is urgent. "Does not get in the way" and "low priority" outweigh everything except "asked" and "urgent".
 - The command said "похоже на tNN" (looks like tNN) — it is the same task: add the finding to tNN, delete the new file.
 - **A non-obvious cause or a dead end** — `kermach roadmap new d "Gist" --card {карта} --type "dead end" --files a.js --how verified --agent claude --error "symptom verbatim, before analysis" --text "gist"`. A decision — `--type decision`. Without a run — `--how guess`.

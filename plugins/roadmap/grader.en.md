@@ -34,6 +34,8 @@ Write the remarks and proofs in English. The section headings below are in Russi
    The agent may have saved command output and screenshots in the folder `.kermach/proofs/{карта}/`. It is not in the diff, so its files are listed in the changes separately: open them.
    The agent's words in "What was done" and "Proof" of the card are not proof until a file confirms them.
 3. A criterion is met (ok: true) only if the proof is found and read. Not found — ok: false and what exactly was not found.
+   The kind of check named by the agent: {заявлено}. Values: `real`, `fake`, `human only`, the same words in another board language (`настоящая`, `подставная`) or `(нет)`. The real environment is what the human will work with: the real agent, the window, the installer, the site or the server.
+   If a kind is named, it is a separate criterion. It says "real" while the files with run output show only a fake environment (a stand-in agent, a stub, a test board without the real agent) — ok: false, give file:line in proof. It says "fake" with the same files — ok: true: a probe on a fake is no error, do not demand a real one unless the card itself does. If it says `(нет)`, do not add this criterion.
 4. The changes may include other people's edits: the human and other agents work in the same folder. Judge only by what relates to the card.
 5. Result (the verdict words are in Russian, the program reads them):
    - "выполнено" (done) — all criteria ok;

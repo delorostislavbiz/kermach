@@ -142,14 +142,35 @@ const ROADMAP_HELP = `kermach roadmap — доска «Роадмапа» про
                                  [--error "дословный симптом"] [--text "суть"] [--stack woodmart,php] [--global]
                                        новая запись d<N> к карте tN: решение, тупик, договорённость, паттерн
                                        или заметка; с флагами файл готов сразу; печатает номер и путь файла
-  kermach roadmap close tN --done "что сделано" --proof "доказательство" [--used "помогла: d12 — чем помогла"]
+  kermach roadmap new t ["Заголовок"] --from-note d1,d2 [--phase fN] [--text "что сделать"] [--why "зачем"] [--check "как проверить"]
+                                       карта из заметок: их номер получают в taken сразу. Заголовок и текст берутся из заметок;
+                                       --text дописывается перед ними. Уже взята в эту карту — новой карты нет
+  kermach roadmap note [list] [--all]  новые заметки, новые сверху, до 40 строк. --all — все, с состоянием: новая, взята, снята
+  kermach roadmap note take d1 [d2 ...] [--title "заголовок"] [--phase fN]
+                                       взять заметки в одну карту: как кнопка «в карту», без окна. Без --phase — во «Входящие»
+  kermach roadmap note drop d1 --why "причина"
+                                       снять заметку с причиной: как кнопка «снять». Файл остаётся: cancelled и строка «Снята (дата): причина»
+  kermach roadmap close tN --done "что сделано" --proof "файл с доказательством" --tested "вид" [--used "помогла: d12 — чем помогла"]
                                        закрыть карту: status: готово, closed: по часам, разделы и отзыв used:
                                        в --used — только записи, которые помогли, и чем: «помогла: dN — чем», «чем» —
                                        не меньше двух слов, несколько — через «;», например
                                        --used "помогла: d12 — нашёл ту же причину; помогла: d40 — взял команду пробы";
                                        не помогшие не перечислять, ни одна не помогла — без --used;
-                                       без «чем», «нет» и отзыв без вердикта — отказ, код 1
-  kermach roadmap run tN [--bg]        запустить карту, как кнопка «Запустить»: вкладка агента в окне проекта, status: в работе;
+                                       без «чем», «нет» и отзыв без вердикта — отказ, код 1.
+                                       --proof называет файл: путь от папки проекта или абсолютный, можно «файл:строка», с пробелами
+                                       и кириллицей. Файла нет или он старше начала работы карты — отказ, код 4. Начало — последний запуск
+                                       карты; нет записи запуска — created; карту вернули из «готово» — новый круг, нужен файл новее него.
+                                       «Как проверить» с --only — среди файлов нужен свежий only-result.txt.
+                                       Ревью и разведка: файл должен быть, свежесть не нужна.
+                                       --tested — вид проверки, на чём проверена работа: настоящая (то, с чем будет работать человек:
+                                       настоящий агент, окно, установщик, сайт или сервер), подставная (подставной агент, заглушка,
+                                       пробная доска), только человек; несколько — через запятую. Обязателен, кроме ревью и разведки:
+                                       нет или неверное значение — отказ, код 1. Подставная проба — нормально, скрывать её нельзя
+  kermach roadmap close tN --done "что сделано" --no-file "причина" --tested "только человек"
+                                       закрыть без файла: отменена, сделано в другой карте, работу сделал человек. Причина — в поле «Доказательство».
+                                       --tested обязателен и здесь: проверить такую карту программа не может, поэтому «только человек».
+                                       Только главная сессия: из вкладки агента карты — отказ, код 5
+  kermach roadmap run tN [--bg]       запустить карту, как кнопка «Запустить»: вкладка агента в окне проекта, status: в работе;
                                        печатает номер, вкладку, агента и модель. Только в терминале Kermach этого проекта,
                                        окно проекта открыто. --bg — в фоне: вкладка скрыта, у карты кнопка «Показать»,
                                        на «готово» закрывается сама, экран — в .kermach/runs/tN-<время>.log
@@ -181,7 +202,8 @@ const ROADMAP_HELP = `kermach roadmap — доска «Роадмапа» про
                                        (черновик и «готово» не в счёт), ревью без признаков фазы в «Как проверить», фаза без
                                        карты-ревью или признаков готовности, depends на карту, которой нет, кольцо depends.
                                        Без fN — незаконченные фазы. Ошибки есть — код 4: волна фазы не стартует, пока человек
-                                       не нажмёт «запускать всё равно» в панели «Роадмапа»
+                                       не нажмёт «запускать всё равно» в панели «Роадмапа». Ниже — замечания доски всего проекта
+                                       и строка о сломанном проверяющем, с фазами и без; на код выхода они не влияют
   kermach roadmap stats [fN]           таблица итогов по готовым картам (t1503): вид карты, агент, модель и усилие — сколько
                                        карт, сколько закрыто с первой попытки (tries: 1 и проверяющий не возвращал), сколько
                                        вернул проверяющий. Без fN — вся доска. Главная читает её раз в фазу.
@@ -232,8 +254,9 @@ const ROADMAP_HELP = `kermach roadmap — доска «Роадмапа» про
 
 Коды выхода: 0 — готово, 1 — не те аргументы, 2 — run не из терминала Kermach этого проекта, 3 — доски нет в этой папке и выше
 (у run — окно проекта закрыто или Kermach не отвечает), 4 — файл не создан, у run — отказ запуска (карты нет, уже запущена, готова),
-у grade — карта не «готово» или проверка не дала итога, 5 — answer из вкладки агента карты: ответ человека агент сам не пишет;
-grade оттуда же — тоже 5: проверку заново агент сам не запускает. У check 4 — проверка нашла ошибки.`;
+у grade — карта не «готово» или проверка не дала итога, у close — файла из --proof нет, он старый или нет only-result.txt,
+5 — answer из вкладки агента карты: ответ человека агент сам не пишет;
+grade оттуда же — тоже 5: проверку заново агент сам не запускает; close --no-file оттуда же — тоже 5. У check 4 — проверка нашла ошибки.`;
 
 /** Действия во вкладке (t382): только в отданных агенту. */
 const ACTS = ['snapshot', 'click', 'fill', 'keypress', 'goto', 'back', 'reload', 'scroll', 'wait', 'eval'];
@@ -491,21 +514,54 @@ function roadmapArgs(rest) {
   if (rest[0] === 'close') {
     const ref = rest[1] || '';
     if (!/^t\d{1,6}$/.test(ref)) die('roadmap close: нужен номер карты, например kermach roadmap close t12 --done "…" --proof "…". Справка — kermach roadmap --help', 1);
-    /** @type {{ close: string, done?: string, proof?: string, used?: string }} */
+    /** @type {{ close: string, done?: string, proof?: string, used?: string, nofile?: string, tested?: string }} */
     const o = { close: ref };
     for (let i = 2; i < rest.length; i++) {
       const a = rest[i];
       const v = rest[++i];
-      if (!['--done', '--proof', '--used'].includes(a)) die(`не понял аргумент ${a}. Справка — kermach roadmap --help`, 1);
-      if (v === undefined || !v.trim()) die(`после ${a} нужно значение`, 1);
-      o[/** @type {'done' | 'proof' | 'used'} */ (a.slice(2))] = v.trim();
+      if (!['--done', '--proof', '--used', '--no-file', '--tested'].includes(a)) die(`не понял аргумент ${a}. Справка — kermach roadmap --help`, 1);
+      if (v === undefined || !v.trim()) die(a === '--no-file' ? 'после --no-file нужна причина: почему доказательства-файла нет, например --no-file "отменена: сделано в t12"' : `после ${a} нужно значение`, 1);
+      if (a === '--no-file') o.nofile = v.trim();
+      else o[/** @type {'done' | 'proof' | 'used' | 'tested'} */ (a.slice(2))] = v.trim();
     }
-    if (!o.done || !o.proof) die('roadmap close: нужны оба — --done "что сделано" и --proof "доказательство"', 1);
+    // t1638: выход без файла — только главной. ENV('CARD'), как у answer: в пачке KERMACH_CARD=t1,t2 и у построителя тоже отказ.
+    if (o.nofile !== undefined && ENV('CARD')) die('roadmap close --no-file: нет доступа — команду вызвал агент карты (вкладка с KERMACH_CARD). Закрыть карту без файла может только главная сессия; агент сохраняет вывод проверки файлом и называет его в --proof', 5);
+    if (o.nofile !== undefined && o.proof) die('roadmap close: --proof и --no-file вместе не бывают: либо файл, либо причина, почему его нет', 1);
+    if (!o.done || (!o.proof && o.nofile === undefined)) die('roadmap close: нужны оба — --done "что сделано" и --proof "файл с доказательством"', 1);
+    // t1642: неверное значение — отказ сразу, карта ещё не нужна. Обязательность зависит от вида карты: её проверяет обработчик close.
+    if (o.tested) {
+      const { TESTED, testedWords } = require('../../plugins/roadmap/board.js');
+      const t = testedWords(o.tested);
+      if (t.bad.length || !t.words.length) die(`roadmap close: --tested: неверное значение ${t.bad.map((/** @type {string} */ s) => `«${s}»`).join(', ') || '«»'}. Допустимы: ${TESTED.join(', ')}; несколько — через запятую. Карта не закрыта`, 1);
+      o.tested = t.words.join(', ');
+    }
     // t1333: --used тем же разбором, что замечания доски (board.js usedWarn) — «нет» не попадает в used: замечанием.
     if (o.used) {
       const bad = require('../../plugins/roadmap/board.js').usedWarn(o.used, {});
       if (bad.length) die(`roadmap close: --used не разобран: ${bad.map((/** @type {string} */ s) => `«${s}»`).join(', ')} — в --used только записи, которые помогли, и чем: «помогла: d<номер> — чем помогла», «чем» не меньше двух слов, несколько — через «;», например --used "помогла: d12 — нашёл ту же причину". Не помогшие записи не перечисляйте; ни одна не помогла — закройте без --used. Карта не закрыта`, 1);
     }
+    return o;
+  }
+  // t1628: разбор заметок без окна — и главной, и агентам: list, take, drop.
+  if (rest[0] === 'note') {
+    const verb = rest[1] && !rest[1].startsWith('--') ? rest[1] : 'list';
+    const args = verb === rest[1] ? rest.slice(2) : rest.slice(1);
+    /** @type {{ note: string, refs: string[], all?: boolean, why?: string, title?: string, phase?: string }} */
+    const o = { note: verb, refs: [] };
+    if (!['list', 'take', 'drop'].includes(verb)) die(`roadmap note: нет такого действия: ${verb}. Есть list, take, drop. Справка — kermach roadmap --help`, 1);
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      const val = () => { const v = args[++i]; if (v === undefined || !v.trim()) die(`после ${a} нужно значение`, 1); return v.trim(); };
+      if (verb === 'list' && a === '--all') o.all = true;
+      else if (verb === 'drop' && a === '--why') o.why = val();
+      else if (verb === 'take' && a === '--title') o.title = val();
+      else if (verb === 'take' && a === '--phase') { const v = val(); if (!/^f\d{1,6}$/.test(v)) die('--phase: номер фазы, например f2', 1); o.phase = v; }
+      else if (verb !== 'list' && /^d\d{1,6}(,\s*d\d{1,6})*$/.test(a)) o.refs.push(...a.split(',').map((s) => s.trim()));
+      else die(`не понял аргумент ${a}. Справка — kermach roadmap --help`, 1);
+    }
+    if (verb !== 'list' && !o.refs.length) die(`roadmap note ${verb}: нужен номер заметки, например d12. Справка — kermach roadmap --help`, 1);
+    if (verb === 'drop' && o.refs.length > 1) die('roadmap note drop: одна заметка за раз: у каждой своя причина', 1);
+    if (verb === 'drop' && !o.why) die('roadmap note drop: нужна причина: --why "почему снята"', 1);
     return o;
   }
   if (rest[0] !== 'new') die(`нет такой команды: roadmap ${rest[0]}. Справка — kermach roadmap --help`, 1);
@@ -529,6 +585,13 @@ function roadmapArgs(rest) {
     // t1439: «Зачем» и «Как проверить» карты. Не o.check: так зовётся подкоманда roadmap check.
     else if (a === '--why' && kind === 't') o.why = val().trim();
     else if (a === '--check' && kind === 't') o.verify = val().trim();
+    // t1628: карта из заметок: их номер получают в taken в той же команде. Заголовок и текст — из заметок, если не заданы.
+    else if (a === '--from-note' && kind === 't') {
+      const v = val().split(',').map((s) => s.trim()).filter(Boolean);
+      const bad = v.find((s) => !/^d\d{1,6}$/.test(s));
+      if (bad || !v.length) die(`--from-note: номера заметок через запятую, например d12,d14, а не «${bad || ''}»`, 1);
+      o.from_note = v;
+    }
     // t1637: карта чинит уже принятое — в какой фазе ошибка была принята и кто нашёл. Слово — на любом языке доски, в файле оно будет на языке доски.
     else if (a === '--bug-phase' && kind === 't') { const v = val().trim(); if (!/^f\d{1,6}$/.test(v)) die(`--bug-phase: номер фазы, в которой ошибка была принята, например f2, а не «${v}»`, 1); o.bug_phase = v; }
     else if (a === '--bug-by' && kind === 't') {
@@ -542,7 +605,7 @@ function roadmapArgs(rest) {
     else words.push(a);
   }
   o.title = words.join(' ').trim();
-  if (!o.title) die(`roadmap new ${kind}: нужен заголовок в кавычках. Справка — kermach roadmap --help`, 1);
+  if (!o.title && !o.from_note) die(`roadmap new ${kind}: нужен заголовок в кавычках. Справка — kermach roadmap --help`, 1);
   // Кто нашёл без фазы можно: фаза бывает не ясна. Фаза без «кто» — счёт по фазам не скажет, кем найдено.
   if (o.bug_phase && !o.bug_by) die('--bug-phase: нужен и --bug-by — кто нашёл ошибку', 1);
   return o;
@@ -550,6 +613,18 @@ function roadmapArgs(rest) {
 
 const MAX_LINES = 40;
 const cut = (/** @type {string} */ s, n) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+
+/** Заметки для разбора без окна (t1628): новые сверху, до 40 строк; --all — все и с состоянием. @param {any} board @param {any} b @param {boolean} all @returns {string[]} */
+function noteLines(board, b, all) {
+  const notes = b.decisions.filter((/** @type {any} */ d) => d.type === 'заметка').sort((/** @type {any} */ x, /** @type {any} */ y) => (y.date || '').localeCompare(x.date || '') || y.num - x.num);
+  const fresh = notes.filter((/** @type {any} */ d) => board.noteState(d) === 'новая');
+  const mark = (/** @type {any} */ d) => (d.cancelled ? `снята ${d.cancelled}: ${cut(d.dropWhy, 60) || 'причины нет'}` : d.taken ? `взята в ${d.taken}` : 'новая');
+  const show = all ? notes : fresh.slice(0, MAX_LINES);
+  const out = [`Заметок: новых ${fresh.length}, всего ${notes.length}`];
+  for (const d of show) out.push(`${d.id}${all ? ` [${mark(d)}]` : ''} ${cut(d.title, 90)}${d.card ? ` (${d.card})` : ''}`);
+  if (show.length < (all ? notes : fresh).length) out.push(`и ещё ${fresh.length - show.length} новых: kermach roadmap note --all`);
+  return out;
+}
 
 /** Первая строка вопроса карты «ждёт ответа»: строка «Вопрос…» в тексте, иначе первая непустая строка «Что сделано», иначе заголовок. */
 function question(/** @type {any} */ c) {
@@ -607,6 +682,50 @@ function boardProject() {
     try { if (fs.statSync(path.join(d, '.kermach', 'roadmap')).isDirectory()) return d; } catch { /* нет — выше */ }
     if (path.dirname(d) === d) return '';
   }
+}
+
+/**
+ * Папка основного проекта, когда команду зовут из копии (t1638): у копии .git — файл «gitdir: <проект>/.git/worktrees/<имя>».
+ * Запись запуска и разборы проверяющего лежат под основным проектом, у копии их нет. Не копия — ''.
+ * @param {string} project
+ */
+function copyMain(project) {
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    const m = /^gitdir:\s*(.+?)[\\/]\.git[\\/]worktrees[\\/][^\\/]+\s*$/m.exec(fs.readFileSync(path.join(project, '.git'), 'utf8'));
+    return m ? path.resolve(project, m[1]) : '';
+  } catch { return ''; /* .git — папка или её нет: не копия */ }
+}
+
+/**
+ * Начало последнего запуска карты (t1638): окна у close может не быть, поэтому запись — из settings.json папки данных, мешок плагина «Роадмап»:
+ * runs и solo под ключом проекта, как key в main.js. Записи нет или файл не прочитан — 0, правило откатится на created.
+ * @param {string} project @param {string} id
+ */
+function runStarted(project, id) {
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    const { DATA_DIR } = require(path.join(__dirname, '..', '..', 'daemon', 'protocol.js'));
+    const bag = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'settings.json'), 'utf8')).pluginSettings.roadmap;
+    const key = process.platform === 'win32' ? path.resolve(project).toLowerCase() : path.resolve(project);
+    return Math.max(...['runs', 'solo'].map((n) => Number(bag[n] && bag[n][key] && bag[n][key][id] && bag[n][key][id].started) || 0));
+  } catch { return 0; }
+}
+
+/** Время последнего файла разбора проверяющего .kermach/grades/tN-K.md (t1638): карту вернули — с него идёт новый круг. Нет — 0. @param {string} project @param {string} id */
+function lastGrade(project, id) {
+  const fs = require('fs');
+  const path = require('path');
+  const dir = path.join(project, '.kermach', 'grades');
+  let at = 0;
+  try {
+    for (const n of fs.readdirSync(dir)) {
+      if (new RegExp(`^${id}-\\d+\\.md$`).test(n)) at = Math.max(at, fs.statSync(path.join(dir, n)).mtimeMs);
+    }
+  } catch { /* разборов нет */ }
+  return at;
 }
 
 /**
@@ -743,7 +862,9 @@ async function roadmap(o) {
     const b = board.read(project);
     if (o.phase && !b.phases.some((/** @type {any} */ f) => f.id === o.phase)) return die(`roadmap check: фазы ${o.phase} на доске нет`, 4);
     const lines = checkLines(board, b, o.phase);
-    process.stdout.write(`${clean(lines.join('\n'))}\n`);
+    // t1695: замечания и сломанный проверяющий — на любой доске. На код выхода не влияют: он только об ошибках.
+    const remarks = require(path.join(__dirname, '..', '..', 'plugins', 'roadmap', 'accept.js')).boardRemarks(b, project);
+    process.stdout.write(`${clean([...lines, ...(remarks.length ? ['', ...remarks] : [])].join('\n'))}\n`);
     if (lines.length > 1) process.exitCode = 4;
     return;
   }
@@ -755,6 +876,18 @@ async function roadmap(o) {
     return;
   }
   if (o.solo) return roadmapSolo(board, project, o.solo, !!o.off);
+  if (o.note) {
+    try {
+      if (o.note === 'drop') {
+        const r = board.noteDrop(project, o.refs[0], o.why);
+        process.stdout.write(`${clean(`${r.id} снята ${r.date}: ${r.why}. Запись остаётся в ${r.file}`)}\n`);
+      } else if (o.note === 'take') {
+        const r = board.noteCard(project, o.refs, { ...(o.title ? { title: o.title } : {}), ...(o.phase ? { phase: o.phase } : {}) });
+        process.stdout.write(`${clean(r.again ? `${r.notes.join(', ')} уже взята в ${r.card}: новая карта не заведена` : `заведена ${r.card}: ${path.join(board.root(project), `${r.card}.md`)}\n${r.notes.join(', ')}: taken: ${r.card}`)}\n`);
+      } else process.stdout.write(`${clean(noteLines(board, board.read(project), !!o.all).join('\n'))}\n`);
+    } catch (e) { return die(`roadmap note ${o.note}: ${String((e && /** @type {any} */ (e).message) || e)}`, 4); }
+    return;
+  }
   if (o.human) {
     if (o.ref) {
       try {
@@ -803,7 +936,7 @@ async function roadmap(o) {
       /** @type {any} */
       const a = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), cmd: 'roadmap-answer', ref: o.answer, text: o.text, head: r.head, sha1: r.sha1, board: project, ...(o.from ? { from: o.from } : {}) }).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
       if (a && a.ok && a.sent) sent = `агенту отправлено: вкладка ${a.sid}, статус ждёт ответа → в работе`;
-      else if (a && a.ok && a.waiting) sent = 'агенту отправится, когда поле ввода опустеет';
+      else if (a && a.ok && a.waiting) sent = `агенту отправится позже: ${a.why || 'вкладка агента занята'}`; // t1664: ждать может и запрос разрешения, не только поле ввода
       else if (a && a.ok) sent = `агенту не отправлено: ${a.why || 'вкладки нет'}`;
       else sent = `агенту не отправлено: вкладки нет (окно проекта: ${(a && a.error) || 'нет ответа'})`;
     }
@@ -831,8 +964,27 @@ async function roadmap(o) {
   if (o.close) {
     /** @type {any} */
     let c;
+    // t1642: вид проверки обязателен у обычной карты, с файлом и без. Правило — только здесь, как у файла: окно и проверяющий пишут «готово» мимо него.
+    if (!o.tested) {
+      const main = copyMain(project);
+      const card = (main && board.oneCard(main, o.close)) || board.oneCard(project, o.close);
+      if (card && card.kind === 'сделать') return die(`карта не закрыта: нужен --tested, на чём проверена работа. Настоящая — то, с чем будет работать человек: настоящий агент, окно, установщик, сайт или сервер. Подставная — подставной агент, заглушка, пробная доска. Только человек — проверить может только он. Несколько — через запятую, например --tested "настоящая, подставная". Подставная проба — нормально, скрывать её нельзя. Справка — kermach roadmap --help`, 1);
+    }
+    // t1638: файл из --proof есть и новее начала работы. Правило — только здесь: окно и проверяющий пишут «готово» через board.update мимо него.
+    if (o.nofile === undefined) {
+      const main = copyMain(project);
+      const card = (main && board.oneCard(main, o.close)) || board.oneCard(project, o.close);
+      if (card) {
+        const home = main || project;
+        const bases = [...new Set([project, ...(main ? [main] : []), process.cwd()])];
+        const r = board.proofCheck(card, o.proof, bases, board.proofStart(card, runStarted(home, o.close), lastGrade(home, o.close)));
+        // Подсказка --no-file — только главной: агенту карты эта команда даёт отказ, код 5.
+        const noFileHint = r.code === 'нет файла' && !ENV('CARD') ? '. Файла и не будет (работу сделал человек, карта отменена) — закройте так: --no-file "причина"' : '';
+        if (!r.ok) return die(`карта не закрыта: ${r.why}${noFileHint}. Справка — kermach roadmap --help`, 4);
+      }
+    }
     try {
-      c = board.update(project, o.close, { status: 'готово', closed: board.stamp(), done: o.done, proof: o.proof, ...(o.used ? { used: o.used } : {}) });
+      c = board.update(project, o.close, { status: 'готово', closed: board.stamp(), done: o.done, proof: o.nofile === undefined ? o.proof : `Без файла, причина: ${o.nofile}`, ...(o.tested ? { tested: o.tested } : {}), ...(o.used ? { used: o.used } : {}) });
     } catch (e) { return die(`карта не закрыта: ${e instanceof Error ? e.message : e}`, 4); }
     process.stdout.write(`${clean(`закрыта ${o.close}: status: ${c.status}, closed: ${c.closed}`)}\n`);
     return;
@@ -853,7 +1005,11 @@ async function roadmap(o) {
   let id;
   try {
     const files = o.files ? { files: o.files } : {};
-    if (o.kind === 't') id = board.create(project, 'card', { title: o.title, ...(o.phase ? { phase: o.phase } : {}), ...(o.bug_phase ? { bug_phase: o.bug_phase } : {}), ...(o.bug_by ? { bug_by: o.bug_by } : {}), ...(o.files ? { files: o.files.map((x) => '`' + x + '`').join(', ') } : {}), ...(o.text ? { what: o.text } : {}), ...(o.why ? { why: o.why } : {}), ...(o.verify ? { check: o.verify } : {}) });
+    if (o.kind === 't' && o.from_note) {
+      const r = board.noteCard(project, o.from_note, { ...(o.title ? { title: o.title } : {}), ...(o.phase ? { phase: o.phase } : {}), ...(o.bug_phase ? { bug_phase: o.bug_phase } : {}), ...(o.bug_by ? { bug_by: o.bug_by } : {}), ...(o.files ? { files: o.files.map((x) => '`' + x + '`').join(', ') } : {}), ...(o.text ? { what: o.text } : {}), ...(o.why ? { why: o.why } : {}), ...(o.verify ? { check: o.verify } : {}) });
+      if (r.again) { process.stdout.write(`${clean(`${r.notes.join(', ')} уже взята в ${r.card}: новая карта не заведена`)}\n`); return; }
+      id = r.card;
+    } else if (o.kind === 't') id = board.create(project, 'card', { title: o.title, ...(o.phase ? { phase: o.phase } : {}), ...(o.bug_phase ? { bug_phase: o.bug_phase } : {}), ...(o.bug_by ? { bug_by: o.bug_by } : {}), ...(o.files ? { files: o.files.map((x) => '`' + x + '`').join(', ') } : {}), ...(o.text ? { what: o.text } : {}), ...(o.why ? { why: o.why } : {}), ...(o.verify ? { check: o.verify } : {}) });
     else {
       const err = `${board.ERROR_LINE} ${o.error || '—'}`;
       const own = Object.fromEntries(['type', 'how', 'agent'].filter((k) => o[k]).map((k) => [k, o[k]]));
@@ -1140,7 +1296,7 @@ async function companionSub(a) {
   const from = ENV('TAB_KEY') || '';
   const r = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), cmd: 'roadmap-cli', sub: ask1 ? 'companion-ask' : 'companion-list', board, cwd: process.cwd(), a: ask1 ? { sid, text, pid: String(process.pid) } : { pid: String(process.pid) }, ...(from ? { from } : {}) });
   if (!r || !r.ok) die(r && r.error ? `companion ${a[0]}: ${r.error}` : 'ответ не той формы', r && Number.isInteger(r.code) ? r.code : 3);
-  if (ask1) { process.stdout.write(`${clean(`вопрос — в очереди сопутствующей ${r.sid} «${r.topic}» (${r.agent}): дойдёт, когда там ничего не набрано`)}\n`); return; }
+  if (ask1) { process.stdout.write(`${clean(`вопрос — в очереди сопутствующей ${r.sid} «${r.topic}» (${r.agent}): дойдёт, когда там ничего не набрано и нет открытого запроса разрешения или вопроса с вариантами`)}\n`); return; }
   const list = Array.isArray(r.list) ? r.list : [];
   if (!list.length) { process.stdout.write('сопутствующих сессий нет — открыть: kermach companion "тема"\n'); return; }
   const at = (/** @type {string} */ iso) => { const d = new Date(iso); if (Number.isNaN(d.getTime())) return 'нет'; const p = (/** @type {number} */ n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
@@ -1150,15 +1306,22 @@ async function companionSub(a) {
 /** kermach agent (t1611): вкладка любого установленного агента с заданием, без доски и без плагинов. */
 const AGENT_HELP = `kermach agent — другие агенты программы: вкладка агента с заданием в окне этого проекта. Доска «Роадмапа» не нужна.
   kermach agent list
-      агенты программы (claude, codex, остальные из каталога): установлен ли, включён ли.
+      агенты программы (claude, codex, остальные из каталога): установлен ли, включён ли, открыта ли уже его вкладка этой командой.
   kermach agent open <имя> "задание"
-      новая вкладка агента, задание — его первое сообщение. Печатает номер вкладки, дальше работает kermach tab list.
-  kermach agent open <имя> -
+      задание агенту. Эта команда уже открыла вкладку этого агента и она жива — задание вводится в неё, разговор с агентом продолжается.
+      Такой вкладки нет — новая вкладка, задание — её первое сообщение. Печатает номер вкладки, дальше работает kermach tab list.
+  kermach agent open <имя> --new "задание"
+      всегда новая вкладка, даже если вкладка этого агента уже открыта.
+  kermach agent open <имя> [--new] -
       задание из потока ввода: для длинного текста и текста с кавычками и переводами строк.
 Разрешения у вкладки те же, что у вкладки из меню «+». Задание передаётся как есть, правил от программы к нему не добавляется.
 Задание длиннее 16000 знаков ложится файлом в .kermach\\prompts проекта, первое сообщение — ссылка на файл. Предел команды — 60000 байт.
 Агент не берёт сообщение при запуске (amp, hermes, devin, kimi, muse, zcode) — задание вводится во вкладку после старта, вывод об этом говорит.
-Коды выхода: 0 — да, 1 — нет задания, такого агента или он не установлен или выключен, 2 — нет доступа, 3 — окно проекта закрыто, 4 — вкладка не открылась.`;
+В открытую вкладку задание идёт так же, как ввод после старта: многострочное и длиннее 1000 знаков — файлом и ссылкой.
+Вкладки из меню «+», агентов карт, главной сессии и вкладку, из которой позвали, команда не трогает. После перезапуска демона терминалов прежние вкладки она не узнаёт.
+Открытая вкладка ждёт ответа на запрос разрешения или в её поле набран текст — команда ждёт до 40 с, потом отказ с кодом 5.
+Коды выхода: 0 — да, 1 — нет задания, такого агента или он не установлен или выключен, 2 — нет доступа, 3 — окно проекта закрыто, 4 — вкладка не открылась
+или задание в неё не ушло, 5 — открытая вкладка агента занята, задание не отправлено.`;
 /** Предел запроса к программе 64 КиБ (cli.js LIMIT.req): заранее и понятным текстом. */
 const AGENT_REQ_MAX = 60000;
 /** Разбор и запуск kermach agent (t1611). @param {string[]} a */
@@ -1168,24 +1331,31 @@ async function agentCmd(a) {
   if (a[0] === 'list' && a.length > 1) die(`agent list: лишний аргумент ${a[1]}`, 1);
   /** @type {any} */
   const q = { v: 1, auth: ENV('BROWSER_AUTH'), cmd: `agent-${a[0]}`, cwd: process.cwd() };
+  // t1760: своя вкладка — чтобы задание не ушло в неё саму и list не показал её как открытую вкладку агента.
+  const from = ENV('TAB_KEY') || '';
+  if (from) q.from = from;
   if (a[0] === 'open') {
     const name = String(a[1] || '').trim();
     if (!name) die('agent open: нужно имя агента — kermach agent open <имя> "задание"; имена — kermach agent list', 1);
-    const piped = a[2] === '-' && a.length === 3;
-    const text = piped ? stdinText().text : a.slice(2).join(' ');
+    // t1760: --new — только отдельным словом сразу после имени; задание «--new …» одним аргументом остаётся заданием.
+    const fresh = a[2] === '--new';
+    const rest = a.slice(fresh ? 3 : 2);
+    const piped = rest[0] === '-' && rest.length === 1;
+    const text = piped ? stdinText().text : rest.join(' ');
     if (!text.trim()) die(`agent open: нужно задание — kermach agent open ${name} "задание"; вкладка не открыта`, 1);
     q.name = name;
     q.text = text;
+    if (fresh) q.fresh = true;
     if (Buffer.byteLength(JSON.stringify(q)) > AGENT_REQ_MAX) die(`agent open: задание больше предела команды (${AGENT_REQ_MAX} байт); вкладка не открыта. Положите текст файлом в папку проекта и попросите агента прочитать этот файл`, 1);
   }
   if (!ENV('BROWSER_PIPE') || !ENV('BROWSER_AUTH')) die('нет доступа: kermach agent работает только в терминале Kermach. Терминал открыт до обновления программы — откройте новую вкладку.', 2);
   const r = await ask(q);
   if (!r || !r.ok) die(r && r.error ? `agent ${a[0]}: ${r.error}` : 'ответ не той формы', r && Number.isInteger(r.code) ? r.code : 3);
   if (a[0] === 'list') {
-    process.stdout.write(`${clean((r.agents || []).map((/** @type {any} */ x) => `${x.id}  ${x.title}  ${!x.found ? 'не установлен' : x.enabled ? 'установлен' : 'установлен, выключен в «Настройках» → «Агенты»'}${x.found && !x.prompt ? '  (задание вводится после старта)' : ''}`).join('\n'))}\n`);
+    process.stdout.write(`${clean((r.agents || []).map((/** @type {any} */ x) => `${x.id}  ${x.title}  ${!x.found ? 'не установлен' : x.enabled ? 'установлен' : 'установлен, выключен в «Настройках» → «Агенты»'}${x.found && !x.prompt ? '  (задание вводится после старта)' : ''}${x.tab ? `  открыта вкладка ${x.tab}: задание пойдёт в неё` : ''}`).join('\n'))}\n`);
     return;
   }
-  process.stdout.write(`${clean([`вкладка: ${r.sid} «${r.title}»`, `агент: ${r.agent}`, `задание: ${r.how}`, ...(r.unseen ? ['на экране задания не видно: посмотрите вкладку; если агент его не получил, напишите ему сами'] : []), ...(r.unlisted ? ['окно ещё не показало вкладку: kermach tab list увидит её чуть позже'] : [])].join('\n'))}\n`);
+  process.stdout.write(`${clean([`вкладка: ${r.sid} «${r.title}»${r.reused ? ' — уже открыта, новая не открывалась' : ''}`, `агент: ${r.agent}`, `задание: ${r.how}`, ...(r.unseen ? ['на экране задания не видно: посмотрите вкладку; если агент его не получил, напишите ему сами'] : []), ...(r.unlisted ? ['окно ещё не показало вкладку: kermach tab list увидит её чуть позже'] : [])].join('\n'))}\n`);
 }
 
 const MAIN_HELP = `kermach main — главная сессия окна проекта: вкладка с пометкой «Главная», куда приходят сообщения о картах.
@@ -1207,7 +1377,7 @@ async function mainCmd(a) {
   const from = ENV('TAB_KEY') || '';
   const r = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), cmd: 'roadmap-cli', sub: tell ? 'main-tell' : 'main', board, a: tell ? { text, pid: String(process.pid) } : { pid: String(process.pid) }, ...(from ? { from } : {}) });
   if (!r || !r.ok) die(r && r.error ? `main: ${r.error}` : 'ответ не той формы', r && Number.isInteger(r.code) ? r.code : 3);
-  if (tell) { process.stdout.write(`${clean(`строка — в очереди главной ${r.sid} (${r.agent}): дойдёт, когда там ничего не набрано`)}\n`); return; }
+  if (tell) { process.stdout.write(`${clean(`строка — в очереди главной ${r.sid} (${r.agent}): дойдёт, когда там ничего не набрано и нет открытого запроса разрешения или вопроса с вариантами`)}\n`); return; }
   const out = [`главная: ${r.sid} «${r.title || ''}»${r.self ? ' — это эта вкладка' : ''}`, `агент: ${r.agent}`];
   out.push(Array.isArray(r.now) && r.now.length ? `над чем работает (SESSION-now.md):\n${r.now.map((l) => `  ${l}`).join('\n')}` : 'над чем работает: SESSION-now.md в проекте нет');
   out.push(Array.isArray(r.waiting) && r.waiting.length ? `ждут ответа (${r.waiting.length}):\n${r.waiting.map((l) => `  ${l}`).join('\n')}` : 'ждут ответа: нет');

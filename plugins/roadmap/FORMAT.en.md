@@ -71,12 +71,14 @@ Header:
 | `advisor` | whether to call the advisor, optional | `да` — the card's task gets the line "call the advisor", only for the `claude` executor; no key or anything else — no line. The program does not set the advisor's model: it comes from the Claude settings (`advisorModel` in `~\.claude\settings.json`); if it is not there, the agent says there is no advisor and does the card without one |
 | `pick` | who chose the model and effort, optional | `человек` — a human named them, a retry does not raise them; no key — chosen by whoever created the card, by the rule below |
 | `agent_why` | why this agent, model, effort and advisor, optional | one line, for example `research — sonnet низкое` |
+| `mcp` | MCP servers the card needs, optional (t1753) | names from the Claude settings separated by commas: `playwright` or `playwright, context7`. The `claude` card agent gets only these and the servers from the passport's `card_mcp`; no key — no servers (`--strict-mcp-config`). Each server is a separate process of 50–70 MB, so give it only to a card that needs it. No server with that name in the settings — the card will not start |
 | `checked` | result of the card checker, written by the program | one line, for example `выполнено, круг 1: 4 из 4 критериев` or `нужна доработка, круг 2 из 3: нет пробы для выкл`; the full review is `.kermach/grades/tN-круг.md` (t1330) |
 | `tries` | launch attempt number, written by the program (t1440) | a number `1`, `2`, `3`…; rewritten on every launch from "Run", `kermach roadmap run`, a wave or a batch. On a done card — the attempt it was delivered on: `kermach roadmap accept fN` sums up the `size.js` tiers by it. Do not edit by hand; no key — the card was launched before t1440 or not by the program |
 | `depends` | which cards it depends on | a list of numbers `[t09, t10]` or empty |
 | `human` | whether a human is needed | `no human`, `human needed` |
 | `bug_phase` | the card fixes something already accepted: in which phase the bug was accepted, optional (t1637) | `f12`; the phase is unclear — no key. A wrong value is a board remark, the card is still read |
 | `bug_by` | who found the bug in already accepted work, optional (t1637) | `human`, `live run`, `review`. A wrong value is a board remark, the card is still read. A bug found before the phase was accepted gets no mark. The count is the second table of `kermach roadmap stats` |
+| `tested` | kind of check: what the work was tested on, written by `kermach roadmap close --tested` (t1642) | `real`, `fake`, `human only`, several separated by commas. Real is what the human will work with: the real agent, the window, the installer, the site or the server. Fake is a stand-in agent, a stub, a test board. Required by `close` except for reviews and research, also with `--no-file`: missing or wrong value — refusal, code 1. An old card without the field is read as is, the acceptance says "kind of check not given"; a wrong word in the file is a board remark. The meaning is checked by the checker, the program looks only at the field |
 | `draft` | draft, optional (t1325) | `да` — a card of a later phase without "How to check": the "All" and "Independent" waves skip it with the reason "draft", "Selected" launches it; the card row in the panel has the mark "draft". No key — an ordinary card. See "Card draft" below |
 | `created` | when it was created | `2026-10-12 11:20` |
 | `closed` | when it was closed, optional | `2026-10-12 15:40`; set by the agent on close, by the window when the status changes to "done". No key — this card gets into the prompt of a neighbouring card of the phase (part 5) only if created later (`created`), and the card row on the board has no time: the file time after `git clone` is wrong |
@@ -139,7 +141,7 @@ A code block ```…``` is part of the field as is: an empty line, `#` and a labe
 "How to check" — a command and the expected result, if something beyond the project check from the passport is needed.
 "How to check" measures the card's goal, not only the absence of errors (t1434). If the goal is matching a sample (markup, mockup, design, old site), the check compares the whole page with it from top to bottom: every section of the sample is on the page or removed by a human's answer.
 "Opens without an error", "no fatal", "one H1" is not enough for such a card: the checker returns it with the result "criteria do not fit". Bad → good: «the home page opens without fatal, one H1» → «the home page opens without fatal; sections from top to bottom match html/index.html: 12 of 12, a screenshot of the whole page next to a screenshot of the sample».
-"What was done" and "Proof" are filled in on close; proof is command output, a commit, or a file and line.
+"What was done" and "Proof" are filled in on close; proof is a file: command output, a screenshot, or a file and line. `kermach roadmap close` refuses with code 4 if the file from `--proof` is missing or older than the start of work on the card; "How to check" with `--only` requires a fresh `only-result.txt`; reviews and research need the file but not freshness. Closing without a file (cancelled, done in another card) is for the main session only: `--no-file "reason"`, the reason goes into the field.
 An empty field is a dash `—` or nothing.
 Write your own text after an empty line: then it does not become part of a field, and the program will not touch it.
 
@@ -232,6 +234,9 @@ A wave does not launch two cards with a shared file together. A shared file is o
 The second card waits with the mark "waits for file: tNN" while the first is working, awaiting an answer, checking or in review; it launches when the first has become "done" and its check is over.
 A card launched not by a wave holds the file too.
 
+While the project folder contains the file `СТОП-НАГРУЗКА.txt`, a wave does not launch new cards. The card shows the mark "waiting: load flag", and the log gets one line. Once the file is gone, the wave continues by itself, without clicks.
+The flag does not touch running cards. The "Run" button works as usual: that is the human's decision. The flag does hold back the card checker, the phase check and the roadmap check: real claude does not start while it is up, the log gets a line, and the "In background" block shows "waiting for the load flag to be removed". The flag does not touch a check already running. Once the file is gone, they start by themselves.
+
 ### Fresh phase checker (t1439)
 Later phases are written as drafts and completed after the previous phase, and at its acceptance the human makes edits. The roadmap check at the start does not see that. So before a phase is launched, the same fresh agent checks it — only this phase.
 When: the first wave of the phase (`kermach roadmap wave fN` or the "All" or "Independent" wave button), if the program check found no errors, the previous phase is over — `status: done` or all its cards "done" — and no card of this phase has been launched yet (all "queued" or "paused").
@@ -313,7 +318,7 @@ card_skills: нет
 | `card_check` | `да` · `нет` | Card checker (t1330). `да` — a card closed by the agent from "Run" is checked by a separate `claude -p` (sonnet, low, read-only): it sees "What to do", "How to check" and the changes since the start of the card, it does not see the agent's conversation. The result is the line `checked:` in the card. "Needs more work" — the remarks go to the agent's tab, the card is "in progress" again, no more than 3 rounds, after the third — "awaiting answer". "Criteria do not fit" — "awaiting answer". Cards of kind `review` and `research` without a command in "How to check" are not checked. |
 
 The values of these three keys are Russian, as in the table: that is how the program reads them.
-No key — `все` and `да`, as before t1322 (for `card_check` — `да`: the check is on). A wrong value has no effect, the window and the "Roadmap" log warn about it.
+No key — `никаких` for `card_mcp` (since t1753: MCP servers come from the card's `mcp` field), `да` for `card_skills` and `card_check`, as before t1322 (the check is on). Servers from the card's `mcp` field are added to the `card_mcp` list; with `все` the field is not needed. A wrong value has no effect, the window and the "Roadmap" log warn about it.
 Subagents are always forbidden to the card agent, there is no setting for them: claude starts with `--disallowedTools=Agent`.
 The flags exist only in claude; for codex and other agents the setting has no effect, the log writes a line about it.
 The body is nine sections, each with a `## ` heading. The sections hold links to the project's files, not a retelling.
@@ -341,7 +346,7 @@ A section with its own heading is kept as is.
 | Key | What it is | Values |
 |---|---|---|
 | `id` | number, matches the file name | `d3` |
-| `type` | kind of entry | `decision`, `dead end`, `agreement` — an agreement with a human or a working rule for all cards (what to edit files with, how to launch), approved by a human; `pattern` — one rule, a generalisation of 3+ entries about one cause; `note` — a side finding that does not get in the way now (t1046): not given to agents, does not go into patterns, a human creates a card from it |
+| `type` | kind of entry | `decision`, `dead end`, `agreement` — an agreement with a human or a working rule for all cards (what to edit files with, how to launch), approved by a human; `pattern` — one rule, a generalisation of 3+ entries about one cause; `note` — a side finding that does not get in the way now (t1046): not given to agents, does not go into patterns, is sorted out in the "Notes" item: new, taken or dropped (t1628) |
 | `card` | the card where it was found | `t12` or empty |
 | `files` | which files it concerns | a list `[src/cart/delivery.ts]` |
 | `date` | when | `2026-10-12` |
@@ -350,6 +355,7 @@ A section with its own heading is kept as is.
 | `until` | shelf life: the last day the entry is valid | `2026-12-31` or empty — no limit |
 | `repeats` | cards where the same cause was found again | a list `[t40, t55]` or empty |
 | `cancelled` | cancellation date: the entry is no longer valid but stays in the history | `2026-10-15` or empty |
+| `taken` | only for a note: the card it was taken into (t1628) | `t12` or empty |
 | `differs` | entries this one is not alike: a human pressed "not alike" next to the mark "similar to dN", the window no longer marks this pair | a list `[d32]` or empty |
 | `wrong` | cards whose agent marked the entry "wrong" | a list `[t901]` or empty; for each, a line `Неверно (t901): why` in the text (the word `Неверно` is Russian), without it the mark has no effect (a board remark) |
 | `stack` | whose code is to blame: theme, plugin, library | a list `[woocommerce, woodmart@8.1]` or empty: the name in lower case (a-z, digits, `.` `-` `_` `/`, `@scope/` at the start), a version after `@` optional |
@@ -359,9 +365,9 @@ A section with its own heading is kept as is.
 | `for` | for an agreement: whom it is for (t1433) | `agent` — a working rule for the card agent; `program` — for the program and the orchestrator (which model to launch, how to keep the board): not given to the card agent; empty — to the agent |
 
 `id` and `type` are required. An empty value is the same as no key: entries without the new keys read as before.
-A wrong value is a file error, as for a card: `how` not from the list, `until` or `cancelled` not a real date `YYYY-MM-DD`, in `repeats` and `wrong` not `t<number>`, in `differs` and `from` not `d<number>`, `approved` not a date, `pattern` not `нет`, `for` neither `agent` nor `program`.
+A wrong value is a file error, as for a card: `how` not from the list, `until` or `cancelled` not a real date `YYYY-MM-DD`, in `repeats` and `wrong` not `t<number>`, in `differs` and `from` not `d<number>`, `approved` not a date, `pattern` not `нет`, `for` neither `agent` nor `program`, `taken` not `t<number>`.
 The program does not give the card agent an entry with `cancelled`, an entry `type: note`, an agreement with `for: program`, or an entry whose `until` is before today; `until` set to today is still valid.
-A note is a finding for a human: it waits in the Inbox of the "Roadmap" window, a human creates a card from it; it does not go into the card prompt or into `kermach roadmap notes`.
+A note is a finding for a human and the main session: it waits in the "Notes" item of the "Roadmap" window. Its state is in the header (t1628): new — neither `taken` nor `cancelled`; taken — `taken: tN`; dropped — `cancelled: date` and the line `Снята (date): reason` in the text, these words are Russian on a board of any language. The entry is not deleted. The "to card" button creates a card in the Inbox with the title and text of the note and writes its number into `taken`; "drop" asks for a reason; several ticked notes give one card. Without the window the same is done by `kermach roadmap note take d1 d2` and `kermach roadmap note drop d1 --why "reason"`; `kermach roadmap new t --from-note d1,d2` creates a card and marks the notes in one command. A card agent only records a note; it does not go into the card prompt or into `kermach roadmap notes`.
 An entry with `wrong` (and the line «Неверно (tN): …») is not given to agents either until a human looks at it: the list is `kermach roadmap notes --wrong`. If the entry is right, the human clears `wrong`, the «Неверно…» line stays as history; if wrong, they set `cancelled` (t836).
 When a human looked and decided the entry is right, the line «Неверно (tN): …» becomes «Проверено человеком (YYYY-MM-DD): верна, отзыв tN снят» (the program writes it so, in Russian), tN leaves `wrong`, and the entry is given again. A merge moves the duplicate's `wrong` into the old entry together with its «Неверно» lines.
 When closing a card, the agent writes `used:` into its header — only the entries that helped, and how (t1433): `помогла: d12 — found the same cause of the hang; помогла: d40 — took the ready probe command`. Parts are separated by `;`; everything after the dash is an explanation, numbers in it do not count as feedback. "How" is at least two words of three letters or more, apart from numbers and the words «помогла», «пригодилась»: `kermach roadmap close` refuses without it with code 1 and writes what is needed. The agent does not list entries that did not help; none helped — no `used`.
@@ -524,6 +530,9 @@ Words by language:
 | `программа` | `програма` | `program` | `Programm` |
 | `человек` | `людина` | `human` | `Mensch` |
 | `живой прогон` | `живий прогін` | `live run` | `Live-Lauf` |
+| `настоящая` | `справжня` | `real` | `echt` |
+| `подставная` | `підставна` | `fake` | `simuliert` |
+| `только человек` | `лише людина` | `human only` | `nur Mensch` |
 | `Что сделать` | `Що зробити` | `What to do` | `Was tun` |
 | `Зачем` | `Навіщо` | `Why` | `Wozu` |
 | `Файлы` | `Файли` | `Files` | `Dateien` |

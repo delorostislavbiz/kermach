@@ -20,11 +20,15 @@
 // Вид «Ждут меня» (t1116): waiting({ agent, offset, q? }) — разговоры всех проектов в состоянии wait, без отмеченных (t1130: next и stale — нет);
 //   у записи last — первая строка последнего ответа агента. mark({ agent, id, done | until: 'ГГГГ-ММ-ДД' | clear }) — «сделано», «отложить до»,
 //   снять. Отметки — <ctx.dataDir>\marks.json, журналы агентов не трогаются. Отметка помнит updatedAt разговора: журнал дописан — она не действует.
+// «Передать другому агенту» (t1475, handoff.js): handoffOf({ sid, kind?, runs?, claudeSessionId?, codexSessionId? }) → { agent, id, guessed } — разговор вкладки;
+//   handoffInfo({ agent, id }) → { title, text, live, targets, to, cwd, excerpt } — черновик первого сообщения и агенты с моделями;
+//   handoff({ agent, id, to, model, text }) — выжимка в <рабочая папка>\.kermach\handoff\, новая вкладка агента to с первым сообщением text. Прошлый разговор не трогается.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Worker } = require('worker_threads');
 const live = require('./live');
+const handoff = require('./handoff');
 /** Переменная программы: KERMACH_<имя>, нет — TERMINALUS_<имя> до t1307 (platform.envOf). @param {string} n */
 const ENV = (n) => require('../../daemon/platform').envOf(process.env, n);
 
@@ -449,16 +453,9 @@ module.exports = (ctx) => {
 
   /** Все разговоры всех проектов, без пометок; ошибка потока — { error }. @param {string} agent @returns {Promise<any>} */
   async function allOf(agent) {
-    /** @type {any[]} */
-    let all = [];
-    for (let off = 0; ; ) {
-      const r = await call(ctx, 'list', { scopePath: '', agent: agent || undefined, offset: off });
-      if (!r || r.error || !Array.isArray(r.items)) return r || { error: '—' };
-      all = all.concat(r.items);
-      if (!r.more || !r.items.length) break;
-      off += r.items.length;
-    }
-    return all;
+    const r = await call(ctx, 'listAll', { scopePath: '', agent: agent || undefined });
+    if (!r || r.error || !Array.isArray(r.items)) return r || { error: '—' };
+    return r.items;
   }
   /** Пометки «идёт» устарели (fresh, t825): посчитать заново. */
   const stale = () => { liveAt = 0; };
@@ -490,6 +487,120 @@ module.exports = (ctx) => {
       : row.agent === 'grok' ? path.join(roots.grok, 'sessions') : path.join(roots.codex, 'sessions');
   }
 
+  // ---- «Передать другому агенту» (t1475) ----
+  const T = require('../../main/i18n').t;
+  /** Рабочая папка новой вкладки: папка разговора, если она есть и внутри проекта окна; иначе папка проекта. @param {string} cwd */
+  function workdir(cwd) {
+    const root = ctx.project.path;
+    if (!cwd) return root;
+    const c = path.resolve(cwd).toLowerCase();
+    const r = path.resolve(root).toLowerCase().replace(/[\\/]+$/, '');
+    let dir = false;
+    try { dir = fs.statSync(cwd).isDirectory(); } catch { /* нет папки */ }
+    return dir && (c === r || c.startsWith(r + path.sep)) ? cwd : root;
+  }
+
+  /** Агенты, которым можно передать: найдены и включены (ctx.agents), с моделями «Роадмапа» (roadmap\agents.js MODELS), как у «Нескольких агентов». */
+  async function targets() {
+    const tune = require('../roadmap/agents');
+    /** @type {any[]} */
+    const known = await ctx.agents();
+    return known.map((e) => {
+      const canModel = e.prompt !== false && Object.hasOwn(tune.TUNE, e.id);
+      return { id: e.id, title: e.id === 'claude' ? 'Claude Code' : e.title, prompt: e.prompt !== false, canModel,
+        models: canModel && Object.hasOwn(tune.MODELS, e.id) ? /** @type {any} */ (tune.MODELS)[e.id] : [] };
+    });
+  }
+
+  /** Разговор вкладки: номер из данных вкладки, процесс вне Kermach с её pid или разговор, начатый в её папке после открытия (handoff.guessOf). @param {any} a */
+  async function handoffOf(a) {
+    const sid = String(a.sid || '');
+    const r = await ctx.terminals().catch(() => null);
+    /** @type {any[]} */
+    const all = r && Array.isArray(r.tabs) ? r.tabs : [];
+    // Вкладка вышла (у Codex кончился лимит, агент закрылся) — её нет у демона: вид и номер — от окна.
+    const tab = all.find((t) => String(t.sid) === sid) || { sid, kind: String(a.kind || ''), runs: String(a.runs || ''), claudeSessionId: a.claudeSessionId, codexSessionId: a.codexSessionId };
+    const agent = handoff.OF_KIND[String(tab.runs || '') || String(tab.kind || '')];
+    if (!agent) return { error: T('history.handoffNotAgent', 'У этой вкладки нет разговора, который читает «История»: передать можно разговор Claude Code, Codex, Grok или Antigravity') };
+    const own = (/** @type {any} */ t) => String((t && (t.claudeSessionId || t.codexSessionId || t.resumeId)) || '').toLowerCase();
+    let id = own(tab);
+    if (id) return { agent, id, guessed: false };
+    const now = await running();
+    if (Number(tab.pid) > 0) for (const [k, v] of now.outside) if (v && v.pid === Number(tab.pid)) return { agent, id: k, guessed: false };
+    const list = await call(ctx, 'listAll', { scopePath: ctx.project.path, agent });
+    /** @type {any[]} */
+    const items = list && Array.isArray(list.items) ? list.items : [];
+    const taken = new Set(all.filter((t) => String(t.sid) !== sid).map(own).filter(Boolean));
+    const opened = Number(tab.createdAt) || Date.parse(String(tab.createdAt || '')) || 0;
+    const g = opened ? handoff.guessOf(items, opened, taken) : items.find((it) => !taken.has(String(it.id).toLowerCase())) || null;
+    if (!g) return { error: T('history.handoffNoTalk', 'Разговор этой вкладки не найден в «Истории». Подождите, пока агент ответит хотя бы раз, или выберите разговор в «Истории»') };
+    id = String(g.id).toLowerCase();
+    return { agent, id, guessed: true };
+  }
+
+  /** Выжимка разговора из потока индекса. @param {{ key: string }} k */
+  const excerptOf = (k) => call(ctx, 'excerpt', { key: k.key, n: handoff.TURNS, max: handoff.TURN_MAX });
+
+  /** Окно «Передать другому агенту…»: черновик первого сообщения, агенты с моделями, идёт ли прошлый агент. @param {any} a */
+  async function handoffInfo(a) {
+    stale();
+    const o = await one(a);
+    if ('error' in o) return o;
+    const x = await excerptOf(o.k);
+    if (!x || x.error) return { error: (x && x.error) || 'нет выжимки' };
+    const list = await targets();
+    const from = handoff.catalogOf(o.k.agent);
+    const to = (list.find((t) => t.id !== from && (t.id === 'claude' || t.id === 'codex')) || list.find((t) => t.id !== from) || { id: '' }).id;
+    const cwd = workdir(x.cwd);
+    return { agent: o.k.agent, id: o.k.id, from, fromName: handoff.nameOf(o.k.agent), title: x.title || '', updatedAt: x.updatedAt, text: handoff.draft(x), live: o.live,
+      targets: list, to, cwd, excerpt: handoff.relOf(o.k.agent, o.k.id), file: x.file };
+  }
+
+  /** «Передать»: файл выжимки и новая вкладка агента to с первым сообщением. Прошлый разговор и его вкладка не трогаются. @param {any} a */
+  async function handoffRun(a) {
+    const o = await one(a);
+    if ('error' in o) return o;
+    const to = String(a.to || '');
+    const list = await targets();
+    const entry = list.find((t) => t.id === to);
+    if (!entry) return { error: T('history.handoffBadTarget', 'Агента {id} нет или он выключен', { id: to }) };
+    const x = await excerptOf(o.k);
+    if (!x || x.error) return { error: (x && x.error) || 'нет выжимки' };
+    const text = String(a.text || '').trim() || handoff.draft(x);
+    const cwd = workdir(x.cwd);
+    /** @type {string} */
+    let file;
+    try { file = handoff.writeExcerpt(cwd, x, to, Date.now()); } catch (e) { return { error: T('history.handoffNoFile', 'Выжимка не записана: {why}', { why: why(e) }) }; }
+    const tune = require('../roadmap/agents');
+    const terminals = require('../../main/terminals');
+    const p = require('../../main/plugin-bridge').projectNow(ctx.project);
+    const model = entry.canModel ? String(a.model || '').trim() : '';
+    if (model && !entry.models.includes(model)) return { error: T('history.handoffBadModel', 'Модели {model} нет у {agent}', { model, agent: entry.title }) };
+    /** @type {any} */
+    let r;
+    let how = 'arg';
+    if (!entry.prompt) {
+      // Агент берёт задание только вводом во вкладку: путь ядра openAgentTask (папка — проекта, модели нет).
+      r = await terminals.openAgentTask(p, to, text);
+      how = 'typed';
+    } else {
+      const kind = tune.kindOf(to);
+      const base = { kind, args: tune.launchArgs(to, model, '').args, cwd, ...(kind === 'claude' ? { followBypass: true } : {}) };
+      // Длинный текст, текст с «-» в начале (ядро примет его за флаг) или обёртка .cmd без многострочных аргументов — файлом, первым сообщением ссылка.
+      r = text.length > 16000 || text.startsWith('-') ? null : await ctx.openTab({ ...base, prompt: text });
+      if (!r || r.code === 'cmd-unsafe') {
+        how = 'file';
+        let first;
+        try { first = handoff.writePrompt(cwd, o.k.agent, o.k.id, text); } catch (e) { return { error: T('history.handoffNoFile', 'Выжимка не записана: {why}', { why: why(e) }) }; }
+        r = await ctx.openTab({ ...base, prompt: first });
+      }
+    }
+    if (!r || r.error) return { error: (r && r.error) || 'нет ответа' };
+    ctx.log(`передан разговор ${o.k.agent} ${o.k.id} → ${to}${model ? ` (${model})` : ''}: вкладка ${r.session && r.session.sid}, папка ${cwd}, выжимка ${file}, первое сообщение — ${how}`);
+    stale();
+    return { ok: true, sid: r.session && r.session.sid, cwd, excerpt: file, how };
+  }
+
   /** @type {Record<string, (a: any) => any>} */
   const cmds = {
     status: () => call(ctx, 'status'),
@@ -516,6 +627,9 @@ module.exports = (ctx) => {
       if (!k) return { error: BAD_KEY };
       return call(ctx, 'details', { key: k.key });
     },
+    handoffOf: (a) => handoffOf(a),
+    handoffInfo: (a) => handoffInfo(a),
+    handoff: (a) => handoffRun(a),
     async trash(a) {
       const o = await one(a);
       if ('error' in o) return o;

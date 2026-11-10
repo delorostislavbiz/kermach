@@ -172,6 +172,13 @@ function start(asked) {
   /** @type {ReturnType<typeof codexLimits.start> | null} */
   let codexPoll = null;
   const codexStart = codexOn ? setTimeout(() => { codexPoll = codexLimits.start({ dataDir: DATA_DIR, log }); }, 5000) : null;
+  // Лимиты других агентов (t1734, main\agent-limits): Grok и следующие поставщики — в <данные>\agent-limits\<агент>.json раз в 5 минут.
+  // Выключаются тем же KERMACH_CODEX_LIMITS=0, что ставит гейт всем проверкам, иначе каждая проверка запускала бы настоящий grok;
+  // отдельно — KERMACH_AGENT_LIMITS=0. KERMACH_AGENT_LIMITS=1 включает их и при выключенном Codex (проба spikes\t1734-agent-limits).
+  const agentsOn = ENV('AGENT_LIMITS') === '1' || (codexOn && ENV('AGENT_LIMITS') !== '0');
+  /** @type {ReturnType<typeof import('./agent-limits').start> | null} */
+  let agentsPoll = null;
+  const agentsStart = agentsOn ? setTimeout(() => { agentsPoll = require('./agent-limits').start({ dataDir: DATA_DIR, log }); }, 7000) : null;
   // Выход ждёт остановки чтения: taskkill дерева codex — ребёнок Electron, и выход программы гасит его раньше,
   // чем он погасит node и codex.exe (t72). Без чтения stop() заканчивается сразу.
   // app.quit — следующим проходом: внутри will-quit Electron ещё считает, что выходит, и повторный вызов пропускает.
@@ -185,8 +192,20 @@ function start(asked) {
   app.on('will-quit', (e) => {
     quitting = true;
     if (codexStart) clearTimeout(codexStart);
+    if (agentsStart) clearTimeout(agentsStart);
     /** @type {Promise<unknown>[]} */
     const waits = [];
+    // Опрос агентов (t1734) — с тем же сроком, что у Codex: идущий grok гасится деревом, выход не ждёт дольше CODEX_STOP_MS.
+    if (agentsPoll) {
+      const p = agentsPoll;
+      agentsPoll = null;
+      /** @type {ReturnType<typeof setTimeout> | null} */
+      let lateA = null;
+      waits.push(Promise.race([
+        p.stop().then(() => true, (err) => { log(`лимиты агентов: опрос не остановлен: ${err}`); return true; }),
+        new Promise((r) => { lateA = setTimeout(() => r(false), CODEX_STOP_MS); }),
+      ]).then((done) => { if (lateA) clearTimeout(lateA); if (!done) log(`лимиты агентов: опрос не остановился за ${CODEX_STOP_MS / 1000} с — выход его не ждёт`); }));
+    }
     if (codexPoll && !codexStopped) {
       codexStopped = true;
       /** @type {ReturnType<typeof setTimeout> | null} */

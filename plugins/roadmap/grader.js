@@ -264,12 +264,14 @@ function build(tpl, c, changes, o = {}) {
   /** @type {Record<string, string>} */
   const vars = { карта: c.id, что: String(c.fields.what || '').trim() || '(пусто)', проверка: String(c.fields.check || '').trim() || '(пусто)', изменения: changes, ответы: answersOf(c.body, { ...o, ref: c.id }) || '(нет)',
     вид: String(c.kind || '').trim() || '(нет)', сделано: String(c.fields.done || '').trim() || '(пусто)', доказательство: String(c.fields.proof || '').trim() || '(пусто)',
-    зачем: String(c.fields.why || '').trim() || '(пусто)', указания: String(c.fields.notes || '').trim() || '(нет)' };
+    зачем: String(c.fields.why || '').trim() || '(пусто)', указания: String(c.fields.notes || '').trim() || '(нет)',
+    // t1642: вид проверки — только значение поля: файл карты со словами агента проверяющему не даём (проверка t1330, случай t8).
+    заявлено: (c.tested || []).join(', ') || '(нет)' };
   // t1424: блок для ревью и разведки — до подстановки, чтобы «<!-- конец -->» из текста карты не обрезал его. Нет блока в своей копии шаблона — задание как есть.
   // t1434: так же блок «как в образце» — только карте, у которой sampleGap.
   const gap = !soft && sampleGap(c.fields || {});
   const t = tpl.replace(SOFT_BLOCK, (m, body) => (soft ? `\n${body}` : '')).replace(SAMPLE_BLOCK, (m, body) => (gap ? `\n${body}` : ''));
-  return prompt.defuseAt(t.replace(/\{(карта|что|зачем|проверка|указания|изменения|ответы|вид|сделано|доказательство)\}/g, (m, k) => vars[k]));
+  return prompt.defuseAt(t.replace(/\{(карта|что|зачем|проверка|указания|изменения|ответы|вид|сделано|доказательство|заявлено)\}/g, (m, k) => vars[k]));
 }
 
 /** Отпечатки ответов человека (t1354) — в папке данных плагина, куда агент карты не пишет: файл карты он правит сам. */

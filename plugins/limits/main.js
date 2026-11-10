@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const claudeLimits = require('../../main/claude-limits');
 const codexLimits = require('../../main/codex-limits');
+const agentLimits = require('../../main/agent-limits');
 /** Ключ «Кредиты API» (t1358, main\api-key.js); под проверкой без ядра — ключа нет. */
 const apiKey = (() => { try { return require('../../main/api-key'); } catch { return null; } })();
 const creditsKey = () => { try { return !!(apiKey && apiKey.info().has); } catch { return false; } };
@@ -93,22 +94,53 @@ function grantLeft(dataDir, now = Date.now()) {
 }
 
 /**
+ * Лимиты агентов с живой вкладкой в проекте (t1734): { grok: { label, status, reason, message, ts, rate_limits } }.
+ * Нет файла (ещё не опрошен), не установлен, нет входа — агента в ответе нет. Не бросает: список вкладок не получен — пусто.
+ * @param {any} c ctx моста @param {string} dataDir
+ */
+async function agentsOf(c, dataDir) {
+  /** @type {Record<string, any>} */
+  const out = {};
+  /** @type {any[]} */
+  let tabs = [];
+  try { const r = await c.terminals(); tabs = (r && r.tabs) || []; } catch { return out; }
+  const kinds = new Set(tabs.filter((t) => t && t.alive !== false).map((t) => t.kind));
+  if (!kinds.size) return out;
+  for (const p of agentLimits.providers()) {
+    if (!p.kinds.some((k) => kinds.has(k))) continue;
+    const d = agentLimits.readFile(dataDir, p.id);
+    if (!d || (d.status !== 'ok' && agentLimits.HIDDEN.has(String(d.reason)))) continue;
+    out[p.id] = { label: p.title, ...d };
+  }
+  return out;
+}
+
+/**
  * Фабрика моста: экземпляр на окно проекта. ctx.dataDir — <данные>\plugins-data\limits (plugin-bridge.js), а файлы лимитов
  * лежат в самой папке данных — на два уровня выше.
  * @param {{ dataDir: string }} ctx
  */
 function make(ctx) {
   const dataDir = path.resolve(ctx.dataDir, '..', '..');
+  // t1727: «продолжай» после сброса лимита. Проверки зовут фабрику с одной папкой данных: без вкладок и настроек модуль не нужен.
+  const c = /** @type {any} */ (ctx);
+  const cont = c.settings && c.terminals && c.project ? require('./continue')(c) : null;
+  // credits (t1358) — только при сохранённом ключе «Кредиты API»: без ключа строки расхода нет.
+  // t1521: остаток ближайшего начисления — тот же расчёт, что у панели «Кредиты» (credits\main.js, balanceNow); require ленивый: плагина может не быть.
+  const base = () => ({ claude: claudeLimits.read(dataDir), codex: readCodex(dataDir), now: Date.now(), ...(creditsKey() ? { credits: { ...readCredits(dataDir), ...grantLeft(dataDir) } } : {}), ...(cont ? { continue: cont.view() } : {}) });
   return {
-    /** @param {string} cmd */
-    handle(cmd) {
-      // credits (t1358) — только при сохранённом ключе «Кредиты API»: без ключа строки расхода нет.
-      // t1521: остаток ближайшего начисления — тот же расчёт, что у панели «Кредиты» (credits\main.js, balanceNow); require ленивый: плагина может не быть.
-      if (cmd === 'get') return { claude: claudeLimits.read(dataDir), codex: readCodex(dataDir), now: Date.now(), ...(creditsKey() ? { credits: { ...readCredits(dataDir), ...grantLeft(dataDir) } } : {}) };
+    /** @param {string} cmd @param {any[]} args */
+    handle(cmd, ...args) {
+      // t1734: лимиты других агентов (main\agent-limits) — только у тех, чья живая вкладка есть в проекте. Без ctx.terminals
+      // (проверки с одной папкой данных) поля agents нет: ответ прежний, синхронный.
+      if (cmd === 'get' && typeof c.terminals === 'function') return agentsOf(c, dataDir).then((agents) => ({ ...base(), agents }));
+      if (cmd === 'get') return base();
+      if (cont && cmd === 'continueSet') return cont.set(args[0]);
+      if (cont && cmd === 'continueCancel') return cont.cancel(args[0]);
       return { error: `нет команды ${cmd}` };
     },
-    stop() {},
+    stop() { if (cont) cont.stop(); },
   };
 }
 
-module.exports = Object.assign(make, { readCodex, readCredits, grantLeft, CREDITS_JOURNAL });
+module.exports = Object.assign(make, { readCodex, readCredits, grantLeft, agentsOf, CREDITS_JOURNAL });

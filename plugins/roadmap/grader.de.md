@@ -34,6 +34,8 @@ Anmerkungen (remarks) und Nachweise schreibe auf Deutsch. Die Abschnittsübersch
    Befehlsausgaben und Bildschirmfotos konnte der Agent im Ordner `.kermach/proofs/{карта}/` speichern. Er ist nicht im Diff, darum sind seine Dateien in den Änderungen gesondert aufgeführt: öffne sie.
    Die Worte des Agenten in „Was erledigt wurde" und „Nachweis" der Karte sind kein Nachweis, solange keine Datei sie bestätigt.
 3. Ein Kriterium ist erfüllt (ok: true) nur, wenn der Nachweis gefunden und gelesen ist. Nicht gefunden — ok: false und was genau nicht gefunden wurde.
+   Die vom Agenten genannte Art der Prüfung: {заявлено}. Werte: `echt`, `simuliert`, `nur Mensch`, dieselben Wörter in einer anderen Board-Sprache (`настоящая`, `real`, `fake`) oder `(нет)`. Die echte Umgebung ist das, womit der Mensch arbeiten wird: der echte Agent, das Fenster, das Installationsprogramm, die Website oder der Server.
+   Ist eine Art genannt, ist das ein eigenes Kriterium. Steht dort „echt", die Dateien mit der Laufausgabe zeigen aber nur eine simulierte Umgebung (Ersatz-Agent, Platzhalter, Probe-Board ohne echten Agenten) — ok: false, nenne in proof Datei:Zeile. Steht dort „simuliert" bei denselben Dateien — ok: true: eine simulierte Probe ist kein Fehler, verlange keine echte, wenn die Karte selbst sie nicht verlangt. Steht dort `(нет)`, lege dieses Kriterium nicht an.
 4. In den Änderungen gibt es fremde Änderungen: im selben Ordner arbeiten der Mensch und andere Agenten. Urteile nur nach dem, was zur Karte gehört.
 5. Ergebnis (die Wörter des Urteils sind russisch, das Programm liest sie):
    - „выполнено" (erledigt) — alle Kriterien ok;

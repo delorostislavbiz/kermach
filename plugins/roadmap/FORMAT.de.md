@@ -71,12 +71,14 @@ Kopf:
 | `advisor` | ob der Berater gerufen wird, optional | `да` — die Aufgabe der Karte bekommt die Zeile „rufe den Berater“, nur beim Ausführenden `claude`; kein Schlüssel oder etwas anderes — keine Zeile. Das Modell des Beraters setzt das Programm nicht: es kommt aus den Claude-Einstellungen (`advisorModel` in `~\.claude\settings.json`); steht es dort nicht, sagt der Agent, dass es keinen Berater gibt, und macht die Karte ohne ihn |
 | `pick` | wer Modell und Aufwand gewählt hat, optional | `человек` — ein Mensch hat sie genannt, ein neuer Versuch erhöht sie nicht; kein Schlüssel — gewählt hat, wer die Karte angelegt hat, nach der Regel unten |
 | `agent_why` | warum dieser Agent, dieses Modell, dieser Aufwand und Berater, optional | eine Zeile, zum Beispiel `Recherche — sonnet низкое` |
+| `mcp` | MCP-Server, die die Karte braucht, optional (t1753) | Namen aus den Claude-Einstellungen durch Komma: `playwright` oder `playwright, context7`. Der Kartenagent `claude` bekommt nur diese und die Server aus `card_mcp` des Steckbriefs; kein Schlüssel — keine Server (`--strict-mcp-config`). Jeder Server ist ein eigener Prozess mit 50–70 MB, darum nur für die Karte, die ihn braucht. Gibt es keinen Server mit diesem Namen in den Einstellungen, startet die Karte nicht |
 | `checked` | Ergebnis des Kartenprüfers, schreibt das Programm | eine Zeile, zum Beispiel `выполнено, круг 1: 4 из 4 критериев` oder `нужна доработка, круг 2 из 3: нет пробы для выкл`; die volle Auswertung — `.kermach/grades/tN-круг.md` (t1330) |
 | `tries` | Nummer des Startversuchs, schreibt das Programm (t1440) | eine Zahl `1`, `2`, `3`…; wird bei jedem Start über „Starten“, `kermach roadmap run`, Welle und Stapel neu geschrieben. Bei einer fertigen Karte — mit welchem Versuch sie abgegeben wurde: danach fasst `kermach roadmap accept fN` die Stufen von `size.js` zusammen. Nicht von Hand ändern; kein Schlüssel — die Karte wurde vor t1440 oder nicht vom Programm gestartet |
 | `depends` | von welchen Karten sie abhängt | Liste von Nummern `[t09, t10]` oder leer |
 | `human` | ob ein Mensch nötig ist | `ohne Mensch`, `Mensch nötig` |
 | `bug_phase` | die Karte repariert bereits Abgenommenes: in welcher Phase der Fehler abgenommen wurde, optional (t1637) | `f12`; die Phase ist unklar — kein Schlüssel. Ein falscher Wert ist eine Board-Anmerkung, die Karte wird trotzdem gelesen |
 | `bug_by` | wer den Fehler in bereits Abgenommenem gefunden hat, optional (t1637) | `Mensch`, `Live-Lauf`, `Review`. Ein falscher Wert ist eine Board-Anmerkung, die Karte wird trotzdem gelesen. Ein vor der Abnahme der Phase gefundener Fehler bekommt keine Markierung. Die Zählung ist die zweite Tabelle von `kermach roadmap stats` |
+| `tested` | Art der Prüfung: worauf die Arbeit geprüft wurde, schreibt `kermach roadmap close --tested` (t1642) | `echt`, `simuliert`, `nur Mensch`, mehrere durch Komma. Echt ist das, womit der Mensch arbeiten wird: der echte Agent, das Fenster, das Installationsprogramm, die Website oder der Server. Simuliert ist ein Ersatz-Agent, ein Platzhalter, ein Probe-Board. Bei `close` Pflicht außer für Review und Erkundung, auch mit `--no-file`: fehlt oder falscher Wert — Ablehnung, Code 1. Eine alte Karte ohne das Feld wird unverändert gelesen, die Abnahme schreibt „Art der Prüfung nicht angegeben"; ein falsches Wort in der Datei ist eine Board-Anmerkung. Den Sinn prüft der Prüfer, das Programm schaut nur auf das Feld |
 | `draft` | Entwurf, optional (t1325) | `да` — eine Karte einer späteren Phase ohne „Wie prüfen“: die Wellen „Alle“ und „Unabhängige“ überspringen sie mit dem Grund „Entwurf“, „Ausgewählte“ startet sie; die Kartenzeile im Panel trägt das Zeichen „Entwurf“. Kein Schlüssel — eine gewöhnliche Karte. Unten — „Kartenentwurf“ |
 | `created` | wann angelegt | `2026-10-12 11:20` |
 | `closed` | wann geschlossen, optional | `2026-10-12 15:40`; setzt der Agent beim Schließen, das Fenster beim Wechsel des Status auf „fertig“. Kein Schlüssel — in den Prompt einer Nachbarkarte der Phase (Teil 5) kommt diese Karte nur, wenn sie später angelegt ist (`created`), und die Kartenzeile auf dem Board hat keine Zeit: die Dateizeit nach `git clone` ist falsch |
@@ -139,7 +141,7 @@ Ein Codeblock ```…``` ist Teil des Feldes, so wie er ist: Leerzeile, `#` und B
 „Wie prüfen“ — Befehl und erwartetes Ergebnis, wenn über die Projektprüfung aus dem Steckbrief hinaus etwas nötig ist.
 „Wie prüfen“ misst das Ziel der Karte, nicht nur das Fehlen von Fehlern (t1434). Ist das Ziel die Übereinstimmung mit einer Vorlage (Markup, Mockup, Design, alte Seite), vergleicht die Prüfung die ganze Seite von oben bis unten mit ihr: jeder Abschnitt der Vorlage ist auf der Seite oder auf Antwort des Menschen entfernt.
 „Öffnet sich ohne Fehler“, „ohne fatal“, „ein H1“ reicht für so eine Karte nicht: der Prüfer gibt sie mit dem Ergebnis „Kriterien passen nicht“ zurück. Schlecht → gut: „die Startseite öffnet sich ohne fatal, ein H1“ → „die Startseite öffnet sich ohne fatal; die Abschnitte von oben bis unten stimmen mit html/index.html überein: 12 von 12, ein Bild der ganzen Seite neben einem Bild der Vorlage“.
-„Was erledigt wurde“ und „Nachweis“ werden beim Schließen ausgefüllt; der Nachweis ist eine Befehlsausgabe, ein Commit oder Datei und Zeile.
+„Was erledigt wurde“ und „Nachweis“ werden beim Schließen ausgefüllt; der Nachweis ist eine Datei: Befehlsausgabe, Bildschirmfoto oder Datei und Zeile. `kermach roadmap close` lehnt mit Code 4 ab, wenn die Datei aus `--proof` fehlt oder älter als der Arbeitsbeginn der Karte ist; „Wie prüfen“ mit `--only` verlangt eine frische `only-result.txt`; Review und Erkundung brauchen die Datei, aber keine Frische. Ohne Datei schließen (abgebrochen, in einer anderen Karte erledigt) darf nur die Hauptsitzung: `--no-file "Grund"`, der Grund kommt ins Feld.
 Ein leeres Feld ist ein Strich `—` oder nichts.
 Eigenen Text schreibe nach einer Leerzeile: dann wird er nicht Teil eines Feldes, und das Programm fasst ihn nicht an.
 
@@ -232,6 +234,9 @@ Eine Welle startet nicht zwei Karten mit einer gemeinsamen Datei zusammen. Eine 
 Die zweite Karte wartet mit dem Zeichen „wartet auf Datei: tNN“, solange die erste arbeitet, auf Antwort wartet, in Prüfung oder im Review ist; sie startet, wenn die erste „fertig“ wurde und ihre Prüfung vorbei ist.
 Auch eine Karte, die nicht durch eine Welle gestartet wurde, hält die Datei.
 
+Solange im Projektordner die Datei `СТОП-НАГРУЗКА.txt` liegt, startet eine Welle keine neuen Karten. Die Karte trägt den Hinweis „wartet: Lastflagge“, im Protokoll steht eine Zeile. Ist die Datei weg, macht die Welle von selbst weiter, ohne Klick.
+Laufende Karten berührt die Flagge nicht. Die Schaltfläche „Starten“ funktioniert wie immer: Das ist die Entscheidung des Menschen. Den Kartenprüfer, die Phasenprüfung und die Roadmap-Prüfung hält die Flagge dagegen auf: Das echte claude startet währenddessen nicht, im Protokoll steht eine Zeile, im Block „Im Hintergrund“ steht „wartet auf das Entfernen der Lastflagge“. Eine laufende Prüfung berührt die Flagge nicht. Ist die Datei weg, starten sie von selbst.
+
 ### Frischer Phasen-Prüfer (t1439)
 Spätere Phasen werden als Entwürfe geschrieben und nach der vorigen Phase ergänzt, und bei ihrer Abnahme bringt der Mensch Änderungen ein. Die Roadmap-Prüfung am Anfang sieht das nicht. Deshalb prüft vor dem Start einer Phase derselbe frische Agent sie — nur diese Phase.
 Wann: die erste Welle der Phase (`kermach roadmap wave fN` oder der Wellenknopf „Alle“ oder „Unabhängige“), wenn die Programmprüfung keine Fehler gefunden hat, die vorige Phase vorbei ist — `status: fertig` oder alle ihre Karten „fertig“ — und in dieser Phase noch keine Karte gestartet wurde (alle „in Warteschlange“ oder „pausiert“).
@@ -313,7 +318,7 @@ card_skills: нет
 | `card_check` | `да` · `нет` | Kartenprüfer (t1330). `да` — eine Karte, die der Agent aus „Starten“ geschlossen hat, prüft ein eigenes `claude -p` (sonnet, niedrig, nur lesen): er sieht „Was tun“, „Wie prüfen“ und die Änderungen seit Beginn der Karte, das Gespräch des Agenten sieht er nicht. Das Ergebnis ist die Zeile `checked:` in der Karte. „Nacharbeit nötig“ — die Anmerkungen gehen in den Tab des Agenten, die Karte ist wieder „in Arbeit“, höchstens 3 Runden, nach der dritten — „wartet auf Antwort“. „Kriterien passen nicht“ — „wartet auf Antwort“. Karten der Art `Review` und `Recherche` ohne Befehl in „Wie prüfen“ werden nicht geprüft. |
 
 Die Werte dieser drei Schlüssel sind russisch, wie in der Tabelle: so liest sie das Programm.
-Kein Schlüssel — `все` und `да`, wie vor t1322 (bei `card_check` — `да`: die Prüfung ist an). Ein falscher Wert wirkt nicht, Fenster und Protokoll der „Roadmap“ warnen davor.
+Kein Schlüssel — bei `card_mcp` `никаких` (seit t1753: MCP-Server gibt der Karte ihr Feld `mcp`), bei `card_skills` und `card_check` — `да`, wie vor t1322 (die Prüfung ist an). Server aus dem Feld `mcp` der Karte kommen zur Liste `card_mcp` hinzu; bei `все` ist das Feld nicht nötig. Ein falscher Wert wirkt nicht, Fenster und Protokoll der „Roadmap“ warnen davor.
 Subagenten sind dem Kartenagenten immer verboten, eine Einstellung dafür gibt es nicht: claude startet mit `--disallowedTools=Agent`.
 Die Flags gibt es nur bei claude; bei codex und anderen Agenten wirkt die Einstellung nicht, das Protokoll schreibt eine Zeile dazu.
 Der Text sind neun Abschnitte, jeder mit einer Überschrift `## `. In den Abschnitten stehen Verweise auf Projektdateien, keine Nacherzählung.
@@ -341,7 +346,7 @@ Ein Abschnitt mit eigener Überschrift bleibt, wie er ist.
 | Schlüssel | Was es ist | Werte |
 |---|---|---|
 | `id` | Nummer, gleich dem Dateinamen | `d3` |
-| `type` | Art des Eintrags | `Entscheidung`, `Sackgasse`, `Vereinbarung` — eine Vereinbarung mit dem Menschen oder eine Arbeitsregel für alle Karten (womit Dateien geändert werden, wie gestartet wird), vom Menschen bestätigt; `Muster` — der Muster-Eintrag: eine Regel, die Verallgemeinerung von 3+ Einträgen über eine Ursache; `Notiz` — ein Fund am Rande, der jetzt nicht stört (t1046): wird Agenten nicht gegeben, geht nicht in Muster ein, eine Karte daraus legt der Mensch an |
+| `type` | Art des Eintrags | `Entscheidung`, `Sackgasse`, `Vereinbarung` — eine Vereinbarung mit dem Menschen oder eine Arbeitsregel für alle Karten (womit Dateien geändert werden, wie gestartet wird), vom Menschen bestätigt; `Muster` — der Muster-Eintrag: eine Regel, die Verallgemeinerung von 3+ Einträgen über eine Ursache; `Notiz` — ein Fund am Rande, der jetzt nicht stört (t1046): wird Agenten nicht gegeben, geht nicht in Muster ein, wird im Punkt „Notizen“ geklärt: neu, übernommen oder verworfen (t1628) |
 | `card` | Karte, auf der es gefunden wurde | `t12` oder leer |
 | `files` | welche Dateien es betrifft | Liste `[src/cart/delivery.ts]` |
 | `date` | wann | `2026-10-12` |
@@ -350,6 +355,7 @@ Ein Abschnitt mit eigener Überschrift bleibt, wie er ist.
 | `until` | Haltbarkeit: der letzte Tag, an dem der Eintrag gilt | `2026-12-31` oder leer — unbefristet |
 | `repeats` | Karten, auf denen dieselbe Ursache wieder gefunden wurde | Liste `[t40, t55]` oder leer |
 | `cancelled` | Datum der Aufhebung: der Eintrag gilt nicht mehr, bleibt aber in der Geschichte | `2026-10-15` oder leer |
+| `taken` | nur bei einer Notiz: die Karte, in die sie übernommen wurde (t1628) | `t12` oder leer |
 | `differs` | Einträge, denen dieser nicht ähnelt: ein Mensch hat neben dem Zeichen „ähnlich wie dN“ auf „nicht ähnlich“ gedrückt, das Fenster markiert dieses Paar nicht mehr | Liste `[d32]` oder leer |
 | `wrong` | Karten, deren Agent den Eintrag als „falsch“ markiert hat | Liste `[t901]` oder leer; zu jeder eine Zeile `Неверно (t901): warum` im Text (das Wort `Неверно` ist russisch), ohne sie wirkt die Markierung nicht (Board-Anmerkung) |
 | `stack` | wessen Code schuld ist: Theme, Plugin, Bibliothek | Liste `[woocommerce, woodmart@8.1]` oder leer: der Name in Kleinbuchstaben (a-z, Ziffern, `.` `-` `_` `/`, `@scope/` am Anfang), eine Version nach `@` nach Wunsch |
@@ -359,9 +365,9 @@ Ein Abschnitt mit eigener Überschrift bleibt, wie er ist.
 | `for` | bei einer Vereinbarung: für wen sie ist (t1433) | `Agent` — eine Arbeitsregel des Kartenagenten; `Programm` — für Programm und Orchestrator (welches Modell gestartet wird, wie das Board geführt wird): wird dem Kartenagenten nicht gegeben; leer — dem Agenten |
 
 Pflicht sind `id` und `type`. Ein leerer Wert ist dasselbe wie kein Schlüssel: Einträge ohne die neuen Schlüssel werden gelesen wie bisher.
-Ein falscher Wert ist ein Dateifehler, wie bei einer Karte: `how` nicht aus der Liste, `until` oder `cancelled` kein echtes Datum `JJJJ-MM-TT`, in `repeats` und `wrong` nicht `t<Nummer>`, in `differs` und `from` nicht `d<Nummer>`, `approved` kein Datum, `pattern` nicht `нет`, `for` weder `Agent` noch `Programm`.
+Ein falscher Wert ist ein Dateifehler, wie bei einer Karte: `how` nicht aus der Liste, `until` oder `cancelled` kein echtes Datum `JJJJ-MM-TT`, in `repeats` und `wrong` nicht `t<Nummer>`, in `differs` und `from` nicht `d<Nummer>`, `approved` kein Datum, `pattern` nicht `нет`, `for` weder `Agent` noch `Programm`, `taken` nicht `t<Nummer>`.
 Dem Kartenagenten gibt das Programm keinen Eintrag mit `cancelled`, keinen Eintrag `type: Notiz`, keine Vereinbarung mit `for: Programm` und keinen Eintrag, dessen `until` vor heute liegt; `until` mit dem heutigen Tag gilt noch.
-Eine Notiz ist ein Fund für den Menschen: sie wartet im Eingang des Fensters „Roadmap“, eine Karte daraus legt der Mensch an; in den Kartenprompt und in `kermach roadmap notes` geht sie nicht.
+Eine Notiz ist ein Fund für den Menschen und die Hauptsitzung: sie wartet im Punkt „Notizen“ des Fensters „Roadmap“. Ihr Zustand steht im Kopf (t1628): neu — weder `taken` noch `cancelled`; übernommen — `taken: tN`; verworfen — `cancelled: Datum` und im Text die Zeile `Снята (Datum): Grund`, diese Wörter sind auf einem Board jeder Sprache russisch. Der Eintrag wird nicht gelöscht. Der Knopf „in Karte“ legt eine Karte im Eingang mit Titel und Text der Notiz an und schreibt ihre Nummer in `taken`; „verwerfen“ fragt nach dem Grund; mehrere angehakte Notizen ergeben eine Karte. Ohne Fenster tun dasselbe `kermach roadmap note take d1 d2` und `kermach roadmap note drop d1 --why "Grund"`; `kermach roadmap new t --from-note d1,d2` legt eine Karte an und markiert die Notizen in einem Befehl. Ein Kartenagent zeichnet eine Notiz nur auf; in den Kartenprompt und in `kermach roadmap notes` geht sie nicht.
 Ein Eintrag mit `wrong` (und der Zeile „Неверно (tN): …“) wird Agenten auch nicht gegeben, bis ein Mensch ihn angesehen hat: die Liste ist `kermach roadmap notes --wrong`. Ist der Eintrag richtig, leert der Mensch `wrong`, die Zeile „Неверно…“ bleibt als Geschichte; ist er falsch, setzt er `cancelled` (t836).
 Hat ein Mensch nachgesehen und den Eintrag für richtig befunden, wird die Zeile „Неверно (tN): …“ zu „Проверено человеком (JJJJ-MM-TT): верна, отзыв tN снят“ (so schreibt es das Programm, auf Russisch), tN verlässt `wrong`, und der Eintrag wird wieder gegeben. Das Zusammenführen überträgt `wrong` des Duplikats samt seinen Zeilen „Неверно“ in den alten Eintrag.
 Beim Schließen einer Karte schreibt der Agent in ihren Kopf `used:` — nur die Einträge, die geholfen haben, und womit (t1433): `помогла: d12 — dieselbe Ursache des Hängers gefunden; помогла: d40 — fertigen Probebefehl übernommen`. Teile durch `;`; alles nach dem Strich ist Erklärung, Nummern darin zählen nicht als Rückmeldung. „Womit“ — mindestens zwei Wörter ab drei Buchstaben, außer Nummern und den Wörtern „помогла“, „пригодилась“: `kermach roadmap close` lehnt ohne das mit Code 1 ab und schreibt, wie es richtig geht. Einträge, die nicht geholfen haben, zählt der Agent nicht auf; hat keiner geholfen — kein `used`.
@@ -524,6 +530,9 @@ Wörter nach Sprachen:
 | `программа` | `програма` | `program` | `Programm` |
 | `человек` | `людина` | `human` | `Mensch` |
 | `живой прогон` | `живий прогін` | `live run` | `Live-Lauf` |
+| `настоящая` | `справжня` | `real` | `echt` |
+| `подставная` | `підставна` | `fake` | `simuliert` |
+| `только человек` | `лише людина` | `human only` | `nur Mensch` |
 | `Что сделать` | `Що зробити` | `What to do` | `Was tun` |
 | `Зачем` | `Навіщо` | `Why` | `Wozu` |
 | `Файлы` | `Файли` | `Files` | `Dateien` |

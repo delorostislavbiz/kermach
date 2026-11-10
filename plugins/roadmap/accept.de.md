@@ -24,16 +24,31 @@ aber die Phase bleibt nicht abgenommen (`status: fertig` nicht setzen), und die 
    Ein Kriterium, das sich ohne Menschen nicht prüfen lässt (Programm, Website ansehen) — markiere „Mensch nötig" und sag, was anzusehen ist.
    In den Fakten steht die Zeile „Kein Prüfer lief" — diese Karten wurden per Befehl oder von Hand geschlossen, ohne Agenten-Tab: ihre Arbeit hat niemand geprüft.
    Führe das „Wie prüfen" jeder von ihnen selbst aus. Sag das dem Menschen in Schritt 7 in der ersten Zeile: „Kein Prüfer lief für die Karten …, die Phase ist nicht abgenommen".
+   In den Fakten stehen die Zeilen „Trotz Ablehnung des Prüfers geschlossen", „Ohne Nachweisdatei geschlossen", „trotz der Befunde der Prüfung", „Die Phasenprüfung vor dem Start fand nicht statt" oder „Karten ohne Phase" — sag das dem Menschen in Schritt 7 in einem Satz: Nummern und Gründe. Sie verbieten die Abnahme nicht: der Mensch entscheidet.
+   In den Fakten steht die Zeile „Art der Prüfung" — zeige sie dem Menschen in Schritt 7 zusammen mit den Kartennummern „nur simuliert", „nur ein Mensch" und „Art der Prüfung nicht angegeben". Der Mensch muss sehen, was nicht echt geprüft wurde. Die Abnahme verbietet das nicht: eine simulierte Probe ist normal.
 2. Review und Einträge. Lies „Was erledigt wurde" der Review-Karte und die Einträge der Phase aus der Liste oben: Entscheidungen, Sackgassen, Notizen.
    Der Phasenbericht ist {отчёт}; Details nötig — öffne Karten und Einträge nach Nummer.
    Die Übersicht „Kartenstufen" — wie viele Karten jeder Stufe (`size.js` hat das Modell nach den Wörtern der Karte gewählt) beim 1., 2., 3. und späteren Versuch abgegeben wurden.
    Weniger als die Hälfte der einfachen (sonnet) beim ersten Versuch — sag dem Menschen: die Regeln der Modellwahl (`size.js`) irren, nenne die Karten
    dieser Stufe ab dem 2. Versuch — nach ihnen werden die Regeln korrigiert. Karten „ohne Versuchsnummer" und „Modell vom Menschen gewählt" nicht mitzählen.
+   Neue Notizen. Ordne jetzt alle Notizen aus der Liste „Neue Notizen" ein, auch die aus anderen Phasen und ohne Phase. Viele Notizen sind kein Grund, sie zu überspringen oder aufzuschieben.
+   Dieses Einordnen und das Einordnen der Hinweise unten sind die einzigen Board-Änderungen vor dem „ja" des Menschen: so hat der Mensch entschieden, das Einordnen wartet nicht auf seine Antwort.
+   Öffne bei jeder Notiz ihre Datei `d<Nummer>.md` und prüfe am Code, ob der Fehler jetzt besteht. Dann eines von zwei, die Möglichkeit „behalten" gibt es nicht:
+   - der Fehler besteht — in eine Karte: `kermach roadmap note take d1 [d2 ...] [--title "Titel"] [--phase fN]`. Die Karte landet im „Eingang", wenn keine Phase angegeben ist;
+   - der Fehler ist weg, es ist eine Wiederholung oder die Korrektur lohnt nicht — aufheben: `kermach roadmap note drop d1 --why "Grund"`.
+   Kleinigkeiten der Prüfungen (veraltete Probe, ungenaues Wort in einer Prüfung) sammle in einer gemeinsamen Karte: `kermach roadmap note take d1 d2 d3 --title "Kleinigkeiten der Prüfungen"`.
+   Der Mensch entscheidet, wenn eine Notiz die Live-Website, Geld, Geheimnisse oder Datenverlust betrifft, wenn sie sich nicht am Code prüfen lässt oder wenn sich der Sinn der Arbeit ändert. Lege auch so eine Notiz in eine Karte und merke sie für Schritt 7.
+   Führe am Ende `kermach roadmap note` aus: dort muss „новых 0" stehen (0 neue; die Zeile des Programms ist russisch).
+   Board-Hinweise. Ordne jetzt jede Zeile der Liste „Board-Hinweise" ein, auch die aus anderen Phasen. Das sind Dienstzeilen des Programms, der Mensch sieht sie nicht.
+   Kannst du einen beheben, behebe ihn in der in der Zeile genannten Datei. Eine alte Liste in `used:` ohne Bewertung: erfinde keine Bewertung für den Agenten, hänge an die Zeile „ — без оценки" an (ohne Bewertung, russisch; `used: d1, d2 — без оценки`). So verschwindet der Hinweis, und es wird keine Bewertung vergeben.
+   Kannst du ihn nicht beheben oder ändert sich der Sinn der Arbeit, sag dem Menschen in Schritt 7 in einfachen Worten: was passiert ist und was zu entscheiden ist. Das Dateifeld und Texte wie „used: …" gib dem Menschen nicht wieder.
+   Eine Zeile „Kein Prüfer lief" einer anderen Phase lässt sich nicht durch eine Änderung beheben: sag in Schritt 7 in einem Satz, welche Karten niemand geprüft hat. Eine Zeile, dass der Prüfer nicht startet: finde die Ursache und behebe sie; klappt das nicht, sag dem Menschen, dass Karten nicht mehr geprüft werden.
+   Führe am Ende noch einmal `kermach roadmap accept {фаза}` aus: in der Liste sollen nur Zeilen bleiben, über die du dem Menschen berichtest.
 3. Abgleich nicht begonnener Karten. Geh die Karten aus der Liste „Nicht begonnene Karten anderer Phasen" durch: öffne jede ganz.
    Gleiche mit dem ab, was die Phase ergeben hat: Dateinamen, Entscheidungen, Funde aus Review und Einträgen. Entscheide für jede: behalten, korrigieren, abbrechen.
    Ein Entwurf der nächsten Phase ist klar geworden — ergänze sein „Wie prüfen" und entferne `draft: да`: erst dann startet die Welle ihn.
    Eine Karte fehlt — schlage eine neue vor. Karten „in Arbeit" nicht ändern: ist eine betroffen — sag es dem Menschen.
-4. „Eingang". Geh jede Karte aus der Liste „Eingang" durch: in die nächste Phase (`phase:` Phasennummer), abbrechen oder behalten.
+4. „Eingang". Geh jede Karte aus der Liste „Eingang" und die in Schritt 2 aus Notizen angelegten Karten durch: in die nächste Phase (`phase:` Phasennummer), abbrechen oder behalten.
    Einen Status „abgebrochen" gibt es bei Karten nicht: eine abgebrochene Karte kommt nach dem „ja" des Menschen in den Windows-Papierkorb — schlage genau das vor.
    Ein wichtiger Fund eines Agenten darf nicht unter Kleinigkeiten untergehen: was die Arbeit kaputt macht, Daten verliert, die Live-Website betrifft — zuerst in der Liste.
 5. Vereinbarungen. Jede aus der Liste oben geht in jeden Prompt jeder Karte. Veraltet — schlage vor, sie aufzuheben:
@@ -41,10 +56,13 @@ aber die Phase bleibt nicht abgenommen (`status: fertig` nicht setzen), und die 
 6. Die Projektübersicht `.kermach/обзор.md`. Agenten lesen die Abschnitte zu Zugang, Einschränkungen, Prüfungen und „Nicht geklärt" verpflichtend und glauben ihnen.
    Prüfe diese Abschnitte nach dem, was die Phase ergeben hat: der Prüfbefehl hat sich geändert, ein Zugang ist da oder weg, Ungeklärtes wurde geklärt.
    Falsches — schlage eine Korrektur vor, mit Datum und Quelle (Karte, Eintrag, Befehl). Neues für künftige Agenten — schlage vor, es zu ergänzen.
-7. Schreib dem Menschen und beende den Zug mit einer Frage. Bis zu seinem „ja" Board-Dateien und Übersicht nicht ändern.
+7. Schreib dem Menschen und beende den Zug mit einer Frage. Bis zu seinem „ja" Board-Dateien und Übersicht nicht ändern, außer beim Einordnen der Notizen und Hinweise in Schritt 2.
    Kriterien — als Tabelle: Kriterium | ja / nein / Mensch nötig | womit geprüft (Befehl und Ausgabe, Datei:Zeile, Seite).
-   Dann kurz: was Agenten und Review bemerkt haben, die Stufenübersicht. Dann eine Liste der Änderungen: Karte, Eintrag oder Abschnitt der Übersicht — was ändern — warum.
+   Dann kurz: was Agenten und Review bemerkt haben, die Stufenübersicht. Dann eine Liste der Änderungen: Karte, Eintrag oder Abschnitt der Übersicht — was ändern — warum. In Schritt 2 behobene Board-Hinweise gehören nicht in diese Liste: sie sind schon erledigt, und die Liste ist für das, was der Mensch noch entscheidet.
    „Eingang" — als kurze Liste: Karte — wohin — warum.
+   Board-Hinweise — nur die nicht behobenen: was passiert ist und was zu entscheiden ist, in einfachen Worten. Über behobene nichts schreiben, auch nicht einen Satz oder eine Zahl.
+   Nachricht an den Menschen: Karte mit Nummer nennen (t12), nicht mit Dateinamen (`t12.md`). Das Feld `used:` und den Zusatz « — без оценки» in der Nachricht weder nennen noch zitieren.
+   Notizen — eine Zeile: wie viele in Karten aufgenommen und wie viele aufgehoben wurden. Nenne gesondert nur die, über die der Mensch entscheidet: Notiz — Karte — was zu entscheiden ist. Den Rest nicht aufzählen.
    „Nicht vom Menschen geprüft" aus den Fakten — als kurze Liste: Nummer — was anzusehen ist. Der Mensch markiert sie mit der Schaltfläche im Fenster oder sagt es dir, dann `kermach roadmap human <Nummer> --done` oder `kermach roadmap human <Nummer> --skip "Grund"`.
    Frage: „Nehmen wir Phase {фаза} ab, soll ich die Änderungen machen? Sieh selbst nach: …" — und was genau zu öffnen ist.
 8. Der Mensch sagte „nicht so". Lege Korrekturkarten in derselben Phase an:

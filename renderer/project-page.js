@@ -314,13 +314,17 @@
   function show(sid, walking, beside) {
     const tab = tabs.get(sid);
     if (!tab) return;
+    const S = KermachSwitch;
+    if (tab.x && sid !== active) { S.setLog(t.log); S.begin(); }
     if (!walking) { walk = null; paintWalk(); recent = [...recent.filter((x) => x !== sid), sid]; }
     active = sid;
     if (isAgent(tab)) lastAgent = sid;
-    if (lay) place(sid, beside);
-    else for (const x of tabs.values()) x.pane.classList.toggle('on', x.sid === sid);
-    if (tab.x) { tab.x.fit(); tab.x.focus(); } else if (tab.page) tab.page.focus();
-    render();
+    S.step('показ панели', () => {
+      if (lay) place(sid, beside);
+      else for (const x of tabs.values()) x.pane.classList.toggle('on', x.sid === sid);
+    });
+    if (tab.x) { const x = tab.x; S.step('подгонка', () => x.fit()); S.step('фокус', () => x.focus()); } else if (tab.page) tab.page.focus();
+    S.step('полоса вкладок', render);
   }
 
   /**
@@ -926,11 +930,14 @@
     const onlyPage = tab.sid.startsWith('-');
     // t1485: «Главная вкладка» — у живой вкладки агента; пометку держит плагин «Роадмап», выключен он — пункта нет.
     const canMain = !onlyPage && tab.alive && tab.kind !== 'shell' && roadmapOn();
+    // t1475: «Передать другому агенту…» — у вкладки агента, чей разговор читает «История»; окно передачи держит плагин «История».
+    const canHand = !onlyPage && HAND_KINDS.includes(tab.runs || tab.kind) && historyOn();
     const pick = await D.menu(x, y, [
       ...(onlyPage ? [] : [{ id: 'look', label: I18n.t('page.cvetIZnachok', 'Цвет и значок'), icon: 'palette' }, { id: 'rename', label: I18n.t('common.rename', 'Переименовать'), icon: 'pen', kbd: 'F2' }, '-']),
       ...(canMain ? [tab.sid === mainSid ? { id: 'unmain', label: I18n.t('page.unmainTab', 'Снять пометку «Главная»'), icon: 'close' } : { id: 'main', label: I18n.t('page.setMainTab', 'Главная вкладка: сюда сообщения о картах'), icon: 'check' }] : []),
       // d307: живую вкладку — в список «в фоне»: терминал работает, на полосе не мешает. Вернуть — «показать» в том списке.
       ...(onlyPage || !tab.alive || !t.term.hide ? [] : [{ id: 'hide', label: I18n.t('page.hideTab', 'Спрятать в фон'), icon: 'down' }]),
+      ...(canHand ? [{ id: 'handoff', label: I18n.t('page.handoffTab', 'Передать другому агенту…'), icon: 'bot' }] : []),
       { id: 'close', label: I18n.t('page.zakrytTerminal', 'Закрыть терминал'), icon: 'trash', danger: true, kbd: kbdClose() },
     ]);
     try {
@@ -941,6 +948,11 @@
       } else if (pick === 'rename') await renameTab(tab);
       else if (pick === 'close') await closeTab(tab);
       else if (pick === 'hide') { const r = await t.term.hide(tab.sid); if (r && r.error) t.log(`вкладка не спрятана: ${r.error}`); }
+      else if (pick === 'handoff') {
+        // Вкладка могла выйти (у Codex кончился лимит): вид и номер разговора — из окна, у демона её уже нет.
+        window.dispatchEvent(new CustomEvent('kermach:handoff', { detail: { sid: tab.sid, kind: tab.kind, runs: tab.runs || '', claudeSessionId: tab.claudeSessionId, codexSessionId: tab.codexSessionId } }));
+        return;
+      }
       else if (pick === 'main' || pick === 'unmain') {
         const r = await t.plugin.call('roadmap', 'mainSet', pick === 'main' ? tab.sid : '').catch((/** @type {any} */ e) => ({ error: String(e && e.message || e) }));
         if (r && r.error) t.log(`пометка «Главная» не поставлена: ${r.error}`);
@@ -948,6 +960,10 @@
       }
     } finally { refocus(); }
   }
+  /** Виды вкладок, чей разговор читает плагин «История» (t1475, plugins/history/handoff.js OF_KIND). */
+  const HAND_KINDS = ['claude', 'codex', 'agent:grok', 'agent:antigravity'];
+  /** Плагин «История» загружен в окне (t1475): только тогда есть кому открыть окно передачи. */
+  const historyOn = () => !!document.querySelector('[data-plugin="history"]');
   /** Плагин «Роадмап» загружен в окне (t1485): только тогда есть кому держать пометку «Главная». */
   const roadmapOn = () => !!document.querySelector('[data-plugin="roadmap"]');
   // Пометку меняют и без окна: kermach roadmap start, сверка после перезапуска вкладки, закрытая главная — плагин шлёт событие main.

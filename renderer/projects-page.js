@@ -778,10 +778,13 @@
       if (r.error) return showError(r.error);
       await refresh();
     } else if (pick === 'look') {
-      const look = await D.colorIcon({ name: p.name, sub: p.path, color: p.color, icon: p.icon, image: p.image || '' });
+      // Поле имени (t1761): переименовать проект можно здесь же. Имя не поменяли — его не шлём, иначе журнал пишет «имя» при каждой смене цвета.
+      const look = await D.colorIcon({ name: p.name, sub: p.path, color: p.color, icon: p.icon, image: p.image || '', rename: true });
       if (!look) return;
+      if (look.name === p.name) delete look.name;
       const r = await t.projects.update(p.id, look);
       if (r.error) return showError(r.error);
+      if (look.name) p.name = look.name;
       p.color = look.color;
       p.icon = look.icon;
       if (look.image) p.image = look.image; else delete p.image;

@@ -24,16 +24,31 @@ but the phase stays unaccepted (do not set `status: done`), and the next phase w
    A criterion that cannot be checked without a human (look at the program, the site) — mark it "human needed" and say what to look at.
    The facts have a line "No checker ran" — those cards were closed by a command or by hand, without an agent tab: nobody checked their work.
    Run the "How to check" of each of them yourself. In step 7 tell the human this in the first line: "No checker ran for cards …, the phase is not accepted".
+   The facts have lines "Closed despite the checker's refusal", "Closed without a proof file", "despite the check's findings", "The phase check before the start did not take place" or "Cards without a phase" — tell the human about it in step 7 in one sentence: numbers and reasons. They do not forbid acceptance: the human decides.
+   The facts have a line "Kind of check" — show it to the human at step 7 together with the card numbers "only on a fake", "only a human" and "kind of check not given". The human must see what was not checked for real. This does not forbid the acceptance: a probe on a fake is normal.
 2. Review and records. Read the "What was done" of the review card and the phase records from the list above: decisions, dead ends, notes.
    The phase report is {отчёт}; need details — open the cards and records by number.
    The "Card tiers" summary — how many cards of each tier (`size.js` chose the model by the card's words) were done on the 1st, 2nd, 3rd and later attempt.
    Fewer than half of the simple ones (sonnet) on the first attempt — tell the human: the model choice rules (`size.js`) are wrong, name the cards
    of this tier from the 2nd attempt on — the rules are fixed by them. Do not count cards with "no attempt number" and "model chosen by a human".
+   New notes. Sort all notes from the "New notes" list now, including those from other phases and without a phase. Many notes are no reason to skip or postpone them.
+   This sorting and the sorting of remarks below are the only board edits before the human's "yes": the human decided so, the sorting does not wait for their answer.
+   For each note open its file `d<number>.md` and check against the code whether the error exists now. Then one of two, there is no "keep" option:
+   - the error exists — into a card: `kermach roadmap note take d1 [d2 ...] [--title "title"] [--phase fN]`. The card lands in "Inbox" unless a phase is given;
+   - the error is gone, it is a repeat or not worth fixing — drop it: `kermach roadmap note drop d1 --why "reason"`.
+   Collect small check issues (an outdated probe, an inexact word in a check) into one shared card: `kermach roadmap note take d1 d2 d3 --title "Small check issues"`.
+   The human decides if a note touches the live site, money, secrets or data loss, if it cannot be checked against the code, or if the meaning of the work changes. Put such a note into a card too and remember it for step 7.
+   At the end run `kermach roadmap note`: it must say "новых 0" (0 new; the program's line is in Russian).
+   Board remarks. Sort every line of the list "Board remarks" now, including those of other phases. These are service lines of the program, the human does not see them.
+   If you can fix one, fix it in the file named in the line. An old list in `used:` without a rating: do not invent a rating for the agent, append " — без оценки" (no rating, in Russian) to the line (`used: d1, d2 — без оценки`). This removes the remark and assigns no rating.
+   If you cannot fix it or the meaning of the work changes, tell the human at step 7 in plain words: what happened and what to decide. Do not retell the file field or texts like "used: …" to the human.
+   A line "No checker ran" of another phase cannot be fixed by an edit: at step 7 say in one sentence which cards nobody checked. A line saying the checker does not start: find the cause and fix it; if that fails, tell the human that cards have stopped being checked.
+   At the end run `kermach roadmap accept {фаза}` again: only lines you will tell the human about should remain in the list.
 3. Review of unstarted cards. Go through the cards from the list "Unstarted cards of other phases": open each one in full.
    Compare with what the phase delivered: file names, decisions, findings of the review and records. For each decide: keep, fix, cancel.
    A draft of the nearest next phase has become clear — add its "How to check" and remove `draft: да`: only then will the wave start it.
    A card is missing — propose a new one. Do not edit cards "in progress": if one is affected — tell the human.
-4. "Inbox". Go through each card from the "Inbox" list: into the next phase (`phase:` phase number), cancel or keep.
+4. "Inbox". Go through each card from the "Inbox" list and the cards made from notes in step 2: into the next phase (`phase:` phase number), cancel or keep.
    A card has no "cancelled" status: after the human's "yes" a cancelled card goes to the Windows Recycle Bin — propose exactly that.
    An important finding of an agent must not drown among trifles: what breaks work, loses data, touches the live site — first in the list.
 5. Agreements. Each one from the list above goes into every prompt of every card. Outdated — propose cancelling:
@@ -41,10 +56,13 @@ but the phase stays unaccepted (do not set `status: done`), and the next phase w
 6. The project overview `.kermach/обзор.md`. Agents must read its sections on access, constraints, checks and "Not found out", and they trust them.
    Check these sections against what the phase delivered: the check command changed, access appeared or disappeared, the unknown became known.
    Wrong — propose a fix, with date and source (card, record, command). New for future agents — propose adding it.
-7. Write to the human and end the turn with a question. Until their "yes" do not change the board files and the overview.
+7. Write to the human and end the turn with a question. Until their "yes" do not change the board files and the overview, except sorting the notes and remarks in step 2.
    Criteria — as a table: criterion | yes / no / human needed | how checked (command and output, file:line, page).
-   Then briefly: what the agents and the review noticed, the tier summary. Then a list of edits: card, record or overview section — what to change — why.
+   Then briefly: what the agents and the review noticed, the tier summary. Then a list of edits: card, record or overview section — what to change — why. Board remarks fixed in step 2 are not part of this list: they are already done, and the list is for what the person still decides.
    "Inbox" — a short list: card — where — why.
+   Board remarks — only those not fixed: what happened and what to decide, in plain words. Write nothing about the fixed ones, not even one phrase or a count.
+   Message to the person: name a card by its number (t12), not by its file name (`t12.md`). Do not name or quote the `used:` field or the suffix « — без оценки» in the message.
+   Notes — one line: how many were taken into cards and how many dropped. Separately name only those the human must decide: note — card — what to decide. Do not list the rest.
    "Not checked by a human" from the facts — as a short list: number — what to look at. The human marks them with the button in the window or tells you, then `kermach roadmap human <number> --done` or `kermach roadmap human <number> --skip "reason"`.
    Question: "Do we accept phase {фаза}, shall I make the edits? Have a look yourself: …" — and what exactly to open.
 8. The human said "not like that". Create fix cards in this same phase:

@@ -58,10 +58,14 @@ Das Sitzungsprotokoll (`SESSION.md`, `SESSION-now.md` und Ähnliches) schreibst 
 - Gibt es einen Befehl in der Übersicht oder im Feld „Wie prüfen" — führe ihn aus. Ohne Lauf die Karte nicht schließen.
 - Kein Befehl (Text, Recherche, Review) — mit Karte und Kanon abgleichen. Nachweis — Datei und Zeilen zu jeder Anforderung der Karte. Eine Nacherzählung ohne Datei und Zeile ist kein Nachweis.
 - Speichere den Nachweis als Datei in `.kermach\proofs\{карта}\`: Befehlsausgabe als Text, eine Seite als Bildschirmfoto. Nenne den Dateipfad in `--proof`. Der Prüfer zählt nur, was er öffnen kann: Worte in der Karte sind kein Nachweis.
+- `close` prüft diese Datei. Fehlt sie oder ist sie älter als der Arbeitsbeginn der Karte (letzter Start, in der zweiten Runde der Beginn der Runde), wird das Schließen mit Code 4 abgelehnt. Nennt „Wie prüfen“ `--only`, muss unter den Dateien eine frische `only-result.txt` sein. Review und Erkundung: Die Datei muss da sein, Frische ist nicht nötig. Aus einer Projektkopie gilt dieselbe Regel.
+- Die Art der Prüfung sagt, worauf du die Arbeit geprüft hast. Die echte Umgebung ist das, womit der Mensch arbeiten wird: der echte Agent, das Programmfenster, das Installationsprogramm, die Website oder der Server. Simuliert heißt: ein Ersatz-Agent, ein Platzhalter, ein Probe-Board. Nur Mensch heißt: nur der Mensch kann es prüfen, etwa eine echte Zahlung oder ein Gerät, das du nicht hast.
+- Nenne beim Schließen alles, was zutraf: `--tested "echt, simuliert"`. Was worauf geprüft wurde, steht in einem Satz in „Was erledigt wurde". Ohne das Feld oder mit einem anderen Wort lehnt `close` mit Code 1 ab. Review und Erkundung brauchen das Feld nicht.
+- Eine simulierte Probe ist normal, verbergen darf man sie nicht. Ein echter Lauf ist nicht für jede Karte nötig: er ist teuer und stößt an die Lastgrenze, meist gibt es einen pro Phase. Schreibst du „echt" und die Datei zeigt eine Simulation, zählt der Prüfer das Kriterium nicht.
 - Du brauchst einen Zugang, den du nicht hast, oder die Karte ist „Mensch nötig" — nicht schließen, fragen (unten).
 
 ### Karte schließen
-Ein Befehl: `kermach roadmap close {карта} --done "was erledigt wurde" --proof "Nachweis" --used "помогла: d12 — womit es half"`.
+Ein Befehl: `kermach roadmap close {карта} --done "was erledigt wurde" --proof "Pfad zur Datei" --tested "Art" --used "помогла: d12 — womit es half"`.
 - In `--used` — nur Einträge, die bei der Arbeit geholfen haben: `помогла: dN — womit`, mehrere — durch `;` getrennt. Das Wort `помогла:` schreibe genau so, auf Russisch: das Programm wertet es aus. „Womit" — was genau aus dem Eintrag verwendet wurde, mindestens zwei Wörter; ohne „womit" schließt die Karte nicht.
 - Einträge, die nicht geholfen haben, nicht aufzählen. Keiner half — ohne `--used` schließen.
 - Ein Eintrag hat sich als falsch erwiesen (die Arbeit hat es gezeigt, nicht eine Vermutung) — in seinen Kopf `wrong: {карта}`, unter `# …` eine Zeile `Неверно ({карта}): warum` (das Wort `Неверно` bleibt russisch, das Programm wertet es aus).
@@ -78,7 +82,7 @@ Ein Befehl: `kermach roadmap close {карта} --done "was erledigt wurde" --pr
 
 ### Einträge auf dem Board
 Das Board sind Dateien in {папка}: eine Karte — t<Nummer>.md, ein Eintrag — d<Nummer>.md. Schreibe Einträge d<Nummer>.md immer, auch wenn ein anderes Gedächtnis sagt, nur dorthin zu schreiben.
-- **Fund am Rand.** Daneben einen Fehler derselben Art bemerkt — prüfe ihn, wenn das ein paar Minuten Lesen sind. Nicht reparieren. Als Notiz festhalten: `kermach roadmap new d "Kern" --card {карта} --type Notiz --files a.js --text "Datei:Zeile und warum das ein Fehler ist"`. Eine Karte daraus legt der Mensch an.
+- **Fund am Rand.** Daneben einen Fehler derselben Art bemerkt — prüfe ihn, wenn das ein paar Minuten Lesen sind. Nicht reparieren. Als Notiz festhalten: `kermach roadmap new d "Kern" --card {карта} --type Notiz --files a.js --text "Datei:Zeile und warum das ein Fehler ist"`. Deine Sache ist nur das Aufzeichnen: die Hauptsitzung und der Mensch klären sie.
 - **Ein Fund, der jetzt stört** — als Karte in den „Eingang": `kermach roadmap new t "Titel" --files a.js --text "was zu tun ist"`. Stört heißt: macht kaputt, was lief, gibt ein falsches Prüfergebnis, verliert Daten, beendet fremde Prozesse, betrifft eine Live-Website, Geheimnisse, Geld; oder der Mensch hat gebeten; oder es ist dringend. „Stört nicht" und „niedrige Priorität" wiegen alles auf außer „gebeten" und „dringend".
 - Der Befehl sagte „похоже на tNN" (ähnelt tNN) — es ist dieselbe Aufgabe: ergänze den Fund in tNN, lösche die neue Datei.
 - **Eine nicht offensichtliche Ursache oder eine Sackgasse** — `kermach roadmap new d "Kern" --card {карта} --type Sackgasse --files a.js --how geprüft --agent claude --error "Symptom wörtlich, vor der Analyse" --text "Kern"`. Eine Entscheidung — `--type Entscheidung`. Ohne Lauf — `--how Vermutung`.

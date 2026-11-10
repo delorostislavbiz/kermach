@@ -93,6 +93,36 @@ const DA1_QUERIES = ['\x1b[c', '\x1b[0c'];
 const DA1_REPLY = '\x1b[?1;2c';
 const DA1_MS = 10000;
 
+// Сон вкладки Claude (t1751): «готово» дольше порога — дерево процесса claude гаснет (с MCP), копия экрана и вкладка остаются,
+// первый ввод поднимает в том же терминале claude --resume по рецепту от окна (поле wake запроса create). Работает, ждёт ответа,
+// codex, кредиты и другие агенты, фоновые задачи на экране — не усыпляются. Порог — KERMACH_SLEEP_MIN в минутах (дробь — для проб),
+// 0 — не усыплять, нет переменной — 60 мин. Пункта в «Настройках» нет: демон их не читает.
+const SLEEP_MIN = (() => {
+  const v = platform.envOf(process.env, 'SLEEP_MIN');
+  const n = Number(v);
+  return v === undefined || v === '' || !Number.isFinite(n) || n < 0 ? 60 : n;
+})();
+const SLEEP_MS = SLEEP_MIN * 60000;
+// Как часто смотреть, кого усыпить: четверть порога, от 5 до 30 с.
+const SLEEP_LOOK_MS = Math.min(30000, Math.max(5000, SLEEP_MS / 4));
+// Сколько ждать выхода усыпляемого дерева: не вышло — сон отменён, вкладка работает как была.
+const SLEEP_EXIT_MS = 15000;
+// Проснувшийся claude готов к вводу: строка состояния пришла (+ WAKE_STATUS_MS) или вывод был и молчит WAKE_QUIET_MS; не позже WAKE_MAX_MS.
+const WAKE_STATUS_MS = 500;
+const WAKE_QUIET_MS = 3000;
+const WAKE_MAX_MS = 30000;
+// Придержанный ввод уходит кусками: текст и Enter отдельно, как typeLine (t1611) — иначе текст с Enter одним куском Claude примет за вставку.
+const WAKE_ENTER_MS = 150;
+// Не ввод человека: отчёты о фокусе (режим 1004), мыши (SGR, X10), ответы терминала (DA, CPR, DSR, DECRQM), OSC и DCS.
+// Режимы умершего claude остаются включёнными в окне: смена вкладки или движение мыши иначе будили бы claude.
+// eslint-disable-next-line no-control-regex
+const NOT_INPUT = /\x1b\[[IO]|\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[M[\s\S]{3}|\x1b\[[?>]?[\d;]*[cnR]|\x1b\[\?[\d;]*\$y|\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1bP[\s\S]*?\x1b\\/g;
+// Плашки фоновых задач Claude Code в нижних рядах экрана (строки из claude.exe 2.1.322): «1 shell», «2 background tasks», «monitor» и др.
+// Надпись — признак одной версии: сменят текст — вкладка с фоновой задачей уснёт. Другого признака у демона нет (t1751).
+const BG_TASKS = /\b\d+ (?:shells?|background tasks?|monitors?|local agents?|teams?|MCP tasks?|cloud sessions?)\b|background dynamic workflow|ultraplan|dreaming|saving memor|memory import|auto-mode scan/i;
+// Строка лимита подписки (как LIMIT_HEADS в plugins\roadmap\grader.js): такую вкладку ждёт «Продолжение после лимита» — его ввод сверяет поле на экране.
+const LIMIT_LINE = /^(?:You've hit your|You've reached your|You're out of usage credits|Your org is out of usage|You're out of extra usage|Your usage allocation has been disabled)|requires usage credits/;
+
 // Состояние агента (t13): работает, требует ответа, готов, ошибка; «завершён» — в событии exit. Коды — STATES в protocol.js.
 // Хуки Claude: что значит каждое событие (проба t11).
 /** @type {Record<string, string>} */
@@ -326,6 +356,25 @@ function spawnError(msg) {
 /** Сколько ждать ответа о рабочей папке новой вкладки (t1301). */
 const CWD_WAIT_MS = 3000;
 
+/**
+ * Отпустить поток вывода и сокет ввода вышедшего терминала (t1752). node-pty 1.2 с useConptyDll сам их не закрывает:
+ * - поток вывода (worker conoutSocketWorker) гасится только по выводу, пришедшему после kill (windowsPtyAgent.js, kill);
+ *   у терминала, который вышел сам или после taskkill дерева, вывода больше нет — поток жил вечно;
+ * - сокет ввода (conin) закрывает только kill; программа, вышедшая сама, оставляла его открытым.
+ * Живой поток и открытый сокет держат через обработчики (наш «ввод не дошёл» тоже) и Session с копией экрана:
+ * демон рос на 12–26 МБ с каждой закрытой вкладкой. dispose — свой метод node-pty: через FLUSH_DATA_INTERVAL (1 с)
+ * он делает worker.terminate(). К выходу pty сокет вывода уже закрыт: дочитывать нечего, а ввод в вышедший терминал не нужен.
+ * @param {any} p pty @param {string} sid для журнала
+ */
+function releasePty(p, sid) {
+  const agent = p && p._agent;
+  if (!agent) return;
+  const conout = agent._conoutSocketWorker;
+  try { if (conout && typeof conout.dispose === 'function') conout.dispose(); } catch (e) { log(`терминал ${sid}: поток вывода node-pty не закрыт — ${/** @type {any} */ (e).message || e}`); }
+  const input = agent._inSocket;
+  try { if (input && !input.destroyed) input.destroy(); } catch (e) { log(`терминал ${sid}: сокет ввода node-pty не закрыт — ${/** @type {any} */ (e).message || e}`); }
+}
+
 class Session {
   /** @param {any} o поля запроса create */
   constructor(o) {
@@ -423,31 +472,235 @@ class Session {
     const scroll = bs.scroll.bind(bs);
     bs.scroll = (/** @type {any} */ a, /** @type {any} */ b) => { scroll(a, b); this.onAltScroll(); };
 
+    // Сон (t1751). wake — рецепт пробуждения от окна: { file, args, env, note }, только в памяти (env в sessions.json не пишется).
+    // sleep: '' — не спит, 'going' — дерево гасится, 'asleep' — спит. wakeQ — придержанный ввод, пока claude не поднялся (null — не придерживаем).
+    this.wake = wakeRecipe(o.wake);
+    this.sleep = '';
+    /** @type {string[] | null} */
+    this.wakeQ = null;
+    /** @type {NodeJS.Timeout | null} */
+    this.sleepTimer = null;
+    /** @type {NodeJS.Timeout | null} */
+    this.wakeTimer = null;
+    // Последний настоящий ввод (мс): час считается от позднего из «готово» и ввода. draft — набран текст без Enter: claude --resume его не вернёт.
+    this.inputAt = Date.now();
+    this.draft = false;
+    this.wokeAt = 0;
+    // Последний вывод и последняя строка состояния (мс) — по ним видно, что проснувшийся claude готов к вводу.
+    this.outAt = 0;
+    this.statusAt = 0;
+    // Почему вкладку не усыпили в прошлый раз — в журнал один раз на причину.
+    this.sleepSkip = '';
+    /** Номер виден и ответ на create ушёл — терминал есть в list (t909). */
+    this.ready = false;
+    this.spawnPty(o.file, ptyArgs(this.desc.args), o.env);
+  }
+
+  /**
+   * Запустить процесс терминала: при создании и при пробуждении (t1751). Обработчики привязаны к своему pty: поздний выход прежнего не трогает новый.
+   * @param {string} file @param {string | string[]} args @param {Record<string, string> | undefined} env
+   */
+  spawnPty(file, args, env) {
     // Консоль из node-pty (conpty.dll + OpenConsole): одна версия на любой Windows. На вопрос DA1 при запуске отвечает answerDa1.
     this.da1Tail = '';
     this.da1Until = Date.now() + DA1_MS;
     // По окну spawnFrom..spawnTo terminate сверит, что номер свой (t141). В node-pty 1.2 корень создаётся не внутри pty.spawn,
     // а когда подключился поток вывода (connect из onReady, t909): pty.pid до этого 0. Поэтому конец окна — время, когда номер стал виден.
     this.spawnFrom = Date.now();
-    this.pty = pty.spawn(o.file, ptyArgs(this.desc.args), {
-      name: 'xterm-256color', cols, rows, cwd, env: terminalEnv(o.env, this.sid), useConptyDll: true,
+    const p = pty.spawn(file, args, {
+      name: 'xterm-256color', cols: this.cols, rows: this.rows, cwd: this.desc.cwd, env: terminalEnv(env, this.sid), useConptyDll: true,
     });
+    this.pty = p;
     this.spawnTo = Date.now();
     /** Номер корня виден или терминал вышел без него: только после этого create отвечает. @type {Promise<void>} */
-    this.pidReady = ownRoot.whenPid(this.pty).then(({ at }) => { this.spawnTo = at; });
-    /** Номер виден и ответ на create ушёл — терминал есть в list (t909). */
-    this.ready = false;
-    this.pty.onData((d) => this.onData(d));
-    this.pty.onExit(({ exitCode }) => this.onExit(exitCode));
+    this.pidReady = ownRoot.whenPid(p).then(({ at }) => { if (this.pty === p) this.spawnTo = at; });
+    p.onData((d) => { if (this.pty === p) this.onData(d); });
+    p.onExit(({ exitCode }) => { releasePty(p, this.sid); if (this.pty === p) this.onExit(exitCode); });
     // Запись в pty асинхронная: ввод в процесс, который как раз выходит, даёт «write EAGAIN» (или EOF) на сокете ввода node-pty 1.1.
     // Своего обработчика у сокета нет — ошибка доходила до uncaughtException (t116, spikes\t116-eagain\probe.js). try её не ловит.
-    const input = /** @type {any} */ (this.pty)._agent?.inSocket;
+    const input = /** @type {any} */ (p)._agent?.inSocket;
     if (input) input.on('error', (e) => log(`терминал ${this.sid}: ввод не дошёл (${e.code || e.message})`));
   }
 
   info() {
-    return { ...this.desc, pid: this.pty.pid, cols: this.cols, rows: this.rows, attached: this.subs.size, hook: this.hook, state: this.state, stateAt: this.stateAt,
-      prompt: this.prompt, reply: this.reply, unseen: this.unseen };
+    // Спящая вкладка (t1751): процесса нет — номер 0, asleep: true. Состояние остаётся «готово»: статусы карт и звук от сна не меняются.
+    return { ...this.desc, pid: this.sleep === 'asleep' ? 0 : this.pty.pid, cols: this.cols, rows: this.rows, attached: this.subs.size, hook: this.hook, state: this.state, stateAt: this.stateAt,
+      prompt: this.prompt, reply: this.reply, unseen: this.unseen, ...(this.sleep ? { asleep: true } : {}) };
+  }
+
+  /**
+   * Ввод из окна или от плагина (write). Спящей вкладке и пока claude поднимается — придержать; иначе — в процесс.
+   * @param {string} d
+   */
+  input(d) {
+    if (this.sleep || this.wakeQ) return this.hold(d);
+    this.feed(d);
+  }
+
+  /** Ввод — в процесс, с отметками состояния и времени. @param {string} d */
+  feed(d) {
+    this.onInput(d);
+    if (d.includes('\r')) this.enterAt = Date.now();
+    this.noteInput(d);
+    this.pty.write(d);
+  }
+
+  /**
+   * Отметить настоящий ввод (t1751): время и набранный без Enter текст. Фокус, мышь и ответы терминала — не ввод.
+   * draft снимают Enter и Ctrl+C (Claude очищает поле); стёртый Backspace текст draft не снимает — вкладка тогда просто не уснёт.
+   * @param {string} d
+   */
+  noteInput(d) {
+    const real = d.replace(NOT_INPUT, '');
+    if (!real) return;
+    this.inputAt = Date.now();
+    // eslint-disable-next-line no-control-regex
+    if (/[\r\x03]/.test(real)) this.draft = false;
+    // eslint-disable-next-line no-control-regex
+    const tail = real.split(/[\r\x03]/).pop() || '';
+    // eslint-disable-next-line no-control-regex
+    if (/[^\x00-\x1f\x7f]/.test(tail.replace(/\x1b\[[\d;?]*[A-Za-z~]|\x1bO[A-Za-z]|\x1b./g, ''))) this.draft = true;
+  }
+
+  /** Придержать ввод спящей или просыпающейся вкладки; спящую — будить. Фокус и мышь не будят. @param {string} d */
+  hold(d) {
+    const real = d.replace(NOT_INPUT, '');
+    if (!real) return;
+    (this.wakeQ || (this.wakeQ = [])).push(real);
+    this.inputAt = Date.now();
+    if (this.sleep === 'asleep') this.wakeUp();
+  }
+
+  /**
+   * Пора ли усыпить (t1751, таймер lookSleep). Только Claude по подписке с рецептом и номером разговора, «готово» дольше порога
+   * от позднего из «готово», последнего ввода и пробуждения; без набранного текста, фоновых задач и строки лимита на экране.
+   * @param {number} now
+   */
+  maySleep(now) {
+    if (this.sleep || this.wakeQ || !this.ready || !this.wake || this.agent !== 'claude' || this.state !== 'done' || this.killed || this.ptyExited) return;
+    if (!UUID.test(String((this.desc.meta || {}).claudeSessionId || ''))) return;
+    if (now - Math.max(Date.parse(this.stateAt) || 0, this.inputAt, this.wokeAt) < SLEEP_MS) return;
+    const why = this.draft ? 'в поле набран текст без Enter' : this.sleepBlock();
+    if (why) {
+      if (this.sleepSkip !== why) { this.sleepSkip = why; log(`терминал ${this.sid}: «готово» дольше ${SLEEP_MIN} мин, но не усыпляю — ${why}`); }
+      return;
+    }
+    this.sleepSkip = '';
+    this.fallAsleep();
+  }
+
+  /** Что на экране мешает сну: плашка фоновых задач в нижних рядах или строка лимита. '' — ничего. */
+  sleepBlock() {
+    const b = this.term.buffer.active;
+    /** @type {string[]} */
+    const lines = [];
+    for (let i = Math.max(0, b.length - 40); i < b.length; i++) {
+      const s = (b.getLine(i)?.translateToString(true) ?? '').trim();
+      if (s) lines.push(s);
+    }
+    const bg = BG_TASKS.exec(lines.slice(-6).join('\n'));
+    if (bg) return `на экране фоновые задачи («${bg[0]}»)`;
+    if (lines.slice(-15).some((l) => LIMIT_LINE.test(l.replace(/^[^A-Za-z]+/, '')))) return 'на экране строка лимита подписки';
+    return '';
+  }
+
+  /** Усыпить: погасить дерево claude. Выход pty придёт в onExit — там fellAsleep. */
+  fallAsleep() {
+    const p = this.pty;
+    this.sleep = 'going';
+    log(`терминал ${this.sid}: «готово» дольше ${SLEEP_MIN} мин — усыпляю claude: дерево pid ${p.pid}, разговор ${(this.desc.meta || {}).claudeSessionId}`);
+    this.sleepTimer = setTimeout(() => this.sleepStuck(p), SLEEP_EXIT_MS);
+    this.killTree().catch((e) => log(`терминал ${this.sid}: усыпление — taskkill упал: ${e && e.stack || e}`));
+  }
+
+  /** Выход усыпляемого дерева не пришёл за SLEEP_EXIT_MS. @param {any} p pty, который гасили */
+  sleepStuck(p) {
+    this.sleepTimer = null;
+    if (this.pty !== p || this.sleep !== 'going') return;
+    if (this.ptyExited) { log(`терминал ${this.sid}: claude вышел, а события выхода нет ${SLEEP_EXIT_MS} мс — считаю уснувшим`); return this.fellAsleep(-1); }
+    log(`терминал ${this.sid}: claude не вышел за ${SLEEP_EXIT_MS} мс — сон отменён, вкладка работает как была`);
+    this.sleep = '';
+    const q = this.wakeQ;
+    this.wakeQ = null;
+    if (q && q.length) this.feed(q.join(''));
+  }
+
+  /** Дерево вышло: вкладка спит. Режимы мыши и фокуса снять, строку «спит» — в копию экрана и окнам. @param {number} code */
+  fellAsleep(code) {
+    if (this.sleepTimer) { clearTimeout(this.sleepTimer); this.sleepTimer = null; }
+    this.sleep = 'asleep';
+    log(`терминал ${this.sid}: claude уснул (код ${code}), экран оставлен, разбудит ввод`);
+    // Область прокрутки (DECSTBM) Claude — сбросить, иначе строка встанет внутрь его рамки; курсор — в нижний ряд, перевод строки поднимает экран.
+    this.output(`\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?6l\x1b[r\x1b[${this.rows};1H\x1b[0m\r\n\x1b[2m[${this.wake ? this.wake.note : ''}]\x1b[0m`);
+    broadcast({ ev: 'updated', session: this.info() });
+    if (this.wakeQ && this.wakeQ.length) this.wakeUp();
+  }
+
+  /** Свой вывод в копию экрана и подписчикам — как вывод программы. @param {string} d */
+  output(d) {
+    this.term.write(d);
+    for (const [c, sub] of this.subs) {
+      if (sub.held) sub.held.push(d);
+      else c.send({ ev: 'data', sid: this.sid, data: d });
+    }
+  }
+
+  /** Разбудить: в том же терминале claude --resume с нынешним номером разговора (после /clear он другой). Ввод — когда claude готов. */
+  wakeUp() {
+    if (this.sleep !== 'asleep' || !this.wake) return;
+    const id = String((this.desc.meta || {}).claudeSessionId || '');
+    const args = [...this.wake.args];
+    const i = args.indexOf('--resume');
+    if (i >= 0 && UUID.test(id)) args[i + 1] = id;
+    this.sleep = '';
+    this.wokeAt = Date.now();
+    log(`терминал ${this.sid}: ввод — бужу claude --resume ${i >= 0 ? args[i + 1] : '?'}`);
+    // Новая консоль считает экран пустым и рисует с верхнего угла: прежний экран — в историю прокрутки, курсор — наверх.
+    this.output(`${'\r\n'.repeat(this.rows)}\x1b[H`);
+    try {
+      this.spawnPty(this.wake.file, ptyArgs(args), this.wake.env);
+    } catch (e) {
+      const msg = spawnError(String(/** @type {any} */ (e).message || e));
+      log(`терминал ${this.sid}: claude не поднялся: ${msg}`);
+      this.sleep = 'asleep';
+      this.wakeQ = null;
+      this.output(`\r\n\x1b[31m[${msg}]\x1b[0m`);
+      return;
+    }
+    const p = this.pty;
+    void this.pidReady.then(() => {
+      if (this.pty !== p) return;
+      log(`терминал ${this.sid}: claude поднялся, pid ${p.pid || 'не появился'}`);
+      broadcast({ ev: 'updated', session: this.info() });
+    });
+    const t0 = Date.now();
+    this.wakeTimer = setInterval(() => {
+      const now = Date.now();
+      const status = this.statusAt > t0 && now - this.statusAt >= WAKE_STATUS_MS;
+      const quiet = this.outAt > t0 && now - this.outAt >= WAKE_QUIET_MS;
+      if (!status && !quiet && now - t0 < WAKE_MAX_MS && !this.ptyExited && this.pty === p) return;
+      if (this.wakeTimer) clearInterval(this.wakeTimer);
+      this.wakeTimer = null;
+      log(`терминал ${this.sid}: claude готов к вводу через ${now - t0} мс (${status ? 'строка состояния' : quiet ? 'вывод затих' : 'потолок ожидания'})`);
+      this.drainWake(p);
+    }, 250);
+  }
+
+  /** Отдать придержанный ввод проснувшемуся claude кусками: текст, Enter отдельно. Только Enter, Esc или Ctrl+C — разбудили, агенту не отдаём. @param {any} p */
+  drainWake(p) {
+    const first = (this.wakeQ || []).join('');
+    // eslint-disable-next-line no-control-regex
+    if (/^[\r\x03\x04\x1b]*$/.test(first)) { this.wakeQ = null; return; }
+    const step = () => {
+      if (this.pty !== p || this.ptyExited || !this.wakeQ) { this.wakeQ = null; return; }
+      const all = this.wakeQ.join('');
+      if (!all) { this.wakeQ = null; return; }
+      const d = (/^[^\r]+|^\r/.exec(all) || [all])[0];
+      this.wakeQ = [all.slice(d.length)];
+      this.feed(d);
+      setTimeout(step, WAKE_ENTER_MS);
+    };
+    step();
   }
 
   /** Агент ли во вкладке и какой: claude, codex или id из каталога (вид agent:<id>, t334). Вид читается каждый раз: meta меняет update. */
@@ -745,6 +998,7 @@ class Session {
   onData(d) {
     if (this.da1Until) d = this.answerDa1(d);
     if (!d) return;
+    this.outAt = Date.now();
     this.term.write(d);
     if (this.agent === 'codex') { this.dataAt = Date.now(); this.lookBusy(BUSY_LOOK_MS); }
     for (const [c, sub] of this.subs) {
@@ -889,6 +1143,11 @@ class Session {
    */
   terminate() {
     this.killed = true;
+    return this.killTree();
+  }
+
+  /** Погасить дерево процесса терминала (terminate без отметки «закрыли»: так же усыпляет сон, t1751). @returns {Promise<void>} */
+  killTree() {
     const pid = this.pty.pid;
     const close = () => { try { this.pty.kill(); } catch {} };
     if (process.platform !== 'win32') return this.terminateGroup();
@@ -944,7 +1203,17 @@ class Session {
 
   /** @param {number} code */
   onExit(code) {
-    log(`терминал ${this.sid} вышел, код ${code}`);
+    // Усыпляемый claude вышел (t1751): вкладка, копия экрана и подписки остаются.
+    if (this.sleep === 'going' && !this.killed) return this.fellAsleep(code);
+    this.finish(code);
+  }
+
+  /** Терминал кончился: запись снять, копию экрана закрыть, окнам — exit. Спящую вкладку закрывают сразу этим (kill, t1751). @param {number} code */
+  finish(code) {
+    if (this.sleepTimer) { clearTimeout(this.sleepTimer); this.sleepTimer = null; }
+    if (this.wakeTimer) { clearInterval(this.wakeTimer); this.wakeTimer = null; }
+    this.wakeQ = null;
+    log(`терминал ${this.sid} ${this.sleep === 'asleep' ? 'закрыт спящим' : 'вышел'}, код ${code}`);
     sessions.delete(this.sid);
     if (this.busyTimer) clearTimeout(this.busyTimer);
     // Журнал вкладки (t1059): meta.logPath от плагина — буфер экрана простым текстом в файл. Вывод до выхода дочитывается write('').
@@ -1089,9 +1358,7 @@ function handle(c, msg) {
     case 'read':
       return void s.read(msg.format).then((text) => c.reply(id, { text }), () => c.fail(id, 'вывод не прочитан'));
     case 'write':
-      s.onInput(String(msg.data));
-      if (String(msg.data).includes('\r')) s.enterAt = Date.now();
-      s.pty.write(String(msg.data));
+      s.input(String(msg.data));
       return c.reply(id);
     case 'resize':
       s.resize(msg.cols, msg.rows);
@@ -1108,7 +1375,8 @@ function handle(c, msg) {
       return c.reply(id, { session: s.info() });
     }
     case 'kill':
-      s.terminate();
+      // Спящая (t1751): процесса нет, выхода не будет — закрыть сразу.
+      if (s.sleep === 'asleep') { s.killed = true; s.finish(0); } else s.terminate();
       return c.reply(id);
     case 'seen':
       // Окно открыло вкладку на экране (t1470): «не смотрел» снят. Рассылка — только при смене.
@@ -1201,6 +1469,27 @@ function createSession(c, id, msg) {
     c.fail(id, 'терминал не запустился: внутренняя ошибка демона, попробуйте открыть вкладку ещё раз');
   });
 }
+
+/**
+ * Рецепт пробуждения из create (t1751): { file, args, env, note } или null — вкладка не усыпляется.
+ * @param {any} w
+ * @returns {{ file: string, args: string[], env: Record<string, string> | undefined, note: string } | null}
+ */
+function wakeRecipe(w) {
+  if (!w || typeof w !== 'object' || typeof w.file !== 'string' || !w.file || !Array.isArray(w.args) || !w.args.includes('--resume')) return null;
+  const env = w.env && typeof w.env === 'object' ? /** @type {Record<string, string>} */ (w.env) : undefined;
+  return { file: w.file, args: w.args.map(String), env, note: String(w.note || 'спит — нажмите клавишу').slice(0, 200) };
+}
+
+/** Усыпить вкладки Claude, стоящие в «готово» дольше порога (t1751). */
+function lookSleep() {
+  if (shuttingDown) return;
+  const now = Date.now();
+  for (const s of sessions.values()) {
+    try { s.maySleep(now); } catch (e) { log(`терминал ${s.sid}: проверка сна упала: ${/** @type {any} */ (e).stack || e}`); }
+  }
+}
+if (SLEEP_MS > 0) setInterval(lookSleep, SLEEP_LOOK_MS).unref();
 
 /** @type {NodeJS.Timeout | null} */
 let idleTimer = null;
@@ -1445,6 +1734,8 @@ function onHook(source, e, tabKey) {
   }
   // Строка состояния — не событие: она обновляется много раз за ответ. Ни s.hook, ни рассылки hook, ни лога, если номер тот же.
   if (event === STATUS_EVENT) {
+    // Проснувшийся claude нарисовал поле (t1751): по строке состояния ему отдаётся придержанный ввод.
+    if (source === 'claude') s.statusAt = Date.now();
     // Запущена раньше прошлой смены номера — это строка прежнего разговора, пришедшая с опозданием.
     const startedAt = Number(e.startedAt) || 0;
     if (source !== 'claude' || meta.kind !== 'claude' || !UUID.test(sessionId) || meta.claudeSessionId === sessionId || startedAt < s.claudeIdAt) return;

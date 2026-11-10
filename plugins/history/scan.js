@@ -404,8 +404,8 @@ function grokMeta(file) {
   return { title: str(j.generated_title) || str(j.session_summary), cwd: str(j.info && j.info.cwd), created: str(j.created_at) };
 }
 
-/** Последние реплики журнала: хвост файла, до n сообщений. @param {Agent} agent @param {string} file @param {number} n */
-function tail(agent, file, n) {
+/** Последние реплики журнала: хвост файла, до n сообщений, каждое до max знаков (выжимка передачи, t1475, — длиннее). @param {Agent} agent @param {string} file @param {number} n @param {number} [max] */
+function tail(agent, file, n, max = 600) {
   /** @type {{ role: string, ts: string, text: string }[]} */
   let got = [];
   let size = 0;
@@ -425,7 +425,7 @@ function tail(agent, file, n) {
     for (const l of lines) {
       const o = parse(agent, l);
       const m = o && lineOf(agent, s, o);
-      if (m) got.push({ role: m.role, ts: m.ts, text: m.text.slice(0, 600) });
+      if (m) got.push({ role: m.role, ts: m.ts, text: m.text.slice(0, max) });
     }
     if (got.length >= n || from === 0 || len >= 16 << 20) return got.slice(-n);
   }
@@ -760,6 +760,12 @@ function run(wd) {
       out.sort((x, y) => String(y.updated).localeCompare(String(x.updated)));
       return { ...page(out.map((r) => rec(r, kids)), a.offset), agents };
     },
+    // Весь список одним ответом и из одного чтения таблицы (t1686): постраничный проход читал sessions на каждую страницу — 19 раз и 217 МБ при 3645 разговорах.
+    listAll(a) {
+      const { out, kids } = visible(a);
+      out.sort((x, y) => String(y.updated).localeCompare(String(x.updated)));
+      return { items: out.map((r) => rec(r, kids)) };
+    },
     search(a) {
       const q = String(a.q || '').trim();
       if (!q) return cmds.list(a);
@@ -805,6 +811,15 @@ function run(wd) {
       const command = r.agent === 'claude' ? `claude --resume ${word(r.id)}${r.agent_name ? ` --agent ${word(r.agent_name)}` : ''}` : r.agent === 'agy' ? `agy --conversation ${word(r.id)}`
         : r.agent === 'grok' ? `grok --resume ${word(r.id)}` : `codex resume ${word(r.id)}`;
       return { first: r.first_prompt || '', turns: tail(r.agent, r.file, 4), subagents, command, cwd: cwdOf(r) };
+    },
+    // Выжимка для передачи другому агенту (t1475): первое сообщение, заголовок и последние реплики длиннее, чем в подробностях.
+    excerpt(a) {
+      const r = db.session(String(a.key));
+      if (!r) return { error: 'разговор не найден' };
+      const n = Math.min(40, Math.max(1, Number(a.n) || 12));
+      const max = Math.min(8000, Math.max(200, Number(a.max) || 2000));
+      return { agent: r.agent, id: r.id, title: titleOf(r).title, first: String(r.first_prompt || ''), turns: tail(r.agent, r.file, n, max), file: r.file, cwd: cwdOf(r),
+        createdAt: r.created || r.updated || '', updatedAt: r.updated || '' };
     },
     forget(a) { const r = db.session(String(a.key)); if (r) db.drop(r.key, r.file); changed(); return { ok: true }; },
     async clear() {

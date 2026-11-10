@@ -112,6 +112,25 @@ function historySetup(host) {
     #plugin-history-panel .toast { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); padding: 4px 10px; border-radius: 5px; background: var(--menu, var(--card, #222));
       border: 1px solid var(--line, rgba(141,145,165,.25)); color: var(--text); font-size: 12px; z-index: 6; max-width: calc(100% - 20px); overflow-wrap: anywhere; }
     #right > :not([hidden]) ~ #plugin-history-panel:not([hidden]) { border-top: 1px solid var(--line, rgba(141,145,165,.14)); }
+    /* «Передать другому агенту…» (t1475): окно на всё окно проекта — его открывает и меню вкладки, когда панели «Истории» не видно. */
+    #plugin-history-handoff { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; font-size: 12.5px; color: var(--text); }
+    #plugin-history-handoff .shade { position: absolute; inset: 0; background: rgba(0,0,0,.45); }
+    #plugin-history-handoff .box { position: relative; width: 560px; max-width: calc(100% - 32px); max-height: calc(100% - 32px); overflow: auto; box-sizing: border-box;
+      background: var(--menu, var(--card, #222)); border: 1px solid var(--line, rgba(141,145,165,.25)); border-radius: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.55); padding: 16px; }
+    #plugin-history-handoff .q { font-weight: 600; font-size: 13.5px; margin-bottom: 4px; overflow-wrap: anywhere; }
+    #plugin-history-handoff .w { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    #plugin-history-handoff .hrow { display: flex; height: auto; flex-wrap: wrap; gap: 10px; margin-top: 12px; } /* не .row: у темы kermach .row — строка списка высотой 48px */
+    #plugin-history-handoff label { display: flex; flex-direction: column; gap: 4px; flex: 1 1 200px; min-width: 0; color: var(--muted); font-size: 12px; }
+    #plugin-history-handoff select, #plugin-history-handoff textarea { background: var(--input, var(--bg, #1e1f26)); color: var(--text); border: 1px solid var(--line, rgba(141,145,165,.25));
+      border-radius: 5px; font: inherit; font-size: 12.5px; padding: 4px 6px; box-sizing: border-box; width: 100%; }
+    #plugin-history-handoff textarea { min-height: 220px; resize: vertical; font-family: var(--mono, Consolas, monospace); font-size: 12px; line-height: 1.4; }
+    #plugin-history-handoff select:focus, #plugin-history-handoff textarea:focus { border-color: var(--accent); outline: none; }
+    #plugin-history-handoff .warn { margin-top: 10px; padding: 6px 8px; border-radius: 5px; border: 1px solid var(--warn, #d29922); color: var(--warn, #d29922); overflow-wrap: anywhere; }
+    #plugin-history-handoff .why { color: var(--danger, #e5534b); font-size: 12px; margin-top: 8px; overflow-wrap: anywhere; }
+    #plugin-history-handoff .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+    #plugin-history-handoff .btn { padding: 4px 12px; border-radius: 5px; border: 1px solid var(--line, rgba(141,145,165,.25)); color: var(--text); background: var(--hover); font: inherit; font-size: 12.5px; cursor: pointer; }
+    #plugin-history-handoff .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--on-accent, #fff); }
+    #plugin-history-handoff .btn[aria-disabled="true"] { opacity: .45; cursor: default; }
   `;
   document.head.appendChild(style);
 
@@ -546,6 +565,7 @@ function historySetup(host) {
     const outHint = l && l.where === 'outside' ? outsideHint(l) : '';
     const list = [];
     if (mine(it)) list.push({ id: 'resume', label: I18n.t('history.resume', 'Продолжить в новой вкладке'), off: !!l, tip: outHint });
+    if (mine(it)) list.push({ id: 'handoff', label: I18n.t('history.handoff', 'Передать другому агенту…') });
     else if (it.projectId) list.push({ id: 'project', label: I18n.t('history.openProject', 'Открыть проект') });
     if (l && l.where === 'tab') list.push({ id: 'jump', label: I18n.t('history.jump', 'Перейти к вкладке') });
     if (scope === 'waiting') list.push('-', { id: 'snooze', label: I18n.t('history.snooze', 'Отложить…') }, { id: 'done', label: I18n.t('history.done', 'Сделано') });
@@ -563,6 +583,7 @@ function historySetup(host) {
     showMenu(at, list, async (id) => {
       const k = keyOf(it);
       if (id === 'resume') resume(it);
+      else if (id === 'handoff') askHandoff({ agent: it.agent, id: it.id });
       else if (id === 'project') host.bridge.projects.open(it.projectId);
       else if (id === 'jump' && host.pages) host.pages.show(l.sid);
       else if (id === 'copyPrompt') { const d = await loadDetails(it); if (d && !d.error) copy(String(d.first || '')); }
@@ -664,6 +685,98 @@ function historySetup(host) {
       if (b && /** @type {HTMLElement} */ (b).dataset.do === 'yes') go();
     };
   };
+
+  // ---- «Передать другому агенту…» (t1475) ----
+  /** @type {HTMLElement | null} */ let handEl = null;
+  const closeHand = () => { if (handEl) { handEl.remove(); handEl = null; } };
+  /** Окошко с ошибкой и кнопкой «Закрыть». @param {HTMLElement} box @param {string} text */
+  const handFail = (box, text) => {
+    box.innerHTML = `<div class="q">${esc(I18n.t('history.handoffTitle', 'Передать другому агенту'))}</div><div class="why">${esc(text)}</div>`
+      + `<div class="acts"><button class="btn" data-do="no">${esc(I18n.t('history.close', 'Закрыть'))}</button></div>`;
+    /** @type {HTMLElement} */ (box.querySelector('[data-do="no"]')).focus();
+  };
+  /**
+   * Окно передачи: кому (агенты каталога, найденные и включённые), модель и первое сообщение. Черновик пишет главная часть (handoff.js) — человек может дописать.
+   * Окно — на document.body: его открывает и меню вкладки (событие kermach:handoff), когда панели «Истории» не видно.
+   * @param {{ agent: string, id: string } | null} ref @param {string} [note] строка сверху; @param {string} [fail] ошибка вместо окна
+   */
+  const askHandoff = async (ref, note, fail) => {
+    closeHand();
+    const m = document.createElement('div');
+    m.id = 'plugin-history-handoff';
+    m.innerHTML = `<div class="shade"></div><div class="box" role="dialog" tabindex="-1"><div class="w">${esc(I18n.t('history.handoffLoading', 'Собираю выжимку разговора…'))}</div></div>`;
+    document.body.appendChild(m);
+    handEl = m;
+    const box = /** @type {HTMLElement} */ (m.querySelector('.box'));
+    box.focus();
+    m.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); closeHand(); } });
+    m.addEventListener('click', (ev) => {
+      const t = /** @type {HTMLElement} */ (ev.target);
+      const b = t.closest('[data-do]');
+      if (t.classList.contains('shade') || (b && /** @type {HTMLElement} */ (b).dataset.do === 'no')) closeHand();
+    });
+    if (fail || !ref) { handFail(box, fail || '—'); return; }
+    const info = await api('handoffInfo', ref);
+    if (stopped || handEl !== m) return;
+    if (!info || info.error) { handFail(box, I18n.t('history.handoffFailed', 'Не передать: {why}', { why: String((info && info.error) || '—') })); return; }
+    /** @type {any[]} */
+    const targets = Array.isArray(info.targets) ? info.targets : [];
+    const live = info.live;
+    const warn = !live ? '' : I18n.t('history.handoffLive', '{agent} ещё работает {where}. Два агента будут править одни и те же файлы — остановите его или дождитесь, пока он закончит.',
+      { agent: info.fromName, where: live.where === 'tab' ? I18n.t('history.handoffInTab', 'во вкладке') : I18n.t('history.handoffOutside', 'вне Kermach') });
+    box.innerHTML = `<div class="q">${esc(I18n.t('history.handoffTitle', 'Передать другому агенту'))}</div>`
+      + `<div class="w">${esc(I18n.t('history.handoffFrom', 'Разговор {agent}: «{title}». Он не изменится и не удалится.', { agent: info.fromName, title: info.title || info.id }))}</div>`
+      + (note ? `<div class="w">${esc(note)}</div>` : '')
+      + `<div class="hrow"><label>${esc(I18n.t('history.handoffAgent', 'Кому передать'))}<select data-k="to">`
+      + targets.map((t) => `<option value="${esc(t.id)}"${t.id === info.to ? ' selected' : ''}>${esc(t.title)}${t.id === info.from ? ` — ${esc(I18n.t('history.handoffSame', 'тот же агент'))}` : ''}</option>`).join('')
+      + `</select></label><label>${esc(I18n.t('history.handoffModel', 'Модель'))}<select data-k="model"></select></label></div>`
+      + `<div class="hrow"><label>${esc(I18n.t('history.handoffText', 'Первое сообщение. Его написала программа — допишите своё, если нужно'))}<textarea data-k="text" spellcheck="false"></textarea></label></div>`
+      + `<div class="w" style="margin-top:8px">${esc(I18n.t('history.handoffWhere', 'Новая вкладка откроется в папке {cwd}. Выжимка разговора ляжет в {rel}.', { cwd: info.cwd, rel: info.excerpt }))}</div>`
+      + (warn ? `<div class="warn">${esc(warn)}</div>` : '')
+      + '<div class="why" hidden></div>'
+      + `<div class="acts"><button class="btn" data-do="no">${esc(I18n.t('history.cancel', 'Отмена'))}</button><button class="btn pri" data-do="yes">${esc(I18n.t('history.handoffOk', 'Передать'))}</button></div>`;
+    const to = /** @type {HTMLSelectElement} */ (box.querySelector('[data-k="to"]'));
+    const model = /** @type {HTMLSelectElement} */ (box.querySelector('[data-k="model"]'));
+    const text = /** @type {HTMLTextAreaElement} */ (box.querySelector('[data-k="text"]'));
+    const errEl = /** @type {HTMLElement} */ (box.querySelector('.why'));
+    const yes = /** @type {HTMLElement} */ (box.querySelector('[data-do="yes"]'));
+    text.value = String(info.text || '');
+    const paintModels = () => {
+      const t = targets.find((x) => x.id === to.value);
+      /** @type {string[]} */
+      const ms = t && t.canModel && Array.isArray(t.models) ? t.models : [];
+      model.innerHTML = `<option value="">${esc(I18n.t('history.handoffModelDefault', 'по умолчанию'))}</option>` + ms.map((x) => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
+      model.disabled = !ms.length;
+      model.title = t && !t.canModel ? I18n.t('history.handoffNoModel', 'Модель этому агенту программа не передаёт: он запустится со своей') : '';
+    };
+    paintModels();
+    to.addEventListener('change', paintModels);
+    if (!targets.length) { errEl.textContent = I18n.t('history.handoffNoTargets', 'Нет ни одного найденного и включённого агента — включите их в окне «Агенты»'); errEl.hidden = false; yes.setAttribute('aria-disabled', 'true'); }
+    to.focus();
+    yes.addEventListener('click', async () => {
+      if (yes.getAttribute('aria-disabled') === 'true') return;
+      yes.setAttribute('aria-disabled', 'true');
+      errEl.hidden = true;
+      const r = await api('handoff', { agent: info.agent, id: info.id, to: to.value, model: model.value, text: text.value });
+      if (stopped || handEl !== m) return;
+      if (!r || r.error) {
+        errEl.textContent = I18n.t('history.handoffFailed', 'Не передать: {why}', { why: String((r && r.error) || '—') });
+        errEl.hidden = false;
+        yes.removeAttribute('aria-disabled');
+        return;
+      }
+      closeHand();
+    });
+  };
+  /** Меню вкладки (project-page.js tabMenu) просит передать её разговор: detail — sid, вид и номера разговора, которые знает окно. @param {Event} ev */
+  const onHandoff = async (ev) => {
+    const d = /** @type {CustomEvent} */ (ev).detail || {};
+    const r = await api('handoffOf', d);
+    if (stopped) return;
+    if (!r || r.error) { askHandoff(null, '', String((r && r.error) || '—')); return; }
+    askHandoff({ agent: r.agent, id: r.id }, r.guessed ? I18n.t('history.handoffGuessed', 'Вкладка не хранит номер своего разговора — взят разговор, начатый в ней после открытия. Проверьте заголовок.') : '');
+  };
+  window.addEventListener('kermach:handoff', onHandoff);
 
   /** Правая колонка видна, пока в ней есть видимая панель. */
   const paintRight = () => { host.right.hidden = ![...host.right.children].some((c) => !(/** @type {HTMLElement} */ (c)).hidden); };
@@ -899,6 +1012,8 @@ function historySetup(host) {
     stopped = true;
     for (const t of [searchTimer, changedTimer, liveTimer, toastTimer, badgeTimer]) if (t) clearTimeout(t);
     document.removeEventListener('pointerdown', onDown, true);
+    window.removeEventListener('kermach:handoff', onHandoff);
+    closeHand();
     if (offLang) offLang();
     // Вкладку снять до панели: close вернёт панель в колонку, и она уйдёт вместе с колонкой ниже.
     closeFull();

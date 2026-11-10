@@ -10,6 +10,7 @@
 // Тот же повод зажигает сигнал на панели задач или точку на значке у часов (attention.js, t108).
 // Звук — системный (shell.beep: «Стандартный звук» Windows), без файлов, окон и процессов.
 // KERMACH_SOUND=0 — выключатель для проверок: событие пишется в журнал, но не звучит.
+// Своя папка данных (KERMACH_DATA) без KERMACH_SOUND=1 — тоже не звучит, строка «играю» в журнале остаётся (t1770).
 // Настройка «звук» (settings.js, t181) читается на каждое событие: выключили — не звучит, мигание остаётся.
 // Тот же повод показывает уведомление Windows (notify.js, t151) — после мигания и до проверок звука: у него своя настройка.
 
@@ -65,6 +66,9 @@ function attach(client, c) {
   if (attached.has(client)) return;
   attached.add(client);
   const off = ENV('SOUND') === '0';
+  // Проба со своей папкой данных без явного KERMACH_SOUND=1 — shell.beep не зовётся, журнал как обычно (t1770):
+  // пробы удаляли выключатель и грузили настоящий main.js — Ростислав слышал их сигналы. Правило — как у уведомлений (notify.js testing()).
+  const quiet = !off && !!ENV('DATA') && ENV('SOUND') !== '1';
   if (off) c.log('звук: выключен переменной KERMACH_SOUND=0');
   client.on('exit', (/** @type {any} */ m) => { if (m && m.sid) notify.forget(m.sid); });
   client.on('state', (/** @type {any} */ m) => {
@@ -84,7 +88,7 @@ function attach(client, c) {
       catch (e) { c.log(`уведомление: ${what} — не показано: ${e instanceof Error ? e.message : e}`); }
       if (off) { c.log(`звук: ${what} — выключен для проверки`); return; }
       if (!settings.get().sound) { c.log(`звук: ${what} — выключен настройкой`); return; }
-      electron.shell.beep();
+      if (!quiet) electron.shell.beep();
       c.log(`звук: ${what} — играю`);
     }).catch((/** @type {any} */ e) => c.log(`звук: ${what} — проект не узнан, звук пропущен: ${e}`));
   });

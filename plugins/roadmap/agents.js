@@ -93,22 +93,58 @@ function launchArgs(agent, model, effort) {
 }
 
 /**
+ * Инструменты агента карты claude (t1750, spikes\t1750-light\ИТОГ.md). Описания всех встроенных — 38,6 тыс. токенов из 47 тыс. старта,
+ * с этим списком старт 17,7 тыс. Список — по 550 сессиям карт с 20.10: всё, что агенты вызывали, кроме запрещённого промптом карты
+ * (Agent, SendMessage, AskUserQuestion) и редкого тяжёлого (Artifact — 2 сессии). Workflow, ScheduleWakeup, ReportFindings, ListAgents,
+ * ReadNotifications, Cron*, EnterWorktree не вызывали ни разу. ToolSearch обязателен: без него отложенные (WebFetch, WebSearch, TaskStop,
+ * Monitor, NotebookEdit) грузятся целиком, +4 тыс. Незнакомое имя claude пропускает молча (runs-iv4.jsonl, U) — PowerShell на Mac не мешает.
+ * MCP --tools не режет: они по-прежнему по полю mcp паспорта. advisor — серверный, остаётся.
+ */
+const CARD_TOOLS = ['Bash', 'PowerShell', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'ToolSearch', 'WebFetch', 'WebSearch', 'TaskStop', 'Monitor', 'NotebookEdit'];
+
+/** Имя MCP-сервера — как MCP_NAME ядра (terminals.js) и паспорта (board.js); больше 16 имён ядро не примет. */
+const MCP_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const MCP_MAX = 16;
+/**
+ * Серверы MCP, которые просит карта (t1753): поле шапки mcp — имена из настроек Claude через запятую, например `mcp: playwright, context7`.
+ * Значение из файла карты (c.extra.mcp) — строка; [список] в квадратных скобках тоже понимается. Неверное имя не передаётся — оно в bad.
+ * @param {unknown} v @returns {{ names: string[], bad: string[] }}
+ */
+function cardMcp(v) {
+  const raw = Array.isArray(v) ? v.map(String) : String(v || '').replace(/^\s*\[|\]\s*$/g, '').split(',');
+  const all = [...new Set(raw.map((x) => x.trim()).filter(Boolean))];
+  const names = all.filter((n) => MCP_NAME.test(n)).slice(0, MCP_MAX);
+  return { names, bad: all.filter((n) => !names.includes(n)) };
+}
+
+/**
  * Лёгкий старт агента карты (t1322, ОПТИМИЗАЦИЯ-процесса.md §3): флаги claude по настройке проекта (board.cardStart, шапка паспорта).
  * Субагенты агенту карты запрещены всегда — --disallowedTools=Agent: через «=», иначе claude возьмёт в список и первое сообщение.
  * MCP «никаких» — --strict-mcp-config; список — поле mcp открытия вкладки, файл серверов пишет ядро (terminals.js mcpConfig).
+ * Проверяющий карты идёт со --strict-mcp-config всегда (grader.js); карта на кредитах этих флагов не получает (ALLOW_FLAGS.credits в terminals.js).
  * Скиллы «нет» — --disable-slash-commands. У других агентов таких флагов нет: настройка не по умолчанию — строка в skipped.
- * @param {string} agent @param {{ mcp: 'все' | 'никаких' | string[], skills: boolean }} st
+ * Инструменты (t1750) — всегда --tools=CARD_TOOLS, через «=» по той же причине, что --disallowedTools; скиллы «да» — и Skill: без него
+ * список скиллов пропадает молча (spikes\t1750-light\runs-iv4.jsonl, S; runs-iv5.jsonl, S2).
+ * MCP по карте (t1753, ОТЧЁТ-память-рост-сессий.md п. 3): каждый сервер — отдельный процесс на 50–70 МБ, картам они почти не нужны.
+ * Ключа card_mcp нет — «никаких» (board.startOf). Серверы, которые просит карта (поле mcp, cardMcp), добавляются к списку паспорта;
+ * «все» паспорта — выбор человека, его карта не сужает. Список пуст — --strict-mcp-config, иначе поле mcp (ядро ставит строгий режим само).
+ * @param {string} agent @param {{ mcp: 'все' | 'никаких' | string[], mcpSet?: boolean, skills: boolean }} st
+ * @param {string[]} [ask] серверы, которые просят карты запуска (cardMcp)
  * @returns {{ args: string[], mcp?: string[], skipped: string }}
  */
-function lightArgs(agent, st) {
+function lightArgs(agent, st, ask = []) {
   if (agent !== 'claude') {
-    const what = [st.mcp !== 'все' && `MCP «${Array.isArray(st.mcp) ? st.mcp.join(', ') : st.mcp}»`, !st.skills && 'скиллы «нет»'].filter(Boolean);
-    return { args: [], skipped: what.length ? `${what.join(' и ')} из паспорта не ${what.length > 1 ? 'передаются' : 'передаётся'}: флаги есть только у claude` : '' };
+    // «никаких» по умолчанию (ключа нет, t1753) у других агентов не новость — строка только о том, что задали паспорт или карта.
+    const own = st.mcp !== 'все' && st.mcpSet !== false ? (Array.isArray(st.mcp) ? st.mcp : [st.mcp]) : [];
+    const mc = [...new Set([...own, ...ask])];
+    const what = [mc.length && `MCP «${mc.join(', ')}»`, !st.skills && 'скиллы «нет»'].filter(Boolean);
+    return { args: [], skipped: what.length ? `${what.join(' и ')} из паспорта или карты не ${what.length > 1 ? 'передаются' : 'передаётся'}: флаги есть только у claude` : '' };
   }
-  const args = ['--disallowedTools=Agent'];
-  if (st.mcp === 'никаких') args.push('--strict-mcp-config');
+  const args = ['--disallowedTools=Agent', `--tools=${[...CARD_TOOLS, ...(st.skills ? ['Skill'] : [])].join(',')}`];
+  const names = st.mcp === 'все' ? [] : [...new Set([...(Array.isArray(st.mcp) ? st.mcp : []), ...ask])].slice(0, MCP_MAX);
+  if (st.mcp !== 'все' && !names.length) args.push('--strict-mcp-config');
   if (!st.skills) args.push('--disable-slash-commands');
-  return Array.isArray(st.mcp) ? { args, mcp: st.mcp, skipped: '' } : { args, skipped: '' };
+  return names.length ? { args, mcp: names, skipped: '' } : { args, skipped: '' };
 }
 
 /**
@@ -147,4 +183,4 @@ function raise(agent, model, effort, tries, pick) {
 /** Попытка выше верхней ступени (t1421, В4): строка для журнала и ответа run. */
 const OVER = 'Ступеней больше нет. Посмотрите карту: возможно, её надо разбить или уточнить';
 
-module.exports = { AGENTS, MODELS, EFFORT, EFFORTS, TUNE, LADDER, OVER, kindOf, launchArgs, lightArgs, raise };
+module.exports = { AGENTS, MODELS, EFFORT, EFFORTS, TUNE, LADDER, OVER, CARD_TOOLS, kindOf, launchArgs, cardMcp, lightArgs, raise };

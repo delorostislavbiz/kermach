@@ -96,7 +96,7 @@ Wie man eine Karte erledigt — genauso wie ein Kartenagent:
 2. Setze den Status der Karte auf „in Arbeit": Ändere die Zeile `status:` im Kopf der Kartendatei. Ab jetzt sieht sich der Prüfer deine Änderungen im Projekt an.
 3. Mach, was in der Karte steht, und nicht mehr. Die Projektregeln für einen Kartenagenten (Prüfungen, Grenzen, Ehrlichkeit) gelten auch für dich.
 4. Prüfe nach dem Feld „Wie prüfen". Speichere den Nachweis als Datei in `{проект}\.kermach\proofs\t<N>\`.
-5. Schließe die Karte: `kermach roadmap close t<N> --done "was getan wurde" --proof "Pfad zum Nachweis"`.
+5. Schließe die Karte: `kermach roadmap close t<N> --done "was getan wurde" --proof "Pfad zum Nachweis" --tested "Art"`. Die Art der Prüfung sagt, worauf geprüft wurde: `echt` (womit der Mensch arbeiten wird), `simuliert`, `nur Mensch`; mehrere durch Komma. Verbirg eine simulierte Probe nicht.
 6. Eine Antwort des Menschen ist nötig — setze den Status „wartet auf Antwort", schreibe die Frage in die Karte und schreibe sie dem Menschen. Nimm die nächste Karte, die nicht von dieser abhängt.
 
 Journal. Füge nach jeder Karte eine Zeile in `{проект}\SESSION-now.md` hinzu. Beispiel: „Modus allein, {фаза}: t12 fertig, nächste t13". Gibt es die Datei nicht — lege sie an.

@@ -310,6 +310,12 @@ function staleAll(dataDir) {
  * «@» внутри слова (e-mail, user@host) Claude Code не трогает — и мы не трогаем. @param {string} s
  */
 const defuseAt = (s) => String(s).replace(/(^|[\s"'`([{<«„])@(?=[^\s@])/gm, '$1＠');
+/**
+ * Отказ с причиной для окна (t1610): error — по-русски, как раньше (журнал, cli.js); why — ключ и значения, окно переводит причину на свой язык.
+ * Ключ — из словаря WHY в window.js; ru — русский образец с {имя}, значения подставляются.
+ * @param {string} k @param {string} ru @param {Record<string, string>} [v] @returns {{ error: string, why: { k: string, v: Record<string, string> } }}
+ */
+const fail = (k, ru, v = {}) => ({ error: ru.replace(/\{(\w+)\}/g, (all, n) => (Object.hasOwn(v, n) ? String(v[n]) : all)), why: { k, v } });
 const subst = (text, vars) => text.replace(/\{([^{}\n]{1,60})\}/g, (all, k) => (Object.hasOwn(vars, k) ? vars[k] : all));
 /**
  * Слова формата доски для шаблонов (t1429): {доска:готово}, {доска:Как проверить} → слово на языке доски («готово», «done»…). Русская доска — русское слово.
@@ -963,21 +969,21 @@ function task(project, name, opts) {
   // Первый «## » вне блока кода ``` (t612): пример с «## » в пояснении выше задания его не обрезает.
   const read = (/** @type {string} */ f) => { const s = unstamp(readSmall(f, MAX_TEMPLATES)); const h = heads(s); return h.length ? s.split('\n').slice(h[0].at + 1).join('\n').trim() : null; };
   const lack = (/** @type {string | null} */ t) => t === null ? 'нет заголовка «## »' : 'после заголовка «## » пусто';
-  try { text = read(tf.file); } catch (e) { if (!tf.own) return { error: `задание не прочитано: ${e instanceof Error ? e.message : e}` }; warnings.push(`своя копия ${tf.file}: ${e instanceof Error ? e.message : e} — взят встроенный текст`); }
+  try { text = read(tf.file); } catch (e) { if (!tf.own) return fail('tplRead', 'задание не прочитано: {e}', { e: String(e instanceof Error ? e.message : e) }); warnings.push(`своя копия ${tf.file}: ${e instanceof Error ? e.message : e} — взят встроенный текст`); }
   // Своя копия не читается, в ней нет «## » или после него пусто — встроенный текст и предупреждение, как у шаблонов карты.
   if (!text && tf.own) {
     if (!warnings.length) warnings.push(`в своей копии ${tf.file} ${lack(text)} — взят встроенный текст`);
     tf.file = builtinIn(name, lang); tf.own = false;
-    try { text = read(tf.file); } catch (e) { return { error: `задание не прочитано: ${e instanceof Error ? e.message : e}` }; }
+    try { text = read(tf.file); } catch (e) { return fail('tplRead', 'задание не прочитано: {e}', { e: String(e instanceof Error ? e.message : e) }); }
   }
-  if (!text) return { error: `в ${path.basename(tf.file)} ${lack(text)}: задание пустое` };
+  if (!text) return text === null ? fail('tplNoHead', 'в {file} нет заголовка «## »: задание пустое', { file: path.basename(tf.file) }) : fail('tplBlank', 'в {file} после заголовка «## » пусто: задание пустое', { file: path.basename(tf.file) });
   /** @type {Record<string, string>} */
   const vars = { ...boardWords(lang), 'проект': project, 'папка': board.root(project) + path.sep, 'формат': builtinIn('FORMAT.md', lang), 'образцы': builtinIn(SAMPLES, lang) + path.sep, 'язык': langName(lang) };
   if (name === ADOPT) {
     // Выбранный файл: относительный путь — от папки проекта; файла нет — отказ, а не задание с неверным путём.
     const file = String(opts.file || '').replace(/[\r\n]+/g, ' ').trim();
     vars['файл'] = file ? path.resolve(project, file) : '';
-    if (file) { let ok = false; try { ok = fs.statSync(vars['файл']).isFile(); } catch { /* нет файла */ } if (!ok) return { error: `файл плана не найден: ${vars['файл']}` }; }
+    if (file) { let ok = false; try { ok = fs.statSync(vars['файл']).isFile(); } catch { /* нет файла */ } if (!ok) return fail('planMissing', 'файл плана не найден: {file}', { file: vars['файл'] }); }
     text = adoptBody(text, !!file, opts.dataDir, lang, warnings);
   }
   // {перенос} в compose.md (t1602): куда идти, если человек согласился использовать найденный план.
@@ -1092,4 +1098,4 @@ const adopt = (project, opts = {}) => task(project, ADOPT, opts);
 const ADVISOR_LINE = lineOf('advisor', {});
 const ADVISOR_ONCE = lineOf('advisorOnce', {});
 
-module.exports = { TEMPLATES, defuseAt, langOf, langName, nameIn, builtinIn, tr, SAY, LINES, ADVISOR_LINE, ADVISOR_ONCE, line, templates, templateFile, stale, staleAll, paths, shared, fresh, pick, search, wrongNotes, noteLine, listLine, alikeNotes, alikePattern, mergeTitle, notes, build, compose, newcard, adopt };
+module.exports = { fail, TEMPLATES, defuseAt, langOf, langName, nameIn, builtinIn, tr, SAY, LINES, ADVISOR_LINE, ADVISOR_ONCE, line, templates, templateFile, stale, staleAll, paths, shared, fresh, pick, search, wrongNotes, noteLine, listLine, alikeNotes, alikePattern, mergeTitle, notes, build, compose, newcard, adopt };
