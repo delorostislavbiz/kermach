@@ -15,8 +15,9 @@ MAIN="$APP/Contents/MacOS/Kermach"
 D="$HOME/Library/Application Support/Kermach"
 [[ -f "$D/projects.json" ]] || D="$HOME/Library/Application Support/TERMINALUS"
 say() { print -r -- "$(date '+%H:%M:%S') $*"; }
-# Головний процес — бінарник без аргументів (демон — той самий бінарник з daemon.js). pgrep -fx на macOS його не бачить.
-mainpid() { ps -axo pid=,command= | awk -v m="$MAIN" '{ pid=$1; $1=""; sub(/^ /, ""); if ($0 == m) print pid }'; }
+# Головний процес — бінарник без аргументів або з ключами (--restore-windows); демон — той самий бінарник з daemon.js.
+# pgrep -fx на macOS його не бачить.
+mainpid() { ps -axo pid=,command= | awk -v m="$MAIN" '{ pid=$1; $1=""; sub(/^ /, ""); if ($0 == m || index($0, m " --") == 1) print pid }'; }
 
 if [[ "${1:-}" != "--no-build" ]]; then
   NODE_BIN=$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1)
