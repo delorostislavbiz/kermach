@@ -473,8 +473,46 @@
       if (!b) return;
       const k = /** @type {HTMLElement} */ (b).dataset.k;
       if (k === 'term') { setView('term', false); return; }
-      key2(k === 'yes' ? (tab.kind === 'codex' ? 'y' : '\r') : k === 'always' ? (tab.kind === 'codex' ? 'a' : '\x1b[B\r') : (tab.kind === 'codex' ? 'n' : '\x1b'));
+      if (tab.kind === 'codex') { key2(k === 'yes' ? 'y' : k === 'always' ? 'a' : 'n'); return; }
+      // Claude Code (порт для macOS): пункт — по его номеру с экрана. Набор пунктов разный: в обходе разрешений бывает только
+      // «1. Yes / 2. No», и прежнее «вниз + Enter» выбирало No — Claude прерывался. Цифра выбирает пункт сразу (проверено на 2.1.322).
+      const opt = pickOption(screenOptions(), k);
+      if (opt) key2(String(opt.n));
+      else if (k === 'always') setView('term', false);
+      else key2(k === 'yes' ? '\r' : '\x1b');
     });
+
+    /**
+     * Пункты вопроса Claude Code на видимом экране терминала: последний список «1. … 2. …» (строка с ❯ — выбранный пункт).
+     * Переносы длинного пункта — строки без номера — пропускаются; «Esc to cancel» и «Enter to confirm» список закрывают.
+     * @returns {{ n: number, text: string }[]}
+     */
+    function screenOptions() {
+      /** @type {{ n: number, text: string }[]} */
+      let last = [];
+      try {
+        const b = tab.x.term.buffer.active;
+        /** @type {{ n: number, text: string }[] | null} */
+        let cur = null;
+        for (let y = b.baseY; y < b.baseY + tab.x.term.rows && y < b.length; y++) {
+          const l = b.getLine(y);
+          const line = l ? l.translateToString(true) : '';
+          const m = /^\s*(?:[❯>›]\s*)?(\d{1,2})\.\s+(.+?)\s*$/.exec(line);
+          if (m && +m[1] === 1) { cur = [{ n: 1, text: m[2] }]; last = cur; continue; }
+          if (m && cur && +m[1] === cur.length + 1) { cur.push({ n: +m[1], text: m[2] }); continue; }
+          if (cur && /Esc to cancel|Enter to confirm/i.test(line)) cur = null;
+        }
+      } catch {}
+      return last;
+    }
+    /** «Да навсегда»: «Yes, and don't ask again…», «Yes, and always allow…», «Yes, allow all edits…» — но не «switch to auto mode». @param {{ text: string }} o */
+    const isAlways = (o) => /^Yes,\s/i.test(o.text) && !/auto mode/i.test(o.text);
+    /** @param {{ n: number, text: string }[]} opts @param {string} k yes | always | no */
+    function pickOption(opts, k) {
+      if (k === 'yes') return opts.find((o) => /^Yes\s*$/i.test(o.text)) || null;
+      if (k === 'always') return opts.find(isAlways) || null;
+      return opts.find((o) => /^No\b/i.test(o.text)) || null;
+    }
 
     /** Последний шаг без результата — что сейчас делает агент или на что просит разрешения. */
     function pending() {
@@ -504,6 +542,8 @@
     }
 
     let painted = '';
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let optTimer;
     function paint() {
       if (view !== 'chat') return;
       const near = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
@@ -559,15 +599,20 @@
         if (ot) ot.addEventListener('click', () => setView('term', false));
         if (near) feed.scrollTop = feed.scrollHeight;
       }
-      // Просьба разрешения — над полем ввода.
+      // Просьба разрешения — над полем ввода. «Разрешать всегда» — только если такой пункт есть на экране (у Codex — всегда);
+      // пунктов ещё нет (терминал не дорисовал) — посмотреть снова чуть позже.
+      const opts = waiting && pend && tab.kind !== 'codex' ? screenOptions() : [];
+      const canAlways = tab.kind === 'codex' || opts.some(isAlways);
+      if (waiting && pend && tab.kind !== 'codex' && !opts.length) { clearTimeout(optTimer); optTimer = setTimeout(() => paintSoon(), 400); }
       if (waiting) {
         const st = pend ? stepOf(pend.name, pend.input) : null;
         const what = st ? (st.detail || st.t) : '';
         ask.hidden = false;
-        ask.innerHTML = `<div class="cv-q">${ICON.lock}<span>${esc(pend ? tr('askTool', '{name} просит разрешения: {t}', { name: name(), t: st ? st.t : '' }) : tr('askOther', '{name} ждёт вашего ответа', { name: name() }))}</span></div>`
+        const askHtml = `<div class="cv-q">${ICON.lock}<span>${esc(pend ? tr('askTool', '{name} просит разрешения: {t}', { name: name(), t: st ? st.t : '' }) : tr('askOther', '{name} ждёт вашего ответа', { name: name() }))}</span></div>`
           + (what && pend ? `<pre class="cv-what">${esc(short(what, 600))}</pre>` : '')
-          + `<div class="cv-btns">${pend ? `<button class="cv-btn pri" data-k="yes">${esc(tr('allow', 'Разрешить'))}</button><button class="cv-btn" data-k="always">${esc(tr('always', 'Разрешать всегда'))}</button><button class="cv-btn" data-k="no">${esc(tr('deny', 'Запретить'))}</button>` : ''}<button class="cv-btn ghost" data-k="term">${ICON.term}${esc(tr('inTerm', 'Ответить в терминале'))}</button></div>`;
-      } else { ask.hidden = true; ask.innerHTML = ''; }
+          + `<div class="cv-btns">${pend ? `<button class="cv-btn pri" data-k="yes">${esc(tr('allow', 'Разрешить'))}</button>${canAlways ? `<button class="cv-btn" data-k="always">${esc(tr('always', 'Разрешать всегда'))}</button>` : ''}<button class="cv-btn" data-k="no">${esc(tr('deny', 'Запретить'))}</button>` : ''}<button class="cv-btn ghost" data-k="term">${ICON.term}${esc(tr('inTerm', 'Ответить в терминале'))}</button></div>`;
+        if (ask.dataset.html !== askHtml) { ask.innerHTML = askHtml; ask.dataset.html = askHtml; }
+      } else { ask.hidden = true; ask.innerHTML = ''; ask.dataset.html = ''; }
       stopBtn.hidden = !working;
       $('.cv-ttl').textContent = title;
       $('.cv-meta').textContent = working ? tr('mWork', 'работает') : waiting ? tr('mWait', 'ждёт ответа') : state === 'done' ? tr('mDone', 'готов') : '';
