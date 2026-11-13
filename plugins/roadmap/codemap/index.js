@@ -66,10 +66,14 @@ const QUERY = {
 (trait_declaration name: (name) @name) @trait
 (enum_declaration name: (name) @name) @enum
 (namespace_definition name: (namespace_name) @name) @namespace
+(program (const_declaration (const_element . (name) @name) @phpconst))
+(class_declaration body: (declaration_list (const_declaration (const_element . (name) @name) @phpconst)))
+(interface_declaration body: (declaration_list (const_declaration (const_element . (name) @name) @phpconst)))
 `,
   py: `
 (function_definition name: (identifier) @name) @function
 (class_definition name: (identifier) @name) @class
+(module (expression_statement (assignment left: (identifier) @name) @pyvar))
 `,
 };
 QUERY.tsx = QUERY.ts;
@@ -131,11 +135,37 @@ function binds(n) {
   const p = n.parent;
   if (!p) return false;
   if (p.type === 'formal_parameters' || p.type === 'array_pattern' || p.type === 'rest_pattern' || p.type === 'object_pattern') return true;
+  // Параметры Python (t1677): def f(MAX, *MAX, **MAX), lambda MAX: …, MAX: int; у значения по умолчанию объявление — только имя.
+  if (p.type === 'parameters' || p.type === 'lambda_parameters' || p.type === 'list_splat_pattern' || p.type === 'dictionary_splat_pattern') return true;
+  if ((p.type === 'default_parameter' || p.type === 'typed_default_parameter') && p.childForFieldName('name')?.startIndex === n.startIndex) return true;
+  if (p.type === 'typed_parameter' && p.namedChild(0)?.startIndex === n.startIndex) return true;
   // Строка импорта (t971): import { A } from, import A from, import * as A — имя заводят, а не читают.
   if (p.type === 'import_specifier' || p.type === 'import_clause' || p.type === 'namespace_import') return true;
   const left = p.type === 'assignment_pattern' ? p.childForFieldName('left') : p.type === 'pair_pattern' ? p.childForFieldName('value')
     : p.type === 'required_parameter' || p.type === 'optional_parameter' ? p.childForFieldName('pattern') : null;
   return !!left && left.startIndex === n.startIndex;
+}
+/** Узлы Python и PHP, где имя не читают: импорт, объявление, тип, пространство имён (t1677). */
+const NOT_READ = new Set(['dotted_name', 'aliased_import', 'import_from_statement', 'import_statement', 'global_statement', 'nonlocal_statement',
+  'object_creation_expression', 'named_type', 'qualified_name', 'namespace_name', 'namespace_use_clause', 'base_clause', 'class_interface_clause']);
+/** Поле узла, в котором стоит n; '' — без поля. @param {any} n */
+function fieldOf(n) {
+  const p = n.parent;
+  for (let i = 0; i < p.childCount; i++) if (p.child(i).startIndex === n.startIndex && p.child(i).type === n.type) return p.fieldNameForChild(i) || '';
+  return '';
+}
+/**
+ * Python и PHP (t1677, d275): имя n — чтение константы, а не её объявление, присваивание, параметр, имя поля или вызов.
+ * Вызов MAX() уже в связях своим видом. @param {any} n
+ */
+function readsVar(n) {
+  const p = n.parent;
+  if (NOT_READ.has(p.type) || binds(n)) return false;
+  // A::X — X читают, A — класс; const B = A — первое имя объявляют, второе читают.
+  if (p.type === 'class_constant_access_expression' || p.type === 'const_element') return p.namedChild(0)?.startIndex !== n.startIndex;
+  const f = fieldOf(n);
+  if (p.type === 'assignment' || p.type === 'augmented_assignment') return f !== 'left';
+  return !['name', 'function', 'attribute', 'alias', 'parameters'].includes(f);
 }
 /** Имя закрыто параметром охватывающей функции: function g(A) { return A } — не верхняя A. @param {any} n */
 function shadowed(n) {
@@ -224,6 +254,13 @@ function extract(ps, lang, text) {
         if (v && (FUNC_VALUE.has(v.type) || (v.type === 'call_expression' && v.childForFieldName('function')?.text === 'require'))) continue;
         kind = def.node.parent.child(0).type === 'const' ? 'const' : 'variable';
       }
+      // Константы Python и PHP (t1677, d275): MAX = 5 на верхнем уровне модуля, const X в PHP — как const и variable у JS (t929).
+      // В Python константа — по соглашению имя заглавными; остальное верхнего уровня — variable. lambda — функция значением, её в карте нет.
+      if (kind === 'pyvar') {
+        if (def.node.childForFieldName('right')?.type === 'lambda') continue;
+        kind = /^[A-Z_][A-Z0-9_]*$/.test(name) && /[A-Z]/.test(name) ? 'const' : 'variable';
+      }
+      if (kind === 'phpconst') kind = 'const';
       // Кусок начинается с обёртки: декоратор Python, «const» у стрелочной функции, «export».
       let outer = def.node;
       for (let p = outer.parent; p && WRAP.has(p.type) && (p.type !== 'lexical_declaration' && p.type !== 'variable_declaration' || p.namedChildCount === 1); p = p.parent) outer = p;
@@ -356,12 +393,24 @@ function linksOf(matches, defs, lang, root) {
   // Использования переменных верхнего уровня (t929): своих и взятых по имени из модуля проекта (const { DEFAULTS } = require('./settings')).
   // Вид — «значением»: { ...DEFAULTS }, DEFAULTS.ui, module.exports = { DEFAULTS }. Других имён не ищем — карта раздулась бы (t839).
   const vars = new Set([...defs.values()].filter((d) => VARS.has(d.kind)).map((d) => d.name)
-    .concat(imports.filter((x) => /^[./]/.test(x[1]) && x[2] !== '*' && x[2] !== 'default').map((x) => x[0])));
-  if (vars.size && root && lang !== 'py' && lang !== 'php') {
-    for (const n of root.descendantsOfType(['identifier', 'shorthand_property_identifier'])) {
+    // Python (t1677): from conf import MAX — модуль проекта и без точки (sys.path), как outer ниже.
+    .concat(imports.filter((x) => (lang === 'py' || /^[./]/.test(x[1])) && x[2] !== '*' && x[2] !== 'default').map((x) => x[0])));
+  // Python и PHP (t1677, d275): чтение верхней константы — MAX в выражении, self::X и A::X в PHP (приёмник — класс, как у метода).
+  if (vars.size && root) {
+    const other = lang === 'py' || lang === 'php';
+    for (const n of root.descendantsOfType(lang === 'php' ? ['name'] : ['identifier', 'shorthand_property_identifier'])) {
       if (!vars.has(n.text)) continue;
       const p = n.parent;
-      if (!p || binds(n) || shadowed(n)) continue;
+      if (!p || (other ? !readsVar(n) : binds(n)) || shadowed(n)) continue;
+      if (other) {
+        let inId = '';
+        for (let q = p; q; q = q.parent) { const d = defs.get(keyOf(q)); if (d) { inId = d.id; break; } }
+        const recv = p.type === 'class_constant_access_expression' ? recvOf(p.namedChild(0)) : '';
+        const row = [n.text, n.startPosition.row + 1, inId, recv, 'r'];
+        const k = row.join('\0');
+        if (!seen.has(k)) { seen.add(k); calls.push(row); }
+        continue;
+      }
       if (p.type === 'variable_declarator' && p.childForFieldName('name')?.startIndex === n.startIndex) continue;
       // Вызов и new уже в связях своим видом.
       if ((p.type === 'call_expression' && p.childForFieldName('function')?.startIndex === n.startIndex) || (p.type === 'new_expression' && p.childForFieldName('constructor')?.startIndex === n.startIndex)) continue;
@@ -463,8 +512,8 @@ const breathe = () => new Promise((res) => setImmediate(res));
 
 /** Версия правил извлечения: другие запросы или другой счёт строк — объявления в карте другие, хотя формат тот же. 3 — связи calls и imports (t839).
  * 4 — переменные верхнего уровня (const, variable) и их использования (t929). 5 — экспорт под другим именем, aliases (t968).
- * 6 — строка import { A } from не чтение A (t971). */
-const EXTRACT = 6;
+ * 6 — строка import { A } from не чтение A (t971). 7 — константы Python и PHP и их чтение (t1677, d275). */
+const EXTRACT = 7;
 
 /**
  * Построить карту кода папки root. Ничего не пишет: запись — writeMap.
@@ -557,6 +606,16 @@ function writeMap(file, map) {
     if (/** @type {any} */ (e).code !== 'EEXIST') throw e;
     fs.unlinkSync(tmp);
     fs.writeFileSync(tmp, text, { flag: 'wx' });
+  }
+  // Папка на месте карты (t1677, d293): rename на неё — EPERM, восемь повторов (~270 мс) не помогут, и карта не запишется никогда.
+  // Как .gitignore карты (worker.js mapDir, t911): пустую убрать, непустую отодвинуть в сторону — чужое не удаляем.
+  if (fs.lstatSync(file, { throwIfNoEntry: false })?.isDirectory()) {
+    try {
+      try { fs.rmdirSync(file); } catch (e) {
+        if (!['ENOTEMPTY', 'EEXIST'].includes(/** @type {any} */ (e).code)) throw e;
+        fs.renameSync(file, `${file}.dir-${Date.now()}`);
+      }
+    } catch (e) { if (/** @type {any} */ (e).code !== 'ENOENT') { try { fs.rmSync(tmp, { force: true }); } catch { /* следующая запись перезапишет */ } throw e; } }
   }
   // Windows: файл карты занят на миг — его переименовывает другая копия программы или открыл антивирус. Тогда rename — EPERM, EACCES или EBUSY.
   // Повтор с растущей паузой, как в graceful-fs; пауза случайная, чтобы две копии не повторяли попытки в один и тот же миг.

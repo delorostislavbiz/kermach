@@ -145,7 +145,7 @@ function register(c) {
   // Свернуть или развернуть группы: keys — номера групп ('_none' — «Без группы»), shut — свернуть или развернуть.
   ipcMain.handle('projects:collapse', (e, keys, shut) => {
     if (!sender.allowed(e, 'projects:collapse')) return sender.refused();
-    if (!Array.isArray(keys) || !keys.every((k) => typeof k === 'string')) return { error: 'нет групп' };
+    if (!Array.isArray(keys) || !keys.every((k) => typeof k === 'string')) return { error: i18n.t('projects.err1', 'нет групп') };
     const set = new Set(view.collapsed);
     for (const k of keys) { if (shut) set.add(k); else set.delete(k); }
     view.collapsed = [...set];
@@ -155,7 +155,7 @@ function register(c) {
   // Вид «список» или «плитка».
   ipcMain.handle('projects:mode', (e, mode) => {
     if (!sender.allowed(e, 'projects:mode')) return sender.refused();
-    if (mode !== 'list' && mode !== 'tiles') return { error: `нет такого вида: ${mode}` };
+    if (mode !== 'list' && mode !== 'tiles') return { error: i18n.t('projects.err2', 'нет такого вида: {mode}', { mode }) };
     view.mode = mode;
     saveView();
     return { ok: true, mode };
@@ -173,7 +173,7 @@ function register(c) {
   });
   ipcMain.handle('projects:add', async (e, dir) => {
     if (!sender.allowed(e, 'projects:add')) return sender.refused();
-    if (typeof dir !== 'string' || !dir) return { error: 'не указана папка' };
+    if (typeof dir !== 'string' || !dir) return { error: i18n.t('projects.err3', 'не указана папка') };
     const p = projects.normPath(dir);
     // Сетевой путь на выключенном компьютере statSync держал бы все окна 21 с (t1300).
     const st = await alive.state(p);
@@ -209,22 +209,27 @@ function register(c) {
     // Окно шлёт image при каждом сохранении, поэтому в журнал идёт только настоящая смена картинки (t1659).
     const imageBefore = data.projects.find((x) => x.id === String(id))?.image || '';
     const p = projects.setLook(c.dataDir, /** @type {any} */ (data), String(id), f.fields);
-    if (!p) return { error: `нет проекта ${id}` };
+    if (!p) return { error: i18n.t('projects.err4', 'нет проекта {id}', { id }) };
     if (f.fields.name) c.log(`проект ${p.path}: имя «${p.name}»`);
     if (f.fields.color || f.fields.icon) c.log(`проект ${p.path}: цвет ${p.color}, значок ${p.icon}`);
     if (f.fields.image !== undefined && f.fields.image !== imageBefore) c.log(`проект ${p.path}: ${f.fields.image ? 'своя картинка' : 'картинка убрана'}`);
     if (f.fields.pinned !== undefined) c.log(`проект ${p.path}: ${f.fields.pinned ? 'закреплён' : 'откреплён'}`);
     if (f.fields.bypass !== undefined) c.log(`проект ${p.path}: новые вкладки Claude ${f.fields.bypass ? 'без вопросов о разрешениях' : 'с вопросами о разрешениях, как обычно'}`);
     changed();
-    require('./project-window').windowFor(p.id)?.webContents.send('project:changed');
+    const pwin = require('./project-window').windowFor(p.id);
+    // Заголовок окна (панель задач, Alt+Tab) задаётся при открытии; после переименования — сразу (t1764).
+    if (f.fields.name && pwin && !pwin.isDestroyed()) pwin.setTitle(`${p.name} — Kermach`);
+    pwin?.webContents.send('project:changed');
     return { ok: true };
   });
   // «Убрать из списка»: только запись. Папка, файл вкладок и терминалы проекта остаются; открытое окно проекта не закрывается.
   ipcMain.handle('projects:remove', (e, id) => {
     if (!sender.allowed(e, 'projects:remove')) return sender.refused();
     const p = projects.remove(c.dataDir, /** @type {any} */ (data), String(id));
-    if (!p) return { error: `нет проекта ${id}` };
+    if (!p) return { error: i18n.t('projects.err5', 'нет проекта {id}', { id }) };
     c.log(`убран из списка проект ${p.path}`);
+    const gone = require('./project-window').forgetIcons(c.dataDir, p.id);
+    if (gone) c.log(`значки проекта ${p.path} удалены: ${gone}`);
     changed();
     return { ok: true };
   });
@@ -239,7 +244,7 @@ function register(c) {
   ipcMain.handle('projects:copy', async (e, id) => {
     if (!sender.allowed(e, 'projects:copy')) return sender.refused();
     const src = data?.projects.find((x) => x.id === String(id));
-    if (!src) return { error: `нет проекта ${id}` };
+    if (!src) return { error: i18n.t('projects.err6', 'нет проекта {id}', { id }) };
     if (!worktree.isGit(src.path)) return { error: i18n.t('projects.copyNoGit', 'Копию можно сделать только у проекта под git') };
     if (copying.has(src.id)) return { error: i18n.t('projects.copyBusy', 'Копия этого проекта уже создаётся') };
     copying.add(src.id);
@@ -270,7 +275,7 @@ function register(c) {
   ipcMain.handle('projects:removeCopy', async (e, id, force) => {
     if (!sender.allowed(e, 'projects:removeCopy')) return sender.refused();
     const p = data?.projects.find((x) => x.id === String(id));
-    if (!p) return { error: `нет проекта ${id}` };
+    if (!p) return { error: i18n.t('projects.err7', 'нет проекта {id}', { id }) };
     if (!isCopyDir(p.path)) return { error: i18n.t('projects.removeCopyNot', 'Это не копия проекта') };
     if (copying.has(p.id)) return { error: i18n.t('projects.removeCopyBusy', 'Копия уже удаляется') };
     copying.add(p.id);
@@ -290,11 +295,13 @@ function register(c) {
         // Папка уже переименована и отвязана от git (t1084): запись с несуществующей папкой не оставляем, остаток называем.
         projects.remove(c.dataDir, /** @type {any} */ (data), p.id);
         require('./project-window').windowFor(p.id)?.close();
+        require('./project-window').forgetIcons(c.dataDir, p.id);
         changed();
         return { error: i18n.t('projects.removeCopyLeft', 'Копия убрана из списка, но удалилась не вся: файл занят другой программой. Остаток — в папке {dir}, удалите её вручную.', { dir: r.leftover }) };
       }
       projects.remove(c.dataDir, /** @type {any} */ (data), p.id);
       require('./project-window').windowFor(p.id)?.close();
+      require('./project-window').forgetIcons(c.dataDir, p.id);
       c.log(`удалена копия ${p.path}: остановлено вкладок ${stopped.n}, ветка ${r.branch} ${r.branchDeleted ? 'удалена (слита)' : 'осталась'}`);
       changed();
       return { ok: true, stopped: stopped.n, branch: r.branch, branchDeleted: r.branchDeleted };
@@ -315,7 +322,7 @@ function register(c) {
   ipcMain.handle('projects:enableHistory', async (e, id) => {
     if (!sender.allowed(e, 'projects:enableHistory')) return sender.refused();
     const p = data?.projects.find((x) => x.id === String(id));
-    if (!p) return { error: `нет проекта ${id}` };
+    if (!p) return { error: i18n.t('projects.err8', 'нет проекта {id}', { id }) };
     const r = await require('../plugins/git/enable').enable(p.path, { run: hrun(), log: c.log });
     if ('ok' in r) { changed(); return r; }
     if (r.code === 'big') return { error: r.error === 'files'
@@ -342,7 +349,7 @@ function register(c) {
     const busy = newProject.checkDir(dir);
     if (busy) return { field: 'dir', error: busy === 'relative' ? i18n.t('projects.newRelative', 'Укажите полный путь к папке') : i18n.t('projects.newBusy', 'Папка уже есть и в ней есть файлы — выберите другую') };
     const preset = newProject.list().presets.find((p) => p.name === (o && o.preset));
-    if (!preset) return { error: `нет варианта ${o && o.preset}` };
+    if (!preset) return { error: i18n.t('projects.err9', 'нет варианта {v0}', { v0: o && o.preset }) };
     let w;
     try { w = newProject.write(dir, preset); } catch (err) {
       c.log(`новый проект ${dir}: папка не создана — ${err}`);
@@ -546,7 +553,7 @@ function open(c, opt = {}) {
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 11 } } : { frame: false }),
     show: false,
     backgroundColor: settings.background(),
-    title: 'Kermach — Проекты',
+    title: i18n.t('projects.kermachProekty', 'Kermach — Проекты'),
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true },
   });
   // Тема «Скло» — полупрозрачность, только macOS (main\settings.js dress, t506).

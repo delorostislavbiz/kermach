@@ -83,7 +83,7 @@ singleInstance.acquire({ dataDir: DATA_DIR, project: asked ? path.resolve(asked)
 /** @param {string} asked папка из --project; пусто — окно «Проекты» */
 function start(asked) {
   const t0 = Date.now();
-  // Ловушка зависания при запуске (t1585): первые 2 минуты профиль главного потока, если он стоит дольше 3 с.
+  // Ловушка зависаний (t1585, постоянная с t1862): строка в main.log при подвисании от 300 мс, профиль в diag — от 2 с.
   require('./hang-watch').start({ dataDir: DATA_DIR, log });
   // macOS: из Dock или Finder программа получает короткий PATH, без Homebrew и ~/.local/bin — claude не нашёлся бы.
   // До демона: он и вкладки наследуют окружение программы.

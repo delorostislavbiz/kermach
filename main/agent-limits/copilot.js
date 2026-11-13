@@ -119,7 +119,9 @@ module.exports = {
       }
     }
     if (!token) return none('not_logged_in', 'в GitHub Copilot не выполнен вход');
-    const r = await getJson(env.KERMACH_LIMITS_COPILOT_URL || URL_DEFAULT, {
+    // Свой адрес — только местный http на 127.0.0.1 (проба), иначе токен ушёл бы на чужой сервер (t1746).
+    const own = String(env.KERMACH_LIMITS_COPILOT_URL || '').trim();
+    const r = await getJson(/^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/.test(own) ? own : URL_DEFAULT, {
       Authorization: `token ${token}`, Accept: 'application/json', 'User-Agent': 'Kermach', 'X-Github-Api-Version': '2025-04-01',
     }, { timeoutMs, signal });
     if (r.status === 401 || r.status === 403) return none('unauthorized', `сервер GitHub не принял вход (${r.status})`);

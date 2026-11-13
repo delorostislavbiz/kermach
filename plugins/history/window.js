@@ -418,6 +418,13 @@ function historySetup(host) {
     const order = [...groups.keys()].sort((a, b) => (a === host.project.id ? -1 : b === host.project.id ? 1 : !a ? 1 : !b ? -1 : 0));
     return order.map((g) => [g, groups.get(g) || []]);
   };
+  /** Пометки «идёт во вкладке» строк списка и имена их вкладок — по ним onTerminals решает, нужна ли перерисовка (t1699). */
+  const liveSig = () => {
+    const titles = new Map(host.terminals().map((x) => [x.sid, x.title || '']));
+    return items.filter((it) => it.live && it.live.where === 'tab').map((it) => `${keyOf(it)}=${it.live.sid}:${titles.get(it.live.sid) || ''}`).join('|');
+  };
+  /** Пометки на момент последней перерисовки. */
+  let drawnLive = '';
   const draw = () => {
     if (!open && !tab) return;
     const top = listEl.scrollTop;
@@ -444,6 +451,7 @@ function historySetup(host) {
     if (hasMore && !failed) h += `<button class="more" data-do="more">${esc(I18n.t('history.showMore', 'Показать ещё'))}</button>`;
     listEl.innerHTML = h;
     listEl.scrollTop = top;
+    drawnLive = liveSig();
   };
 
   /** Список заново (more — следующая страница; fresh — вкладки сменились, пометки «идёт» посчитать заново, t825). Ответ — массив или { items, total, more }.
@@ -992,7 +1000,10 @@ function historySetup(host) {
     // Снимается пометка только у вкладки, которую окно видело живой; иначе каждая перерисовка снимала её и грузила список заново (t790).
     const gone = items.filter((it) => it.live && it.live.where === 'tab' && seen.has(it.live.sid) && !alive.has(it.live.sid));
     for (const it of gone) it.live = null;
-    if (gone.length || items.some((it) => it.live && it.live.where === 'tab')) draw();
+    // Перерисовать, только если пометки «идёт во вкладке» поменялись: снялись или у вкладки новое имя (подсказка liveMark).
+    // Раньше при живой вкладке каждое событие вкладок собирало весь список заново (d711, t1699).
+    const mark = liveSig();
+    if (gone.length || mark !== drawnLive) draw();
     if (gone.length && (open || tab) && !liveTimer) {
       liveTimer = setTimeout(() => { liveTimer = null; if (!stopped && (open || tab) && !modalEl) load(false, true); }, 300);
     }

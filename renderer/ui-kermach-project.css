@@ -7,7 +7,7 @@
 .term .tile { display: contents; }
 
 /* --- Боковая панель — плавающая плашка (t655): 244 px, отступ 8 от краёв окна, фон --side, рамка --line, радиус 10. --- */
-html:is([data-ui="kermach"], [data-ui="termius"]) #side { width: 244px; margin: 8px 0 8px 8px; padding: 0; background: var(--side); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#sideHead)) #side { width: 244px; margin: 8px 0 8px 8px; padding: 0; background: var(--side); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 
 /* Шапка: плитка 30×30 радиус 8 с тинтом цвета проекта (подложка <i> с прозрачностью --tint-a), значок 17; имя 13/600, путь 11. */
 html:is([data-ui="kermach"], [data-ui="termius"]) #sideHead { display: flex; align-items: center; gap: 10px; padding: 12px 10px 12px 12px; flex-shrink: 0; }
@@ -22,7 +22,7 @@ html:is([data-ui="kermach"], [data-ui="termius"]) #sideHide { width: 28px; heigh
 html:is([data-ui="kermach"], [data-ui="termius"]) #sideHide:hover { background: var(--selected); color: var(--text); }
 
 /* Подпись «Терминалы» и число строк справа. */
-html:is([data-ui="kermach"], [data-ui="termius"]) #side .cap { display: flex; align-items: center; padding: 6px 14px 4px; font-size: var(--fs-cap); font-weight: 600; color: var(--muted); }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#sideHead)) #side .cap { display: flex; align-items: center; padding: 6px 14px 4px; font-size: var(--fs-cap); font-weight: 600; color: var(--muted); }
 html:is([data-ui="kermach"], [data-ui="termius"]) #termCount { display: block; margin-left: auto; font-weight: 400; }
 
 /* --- Строка терминала (t656): 42 px, радиус 7, отступ 0 8; плитка 26×26 радиус 7 с тинтом цвета терминала и значком 16. ---
@@ -54,10 +54,10 @@ html:is([data-ui="kermach"], [data-ui="termius"]) #sideAdds > div { height: 28px
 html:is([data-ui="kermach"], [data-ui="termius"]) #sideAdds > div:hover { background: var(--selected); }
 html:is([data-ui="kermach"], [data-ui="termius"]) #sideAdds svg { flex-shrink: 0; }
 /* Список забирает свободное место — кнопки сразу под последней строкой, низ панели прижат к низу. */
-html:is([data-ui="kermach"], [data-ui="termius"]) #side #list { flex: 0 1 auto; }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#sideHead)) #side #list { flex: 0 1 auto; }
 
 /* --- Скрыть и показать панель (t678): класс side-off на <html> ставит project-page.js. «Показать» — в начале полосы вкладок. --- */
-html.side-off:is([data-ui="kermach"], [data-ui="termius"]) #side { display: none; }
+html.side-off:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#sideHead)) #side { display: none; }
 html.side-off:is([data-ui="kermach"], [data-ui="termius"]) #sideShow { display: flex; align-items: center; justify-content: center; align-self: center; width: 28px; height: 28px; margin: 0 2px 0 8px;
   border-radius: 6px; flex-shrink: 0; color: var(--muted); }
 html.side-off:is([data-ui="kermach"], [data-ui="termius"]) #sideShow:hover { background: var(--selected); color: var(--text); }
@@ -140,7 +140,7 @@ html:is([data-ui="kermach"], [data-ui="termius"]) #panes.split .pane:not(.page).
 /* --- Нижняя строка 34 px (Д-11): под карточкой, справа от боковой панели; панель — во всю высоту окна, как в макете. --- */
 html:is([data-ui="kermach"], [data-ui="termius"]) #bottom { height: 34px; gap: 22px; padding: 0 16px; border-top: 0; margin-left: 252px; color: var(--muted); }
 html.side-off:is([data-ui="kermach"], [data-ui="termius"]) #bottom { margin-left: 0; }
-html:not(.side-off):is([data-ui="kermach"], [data-ui="termius"]) body:has(#bottom:not([hidden])) #side { margin-bottom: -26px; }
+html:not(.side-off):is([data-ui="kermach"], [data-ui="termius"]):where(:has(#sideHead)) body:has(#bottom:not([hidden])) #side { margin-bottom: -26px; }
 /* Полоса лимита 44×5: заполнение — израсходованный процент цветом limitsColor (plugins\limits\window.js), при загрузке — kFill 1.2 s. */
 html:is([data-ui="kermach"], [data-ui="termius"]) #plugin-limits .lbar { display: inline-flex; width: 44px; height: 5px; margin-right: 7px; border-radius: 3px; overflow: hidden; vertical-align: middle; background: var(--selected); }
 html:is([data-ui="kermach"], [data-ui="termius"]) #plugin-limits .lbar b { display: block; height: 100%; transform-origin: left; animation: kFill 1.2s var(--ease-in) both; }

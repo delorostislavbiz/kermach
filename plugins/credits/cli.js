@@ -50,7 +50,10 @@ const HELP = `kermach credits — задания на кредитах API: фа
   kermach credits accept c3            «Принять»: перенести правки копии в проект и удалить копию (только у «прошло»)
   kermach credits reject c3            «Отклонить»: удалить копию вместе с правками
   kermach credits retry c3             «Разрешить и повторить»: команды из «нужно разрешение» — в разрешённые, запуск заново в той же копии
-  kermach credits --help               эта справка
+  kermach credits redo c3 "замечания"  «Доработать»: замечания к готовому заданию — агенту в тот же разговор, в той же копии.
+                                       Замечания, итог и цена дописываются в задание блоком «## Доработка N». Без текста —
+                                       запустить доработку, замечания которой уже записаны (так её запускает панель)
+  kermach credits --help              эта справка
 
 Панель «Кредиты» в окне проекта: те же задания, кнопки и флажок «Добрать остаток» (он же запускает задания сам, пока окно проекта открыто).`;
 
@@ -150,7 +153,8 @@ async function queue(dir, o) {
       await runOne(dir, p.job, dataDir);
     } else {
       const going = jobs.find((j) => !j.error && j.head.status === 'идёт' && j.head.pid && j.head.pid !== String(process.pid));
-      if (going && (() => { try { process.kill(Number(going.head.pid), 0); return true; } catch { return false; } })()) die(`${going.id} уже идёт (процесс ${going.head.pid}) — очередь идёт по одному`, 3);
+      // t1675: номер упавшего раннера мог достаться чужой программе — сверка по времени запуска (pid_at), не по одному номеру.
+      if (going && store.running(going.head)) die(`${going.id} уже идёт (процесс ${going.head.pid}) — очередь идёт по одному`, 3);
       if (store.loadFlag(dir)) { process.stdout.write(`Флаг нагрузки ${store.LOAD_FLAG} — очередь встала. Запущено заданий: ${ran}\n`); return; }
       const j = jobs.find((x) => !x.error && x.head.status === 'в очереди');
       if (!j) { process.stdout.write(`${ran ? 'Очередь кончилась' : 'Заданий в очереди нет'}. Запущено заданий: ${ran}\n`); return; }
@@ -195,7 +199,7 @@ function grantsCmd(rest) {
 async function main(argv) {
   const cmd = argv[0];
   if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help' || argv[1] === '--help') { process.stdout.write(`${HELP}\n`); return; }
-  const CMDS = ['list', 'add', 'done', 'show', 'edit', 'run', 'fetch', 'diff', 'accept', 'reject', 'retry', 'topup', 'grants'];
+  const CMDS = ['list', 'add', 'done', 'show', 'edit', 'run', 'fetch', 'diff', 'accept', 'reject', 'retry', 'redo', 'topup', 'grants'];
   if (!CMDS.includes(cmd)) die(`нет такой команды: credits ${cmd}. Есть ${CMDS.join(', ')}. Справка — kermach credits --help`, 1);
   const dir = project();
   if (!dir) die(`проекта нет: ни в ${process.cwd()}, ни выше нет папки .kermach. Задания ведутся в папке проекта Kermach; для нового проекта создайте в его папке пустую папку .kermach`, 3);
@@ -267,16 +271,19 @@ async function main(argv) {
       if (r.pending) process.stdout.write(`${r.id}: ${r.result}. Забрать — kermach credits fetch ${id} (или run ${id} --wait — ждать здесь)\n`);
       else process.stdout.write(`${r.id}: ${r.result}\nцена запроса: $${r.runCost}${r.priced ? '' : ' (цены модели нет в таблице)'} · всего по заданию $${r.cost} · ${r.model}\nфайл ответа: ${r.answer || '—'}\n`);
       if (r.status === 'не прошло') process.exitCode = 4;
-    } else if (cmd === 'run' || cmd === 'retry') {
+    } else if (cmd === 'run' || cmd === 'retry' || cmd === 'redo') {
       const { pos } = flags(rest, []);
-      const id = ref(pos);
+      // redo (t1560): номер и замечания одной строкой в кавычках; без замечаний — ждущая доработка (её записала панель).
+      const id = ref(cmd === 'redo' ? pos.slice(0, 1) : pos);
+      if (cmd === 'redo' && pos.length > 2) die(`credits redo: замечания — одной строкой в кавычках, например kermach credits redo ${id} "сделай кнопку синей"`, 1);
+      if (cmd === 'redo' && pos.length === 2) { const a = store.redoAdd(dir, id, pos[1]); process.stdout.write(`${id}: замечания записаны — доработка ${a.n}\n`); }
       // Папка данных Kermach: ключ API (apiKeyHelper) и журнал расходов credits\journal.jsonl — те же, что у вкладки на кредитах.
       const dataDir = require('../../daemon/protocol').DATA_DIR;
       const opt = { dataDir, out: (/** @type {string} */ s) => { process.stdout.write(s); } };
-      const r = cmd === 'retry' ? await store.retry(dir, id, opt) : await store.run(dir, id, opt);
+      const r = cmd === 'retry' ? await store.retry(dir, id, opt) : await store.run(dir, id, cmd === 'redo' ? { ...opt, redo: true } : opt);
       if ('added' in r) process.stdout.write(`\nразрешил: ${/** @type {any} */ (r).added.join(' ; ')}\n`);
       process.stdout.write(`\n${r.id}: ${r.result}\nцена по заданию: $${r.cost} · копия: ${r.copy}\n`);
-      if (r.status === 'прошло') process.stdout.write(`правки — kermach credits diff ${id}; принять — kermach credits accept ${id}; отклонить — kermach credits reject ${id}\n`);
+      if (r.status === 'прошло') process.stdout.write(`правки — kermach credits diff ${id}; принять — kermach credits accept ${id}; доработать — kermach credits redo ${id} "замечания"; отклонить — kermach credits reject ${id}\n`);
       else if (r.need.length) process.stdout.write(`разрешить и повторить — kermach credits retry ${id}; отклонить — kermach credits reject ${id}\n`);
       if (r.status !== 'прошло') process.exitCode = 4;
     } else if (cmd === 'diff') {

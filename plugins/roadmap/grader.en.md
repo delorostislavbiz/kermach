@@ -32,6 +32,7 @@ Write the remarks and proofs in English. The section headings below are in Russi
    Then start remarks with the words "The check does not measure the goal: a comparison with the sample over the whole page is needed" and name the sample: the human will see this line first. The human will add the comparison to the card, the agent will do it.
 2. For each criterion find proof: a place in a changed file (file:line) or a file with run output (probe report, screenshot, check result). Open and read what you need.
    The agent may have saved command output and screenshots in the folder `.kermach/proofs/{карта}/`. It is not in the diff, so its files are listed in the changes separately: open them.
+   It also holds `checklist.md` — the agent's list "card item — proof file and line". Open it first and follow it, but open each file yourself: a list item without a file that shows what is needed is not counted.
    The agent's words in "What was done" and "Proof" of the card are not proof until a file confirms them.
 3. A criterion is met (ok: true) only if the proof is found and read. Not found — ok: false and what exactly was not found.
    The kind of check named by the agent: {заявлено}. Values: `real`, `fake`, `human only`, the same words in another board language (`настоящая`, `подставная`) or `(нет)`. The real environment is what the human will work with: the real agent, the window, the installer, the site or the server.

@@ -188,8 +188,8 @@ function register(c) {
     if (!fromWindow(e, 'dashboard:project')) return { error: 'вызов не из окна «Дашборд»' };
     const d = dataOf();
     const p = d.projects.find((x) => x.id === id && x.pinned);
-    if (!p) { log(`щелчок по проекту ${String(id).slice(0, 80)}: такого закреплённого нет`); return { error: 'нет такого проекта' }; }
-    if (!fs.existsSync(p.path)) { log(`щелчок по проекту ${p.path}: нет папки`); return { error: 'нет папки проекта' }; }
+    if (!p) { log(`щелчок по проекту ${String(id).slice(0, 80)}: такого закреплённого нет`); return { error: i18n.t('dashboard.err1', 'нет такого проекта') }; }
+    if (!fs.existsSync(p.path)) { log(`щелчок по проекту ${p.path}: нет папки`); return { error: i18n.t('dashboard.err2', 'нет папки проекта') }; }
     projects.remember(c.dataDir, d, p.path);
     log(`открываю проект ${p.path}`);
     if (c.openProject) c.openProject(p);
@@ -200,10 +200,10 @@ function register(c) {
     if (!fromWindow(e, 'dashboard:tab')) return { error: 'вызов не из окна «Дашборд»' };
     const d = dataOf();
     const p = d.projects.find((x) => x.id === id && x.pinned);
-    if (!p) { log(`щелчок по агенту ${String(id).slice(0, 80)}: такого закреплённого проекта нет`); return { error: 'нет такого проекта' }; }
+    if (!p) { log(`щелчок по агенту ${String(id).slice(0, 80)}: такого закреплённого проекта нет`); return { error: i18n.t('dashboard.err3', 'нет такого проекта') }; }
     const tab = typeof sid === 'string' ? ((await tabsByProject()).get(p.id) || []).find((t) => t.sid === sid && !t.hidden) : null;
-    if (!tab) { log(`щелчок по агенту ${String(sid).slice(0, 80)} в ${p.path}: такой вкладки нет`); return { error: 'нет такой вкладки' }; }
-    if (!fs.existsSync(p.path)) { log(`щелчок по агенту в ${p.path}: нет папки`); return { error: 'нет папки проекта' }; }
+    if (!tab) { log(`щелчок по агенту ${String(sid).slice(0, 80)} в ${p.path}: такой вкладки нет`); return { error: i18n.t('dashboard.err4', 'нет такой вкладки') }; }
+    if (!fs.existsSync(p.path)) { log(`щелчок по агенту в ${p.path}: нет папки`); return { error: i18n.t('dashboard.err5', 'нет папки проекта') }; }
     projects.remember(c.dataDir, d, p.path);
     log(`открываю вкладку ${sid} проекта ${p.path}`);
     if (c.openProject) c.openProject(p);

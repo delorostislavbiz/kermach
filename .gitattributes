@@ -1,0 +1,21 @@
+# Переносы строк: в репозитории и в рабочей папке всегда LF, на любой системе.
+* text=auto eol=lf
+
+# Скрипты .sh .yml .yaml .ps1 .nsi: в индексе все LF — фиксируем LF.
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.ps1 text eol=lf
+*.nsi text eol=lf
+
+# .cmd и .bat не трогаем (-text): в src/bin они LF (меток goto нет), а в spikes есть пробы с CRLF
+# в индексе; перенормировка изменила бы их содержимое.
+*.cmd -text
+*.bat -text
+
+# Двоичные: не трогать.
+*.ttf binary
+*.png binary
+*.wasm binary
+*.ico binary
+*.icns binary

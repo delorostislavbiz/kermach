@@ -42,7 +42,8 @@ const SAY = {
   'Ревью {id}: {st} — находок ещё нет.': ["Рев'ю {id}: {st} — знахідок ще немає.", 'Review {id}: {st} — no findings yet.', 'Review {id}: {st} — noch keine Funde.'],
   'Записи фазы ({n}):': ['Записи фази ({n}):', 'Phase entries ({n}):', 'Einträge der Phase ({n}):'],
   'Записей у карт фазы нет.': ['Записів у карток фази немає.', 'The phase cards have no entries.', 'Die Karten der Phase haben keine Einträge.'],
-  'Новые заметки всего проекта, с других фаз и без фазы тоже ({n}) — разбери все, шаг 2. Если вывод обрезан, весь список даст kermach roadmap note --all, в нём и взятые со снятыми:': ['Нові нотатки всього проєкту, з інших фаз і без фази теж ({n}) — розбери всі, крок 2. Якщо вивід обрізано, весь список дасть kermach roadmap note --all, у ньому і взяті зі знятими:', 'New notes of the whole project, from other phases and without a phase too ({n}) — sort them all, step 2. If the output is cut off, kermach roadmap note --all gives the whole list, taken and dropped ones included:', 'Neue Notizen des ganzen Projekts, auch aus anderen Phasen und ohne Phase ({n}) — alle einordnen, Schritt 2. Ist die Ausgabe abgeschnitten, gibt kermach roadmap note --all die ganze Liste, auch aufgenommene und aufgehobene:'],
+  'Новые заметки всего проекта, с других фаз и без фазы тоже ({n}) — разбери все, шаг 2. Если вывод обрезан, все новые заметки даст kermach roadmap note --new:': ['Нові нотатки всього проєкту, з інших фаз і без фази теж ({n}) — розбери всі, крок 2. Якщо вивід обрізано, усі нові нотатки дасть kermach roadmap note --new:', 'New notes of the whole project, from other phases and without a phase too ({n}) — sort them all, step 2. If the output is cut off, kermach roadmap note --new gives all new notes:', 'Neue Notizen des ganzen Projekts, auch aus anderen Phasen und ohne Phase ({n}) — alle einordnen, Schritt 2. Ist die Ausgabe abgeschnitten, gibt kermach roadmap note --new alle neuen Notizen:'],
+  'Новые заметки всего проекта ({n}): их список — в конце вывода, после шагов приёмки. Разбери все, шаг 2.': ['Нові нотатки всього проєкту ({n}): їхній список — наприкінці виводу, після кроків приймання. Розбери всі, крок 2.', 'New notes of the whole project ({n}): their list is at the end of the output, after the acceptance steps. Sort them all, step 2.', 'Neue Notizen des ganzen Projekts ({n}): ihre Liste steht am Ende der Ausgabe, nach den Schritten der Abnahme. Alle einordnen, Schritt 2.'],
   'Новых заметок в проекте нет — разбирать нечего.': ['Нових нотаток у проєкті немає — розбирати нічого.', 'No new notes in the project — nothing to sort.', 'Keine neuen Notizen im Projekt — nichts einzuordnen.'],
   ' — карта {id}': [' — картка {id}', ' — card {id}', ' — Karte {id}'],
   'Не начатые карты других фаз ({n}) — сверь с тем, что дала фаза:': ['Не розпочаті картки інших фаз ({n}) — звір із тим, що дала фаза:', 'Unstarted cards of other phases ({n}) — compare them with what the phase delivered:', 'Nicht begonnene Karten anderer Phasen ({n}) — mit dem Ergebnis der Phase abgleichen:'],
@@ -251,7 +252,7 @@ function cardLine(c, L = '') {
  * Факты доски для приёмки фазы ph. @param {any} b результат board.read @param {string} ph @param {string} project
  * @param {string} [today] ГГГГ-ММ-ДД, по умолчанию сегодня — для срока until договорённостей
  * @param {string} [dataDir] папка данных плагина: свои копии шаблонов (t1632)
- * @returns {{ lines: string[], error?: string }}
+ * @returns {{ lines: string[], notes?: string[], error?: string }} notes — список новых заметок, accept() печатает его после шагов (t1683)
  */
 function facts(b, ph, project, today = day(new Date()), dataDir = '') {
   const L = langOf(b.lang);
@@ -294,8 +295,12 @@ function facts(b, ph, project, today = day(new Date()), dataDir = '') {
   // t1629: все новые заметки проекта, без обрезки: разбор не должен зависеть от их числа. Отбор и порядок — как у счётчика окна и kermach roadmap note.
   const fresh = b.decisions.filter((/** @type {any} */ d) => board.noteState(d) === 'новая')
     .sort((/** @type {any} */ a, /** @type {any} */ z) => (z.date || '').localeCompare(a.date || '') || z.num - a.num);
-  out.push('', fresh.length ? tr(L, 'Новые заметки всего проекта, с других фаз и без фазы тоже ({n}) — разбери все, шаг 2. Если вывод обрезан, весь список даст kermach roadmap note --all, в нём и взятые со снятыми:', { n: fresh.length }) : tr(L, 'Новых заметок в проекте нет — разбирать нечего.'));
-  for (const d of fresh) out.push(`  ${d.id}: ${cut(d.title, 110)}${d.card ? tr(L, ' — карта {id}', { id: d.card }) : ''}`);
+  // t1683: в фактах — только счётчик; сам список печатает accept() после шагов. Иначе сотни заметок сдвигают шаги в конец вывода, и при обрезке главная их не видит.
+  out.push('', fresh.length ? tr(L, 'Новые заметки всего проекта ({n}): их список — в конце вывода, после шагов приёмки. Разбери все, шаг 2.', { n: fresh.length }) : tr(L, 'Новых заметок в проекте нет — разбирать нечего.'));
+  /** @type {string[]} */
+  const notes = [];
+  if (fresh.length) notes.push(tr(L, 'Новые заметки всего проекта, с других фаз и без фазы тоже ({n}) — разбери все, шаг 2. Если вывод обрезан, все новые заметки даст kermach roadmap note --new:', { n: fresh.length }));
+  for (const d of fresh) notes.push(`  ${d.id}: ${cut(d.title, 110)}${d.card ? tr(L, ' — карта {id}', { id: d.card }) : ''}`);
 
   out.push('', ...warnLines(b, f, project, L, dataDir));
 
@@ -329,7 +334,7 @@ function facts(b, ph, project, today = day(new Date()), dataDir = '') {
   if (busy.length) out.push('', tr(L, 'Карты в работе (не править; задело — сказать человеку): {v}', { v: busy.map((/** @type {any} */ c) => c.id).join(', ') }));
 
   out.push('', ...pacts(b, today, L), '', overview(project, L), '', ...next(b, f, L));
-  return { lines: out };
+  return { lines: out, notes };
 }
 
 /**
@@ -443,7 +448,9 @@ function accept(b, ph, project, opts = {}) {
   const r = facts(b, ph, project, undefined, opts.dataDir);
   if (r.error) return { error: r.error };
   const text = instruction({ 'фаза': ph, 'отчёт': `.kermach/reports/${ph}.md`, 'папка': b.root + path.sep }, b.lang);
-  return { text: `${r.lines.join('\n')}\n\n${text}\n` };
+  // t1683: список новых заметок — после шагов: длина списка не сдвигает шаги.
+  const notes = r.notes && r.notes.length ? `\n${r.notes.join('\n')}\n` : '';
+  return { text: `${r.lines.join('\n')}\n\n${text}\n${notes}` };
 }
 
 module.exports = { accept, facts, instruction, boardRemarks, MAX_CARDS, isBare, bareLine, SAY };

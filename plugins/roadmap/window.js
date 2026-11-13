@@ -538,11 +538,6 @@ function roadmapSetup(host) {
     /* «Правило работы: …» (t960): тип меняет человек одной кнопкой. */
     #plugin-roadmap-panel .rdecs .dpact button { height: 22px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--rm-ok) 50%, transparent); border-radius: 4px; background: transparent; color: var(--rm-ok); font: inherit; font-size: 11.5px; cursor: pointer; }
     #plugin-roadmap-panel .rdecs .dpact button:disabled { opacity: .55; cursor: default; }
-    /* «Для всех проектов» (t698): переключатель записи и заголовки групп списка. */
-    #plugin-roadmap-panel .rdecs .dglob { display: flex; align-items: center; gap: 6px; font-size: 11.5px; line-height: 16px; color: var(--muted); cursor: pointer; width: fit-content; }
-    #plugin-roadmap-panel .rdecs .dglob input { margin: 0; cursor: pointer; }
-    #plugin-roadmap-panel .rdecs .dglob.on { color: var(--rm-info); }
-    #plugin-roadmap-panel .rdecs .dgrp { margin: 6px 0 2px; font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--muted); }
     /* «Переносимый вывод» (t990): что пригодится в другом проекте с тем же стеком. */
     #plugin-roadmap-panel .rdecs .dport { display: flex; flex-direction: column; gap: 2px; padding-left: 8px; border-left: 2px solid color-mix(in srgb, var(--rm-info) 50%, transparent); font-size: 12px; line-height: 17px; overflow-wrap: anywhere; }
     #plugin-roadmap-panel .rdecs .dport .dph { display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--muted); }
@@ -555,12 +550,6 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .rdecs .dwrong button { height: 22px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--rm-ok) 50%, transparent); border-radius: 4px; background: transparent; color: var(--rm-ok); font: inherit; cursor: pointer; }
     #plugin-roadmap-panel .rdecs .dwrong button.dnot { border-color: color-mix(in srgb, var(--rm-warn) 50%, transparent); color: var(--rm-warn); }
     #plugin-roadmap-panel .rdecs .dwrong button:disabled { opacity: .55; cursor: default; }
-    /* Общая база (t991): где копия записи и почему не ушла; «убрать», «снова в общую базу». */
-    #plugin-roadmap-panel .rdecs .dknown { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding-left: 8px; border-left: 2px solid color-mix(in srgb, var(--rm-info) 50%, transparent); font-size: 11.5px; line-height: 16px; color: var(--muted); overflow-wrap: anywhere; }
-    #plugin-roadmap-panel .rdecs .dknown.bad { border-left-color: color-mix(in srgb, var(--rm-warn) 60%, transparent); color: var(--rm-warn); }
-    #plugin-roadmap-panel .rdecs .dknown .kw { color: var(--muted); }
-    #plugin-roadmap-panel .rdecs .dknown button { height: 22px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--rm-info) 50%, transparent); border-radius: 4px; background: transparent; color: var(--rm-info); font: inherit; cursor: pointer; }
-    #plugin-roadmap-panel .rdecs .dknown button:disabled { opacity: .55; cursor: default; }
     #plugin-roadmap-panel .rdecs .dpatt { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding-left: 8px; border-left: 2px solid color-mix(in srgb, var(--rm-info) 50%, transparent); font-size: 11.5px; line-height: 16px; color: var(--rm-info); overflow-wrap: anywhere; }
     #plugin-roadmap-panel .rdecs .dpatt.wait { border-left-color: color-mix(in srgb, var(--rm-warn) 60%, transparent); color: var(--rm-warn); }
     #plugin-roadmap-panel .rdecs .dpatt .kw { color: var(--muted); }
@@ -658,6 +647,12 @@ function roadmapSetup(host) {
   const sel = { phase: '', /** @type {Set<string>} */ ids: new Set(), anchor: '' };
   /** Отказ последней кнопки волны (t687): строка под заголовком фазы до следующего нажатия. @type {{ phase: string, text: string } | null} */
   let waveNote = null;
+  /** t1725: фаза, у которой показано предупреждение о флаге нагрузки; следующее нажатие «Итог агентом» запускает всё равно. */
+  let sumAsk = '';
+  /** t1865: у кнопки показано предупреждение о флаге нагрузки — следующее нажатие открывает вкладку всё равно (без loadAsk). */
+  const flagAsk = { compose: false, newcard: false, orch: false };
+  /** Спросить ли у главной части флаг нагрузки при этом нажатии: да, если предупреждение ещё не показано. @param {'compose' | 'newcard' | 'orch'} b */
+  const askFlag = (b) => { const ask = !flagAsk[b]; flagAsk[b] = false; return { loadAsk: ask }; };
   /** Карта → её место в волне (st, why, letter): последняя волна, где карта есть; идущая важнее законченной. Собирает draw. @type {Map<string, any>} */
   let wItems = new Map();
   /** «Стоп» нажат один раз: второй щелчок до until останавливает волну. @type {{ id: string, until: number } | null} */
@@ -669,19 +664,8 @@ function roadmapSetup(host) {
   let differBusy = '';
   /** «Сделать договорённостью» (t960): запись, у которой команда pact ушла и ответа ещё нет. */
   let pactBusy = '';
-  /** Запись, у которой идёт переключение «для всех проектов» (t698). */
-  let globBusy = '';
   /** «Верна» / «отменить» (t987): запись, у которой команда ушла и ответа ещё нет. */
   let wrongBusy = '';
-  /**
-   * Пометки общей базы (t991) — команда known главной части, по открытию экрана записей и по каждой доске, пока он открыт (не в доске: marks читает все s<N>.md).
-   * warn — база не читается (битый state.json). seq — ответ на старый запрос не затирает новый.
-   * cut, max (t1012) — сколько старых файлов базы не прочитано и сколько читается: база больше предела.
-   * @type {{ marks: { id: string, s: string, kind: string, why: string }[], warn: string, cut: number, max: number, seq: number }}
-   */
-  const knownSt = { marks: [], warn: '', cut: 0, max: 0, seq: 0 };
-  /** «Убрать» / «снова в общую базу» (t991): запись, у которой команда ушла и ответа ещё нет. */
-  let knownBusy = '';
   /** «Собрать в паттерн» / «не паттерн» / «утвердить» (t1005): запись, у которой команда ушла и ответа ещё нет. */
   let pattBusy = '';
   /**
@@ -900,7 +884,7 @@ function roadmapSetup(host) {
     const r = b.reports && b.reports[f.id];
     if (!r) return '';
     return `<span class="wbtns"><button type="button" data-report="${esc(f.id)}" title="${esc(T('report.openTitle', 'Отчёт фазы: что сделано и чем доказано по каждой карте, записи фазы — {file}', { file: r.file }))}">${esc(T('report.open', 'Отчёт'))}</button>`
-      + `<button type="button" data-sum="${esc(f.id)}" title="${esc(T('report.sumTitle', 'Агент дописывает в отчёт вывод простыми словами и кандидатов в общие записи. Общими их делаете вы — галочкой «для всех проектов» на экране записей'))}">${esc(r.sum ? T('report.sumAgain', 'Итог заново') : T('report.sum', 'Итог агентом'))}</button></span>`;
+      + `<button type="button" data-sum="${esc(f.id)}" title="${esc(T('report.sumTitle', 'Агент дописывает в отчёт вывод простыми словами и записи, которые пригодятся в других проектах'))}">${esc(r.sum ? T('report.sumAgain', 'Итог заново') : T('report.sum', 'Итог агентом'))}</button></span>`;
   };
   /** «Отчёт» — вкладка документа (плагин «Markdown»), его нет или отказал — программой по умолчанию. @param {string} ph */
   const reportOpen = async (ph) => {
@@ -922,10 +906,17 @@ function roadmapSetup(host) {
   /** «Итог агентом»: вкладка агента; ответ с ошибкой — строкой под фазой. @param {HTMLButtonElement} btn */
   const sumClick = (btn) => {
     const ph = btn.dataset.sum || '';
+    // t1725: после предупреждения о флаге нагрузки второе нажатие — согласие человека, запуск идёт.
+    const force = sumAsk === ph;
+    sumAsk = '';
     btn.disabled = true;
-    api('phaseSum', ph).then((/** @type {any} */ r) => {
+    api('phaseSum', ph, force).then((/** @type {any} */ r) => {
       if (stopped) return;
-      if (!r || r.error) {
+      if (r && r.load) {
+        sumAsk = ph;
+        waveNote = { phase: ph, text: T('report.sumLoad', 'Стоит флаг нагрузки (СТОП-НАГРУЗКА.txt в папке проекта): ноутбук перегружен, итог запустит ещё один claude. Нажмите «Итог агентом» ещё раз, чтобы запустить всё равно') };
+        host.log(`итог ${ph}: стоит флаг нагрузки — показано предупреждение`);
+      } else if (!r || r.error) {
         waveNote = { phase: ph, text: T('report.sumFail', 'Итог не запущен: {why}', { why: (r && r.error) || '?' }) };
         host.log(`итог ${ph}: не запущен: ${(r && r.error) || '?'}`);
       } else {
@@ -965,6 +956,9 @@ function roadmapSetup(host) {
     if (skip.length) html += `<div class="wx">${esc(T('wave.skipped', 'пропущены: {list}', { list: skip.join(', ') }))}</div>`;
     const closed = wv.items.filter((/** @type {any} */ x) => x.st === 'closed').map((/** @type {any} */ x) => x.id);
     if (closed.length) html += `<div class="wx warn">${esc(T('wave.closedList', 'вкладка закрыта, карта не готова: {ids}', { ids: closed.join(', ') }))}</div>`;
+    // t1682: волна стоит из-за флага — строка называет причину и что делать, а не только «идёт · 0 из N».
+    const held = wv.state === 'run' ? wv.items.filter((/** @type {any} */ x) => x.st === 'load').map((/** @type {any} */ x) => x.id) : [];
+    if (held.length) html += `<div class="wx warn load">${esc(T('wave.loadLine', 'стоит флаг нагрузки (СТОП-НАГРУЗКА.txt в папке проекта): новые карты не запускаю, ждут {ids}. Уберите файл — волна продолжит сама', { ids: held.join(', ') }))}</div>`;
     return `${html}</div>`;
   };
   /**
@@ -1674,8 +1668,7 @@ function roadmapSetup(host) {
       for (const p of r.parts) {
         const kind = /** @type {any} */ (RM_KIND)[p.v.kind];
         const v = kind ? { ...p.v, kind: T(`kind.${kind}`, p.v.kind) } : p.v;
-        // Часть 6 с общей базой (t991): свой ключ с {sn} и {sm}, без базы — прежний, иначе на uk/en/de «общая база 0 из 0».
-        const key = p.key === 'card' && !p.v.phase ? 'cardInbox' : p.key === 'notes' && p.v.sm && p.v.sm !== '0' ? 'notesShared' : p.key;
+        const key = p.key === 'card' && !p.v.phase ? 'cardInbox' : p.key;
         const note = T(`pnote.${key}`, key === 'cardInbox' ? '{id} · Входящие' : p.note, v);
         html += `<div class="psec" data-part="${esc(p.key)}"><div class="phd"><span class="pn">${p.n}</span><span class="pt">${esc(T(`part.${p.key}`, p.title))}</span>`
           + `<span class="pnote">${esc(note)}</span></div><pre class="box">${esc(p.text)}</pre></div>`;
@@ -2607,9 +2600,7 @@ function roadmapSetup(host) {
   let dc = null;
   /** Карта открыта из списка решений: «назад» с карты ведёт туда, с тем же фильтром. @type {typeof dc} */
   let dcBack = null;
-  const DC_TYPES = [['all', 'decsAll', 'все'], ['решение', 'decsDec', 'решения'], ['тупик', 'decsDead', 'тупики'], ['договорённость', 'decsPact', 'договорённости'], ['wrong', 'decsWrong', 'посмотреть'], ['patt', 'decsPatt', 'паттерны'], ['known', 'decsKnown', 'общая база']];
-  /** Пометка общей базы записи (t991) или undefined. @param {string} id */
-  const knownOf = (id) => knownSt.marks.find((m) => m.id === id);
+  const DC_TYPES = [['all', 'decsAll', 'все'], ['решение', 'decsDec', 'решения'], ['тупик', 'decsDead', 'тупики'], ['договорённость', 'decsPact', 'договорённости'], ['wrong', 'decsWrong', 'посмотреть'], ['patt', 'decsPatt', 'паттерны']];
   /** Кандидат в паттерн с центром id (t1005, main.js patternC) или undefined. @param {string} id */
   const candOf = (id) => (last && Array.isArray(last.patternC) ? last.patternC : []).find((/** @type {any} */ c) => c.id === id);
   const decsShown = () => {
@@ -2622,7 +2613,7 @@ function roadmapSetup(host) {
     const hit = (/** @type {string} */ c) => (!whole ? c.includes(card) : digits ? c.replace(/^\D+/, '') === card : c === card);
     return (last && last.decisions ? last.decisions : [])
       // Заметки — на своём экране (t1628); здесь только запись по номеру и записи одной карты.
-      .filter((/** @type {any} */ d) => (d.type !== 'заметка' || st.one || card) && (!st.one || d.id === st.one) && (st.type === 'all' || d.type === st.type || (st.type === 'wrong' && isWrong(d)) || (st.type === 'known' && !!knownOf(d.id)) || (st.type === 'patt' && (d.type === 'паттерн' || !!candOf(d.id))))
+      .filter((/** @type {any} */ d) => (d.type !== 'заметка' || st.one || card) && (!st.one || d.id === st.one) && (st.type === 'all' || d.type === st.type || (st.type === 'wrong' && isWrong(d)) ||(st.type === 'patt' && (d.type === 'паттерн' || !!candOf(d.id))))
         && (!card || hit((d.card || '').toLowerCase()))
         && (!file || d.files.some((/** @type {string} */ f) => f.toLowerCase().includes(file))))
       // Новые сверху: по дате, при равной — по номеру.
@@ -2665,15 +2656,6 @@ function roadmapSetup(host) {
     return [s.length > CAUSE_ALT_MAX ? `${s.slice(0, CAUSE_ALT_MAX).trimEnd()}…` : s, !!s];
   };
   /** Кнопка «сделать договорённостью» (t960) — у решения «Правило работы: …»: агент заводит правило решением, тип меняет человек (t925). @param {any} d */
-  /**
-   * «Для всех проектов» (t698): global: да в шапке записи — копия уходит в общую базу и без «Переносимого вывода», фильтр адресов и путей тот же.
-   * Только у решения и тупика с stack: остальным база всё равно откажет (known.reasonCode), галочка ничего бы не сделала. @param {any} d
-   */
-  const globRow = (d) => {
-    if (!d.global && ((d.type !== 'решение' && d.type !== 'тупик') || !(d.stack && d.stack.length))) return '';
-    return `<label class="dglob${d.global ? ' on' : ''}" title="${esc(T('dc.globTitle', 'Запись получат агенты других проектов с тем же stack: {stack}. Адреса, ключи и пути не уходят — запись тогда остаётся в проекте', { stack: (d.stack || []).join(', ') || '—' }))}">`
-      + `<input type="checkbox" data-dglob="${esc(d.id)}"${d.global ? ' checked' : ''}${globBusy === d.id ? ' disabled' : ''}>${esc(T('dc.glob', 'для всех проектов'))}</label>`;
-  };
   const pactRow = (d) => (d.type !== 'решение' || !/^Правило работы:/.test(d.title || '') ? ''
     : `<div class="dpact"><button type="button" data-dpact="${esc(d.id)}"${pactBusy === d.id ? ' disabled' : ''}`
       + ` title="${esc(T('dc.pactTitle', 'Утвердить правило: в шапку {id} — type: {pact} и agent: {human}, запись пойдёт в «Свежее» каждой карты. Вернуть — type: {dec} и agent: {agent} в файле',
@@ -2706,66 +2688,6 @@ function roadmapSetup(host) {
       + `${esc(T('dc.wrongOk', 'верна'))}</button>`
       + `<button type="button" class="dnot" data-dwcancel="${esc(d.id)}"${off} title="${esc(T('dc.wrongCancelTitle', 'Запись неверна: в шапку {id} — cancelled с сегодняшней датой, агентам она больше не подаётся. Вернуть — убрать cancelled в файле', { id: d.id }))}">`
       + `${esc(T('dc.wrongCancel', 'отменить'))}</button></div></div>`;
-  };
-  /**
-   * Строка общей базы (t991): ушла ли копия записи в known\ и почему нет. Причины not и leak — по коду пометки (t1021), на языке окна.
-   * Кнопка «убрать» — у shared, «снова в общую базу» — у removed и edited (у остальных она завела бы дубль, карта 5 t844). @param {any} d
-   */
-  const knownRow = (d) => {
-    const m = knownOf(d.id);
-    if (!m) return '';
-    const v = { s: m.s, file: `${m.s}.md` };
-    /** @type {Record<string, [string, string]>} */
-    const K = {
-      shared: ['dc.kShared', 'в общей базе: {s}'],
-      new: ['dc.kNew', 'уйдёт в общую базу при следующей сборке промпта'],
-      not: ['dc.kNot', 'в общую базу не идёт:'],
-      leak: ['dc.kLeak', 'не ушла в общую базу:'],
-      edited: ['dc.kEdited', '{file} в общей базе поправлен руками, а запись в проекте изменилась — копию не обновляем'],
-      removed: ['dc.kRemoved', '{file} удалён из общей базы — другие проекты запись не получают'],
-    };
-    const [k, ru] = K[m.kind] || ['', m.kind];
-    // Причина — по коду known.js (t1021): known.WHY, LEAK, WHERE. Кода нет (чужая версия known.js) — русский why как есть.
-    const a = m.args && typeof m.args === 'object' ? m.args : {};
-    /** @type {Record<string, string>} */
-    const NOT = {
-      'not.type': T('dc.kWhy.type', 'не решение и не тупик'),
-      'not.rule': T('dc.kWhy.rule', 'правило работы — только для своего проекта'),
-      'not.unchecked': T('dc.kWhy.unchecked', 'не проверено (how не «проверено»)'),
-      'not.cancelled': T('dc.kWhy.cancelled', 'отменена'),
-      'not.expired': T('dc.kWhy.expired', 'срок вышел'),
-      'not.wrong': T('dc.kWhy.wrong', 'отмечена «неверна»'),
-      'not.unapproved': T('dc.kWhy.unapproved', 'паттерн не утверждён человеком или правлен после утверждения'),
-      'not.nostack': T('dc.kWhy.nostack', 'нет stack'),
-      'not.noportable': T('dc.kWhy.noportable', 'нет раздела «Переносимый вывод»'),
-      'not.inpattern': T('dc.kWhy.inpattern', 'в паттерне {d} — в базу идёт паттерн', { d: a.d }),
-    };
-    /** @type {Record<string, string>} */
-    const WHAT = {
-      email: T('dc.kWhat.email', 'e-mail'), domain: T('dc.kWhat.domain', 'адрес сайта'), ip: T('dc.kWhat.ip', 'IP'),
-      'user-path': T('dc.kWhat.userPath', 'путь с именем пользователя'), 'project-path': T('dc.kWhat.projectPath', 'путь папки проекта'),
-      'project-name': T('dc.kWhat.projectName', 'имя папки проекта'), key: T('dc.kWhat.key', 'похоже на ключ'),
-    };
-    /** @type {Record<string, string>} */
-    const WHERE = { title: T('dc.kWhere.title', 'заголовок'), error: T('dc.kWhere.error', 'строка «Текст ошибки:»'), line: T('dc.kWhere.line', 'строка {n} раздела', { n: a.n }) };
-    const why = m.kind === 'leak'
-      ? (m.code === 'leak' && got(WHAT, a.what) && got(WHERE, a.where) ? `${got(WHAT, a.what)} — ${got(WHERE, a.where)}` : String(m.why || '').replace(/^не ушла в общую базу:\s*/, ''))
-      : m.kind === 'not' ? got(NOT, m.code) || String(m.why || '') : '';
-    const off = knownBusy === d.id ? ' disabled' : '';
-    const btn = m.kind === 'shared'
-      ? `<button type="button" data-kdrop="${esc(d.id)}"${off} title="${esc(T('dc.kDropTitle', 'Файл {file} уйдёт в Корзину: другие проекты запись больше не получат, в проекте она остаётся. Вернуть — «снова в общую базу» или из Корзины', v))}">${esc(T('dc.kDrop', 'убрать'))}</button>`
-      : m.kind === 'removed' || m.kind === 'edited'
-        ? `<button type="button" data-kback="${esc(d.id)}"${off} title="${esc(m.kind === 'edited'
-          ? T('dc.kBackEditTitle', 'Файл {file} с ручной правкой уйдёт в Корзину, строка {s} — из state.json. При следующей сборке промпта в базу уйдёт запись проекта', v)
-          : T('dc.kBackTitle', 'Строка {s} уйдёт из state.json. При следующей сборке промпта запись заведётся в общей базе заново', v))}">${esc(T('dc.kBack', 'снова в общую базу'))}</button>`
-        : '';
-    // Отзывы карт всех проектов о копии (t698, known.countOf): «помогла 2 · не пригодилась 1».
-    const u = m.used && typeof m.used === 'object' ? m.used : null;
-    const said = u ? [['помогла', 'dc.kUsedOk', 'помогла {n}'], ['не пригодилась', 'dc.kUsedNo', 'не пригодилась {n}'], ['неверна', 'dc.kUsedBad', 'неверна {n}'], ['не открывал', 'dc.kUsedShut', 'не открывал {n}']]
-      .filter(([w]) => Number(u[w]) > 0).map(([w, key, ru]) => T(key, ru, { n: Number(u[w]) })).join(' · ') : '';
-    return `<div class="dknown${m.kind === 'shared' || m.kind === 'new' ? '' : ' bad'}" data-known="${esc(m.kind)}"><span>${esc(k ? T(k, ru, v) : ru)}</span>`
-      + (said ? `<span class="kw" data-kused>${esc(said)}</span>` : '')
-      + (why ? `<span class="kw">${esc(why)}</span>` : '') + btn + '</div>';
   };
   /**
    * Паттерн (t1005, план t845 раздел 4). У кандидата — «похоже на паттерн» и кнопки «собрать в паттерн» (карта во «Входящих», текст пишет агент) и «не паттерн».
@@ -2815,32 +2737,6 @@ function roadmapSetup(host) {
     if (!mergeErr) await load();
     else if (dc) paintDecs();
   };
-  /** Предупреждения базы над списком (t991): state.json не читается, s<N>.md с метками конфликта git; на виде «общая база» — обрезка (t1012). */
-  const knownWarn = () => (knownSt.warn ? `<div class="note warn" data-n="known">${esc(T('dc.kWarn', 'Общая база не читается: {error}. Записи проекта в неё не уходят, другие проекты их не получают', { error: knownSt.warn }))}</div>` : '')
-    + knownSt.marks.filter((m) => m.kind === 'conflict').map((m) => `<div class="note warn" data-n="kconflict">${esc(T('dc.kConflict', 'В общей базе {file} с метками конфликта git — агентам не подаётся, поправьте файл', { file: `${m.s}.md` }))}</div>`).join('')
-    + (knownSt.cut && dc && dc.type === 'known' ? `<div class="note warn" data-n="kcut">${esc(T('dc.kCut', 'В общей базе больше {max} файлов: {n} старых не прочитано, агентам они не подаются', { n: knownSt.cut, max: knownSt.max }))}</div>` : '');
-  /** Пометки базы заново; доску не ждёт — экран перерисуется по ответу. */
-  const loadKnown = async () => {
-    const n = ++knownSt.seq;
-    const r = await api('known');
-    if (n !== knownSt.seq) return;
-    knownSt.marks = r && Array.isArray(r.marks) ? r.marks : [];
-    knownSt.warn = r && (r.warn || r.error) ? String(r.warn || r.error) : '';
-    knownSt.cut = r && r.cut > 0 ? Number(r.cut) : 0;
-    knownSt.max = r && r.max > 0 ? Number(r.max) : 0;
-    if (!stopped && dc) paintDecs();
-  };
-  /** «Убрать» или «снова в общую базу» (t991): команда главной части, потом пометки заново. @param {string} id @param {'knownDrop' | 'knownBack'} cmd */
-  const knownClick = async (id, cmd) => {
-    if (knownBusy) return;
-    knownBusy = id;
-    mergeErr = '';
-    paintDecs();
-    const r = await api(cmd, id);
-    knownBusy = '';
-    mergeErr = r && r.error ? T('dc.kErr', 'Общая база не изменена: {error}', { error: r.error }) : '';
-    if (!stopped && dc) await loadKnown();
-  };
   /** Длина строки вместо «Причины» (t966): «Решение:» старых записей — абзац на 400 знаков и больше. */
   const CAUSE_ALT_MAX = 200;
   const paintDecs = () => {
@@ -2854,9 +2750,6 @@ function roadmapSetup(host) {
     const crumb = decsEl.querySelector('.crumb');
     if (crumb) crumb.textContent = I18n.n('roadmap.dc.count', list.length, ['{n} запись', '{n} записи', '{n} записей']);
     for (const b of decsEl.querySelectorAll('[data-dtype]')) b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.dtype === st.type);
-    // «Общая база» (t991) — только когда у записей проекта есть пометки базы или она не читается.
-    const kb = /** @type {HTMLElement | null} */ (decsEl.querySelector('[data-dtype="known"]'));
-    if (kb) kb.hidden = !knownSt.marks.length && !knownSt.warn && !knownSt.cut && st.type !== 'known';
     const wb = /** @type {HTMLElement | null} */ (decsEl.querySelector('[data-dtype="wrong"]'));
     if (wb) wb.hidden = !anyWrong;
     // «Паттерны» (t1005) — только когда на доске есть паттерн или кандидат.
@@ -2867,13 +2760,7 @@ function roadmapSetup(host) {
     const day = (/** @type {string} */ s) => { const x = /^(\d{4})-(\d\d)-(\d\d)/.exec(s || ''); return x ? `${x[3]}.${x[2]}` : s || ''; };
     let html = '';
     if (!list.length) html = `<div class="none">${esc(all.length ? T('dc.none', 'Под фильтр ничего не подошло.') : T('dc.empty', 'Записей пока нет. Агент заводит их файлами d<N>.md рядом с картами.'))}</div>`;
-    // «Для всех проектов» (t698) — отдельной группой сверху; заголовки групп — только когда такие записи есть, иначе список прежний.
-    const glob = list.filter((/** @type {any} */ d) => d.global);
-    const rest = list.filter((/** @type {any} */ d) => !d.global);
-    const grp = (/** @type {string} */ n, /** @type {string} */ k, /** @type {string} */ ru) => `<div class="dgrp" data-grp="${n}">${esc(T(k, ru))}</div>`;
-    for (const d of glob.length ? [...glob, ...rest] : list) {
-      if (glob.length && d === glob[0]) html += grp('global', 'dc.grpGlobal', 'для всех проектов');
-      if (glob.length && d === rest[0]) html += grp('own', 'dc.grpOwn', 'только этот проект');
+    for (const d of list) {
       const [cls, label] = dLabel(d);
       const ref = (d.card ? (cards.has(d.card) ? `<span class="lnk" data-dopen="${esc(d.card)}" title="${esc(T('dc.openTitle', 'Открыть карту {id}', { id: d.card }))}">${esc(d.card)}</span>` : `<span>${esc(d.card)}</span>`) : '')
         + d.files.map((/** @type {string} */ f) => `<span>${esc(f)}</span>`).join('');
@@ -2882,10 +2769,9 @@ function roadmapSetup(host) {
       const dmFull = [...dMarks(d, day, true), day(d.date), d.agent].filter(Boolean).join(' · ');
       html += `<div class="box drec" data-id="${esc(d.id)}"><div class="dh" title="${esc(`${d.title || d.id}\n${dmFull}`)}"><span class="dt ${cls}">${esc(label)}</span>`
         + `<span class="tt">${esc(d.title || d.id)}</span><span class="dm">${esc(dm)}</span></div>`
-        + (shownText(d) ? `<div class="dtx">${esc(shownText(d))}</div>` : '') + portRow(d) + globRow(d) + knownRow(d)
+        + (shownText(d) ? `<div class="dtx">${esc(shownText(d))}</div>` : '') + portRow(d)
         + (ref ? `<div class="dref">${ref}</div>` : '') + wrongRow(d) + pactRow(d) + pattRow(d) + likeRow(d) + '</div>';
     }
-    html = knownWarn() + html;
     if (last && last.patternErr) html = `<div class="note warn" data-n="patt">${esc(T('dc.pWarn', 'Утверждения паттернов не читаются: {error}. Паттерны агентам не подаются, их записи подаются как раньше', { error: last.patternErr }))}</div>` + html;
     if (mergeErr) html = `<div class="note warn">${esc(mergeErr)}</div>` + html;
     /** @type {HTMLElement} */ (decsEl.querySelector('.dlist')).innerHTML = html;
@@ -2909,7 +2795,6 @@ function roadmapSetup(host) {
     decsEl.hidden = false;
     decsEl.scrollTop = 0;
     decsFrame();
-    loadKnown();
   };
   const hideDecs = () => { dc = null; decsEl.hidden = true; decsEl.textContent = ''; };
   const closeDecs = () => { hideDecs(); body.hidden = false; draw(); };
@@ -2960,17 +2845,6 @@ function roadmapSetup(host) {
     mergeErr = r && r.error ? T('dc.differErr', 'Не записано «не похоже»: {error}', { error: r.error }) : '';
     if (!stopped && dc) paintDecs();
   };
-  /** «Для всех проектов» (t698): команда decGlobal, потом пометки базы заново; доску с новой шапкой пришлёт слежение. @param {string} id @param {boolean} on */
-  const globClick = async (id, on) => {
-    if (globBusy) return;
-    globBusy = id;
-    mergeErr = '';
-    paintDecs();
-    const r = await api('decGlobal', id, on);
-    globBusy = '';
-    mergeErr = r && r.error ? T('dc.globErr', 'Пометка «для всех проектов» не изменена: {error}', { error: r.error }) : '';
-    if (!stopped && dc) await loadKnown();
-  };
   /** «Сделать договорённостью» (t960): команда pact; доску с новым типом пришлёт слежение. @param {string} id */
   const pactClick = async (id) => {
     if (pactBusy) return;
@@ -3015,13 +2889,6 @@ function roadmapSetup(host) {
     if (pn) { pattClick(pn.dataset.pno || '', 'patternNo'); return; }
     const po = /** @type {HTMLElement | null} */ (t.closest('[data-pok]'));
     if (po) { pattClick(po.dataset.pok || '', 'patternOk'); return; }
-    const kd = /** @type {HTMLElement | null} */ (t.closest('[data-kdrop]'));
-    if (kd) { knownClick(kd.dataset.kdrop || '', 'knownDrop'); return; }
-    const kk = /** @type {HTMLElement | null} */ (t.closest('[data-kback]'));
-    if (kk) { knownClick(kk.dataset.kback || '', 'knownBack'); return; }
-    // Щелчок по подписи доходит сюда вторым событием — по самой галочке, уже переключённой: checked — новое значение.
-    const gl = /** @type {HTMLInputElement | null} */ (t.closest('input[data-dglob]'));
-    if (gl) { globClick(gl.dataset.dglob || '', gl.checked); return; }
     const op = /** @type {HTMLElement | null} */ (t.closest('[data-dopen]'));
     if (!op) return;
     dcBack = dc;
@@ -3546,14 +3413,18 @@ function roadmapSetup(host) {
     comp.busy = true; comp.note = null; comp.how = how;
     draw();
     // Язык окна (t1429) — язык новой доски: main.js запишет его в паспорт, когда агент его заведёт.
-    const r = how === 'compose' ? await api('compose', T('composeTab', 'Роадмап · составить'), I18n.lang())
+    const r = how === 'compose' ? await api('compose', T('composeTab', 'Роадмап · составить'), I18n.lang(), askFlag('compose'))
       : how === 'adopt' ? await api('adopt', T('adoptTab', 'Роадмап · готовый план'), I18n.lang())
         : await api('pickPlan', T('adoptTab', 'Роадмап · готовый план'), I18n.lang(), T('pickPlanTitle', 'Файл плана'));
     comp.busy = false;
     if (stopped) return;
     // Окно выбора отменили: ни вкладки, ни строки под кнопками.
     if (r && r.canceled) { draw(); return; }
-    if (r && r.sid) {
+    if (r && r.load) {
+      flagAsk.compose = true;
+      comp.note = { bad: true, text: T('composeLoad', 'Стоит флаг нагрузки (СТОП-НАГРУЗКА.txt в папке проекта): ноутбук перегружен, вкладка запустит ещё один claude. Нажмите «Составить роадмап» ещё раз, чтобы открыть всё равно') };
+      host.log('составить роадмап: стоит флаг нагрузки — показано предупреждение');
+    } else if (r && r.sid) {
       // Вкладка составления уже открыта (t568): её номер — в строке «составляется…», окно переходит на неё.
       comp.sid = String(r.sid);
       comp.note = { bad: true, text: T('composeAlready', 'Вкладка составления уже открыта, показываю её.') };
@@ -3572,10 +3443,14 @@ function roadmapSetup(host) {
     if (nc.busy) return;
     nc.busy = true; nc.note = null;
     draw();
-    const r = await api('newcard', T('newcardTab', 'Роадмап · новая карта'));
+    const r = await api('newcard', T('newcardTab', 'Роадмап · новая карта'), askFlag('newcard'));
     nc.busy = false;
     if (stopped) return;
-    if (r && r.sid) {
+    if (r && r.load) {
+      flagAsk.newcard = true;
+      nc.note = { bad: true, text: T('newcardLoad', 'Стоит флаг нагрузки (СТОП-НАГРУЗКА.txt в папке проекта): ноутбук перегружен, вкладка запустит ещё один claude. Нажмите кнопку «Новая карта» ещё раз, чтобы открыть всё равно') };
+      host.log('новая карта: стоит флаг нагрузки — показано предупреждение');
+    } else if (r && r.sid) {
       // Вкладка новой карты уже открыта: окно переходит на неё, вторую не открываем.
       nc.note = { bad: true, text: T('newcardAlready', 'Вкладка новой карты уже открыта, показываю её.') };
       host.pages.show(String(r.sid));
@@ -3595,10 +3470,14 @@ function roadmapSetup(host) {
     if (oc.busy) return;
     oc.busy = true; nc.note = null;
     draw();
-    const r = await api('start', T('orchTab', 'Главная сессия'));
+    const r = await api('start', T('orchTab', 'Главная сессия'), askFlag('orch'));
     oc.busy = false;
     if (stopped) return;
-    if (r && r.sid) {
+    if (r && r.load) {
+      flagAsk.orch = true;
+      nc.note = { bad: true, text: T('orchLoad', 'Стоит флаг нагрузки (СТОП-НАГРУЗКА.txt в папке проекта): ноутбук перегружен, вкладка запустит ещё один агент. Нажмите кнопку «Новая главная сессия» ещё раз, чтобы открыть всё равно') };
+      host.log('главная сессия: стоит флаг нагрузки — показано предупреждение');
+    } else if (r && r.sid) {
       nc.note = { bad: true, text: T('orchAlready', 'Вкладка главной сессии уже открыта, показываю её.') };
       host.pages.show(String(r.sid));
     } else if (!r || r.error || !r.session) {
@@ -3913,7 +3792,7 @@ function roadmapSetup(host) {
     // Вкладка итога сменила состояние (t1182) — старая строка под фазой («уже пишется») уступает «записан» / «не записан».
     const sumSt = (/** @type {any} */ x, /** @type {string} */ ph) => x && x.reports && x.reports[ph] ? x.reports[ph].sumSt : undefined;
     if (waveNote && sumSt(b, waveNote.phase) && sumSt(b, waveNote.phase) !== sumSt(last, waveNote.phase)) waveNote = null;
-    last = b; if (open) drawSoft(); refreshPassport(); refreshPhase(); inboxSoft(); humanSoft(); notesSoft(); paintDecs(); if (!foundEl.hidden) paintFound(); if (dc) loadKnown(); if (cur) refreshCard(); if (pv) loadPrompt(); });
+    last = b; if (open) drawSoft(); refreshPassport(); refreshPhase(); inboxSoft(); humanSoft(); notesSoft(); paintDecs(); if (!foundEl.hidden) paintFound(); if (cur) refreshCard(); if (pv) loadPrompt(); });
   // Скрытая вкладка карты «готово» (t1060): главная часть выждала паузу, окно закрывает её без вопроса; экран демон пишет в .kermach/runs/<карта>-<время>.log.
   host.on('runClose', (/** @type {any} */ x) => {
     const term = host.bridge && host.bridge.term;

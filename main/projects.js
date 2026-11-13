@@ -22,7 +22,7 @@ const DEFAULT_COLOR = '#737373';
 
 /**
  * openedAt — когда проект открывали последний раз (ISO); нет — ни разу не открывали в Kermach. По нему окно «Проекты» ставит недавние выше.
- * image — картинка проєкту замість значка (data:URL, перевірка — isImage у renderer\icons.js); icon лишається запасним значком.
+ * image — картинка проекта вместо значка (data:URL, проверка — isImage в renderer\icons.js); icon остаётся запасным значком.
  * @typedef {{ id: string, name: string, path: string, color: string, icon: string, image?: string, group: string | null, pinned?: boolean, bypass?: boolean, openedAt?: string }} Project
  * @typedef {{ at: string, count: number, note?: string }} OrcaImport
  * @typedef {{ v: 2, last: string, importedFromOrca?: OrcaImport, groups: { id: string, name: string }[], projects: Project[] }} ProjectsData
@@ -41,9 +41,9 @@ function newProject(dir) {
 }
 
 /**
- * Картинка Орки для списку: завантажена людиною, зменшена до 128 точок, щоб projects.json не розростався.
- * Адреса в мережі (аватар GitHub) не береться. Без Electron (nativeImage) — як є, якщо пройде перевірку.
- * @param {unknown} src @returns {string} порожньо — картинки немає
+ * Картинка Орки для списка: загружена человеком, уменьшена до 128 точек, чтобы projects.json не разрастался.
+ * Адрес в сети (аватар GitHub) не берётся. Без Electron (nativeImage) — как есть, если пройдёт проверку.
+ * @param {unknown} src @returns {string} пусто — картинки нет
  */
 function orcaImage(src) {
   if (typeof src !== 'string' || !/^data:image\/(png|jpeg|webp);base64,/i.test(src)) return '';
@@ -286,12 +286,12 @@ function add(dataDir, data, dir) {
  * Регистр цвета не меняется: у проектов из Орки цвета строчными буквами, в палитре — заглавными.
  * pinned — только true или false (t164): закрепление проекта в окне «Проекты».
  * bypass — только true или false (t851): все новые вкладки Claude проекта — без вопросов о разрешениях.
- * image — картинка проєкту: data:URL або порожній рядок (прибрати картинку).
+ * image — картинка проекта: data:URL или пустая строка (убрать картинку).
  * @param {any} f @param {('title' | 'color' | 'icon' | 'image' | 'pinned' | 'bypass')[]} keys какие поля можно менять
  * @returns {{ fields: { title?: string, color?: string, icon?: string, image?: string, pinned?: boolean, bypass?: boolean }, error?: undefined } | { error: string, fields?: undefined }}
  */
 function checkLook(f, keys) {
-  if (!f || typeof f !== 'object') return { error: 'нечего менять' };
+  if (!f || typeof f !== 'object') return { error: i18n.t('projects.err20', 'нечего менять') };
   /** @type {{ title?: string, name?: string, color?: string, icon?: string, image?: string, pinned?: boolean, bypass?: boolean }} */
   const out = {};
   for (const k of keys) {
@@ -299,10 +299,10 @@ function checkLook(f, keys) {
     const v = f[k];
     if (k === 'title' || k === 'name') {
       const s = typeof v === 'string' ? v.trim() : '';
-      if (!s || s.length > 60) return { error: 'имя — от 1 до 60 знаков' };
+      if (!s || s.length > 60) return { error: i18n.t('projects.err21', 'имя — от 1 до 60 знаков') };
       out[k] = s;
     } else if (k === 'color') {
-      if (typeof v !== 'string' || !/^#[0-9a-f]{6}$/i.test(v)) return { error: `не цвет: ${v}` };
+      if (typeof v !== 'string' || !/^#[0-9a-f]{6}$/i.test(v)) return { error: i18n.t('projects.err22', 'не цвет: {v}', { v }) };
       out.color = v;
     } else if (k === 'image') {
       if (v !== '' && !require('../renderer/icons').isImage(v)) {
@@ -311,17 +311,17 @@ function checkLook(f, keys) {
       }
       out.image = v;
     } else if (k === 'pinned') {
-      if (typeof v !== 'boolean') return { error: `закрепление — только true или false: ${JSON.stringify(v)}` };
+      if (typeof v !== 'boolean') return { error: i18n.t('projects.err23', 'закрепление — только true или false: {v0}', { v0: JSON.stringify(v) }) };
       out.pinned = v;
     } else if (k === 'bypass') {
-      if (typeof v !== 'boolean') return { error: `без вопросов о разрешениях — только true или false: ${JSON.stringify(v)}` };
+      if (typeof v !== 'boolean') return { error: i18n.t('projects.err24', 'без вопросов о разрешениях — только true или false: {v0}', { v0: JSON.stringify(v) }) };
       out.bypass = v;
     } else {
-      if (typeof v !== 'string' || !require('../renderer/icons').GRID.includes(v)) return { error: `нет такого значка: ${v}` };
+      if (typeof v !== 'string' || !require('../renderer/icons').GRID.includes(v)) return { error: i18n.t('projects.err25', 'нет такого значка: {v}', { v }) };
       out.icon = v;
     }
   }
-  return Object.keys(out).length ? { fields: out } : { error: 'нечего менять' };
+  return Object.keys(out).length ? { fields: out } : { error: i18n.t('projects.err26', 'нечего менять') };
 }
 
 /**
@@ -388,7 +388,7 @@ function addGroup(dataDir, data, name, pid) {
   const c = checkGroupName(data, name);
   if (!('name' in c)) return c;
   const p = pid ? data.projects.find((x) => x.id === pid) : null;
-  if (pid && !p) return { error: `нет проекта ${pid}` };
+  if (pid && !p) return { error: i18n.t('projects.err27', 'нет проекта {pid}', { pid }) };
   const group = { id: crypto.randomUUID(), name: c.name };
   data.groups.push(group);
   if (p) p.group = group.id;
@@ -399,7 +399,7 @@ function addGroup(dataDir, data, name, pid) {
 /** @param {string} dataDir @param {ProjectsData} data @param {string} id @param {unknown} name @returns {{ group: { id: string, name: string } } | { error: string }} */
 function renameGroup(dataDir, data, id, name) {
   const g = data.groups.find((x) => x.id === id);
-  if (!g) return { error: `нет группы ${id}` };
+  if (!g) return { error: i18n.t('projects.err28', 'нет группы {id}', { id }) };
   const c = checkGroupName(data, name, id);
   if (!('name' in c)) return c;
   g.name = c.name;
@@ -410,9 +410,9 @@ function renameGroup(dataDir, data, id, name) {
 /** «Выше» (-1) и «Ниже» (1): меняется местами с соседней. Порядок групп — порядок в файле. @param {string} dataDir @param {ProjectsData} data @param {string} id @param {number} step */
 function moveGroup(dataDir, data, id, step) {
   const i = data.groups.findIndex((x) => x.id === id);
-  if (i < 0) return { error: `нет группы ${id}` };
+  if (i < 0) return { error: i18n.t('projects.err29', 'нет группы {id}', { id }) };
   const j = i + step;
-  if ((step !== 1 && step !== -1) || j < 0 || j >= data.groups.length) return { error: `группу ${id} некуда сдвинуть` };
+  if ((step !== 1 && step !== -1) || j < 0 || j >= data.groups.length) return { error: i18n.t('projects.err30', 'группу {id} некуда сдвинуть', { id }) };
   [data.groups[i], data.groups[j]] = [data.groups[j], data.groups[i]];
   save(dataDir, data);
   return { ok: true };
@@ -421,7 +421,7 @@ function moveGroup(dataDir, data, id, step) {
 /** Удалить группу: её проекты остаются в списке, «Без группы». @param {string} dataDir @param {ProjectsData} data @param {string} id @returns {{ moved: number } | { error: string }} */
 function removeGroup(dataDir, data, id) {
   const i = data.groups.findIndex((x) => x.id === id);
-  if (i < 0) return { error: `нет группы ${id}` };
+  if (i < 0) return { error: i18n.t('projects.err31', 'нет группы {id}', { id }) };
   data.groups.splice(i, 1);
   let moved = 0;
   for (const p of data.projects) if (p.group === id) { p.group = null; moved++; }
@@ -432,8 +432,8 @@ function removeGroup(dataDir, data, id) {
 /** Перенести проект в группу; null — «Без группы». @param {string} dataDir @param {ProjectsData} data @param {string} id @param {string | null} groupId */
 function setGroup(dataDir, data, id, groupId) {
   const p = data.projects.find((x) => x.id === id);
-  if (!p) return { error: `нет проекта ${id}` };
-  if (groupId !== null && !data.groups.some((g) => g.id === groupId)) return { error: `нет группы ${groupId}` };
+  if (!p) return { error: i18n.t('projects.err32', 'нет проекта {id}', { id }) };
+  if (groupId !== null && !data.groups.some((g) => g.id === groupId)) return { error: i18n.t('projects.err33', 'нет группы {groupId}', { groupId }) };
   p.group = groupId;
   save(dataDir, data);
   return { project: p };

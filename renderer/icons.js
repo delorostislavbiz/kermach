@@ -172,7 +172,24 @@
     return cv.toDataURL('image/png');
   }
 
-  const api = { ICONS, GRID, get TITLES() { return TITLES(); }, PALETTE, DEFAULT_COLOR, svg, tilePNG, isImage, projectArt };
+  // Служебные рисунки окна «Дела» (стрелки свёртки, виды, флаг): не для выбора иконки проекта, поэтому не в ICONS и GRID (t1672).
+  /** @type {Record<string, string>} */
+  const SVC = {
+    chevR: '<path d="M9 6l6 6-6 6"/>', chevD: '<path d="M6 9l6 6 6-6"/>', arrowR: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+    inbox: '<path d="M3 13l3-8h12l3 8v6H3zM3 13h5l1 3h6l1-3h5"/>',
+    repeat: '<path d="M4 11V9a3 3 0 0 1 3-3h12M16 3l3 3-3 3M20 13v2a3 3 0 0 1-3 3H5M8 21l-3-3 3-3"/>',
+    filter: '<path d="M4 5h16l-6 8v6l-4-2v-4z"/>',
+    at: '<circle cx="12" cy="12" r="4"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.5 7.1"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>', search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+    flag: '<path d="M5 21V4h11l-2 4 2 4H5"/>', x: '<path d="M6 6l12 12M18 6L6 18"/>', clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', check: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
+    layers: '<path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5"/>',
+    more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>', star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+    link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>', sort: '<path d="M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4"/>', gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>', trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  };
+
+  const api = { SVC, ICONS, GRID, get TITLES() { return TITLES(); }, PALETTE, DEFAULT_COLOR, svg, tilePNG, isImage, projectArt };
   if (typeof window !== 'undefined') /** @type {any} */ (window).Icons = api;
   if (typeof module !== 'undefined') module.exports = api;
 })();

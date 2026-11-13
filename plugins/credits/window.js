@@ -29,6 +29,14 @@ function creditsSetup(host) {
   };
   const lang = () => (w.I18n && w.I18n.lang ? w.I18n.lang() : '');
   const api = (/** @type {string} */ cmd, /** @type {any[]} */ ...a) => host.call(cmd, ...a).catch((/** @type {any} */ e) => ({ error: String((e && e.message) || e) }));
+  /**
+   * Отказ «уже идёт» из-за неизвестного времени запуска (t1876, busyText в main.js) — на языке окна; другой текст — ''.
+   * @param {string} e @returns {string}
+   */
+  const busyUnknown = (e) => {
+    const m = /^(\S+) уже идёт \(процесс (\d+)\): Windows не сказала/.exec(String(e || ''));
+    return m ? T('busyUnknown', '{id} уже идёт (процесс {pid}): Windows не сказала, когда запущен этот процесс, поэтому считаю, что задание ещё идёт, — второй запуск оплатился бы второй раз. Подождите минуту и повторите; задание зависло — нажмите «Стоп»: процесс не тронется, задание снимется с «идёт»', { id: m[1], pid: m[2] }) : '';
+  };
   const ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M14.5 9a2.5 2.5 0 0 0-2.5-1.5c-1.5 0-2.5.8-2.5 2s1 1.7 2.5 2 2.5.8 2.5 2-1 2-2.5 2A2.5 2.5 0 0 1 9.5 15M12 6v1.5M12 16.5V18"/></svg>';
 
   const style = document.createElement('style');
@@ -136,6 +144,8 @@ function creditsSetup(host) {
   let confirmCancel = '';
   /** Задание, у которого «Отклонить» ждёт второго щелчка. */
   let confirmRej = '';
+  /** Задание, у которого открыта форма «Доработать» (t1560). */
+  let redoOpen = '';
   /** Идущие действия по заданию: id → имя кнопки. @type {Map<string, string>} */
   const busy = new Map();
   let stopped = false;
@@ -179,6 +189,7 @@ function creditsSetup(host) {
     if (j.status === 'не прошло' && j.need) a.push(['retry', 'warn', T('retry', 'Разрешить и повторить')]);
     else if (j.status === 'не прошло') a.push(['run', '', T('runAgain', 'Запустить заново')]);
     if (j.status === 'не прошло' && hasCopy) a.push(['diff', '', T('diff', 'Правки')]);
+    if (j.canRedo) a.push(['redo', '', T('redo', 'Доработать')]);
     if (j.hasAnswer) a.push(['answer', '', T('answer', 'Ответ')]);
     if ((j.status === 'прошло' || j.status === 'не прошло') && hasCopy && !j.decision) a.push(['reject', 'bad', confirmRej === j.id ? T('rejectSure', 'Точно удалить правки?') : T('reject', 'Отклонить')]);
     if (j.hasLog && !a.some((x) => x[0] === 'log')) a.push(['log', '', T('log', 'Журнал')]);
@@ -199,6 +210,7 @@ function creditsSetup(host) {
     const spent = data && data.spent;
     const n = nearest();
     const topup = !!(data && data.settings && data.settings.topup);
+    const agentsPack = !!(data && data.settings && data.settings.batchAgents);
     const pname = (host.project && host.project.name) || '';
     let h = `<div class="cr-head"><b>${esc(T('title', 'Кредиты'))}${pname ? ` · ${esc(pname)}` : ''}</b>`
       + `<button data-act="queue">${esc(T('queue', 'Запустить очередь'))}</button><button data-act="form">${esc(formOpen ? T('formClose', 'Скрыть форму') : T('add', 'Добавить задание'))}</button></div>`;
@@ -218,6 +230,9 @@ function creditsSetup(host) {
     }
     h += `<div class="cr-card"><label><input type="checkbox" data-act="topup"${topup ? ' checked' : ''}>${esc(T('topup', 'Добрать остаток'))}</label>`
       + `<span class="l">${esc(T('topupNote', 'В последние 5 дней перед тем, как сгорит начисление, Kermach сам запускает очередь, пока не останется запас $5. Флаг нагрузки — пауза.'))}</span></div>`;
+    // t1675: флаг batchAgents в settings.json проекта — раньше только командой kermach batch allow on.
+    h += `<div class="cr-card"><label><input type="checkbox" data-act="batchAgents"${agentsPack ? ' checked' : ''}>${esc(T('batchAgents', 'Агенты карт могут отправлять пачки'))}</label>`
+      + `<span class="l">${esc(T('batchAgentsNote', 'Агент карты сам отправит пачку запросов командой kermach batch new — за деньги с ключа API. Выключено — пачки отправляет только человек.'))}</span></div>`;
     h += '</div>';
     if (formOpen) {
       h += `<form class="cr-form" data-form="add"><input class="wide" name="title" placeholder="${esc(T('fTitle', 'Что сделать — одной строкой'))}">`
@@ -247,6 +262,15 @@ function creditsSetup(host) {
         + '</span></div>';
     }
     h += '</div>';
+    // Форма «Доработать» (t1560) — прямо в панели, как форма «Добавить»: так набранное переживает опрос списка (t1558).
+    const rj = redoOpen ? jobs.find((/** @type {any} */ x) => x.id === redoOpen) : null;
+    if (rj) {
+      h += `<form class="cr-form" data-form="redo" data-redo="${esc(rj.id)}"><b class="wide">${esc(T('redoHead', 'Доработать {id} · {t}', { id: rj.id, t: rj.title || '' }))}</b>`
+        + `<span class="wide muted">${esc(T('redoNote', 'Замечания уйдут агенту в тот же разговор, он поправит в той же копии. Итог и цена допишутся в задание.'))}</span>`
+        + `<textarea class="wide" name="text" placeholder="${esc(T('redoText', 'Что поправить в результате'))}"></textarea>`
+        + `<div class="wide"><button type="submit" class="ok"${busy.has(rj.id) ? ' disabled' : ''}>${esc(T('redoSend', 'Отправить на доработку'))}</button>`
+        + `<button type="button" data-act="redoCancel">${esc(T('redoCancel', 'Отмена'))}</button></div></form>`;
+    }
     h += packsHtml();
     if (sel) {
       const pk = showWhat === 'summary' ? ((data && data.packs) || []).find((/** @type {any} */ x) => x.id === sel) : null;
@@ -547,13 +571,19 @@ function creditsSetup(host) {
     if (act === 'select') { if (sel === id) { sel = ''; render(); } else showBottom(id, 'log'); return; }
     if (act === 'log' || act === 'diff' || act === 'answer') { showBottom(id, act); return; }
     if (act === 'reject' && confirmRej !== id) { confirmRej = id; render(); return; }
+    if (act === 'redo') {
+      redoOpen = id; msg = ''; render();
+      const ta = /** @type {HTMLTextAreaElement | null} */ (panel.querySelector('form[data-form="redo"] textarea'));
+      if (ta) ta.focus();
+      return;
+    }
     confirmRej = '';
     busy.set(id, act);
     msg = '';
     render();
     const r = await api(act, id);
     busy.delete(id);
-    if (r && r.error) msg = T('actFail', '{id}: {e}', { id, e: r.error });
+    if (r && r.error) msg = busyUnknown(r.error) || T('actFail', '{id}: {e}', { id, e: r.error });
     await load();
     if ((act === 'run' || act === 'retry') && !(r && r.error)) showBottom(id, 'log');
   }
@@ -561,7 +591,7 @@ function creditsSetup(host) {
   /** Кнопка «Запустить очередь» (t1521): kermach credits run без номера — задания по одному сверху вниз. */
   async function queue() {
     const r = await api('runQueue');
-    msg = r && r.error ? T('queueFail', 'Очередь не запущена: {e}', { e: r.error }) : '';
+    msg = r && r.error ? T('queueFail', 'Очередь не запущена: {e}', { e: busyUnknown(r.error) || r.error }) : '';
     await load();
   }
 
@@ -628,6 +658,7 @@ function creditsSetup(host) {
     if (!b) return;
     const a = b.dataset.act || '';
     if (a === 'form') { formOpen = !formOpen; render(); return; }
+    if (a === 'redoCancel') { redoOpen = ''; blurForm(); render(); return; }
     if (a === 'pkForm') { packOpen = !packOpen; est = null; packStep = 1; render(); if (packOpen) loadRecipes(); return; }
     if (a === 'pkStep') { goStep(Number(b.dataset.step) || 1); return; }
     if (a === 'pkNext') { goStep(packStep + 1); return; }
@@ -641,7 +672,7 @@ function creditsSetup(host) {
     const pk = /** @type {HTMLElement | null} */ (b.closest('[data-pack]'));
     if (pk && pk.dataset.pack) { packAct(a, pk.dataset.pack); return; }
     if (a === 'queue') { queue(); return; }
-    if (a === 'topup' || a === 'save') return;
+    if (a === 'topup' || a === 'batchAgents' || a === 'save') return;
     const rowEl = /** @type {HTMLElement | null} */ (b.closest('[data-id]'));
     if (rowEl && rowEl.dataset.id) act(a, rowEl.dataset.id);
   });
@@ -669,6 +700,12 @@ function creditsSetup(host) {
       return;
     }
     if (t.dataset.act === 'pkRecipe') { if (t.value) applyRecipe(t.value); return; }
+    if (t.dataset.act === 'batchAgents') {
+      const r = await api('batchAgents', t.checked);
+      msg = r && r.error ? T('batchAgentsFail', '«Агенты карт могут отправлять пачки» не сохранён: {e}', { e: r.error }) : '';
+      await load();
+      return;
+    }
     if (t.dataset.act !== 'topup') return;
     const r = await api('topup', t.checked);
     msg = r && r.error ? T('topupFail', '«Добрать остаток» не сохранён: {e}', { e: r.error }) : '';
@@ -684,6 +721,20 @@ function creditsSetup(host) {
       return;
     }
     const v =(/** @type {string} */ k) => String(/** @type {any} */ (f.elements.namedItem(k) || {}).value || '').trim();
+    if (f.dataset.form === 'redo') {
+      // t1560: замечания — в задание, запуск kermach credits redo cN; ошибка — форма остаётся с текстом.
+      const id = f.dataset.redo || '';
+      if (!v('text')) { msg = T('redoNeed', 'Напишите, что поправить'); render(); return; }
+      if (busy.has(id)) return;
+      busy.set(id, 'redo'); msg = ''; blurForm(); render();
+      const r = await api('redo', id, v('text'));
+      busy.delete(id);
+      if (r && r.error) { msg = T('redoFail', 'Доработка не запущена: {e}', { e: r.error }); render(); return; }
+      redoOpen = ''; f.reset();
+      await load();
+      showBottom(id, 'log');
+      return;
+    }
     if (!v('title')) { msg = T('needTitle', 'Напишите, что сделать'); render(); return; }
     const r = await api('add', { title: v('title'), text: v('text'), kind: v('kind'), model: v('model'), effort: v('effort'), check: v('check') });
     if (r && r.error) { msg = T('addFail', 'Задание не добавлено: {e}', { e: r.error }); render(); return; }

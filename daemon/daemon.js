@@ -96,15 +96,37 @@ const DA1_MS = 10000;
 // Сон вкладки Claude (t1751): «готово» дольше порога — дерево процесса claude гаснет (с MCP), копия экрана и вкладка остаются,
 // первый ввод поднимает в том же терминале claude --resume по рецепту от окна (поле wake запроса create). Работает, ждёт ответа,
 // codex, кредиты и другие агенты, фоновые задачи на экране — не усыпляются. Порог — KERMACH_SLEEP_MIN в минутах (дробь — для проб),
-// 0 — не усыплять, нет переменной — 60 мин. Пункта в «Настройках» нет: демон их не читает.
-const SLEEP_MIN = (() => {
+// 0 — не усыплять, нет переменной — 60 мин. Пункт «Настроек» (t1771) окно присылает запросом sleep при связи и при смене; переменная главнее:
+// ею пользуются пробы, а настройки у них общие с окном.
+const SLEEP_ENV = (() => {
   const v = platform.envOf(process.env, 'SLEEP_MIN');
   const n = Number(v);
-  return v === undefined || v === '' || !Number.isFinite(n) || n < 0 ? 60 : n;
+  return v === undefined || v === '' || !Number.isFinite(n) || n < 0 ? null : n;
 })();
-const SLEEP_MS = SLEEP_MIN * 60000;
-// Как часто смотреть, кого усыпить: четверть порога, от 5 до 30 с.
-const SLEEP_LOOK_MS = Math.min(30000, Math.max(5000, SLEEP_MS / 4));
+let sleepMin = SLEEP_ENV === null ? 60 : SLEEP_ENV;
+/** @type {NodeJS.Timeout | null} */
+let sleepLook = null;
+// Как часто смотреть, кого усыпить: четверть порога, от 5 до 30 с. Порог 0 — не смотреть.
+function planSleep() {
+  if (sleepLook) clearInterval(sleepLook);
+  sleepLook = null;
+  if (sleepMin > 0) sleepLook = setInterval(lookSleep, Math.min(30000, Math.max(5000, sleepMin * 60000 / 4))).unref();
+}
+// Прогрев кеша (t1826): вкладка Claude с meta.warm '1' в «готово» не засыпает, и раз в WARM_MIN минут демон шлёт ей короткую строку,
+// чтобы часовой кеш разговора у Anthropic не истёк. Ход прогрева не меняет состояние, ответ, «не смотрел» и звук (warmTurn).
+// Предел — WARM_MAX_H часов от последнего настоящего хода или ввода (решение Ростислава 11.11: 4 ч): дальше не греем, вкладка засыпает как обычно. 0 — без предела.
+// Переменные KERMACH_WARM_MIN и KERMACH_WARM_MAX_H, дробь — для проб.
+const numEnv = (/** @type {string} */ k, /** @type {number} */ dflt) => {
+  const v = platform.envOf(process.env, k);
+  const n = Number(v);
+  return v === undefined || v === '' || !Number.isFinite(n) || n < 0 ? dflt : n;
+};
+const WARM_MS = (numEnv('WARM_MIN', 50) || 50) * 60000;
+const WARM_MAX_MS = numEnv('WARM_MAX_H', 4) * 3600000;
+const WARM_LOOK_MS = Math.min(30000, Math.max(2000, WARM_MS / 10));
+// Ход прогрева длиннее этого — больше не прячем: дальше вкладка живёт как обычно.
+const WARM_TURN_MS = 180000;
+const WARM_TEXT = '[Kermach: прогрев кеша. Ничего не делай, ответь одним словом: ок]';
 // Сколько ждать выхода усыпляемого дерева: не вышло — сон отменён, вкладка работает как была.
 const SLEEP_EXIT_MS = 15000;
 // Проснувшийся claude готов к вводу: строка состояния пришла (+ WAKE_STATUS_MS) или вывод был и молчит WAKE_QUIET_MS; не позже WAKE_MAX_MS.
@@ -491,6 +513,11 @@ class Session {
     this.statusAt = 0;
     // Почему вкладку не усыпили в прошлый раз — в журнал один раз на причину.
     this.sleepSkip = '';
+    // Прогрев (t1826): warmAt — когда слали последний (мс); warmTurn — идёт ход прогрева: { at } или null; warmSkip — причина пропуска для журнала.
+    this.warmAt = 0;
+    /** @type {{ at: number } | null} */
+    this.warmTurn = null;
+    this.warmSkip = '';
     /** Номер виден и ответ на create ушёл — терминал есть в list (t909). */
     this.ready = false;
     this.spawnPty(o.file, ptyArgs(this.desc.args), o.env);
@@ -554,6 +581,10 @@ class Session {
     const real = d.replace(NOT_INPUT, '');
     if (!real) return;
     this.inputAt = Date.now();
+    // Человек отправил своё (Enter) или прервал (Ctrl+C) во время прогрева (t1826) — дальше обычный ход, не прячем.
+    // Буквы без Enter ход прогрева не снимают: иначе его «ок» ушёл бы окнам как ответ со звуком; набранное держит draft.
+    // eslint-disable-next-line no-control-regex
+    if (this.warmTurn && /[\r\x03]/.test(real)) this.warmTurn = null;
     // eslint-disable-next-line no-control-regex
     if (/[\r\x03]/.test(real)) this.draft = false;
     // eslint-disable-next-line no-control-regex
@@ -577,16 +608,66 @@ class Session {
    * @param {number} now
    */
   maySleep(now) {
-    if (this.sleep || this.wakeQ || !this.ready || !this.wake || this.agent !== 'claude' || this.state !== 'done' || this.killed || this.ptyExited) return;
+    if (!(sleepMin > 0) || this.sleep || this.wakeQ || !this.ready || !this.wake || this.agent !== 'claude' || this.state !== 'done' || this.killed || this.ptyExited) return;
     if (!UUID.test(String((this.desc.meta || {}).claudeSessionId || ''))) return;
-    if (now - Math.max(Date.parse(this.stateAt) || 0, this.inputAt, this.wokeAt) < SLEEP_MS) return;
+    if (now - this.humanAt() < sleepMin * 60000) return;
+    // Прогрев включён (t1826): не усыпляем, пока не вышел его предел.
+    if (this.warmOn() && !this.warmOver(now)) return;
+    if (this.warmOn() && this.warmSkip !== 'предел') { this.warmSkip = 'предел'; log(`терминал ${this.sid}: прогрев — вышел предел ${WARM_MAX_MS / 3600000} ч, больше не грею`); }
     const why = this.draft ? 'в поле набран текст без Enter' : this.sleepBlock();
     if (why) {
-      if (this.sleepSkip !== why) { this.sleepSkip = why; log(`терминал ${this.sid}: «готово» дольше ${SLEEP_MIN} мин, но не усыпляю — ${why}`); }
+      if (this.sleepSkip !== why) { this.sleepSkip = why; log(`терминал ${this.sid}: «готово» дольше ${sleepMin} мин, но не усыпляю — ${why}`); }
       return;
     }
     this.sleepSkip = '';
     this.fallAsleep();
+  }
+
+  /** Последний настоящий ход, ввод или пробуждение (мс). Ход прогрева stateAt не двигает. */
+  humanAt() {
+    return Math.max(Date.parse(this.stateAt) || 0, this.inputAt, this.wokeAt);
+  }
+
+  /** Прогрев кеша включён у вкладки (t1826). */
+  warmOn() {
+    return (this.desc.meta || {}).warm === '1';
+  }
+
+  /** Вышел ли предел прогрева. @param {number} now */
+  warmOver(now) {
+    return WARM_MAX_MS > 0 && now - this.humanAt() >= WARM_MAX_MS;
+  }
+
+  /**
+   * Пора ли греть (t1826, таймер lookWarm). Только Claude в «готово» с номером разговора, не спит, без набранного текста, меню, фоновых задач и строки лимита.
+   * Пауза — WARM_MS от позднего из настоящего хода, ввода и прошлого прогрева.
+   * @param {number} now
+   */
+  mayWarm(now) {
+    if (this.warmTurn && now - this.warmTurn.at >= WARM_TURN_MS) {
+      log(`терминал ${this.sid}: ход прогрева идёт дольше ${WARM_TURN_MS / 1000} с — больше не прячу его`);
+      this.warmTurn = null;
+    }
+    if (!this.warmOn() || this.warmTurn || this.sleep || this.wakeQ || !this.ready || this.agent !== 'claude' || this.state !== 'done' || this.menu || this.killed || this.ptyExited) return;
+    if (!UUID.test(String((this.desc.meta || {}).claudeSessionId || ''))) return;
+    if (now - Math.max(this.humanAt(), this.warmAt) < WARM_MS) return;
+    if (this.warmOver(now)) {
+      if (this.warmSkip !== 'предел') { this.warmSkip = 'предел'; log(`терминал ${this.sid}: прогрев — вышел предел ${WARM_MAX_MS / 3600000} ч, больше не грею`); }
+      return;
+    }
+    const why = this.draft ? 'в поле набран текст без Enter' : this.sleepBlock();
+    if (why) {
+      if (this.warmSkip !== why) { this.warmSkip = why; log(`терминал ${this.sid}: прогрев пропущен — ${why}`); }
+      return;
+    }
+    this.warmSkip = '';
+    this.warmAt = now;
+    this.warmTurn = { at: now };
+    log(`терминал ${this.sid}: прогрев кеша, разговор ${(this.desc.meta || {}).claudeSessionId}`);
+    // Строка и Enter отдельно, как typeLine: Claude принимает строку целиком. Мимо feed — это не ввод человека, inputAt и draft не трогаем.
+    const p = this.pty;
+    p.write(WARM_TEXT);
+    setTimeout(() => { if (this.pty === p && !this.ptyExited) p.write('\r'); }, 300);
   }
 
   /** Что на экране мешает сну: плашка фоновых задач в нижних рядах или строка лимита. '' — ничего. */
@@ -608,7 +689,7 @@ class Session {
   fallAsleep() {
     const p = this.pty;
     this.sleep = 'going';
-    log(`терминал ${this.sid}: «готово» дольше ${SLEEP_MIN} мин — усыпляю claude: дерево pid ${p.pid}, разговор ${(this.desc.meta || {}).claudeSessionId}`);
+    log(`терминал ${this.sid}: «готово» дольше ${sleepMin} мин — усыпляю claude: дерево pid ${p.pid}, разговор ${(this.desc.meta || {}).claudeSessionId}`);
     this.sleepTimer = setTimeout(() => this.sleepStuck(p), SLEEP_EXIT_MS);
     this.killTree().catch((e) => log(`терминал ${this.sid}: усыпление — taskkill упал: ${e && e.stack || e}`));
   }
@@ -724,6 +805,15 @@ class Session {
     const twice = this.agent === 'codex' && state === this.state && (this.stateBy === 'hook' || this.stateBy === 'osc9') && this.stateBy !== by;
     const told = (by === 'hook' || by === 'osc9') && state !== 'working' && !twice;
     if (!this.agent || (state === this.state && !told)) return;
+    // Ход прогрева (t1826): «работает» и конец хода прячем — окна, доска и звук его не видят, stateAt не двигается.
+    // Любое другое (запрос разрешения, ошибка) — ход уже не прогрев: состояние как обычно.
+    if (this.warmTurn) {
+      if (state === 'working' || state === 'done') {
+        if (state === 'done' && by === 'hook') { this.warmTurn = null; log(`терминал ${this.sid}: прогрев кеша — ход закончен`); }
+        return;
+      }
+      this.warmTurn = null;
+    }
     // loud — звук и мигание по заголовку (t338): у агента без хуков заголовок — единственный голос. Claude и Codex звучат от хука и OSC 9.
     const now = Date.now();
     const loud = by === 'title' && Object.hasOwn(TITLE_RULES, this.agent)
@@ -1114,6 +1204,8 @@ class Session {
     cols = Math.max(2, Math.floor(cols));
     rows = Math.max(2, Math.floor(rows));
     if (!cols || !rows || (cols === this.cols && rows === this.rows)) return;
+    // Смена размера — в журнал (d370): по нему видно, менялась ли высота или ширина в момент порчи экрана (t1154).
+    log(`терминал ${this.sid}: размер ${this.cols}x${this.rows} → ${cols}x${rows}`);
     this.cols = cols;
     this.rows = rows;
     // Ряды сдвинулись: прежнее «interrupted» может встать ниже старого ряда строки хода (t648).
@@ -1390,6 +1482,17 @@ function handle(c, msg) {
       return void codexHookCheck(msg.file, pre, typeof msg.cwd === 'string' && msg.cwd ? msg.cwd : os.homedir(), msg.again === true)
         .then((r) => c.reply(id, { args: r.args, check: r }), (e) => c.fail(id, String(e)));
     }
+    // Порог сна вкладок Claude из «Настроек» (t1771): минуты, 0 — не усыплять. Переменная KERMACH_SLEEP_MIN главнее — ответ называет действующий порог.
+    case 'sleep': {
+      const n = Number(msg.min);
+      if (!Number.isFinite(n) || n < 0 || n > 1440) return c.fail(id, `порог сна — минуты от 0 до 1440, пришло ${msg.min}`);
+      if (SLEEP_ENV === null && n !== sleepMin) {
+        log(`порог сна вкладок Claude: ${n ? `${n} мин` : 'не усыплять'} (было ${sleepMin ? `${sleepMin} мин` : 'не усыплять'}), клиент ${c.role} ${c.name}`);
+        sleepMin = n;
+        planSleep();
+      }
+      return c.reply(id, { min: sleepMin, env: SLEEP_ENV !== null });
+    }
     case 'shutdown':
       log(`остановка по просьбе клиента ${c.role} ${c.name}`);
       c.reply(id);
@@ -1489,7 +1592,17 @@ function lookSleep() {
     try { s.maySleep(now); } catch (e) { log(`терминал ${s.sid}: проверка сна упала: ${/** @type {any} */ (e).stack || e}`); }
   }
 }
-if (SLEEP_MS > 0) setInterval(lookSleep, SLEEP_LOOK_MS).unref();
+planSleep();
+
+/** Прогреть кеш у вкладок Claude с включённым прогревом (t1826). */
+function lookWarm() {
+  if (shuttingDown) return;
+  const now = Date.now();
+  for (const s of sessions.values()) {
+    try { s.mayWarm(now); } catch (e) { log(`терминал ${s.sid}: проверка прогрева упала: ${/** @type {any} */ (e).stack || e}`); }
+  }
+}
+setInterval(lookWarm, WARM_LOOK_MS).unref();
 
 /** @type {NodeJS.Timeout | null} */
 let idleTimer = null;
@@ -1760,6 +1873,12 @@ function onHook(source, e, tabKey) {
   if (source === 'claude' && meta.kind === 'claude' && UUID.test(sessionId) && meta.claudeSessionId !== sessionId) newClaudeId(s, sessionId, event);
   // Notification «permission_prompt» приходит через ~6 с после PermissionRequest (t1483, spikes\t1483-ask\cause.txt): вкладка ещё ждёт того же ответа,
   // поэтому что просят (tool, what) остаётся, иначе дашборд потеряет текст вопроса и имя инструмента.
+  // Ход прогрева (t1826): команда и ответ «ок» — не разговор человека. hook, prompt, reply не трогаем и не рассылаем; Stop снимает warmTurn в setState.
+  if (s.warmTurn && (event === 'UserPromptSubmit' || event === 'Stop')) {
+    // Поздний кадр спиннера после Stop (t1841, d813): без settleUntil он вернул бы «работает» по заголовку и сдвинул stateAt.
+    if (event === 'Stop') { s.settleUntil = Date.now() + SETTLE_MS; s.setState('done', 'hook'); }
+    return;
+  }
   const same = event === 'Notification' && s.state === 'waiting' && s.hook && s.hook.event === 'PermissionRequest';
   s.hook = same ? s.hook : { event, at: new Date().toISOString(), sessionId, source, ...permOf(event, e) };
   const said = talkOf(event, e);

@@ -170,5 +170,17 @@
   "credits.rcpResearchText": "Jede Zeile ist eine Frage oder eine Website-Adresse. Finde die Antwort im Internet und lies die nötigen Seiten. Antworte kurz, mit Links zu den Quellen.",
   "credits.rcpCards": "Prüfung der Tafelkarten",
   "credits.rcpCardsText": "Prüfe die Karte nach den Regeln einer guten Karte. Antworte als Liste: wo „Wie prüfen“ vage ist, wo Dateien fehlen, wo die Karte zu groß ist und geteilt werden sollte. Alles gut — Antwort „keine Anmerkungen“.",
-  "credits.pkLineN": "Zeile {n}"
+  "credits.pkLineN": "Zeile {n}",
+  "credits.redo": "Nacharbeiten",
+  "credits.redoHead": "Nacharbeiten {id} · {t}",
+  "credits.redoNote": "Die Anmerkungen gehen im selben Gespräch an den Agenten, er korrigiert in derselben Kopie. Ergebnis und Preis werden im Auftrag ergänzt.",
+  "credits.redoText": "Was am Ergebnis zu korrigieren ist",
+  "credits.redoSend": "Zur Nacharbeit senden",
+  "credits.redoCancel": "Abbrechen",
+  "credits.redoNeed": "Schreiben Sie, was zu korrigieren ist",
+  "credits.redoFail": "Nacharbeit nicht gestartet: {e}",
+  "credits.batchAgents": "Karten-Agenten dürfen Stapel senden",
+  "credits.batchAgentsNote": "Ein Karten-Agent sendet selbst einen Stapel Anfragen mit kermach batch new — bezahlt über den API-Schlüssel. Aus — Stapel sendet nur ein Mensch.",
+  "credits.batchAgentsFail": "„Karten-Agenten dürfen Stapel senden“ nicht gespeichert: {e}",
+  "credits.busyUnknown": "{id} läuft bereits (Prozess {pid}): Windows hat nicht gemeldet, wann dieser Prozess gestartet wurde, daher gilt die Aufgabe als noch laufend — ein zweiter Start würde doppelt bezahlt. Warten Sie eine Minute und versuchen Sie es erneut; hängt die Aufgabe, drücken Sie „Stopp“: der Prozess bleibt unberührt, die Aufgabe ist nicht mehr „läuft“"
 }

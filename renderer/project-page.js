@@ -52,7 +52,7 @@
    * @typedef {{ focus: () => void, close: () => void, look?: (f: { color: string, icon: string }) => void }} PageTab
    * runs — агент, запущенный руками во вкладке-терминале (t406): claude, codex, agent:<id> или ''. Вид kind остаётся shell — так вкладку запустили.
    * pics — получатель снимка со страницы (t416), от главного процесса.
-   * @typedef {{ sid: string, kind: string, runs?: string, pics?: boolean, title: string, color: string, icon: string, alive: boolean, lost?: boolean, failed?: string, state: string, pane: HTMLElement, x: any, page?: PageTab, pos?: number, url?: string, claudeSessionId?: string, codexSessionId?: string, bypass?: boolean }} Tab
+   * @typedef {{ sid: string, kind: string, runs?: string, pics?: boolean, title: string, color: string, icon: string, alive: boolean, lost?: boolean, failed?: string, state: string, pane: HTMLElement, x: any, page?: PageTab, pos?: number, url?: string, claudeSessionId?: string, codexSessionId?: string, bypass?: boolean, warm?: boolean }} Tab
    */
   /** @type {Map<string, Tab>} */
   const tabs = new Map();
@@ -182,7 +182,7 @@
       tabKey: (/** @type {string} */ kind, /** @type {boolean} */ shift) => (kind === 'close' ? tabCommand('close', tabs.get(sid)) : kind === 'recent' ? walkRecent(shift ? -1 : 1) : stepTab(kind === 'next' ? 1 : -1)),
     }, fontPx());
     /** @type {Tab} */
-    const tab = { sid, kind: s.kind, runs: String(s.runs || ''), pics: !!s.pics, title: s.title, color: colorOf(s.color), icon: s.icon, alive: true, state: String(s.state || ''), pane, x, claudeSessionId: s.claudeSessionId, codexSessionId: s.codexSessionId, bypass: !!s.bypass };
+    const tab = { sid, kind: s.kind, runs: String(s.runs || ''), pics: !!s.pics, title: s.title, color: colorOf(s.color), icon: s.icon, alive: true, state: String(s.state || ''), pane, x, claudeSessionId: s.claudeSessionId, codexSessionId: s.codexSessionId, bypass: !!s.bypass, warm: !!s.warm };
     tabs.set(sid, tab);
     const early = pending.get(sid);
     if (early) { for (const d of early) x.write(d); pending.delete(sid); }
@@ -600,7 +600,9 @@
     const cls = (/** @type {Tab} */ x, /** @type {string} */ k) => `${x.sid === active ? ' on' : lay && lay.parts.includes(x.sid) ? ' vis' : ''}${k === 'waiting' ? ' need' : ''}`;
     // Вкладка сайта (t172): вторая строка — адрес страницы без https://, а не метка состояния.
     // Claude без вопросов о разрешениях (t851): молния после имени — в списке слева и на вкладке полосы, слово — в подсказке.
-    const by = (/** @type {Tab} */ x) => (x.bypass ? `<span class="by" title="${esc(I18n.t('page.claudeBypass', 'Claude без вопросов о разрешениях'))}" style="display:inline-flex;vertical-align:-2px;margin-left:4px">${svg('bolt', '#ECA855', 12)}</span>` : '');
+    const by = (/** @type {Tab} */ x) => (x.bypass ? `<span class="by" title="${esc(I18n.t('page.claudeBypass', 'Claude без вопросов о разрешениях'))}" style="display:inline-flex;vertical-align:-2px;margin-left:4px">${svg('bolt', '#ECA855', 12)}</span>` : '')
+      // t1795: прогрев кеша Claude — знак после имени, слово в подсказке.
+      + (x.warm ? `<span class="warm" title="${esc(I18n.t('page.warmOnHint', 'Прогрев кеша включён: вкладка не засыпает, кеш разговора не остывает'))}" style="margin-left:4px;color:#E07A3C">♨</span>` : '');
     // t1485: звезда после имени у главной вкладки — в списке слева и на полосе, слово «Главная» — в подсказке.
     const mk = (/** @type {Tab} */ x) => (x.sid === mainSid ? `<span class="mainmark" title="${esc(I18n.t('page.mainTab', 'Главная: сюда приходят сообщения о картах «Роадмапа»'))}" style="margin-left:4px;color:#ECA855">★</span>` : '')
       + (comps.has(x.sid) ? `<span class="compmark" title="${esc(`${I18n.t('page.companionTab', 'Сопутствующая сессия')}: ${comps.get(x.sid)}`)}" style="margin-left:4px;color:#9B7BEA">◇</span>` : '')
@@ -624,9 +626,9 @@
       h.innerHTML = `<i style="background:${x.color}"></i><b>${esc(x.title)}</b>${k ? `<span>·</span><span>${esc(STATES[k].word)}</span>` : ''}`;
     }
     revealActive(list.length);
-    $('termCount').textContent = String(list.length);
     // «4 терминала · 1 ждёт тебя» справа в нижней строке (d235); класс waiting у body — рамка проекта мигает (d234, плагин frame).
     const terms = list.filter((x) => !x.page && x.alive).length; // завершённые вкладки (d407, t1274) не считаются
+    $('termCount').textContent = String(terms); // заголовок «Терминалы» — то же число, что внизу (t1708)
     const need = list.filter((x) => !x.page && stateOf(x) === 'waiting').length;
     let cnt = $('tabCount');
     if (!cnt) { cnt = document.createElement('div'); cnt.id = 'tabCount'; cnt.style.marginLeft = 'auto'; $('bottom').append(cnt); }
@@ -937,6 +939,8 @@
       ...(canMain ? [tab.sid === mainSid ? { id: 'unmain', label: I18n.t('page.unmainTab', 'Снять пометку «Главная»'), icon: 'close' } : { id: 'main', label: I18n.t('page.setMainTab', 'Главная вкладка: сюда сообщения о картах'), icon: 'check' }] : []),
       // d307: живую вкладку — в список «в фоне»: терминал работает, на полосе не мешает. Вернуть — «показать» в том списке.
       ...(onlyPage || !tab.alive || !t.term.hide ? [] : [{ id: 'hide', label: I18n.t('page.hideTab', 'Спрятать в фон'), icon: 'down' }]),
+      // t1795: прогрев кеша — у живой вкладки Claude.
+      ...(!onlyPage && tab.alive && tab.kind === 'claude' && t.term.warm ? [{ id: 'warm', label: tab.warm ? I18n.t('page.warmOff', 'Прогрев кеша: выключить') : I18n.t('page.warmOn', 'Прогрев кеша: включить'), icon: tab.warm ? 'check' : 'sun' }] : []),
       ...(canHand ? [{ id: 'handoff', label: I18n.t('page.handoffTab', 'Передать другому агенту…'), icon: 'bot' }] : []),
       { id: 'close', label: I18n.t('page.zakrytTerminal', 'Закрыть терминал'), icon: 'trash', danger: true, kbd: kbdClose() },
     ]);
@@ -947,6 +951,10 @@
         if (look) await update(tab, look);
       } else if (pick === 'rename') await renameTab(tab);
       else if (pick === 'close') await closeTab(tab);
+      else if (pick === 'warm') {
+        const r = await t.term.warm(tab.sid, !tab.warm);
+        if (r && r.error) t.log(`прогрев кеша не переключён: ${r.error}`); else { tab.warm = !tab.warm; render(); }
+      }
       else if (pick === 'hide') { const r = await t.term.hide(tab.sid); if (r && r.error) t.log(`вкладка не спрятана: ${r.error}`); }
       else if (pick === 'handoff') {
         // Вкладка могла выйти (у Codex кончился лимит): вид и номер разговора — из окна, у демона её уже нет.
@@ -998,6 +1006,38 @@
     }, () => {});
     Promise.resolve(t.plugin.call('roadmap', 'companions')).then((/** @type {any} */ r) => { if (r && !r.error) compsSet(r); }, () => {});
   };
+
+  /**
+   * «Включить историю изменений» из окна проекта (t1678, d374) — те же подтверждение и вызов, что в окне «Проекты» (projects-page.js, t1171).
+   * Пункт есть в меню «+» во всех темах и в меню шапки боковой панели (Kermach, Termius Dark), пока у проекта нет точек возврата.
+   * @param {any} hist ответ canHistory: { git }
+   */
+  async function historyAsk(hist) {
+    const ok = await D.confirm({
+      title: I18n.t('projects.history', 'Включить историю изменений'),
+      text: I18n.t('projects.historyAsk', 'Вести историю изменений в «{name}»? После работы агентов появятся точки возврата.', { name: $('pName').textContent || p.name }),
+      note: hist.git
+        ? I18n.t('projects.historyNoteOwn', 'У проекта свой git. Точки возврата хранятся отдельно: ветка, коммиты и .gitignore не меняются.')
+        : I18n.t('projects.historyNote', 'Будет создана папка .git. Видео, архивы, node_modules и дампы баз в историю не попадут. Список — в файле .gitignore.'),
+      ok: I18n.t('projects.historyOk', 'Включить'),
+    });
+    if (ok) {
+      const r = await t.projects.enableHistory(p.id).catch((/** @type {any} */ e) => ({ error: String(e && e.message || e) }));
+      if (r && r.error) {
+        t.log(`история изменений не включилась: ${r.error}`);
+        await D.confirm({ title: I18n.t('projects.history', 'Включить историю изменений'), text: String(r.error), ok: 'OK' });
+      } else t.log('история изменений включена из окна проекта');
+    }
+    refocus();
+  }
+  // Шапка боковой панели (заголовок окна — область перетаскивания, правый щелчок там системный).
+  $('sideHead').addEventListener('contextmenu', async (ev) => {
+    ev.preventDefault();
+    const hist = await t.projects.canHistory(p.id).catch(() => false);
+    if (!hist) { refocus(); return; }
+    const pick = await D.menu(ev.clientX, ev.clientY, [{ id: 'history', label: I18n.t('projects.history', 'Включить историю изменений'), icon: 'clock' }]);
+    if (pick === 'history') await historyAsk(hist); else refocus();
+  });
 
   for (const id of ['list', 'tabs']) {
     $(id).addEventListener('contextmenu', (ev) => {
@@ -1277,6 +1317,7 @@
     menu.style.left = `${Math.max(e, Math.min(r.left, window.innerWidth - menu.offsetWidth - e))}px`;
     plus.classList.toggle('open', at === plus);
     { const ce = document.getElementById('addCompanion'); if (ce) ce.hidden = !roadmapOn(); }
+    { const he = document.getElementById('addHistory'); if (he) { he.hidden = true; t.projects.canHistory(p.id).then((/** @type {any} */ h) => { he.hidden = !h; }, () => {}); } }
     refreshAgents();
   };
   plus.onclick = (ev) => { ev.stopPropagation(); if (menu.classList.contains('open') && menuAt === plus) closeMenu(); else openMenu(); };
@@ -1334,6 +1375,22 @@
     el.hidden = true;
     $('addShell').after(el);
     wireItem(el, () => { companionAsk().catch((/** @type {any} */ e) => t.log(`сопутствующая сессия не открылась: ${e}`)); });
+  }
+  // «Включить историю изменений» (t1678, d374) — последним пунктом меню «+»: меню есть во всех темах. Виден, пока истории нет (openMenu).
+  {
+    const el = document.createElement('div');
+    el.className = 'item';
+    el.id = 'addHistory';
+    el.dataset.icon = 'clock';
+    el.dataset.color = '#8E8E93';
+    el.dataset.i18n = 'projects.history';
+    el.textContent = I18n.t('projects.history', 'Включить историю изменений');
+    el.hidden = true;
+    menu.appendChild(el);
+    wireItem(el, async () => {
+      const hist = await t.projects.canHistory(p.id).catch(() => false);
+      if (hist) await historyAsk(hist); else refocus();
+    });
   }
   /** Тема и агент сопутствующей сессии, потом вызов плагина (t1486). */
   async function companionAsk() {
@@ -1589,7 +1646,7 @@
         if (had) {
           // Агент закончил во вкладке, на которую смотрят (t1470): «не смотрел» не нужен.
           if (had.sid === active && s.state === 'done' && had.state !== 'done') markSeen();
-          had.title = s.title; had.color = colorOf(s.color); had.icon = s.icon; had.state = String(s.state || ''); had.connecting = !!s.connecting; had.runs = String(s.runs || ''); had.pics = !!s.pics; had.claudeSessionId = s.claudeSessionId; had.codexSessionId = s.codexSessionId; had.bypass = !!s.bypass;
+          had.title = s.title; had.color = colorOf(s.color); had.icon = s.icon; had.state = String(s.state || ''); had.connecting = !!s.connecting; had.runs = String(s.runs || ''); had.pics = !!s.pics; had.claudeSessionId = s.claudeSessionId; had.codexSessionId = s.codexSessionId; had.bypass = !!s.bypass; had.warm = !!s.warm;
           // Агента узнали в терминале уже после выбора вкладки (t406, ревью): выбрана позже нынешнего получателя — получатель теперь она.
           if (isAgent(had) && lastAgent !== had.sid && recent.lastIndexOf(had.sid) > recent.lastIndexOf(lastAgent)) lastAgent = had.sid;
           // Вышел, пока окно было занято: term:exit уже отметил вкладку, здесь — на случай, если событие разминулось со списком.
@@ -1803,6 +1860,12 @@
   const pluginOffs = new Map();
   /** Свои плагины (папка пользователя, main\plugins.js own), пока выключены: код не грузится вовсе, тег — когда человек включил (t855). @type {Map<string, { id: string, url: string }>} */
   const ownLater = new Map();
+  /**
+   * Теги <script>, которые вставило само окно (loadPlugin), → id плагина из списка plugins.list (t1671, d530).
+   * kermachPlugin берёт id отсюда, а не из data-plugin: чужой тег с любым data-plugin host встроенного плагина не получит.
+   * @type {WeakMap<HTMLScriptElement, string>}
+   */
+  const ownTags = new WeakMap();
   /** Тег <script> кода плагина; ответ — когда код отработал или не загрузился. @param {{ id: string, url: string }} pl @returns {Promise<null>} */
   const loadPlugin = (pl) => {
     const s = document.createElement('script');
@@ -1810,6 +1873,7 @@
     // Скрипты выполняются в порядке списка, а не загрузки: строки внизу левой панели всегда в одном порядке (t520).
     s.async = false;
     s.dataset.plugin = pl.id;
+    ownTags.set(s, pl.id);
     const r = new Promise((done) => {
       s.onload = () => { if (!pluginFailed.has(pl.id)) t.log(`плагин ${pl.id}: загружен`); done(null); };
       s.onerror = () => { t.log(`плагин ${pl.id}: не загрузился (${pl.url})`); done(null); };
@@ -1922,8 +1986,10 @@
   });
   w.kermachPlugin = (/** @type {(host: any) => void} */ setup) => {
     const s = /** @type {HTMLScriptElement | null} */ (document.currentScript);
-    const id = s && s.dataset.plugin;
-    if (!id) { t.log('kermachPlugin вызван не из кода плагина при загрузке — пропущен'); return; }
+    if (!s || !s.dataset.plugin) { t.log('kermachPlugin вызван не из кода плагина при загрузке — пропущен'); return; }
+    // Тег вставлен не окном (t1671, d530): id из data-plugin не сверен со списком плагинов — не запускаем, host не отдаём.
+    const id = ownTags.get(s);
+    if (!id) { t.log(`kermachPlugin: тег ${String(s.dataset.plugin).slice(0, 64)} вставлен не окном — пропущен`); return; }
     const entry = plugins.get(id) || { setup: null, stop: null, on: false };
     plugins.set(id, entry);
     entry.setup = setup;

@@ -5,7 +5,7 @@
 // Порядок вкладок и их описание — в tabs\<номер проекта>.json (main\tabs.js).
 // Вкладка из файла без живого терминала (компьютер перезагружали, демон останавливали) запускается заново при открытии окна:
 // Claude — claude --resume <номер разговора>; разговора на диске нет — новый разговор со строкой во вкладке (t165).
-// Codex и «Терминал» — заново в папке проекта. Агент из системы (agent:<id>, t183) — тоже заново, без продолжения разговора;
+// Codex — codex resume <номер разговора> (codexSessionId от SessionStart), без номера — заново; «Терминал» — заново в папке проекта. Агент из системы (agent:<id>, t183) — тоже заново, без продолжения разговора;
 // его выключили или удалили из системы — вкладка остаётся завершённой со строкой, почему.
 // Важно: у проекта одно окно (project-window.js), и это условие держит всю схему. Демон хранит одну подписку на пару
 // «клиент — терминал» (subs в daemon.js — Map<Client,…>), а главный процесс для демона — один клиент.
@@ -512,7 +512,7 @@ const MCP_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
  * @returns {{ file: string } | { error: string }}
  */
 function mcpConfig(names, project) {
-  if (!ctx) return { error: 'терминалы ещё не готовы' };
+  if (!ctx) return { error: i18n.t('term.notReady', 'терминалы ещё не готовы') };
   /** @param {string} f */
   const read = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
   const home = process.env.CLAUDE_CONFIG_DIR ? path.resolve(process.env.CLAUDE_CONFIG_DIR) : os.homedir();
@@ -664,9 +664,9 @@ function checkExtra(kind, o, p) {
     if (rel.startsWith('..') || path.isAbsolute(rel)) return { error: `папка ${o.cwd} вне папки проекта` };
     let isDir = false;
     // Папка проекта на мёртвом сетевом пути: statSync держал бы окна 21 с (t1300).
-    if (!alive.ok(p.path)) return { error: `папка проекта не отвечает: ${p.path}` };
+    if (!alive.ok(p.path)) return { error: i18n.t('term.dirDead', 'папка проекта не отвечает: {path}', { path: p.path }) };
     try { isDir = fs.statSync(dir).isDirectory(); } catch {}
-    if (!isDir) return { error: `нет папки ${dir}` };
+    if (!isDir) return { error: i18n.t('term.noDir', 'нет папки {dir}', { dir }) };
     if (rel) x.cwd = dir;
   }
   if (o.env !== undefined) {
@@ -710,7 +710,7 @@ function checkExtra(kind, o, p) {
     if (kind !== 'claude' && kind !== 'codex') return { error: 'resume — только у вкладок Claude и Codex' };
     if (typeof o.resume !== 'string' || !UUID_RE.test(o.resume)) return { error: 'resume: номер разговора вида xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' };
     if (!hasConversation(o.resume, kind, x.env)) {
-      return { error: `разговора ${kind === 'claude' ? 'Claude' : 'Codex'} ${o.resume} нет в ${kind === 'claude' ? conversationsDir() : codexSessionsDir(x.env)}` };
+      return { error: i18n.t('term.noConversation', 'разговора {agent} {id} нет в {dir}', { agent: kind === 'claude' ? 'Claude' : 'Codex', id: o.resume, dir: kind === 'claude' ? conversationsDir() : codexSessionsDir(x.env) }) };
     }
     resume = o.resume.toLowerCase();
   }
@@ -722,7 +722,7 @@ function checkExtra(kind, o, p) {
     const found = agents.named(p.path).find((a) => a.name === o.agent);
     // При продолжении имя агента приходит из журнала разговора, а файл агента могли удалить: разговор продолжается без --agent (строка в main.log).
     if (!found && resume) agentSkipped = o.agent;
-    else if (!found) return { error: `агента Claude ${o.agent} нет ни в ~/.claude/agents, ни в .claude\\agents проекта` };
+    else if (!found) return { error: i18n.t('term.noAgent', 'агента Claude {name} нет ни в ~/.claude/agents, ни в .claude\\agents проекта', { name: o.agent }) };
     else ag = { name: found.name, mode: found.mode };
   }
   return { x: Object.keys(x).length ? x : null, prompt, title, ag, resume, agentSkipped, mcpArgs };
@@ -775,13 +775,13 @@ function launchWith(kind, resume, hooksSettings, x, prompt, ag, codexHook, bypas
  * те же аргументы плагина, MCP, агент и режим, без первого сообщения. Не Claude по подписке — без рецепта, такая вкладка не усыпляется.
  * @param {string} kind @param {string} id номер разговора при запуске @param {any} d клиент демона @param {any} ex итог checkExtra
  * @param {any} ag агент Claude @param {boolean} bypass @param {string} name tabName @param {{ id: string, path: string }} p проект
- * @returns {{ file: string, args: string[], env: any } | undefined}
+ * @returns {{ file: string, args: string[], env: any, note: string } | undefined}
  */
 function wakeOf(kind, id, d, ex, ag, bypass, name, p) {
   if (kind !== 'claude' || !id || !UUID_RE.test(id)) return undefined;
   const w = launchWith(kind, id, d.hooksSettings, ex.x, '', ag, [], bypass, name, ex.mcpArgs);
   if ('error' in w) return undefined;
-  return { file: w.file, args: w.args, env: browserCli.envFor(p, w.env) };
+  return { file: w.file, args: w.args, env: browserCli.envFor(p, w.env), note: i18n.t('term.sleepNote', 'спит — нажмите клавишу') };
 }
 
 /**
@@ -854,6 +854,8 @@ function pick(s) {
     bypass: s.meta && s.meta.bypass === '1' ? true : undefined,
     // Скрытая вкладка (t1059): терминал живёт, окно её в полосе не рисует, пока плагин не скажет «показать» (showFromPlugin).
     hidden: s.meta && s.meta.hidden ? true : undefined,
+    // Прогрев кеша Claude (t1795): окно рисует значок и пункт меню «выключить».
+    warm: s.meta && s.meta.warm === '1' ? true : undefined,
     // Последний хук (t1133): «Роадмап» отличает запрос разрешения (PermissionRequest, tool и what — что просит) от вопроса.
     hook: s.hook && s.hook.event ? { event: String(s.hook.event), tool: String(s.hook.tool || ''), what: String(s.hook.what || '') } : undefined,
     // Вопрос текстом в конце последнего ответа (t1483, askOf демона): «Роадмап» не закрывает такую вкладку (t1717). В файл вкладок не идёт: entryOf.
@@ -880,7 +882,7 @@ function pickLive(s) {
  * @param {import('./tabs').TabEntry} t
  */
 function pickSaved(t) {
-  const s = { ...t, meta: { kind: t.kind, claudeSessionId: t.claudeSessionId, codexSessionId: t.codexSessionId, bypass: t.bypass, hidden: t.hidden }, pid: undefined };
+  const s = { ...t, meta: { kind: t.kind, claudeSessionId: t.claudeSessionId, codexSessionId: t.codexSessionId, bypass: t.bypass, hidden: t.hidden, warm: t.warm }, pid: undefined };
   return { ...pick(s), alive: false, failed: notices.has(t.sid), state: exits.get(t.sid) || 'exited', notice: notices.get(t.sid) || i18n.t('term.notStarted', '{title} не запущен — откройте окно заново', { title: shownTitle(s) }) };
 }
 
@@ -898,7 +900,7 @@ const entryOf = (s) => ({
   ...pick(s), reply: undefined, title: s.title || lookOf(kindOf(s)).title, autoTitle: s.autoTitle, titleManual: s.titleManual ? '1' : undefined,
   claudeSessionId: s.meta && s.meta.claudeSessionId, codexSessionId: s.meta && s.meta.codexSessionId, extra: s.meta && s.meta.extra ? JSON.stringify(s.meta.extra) : undefined,
   agent: s.meta && s.meta.agent, agentMode: s.meta && s.meta.agentMode, bypass: s.meta && s.meta.bypass === '1' ? '1' : undefined,
-  hidden: s.meta && s.meta.hidden ? '1' : undefined, logPath: (s.meta && s.meta.logPath) || undefined,
+  hidden: s.meta && s.meta.hidden ? '1' : undefined, warm: s.meta && s.meta.warm === '1' ? '1' : undefined, logPath: (s.meta && s.meta.logPath) || undefined,
 });
 
 /**
@@ -980,7 +982,7 @@ async function revive(c, d, p, cols, rows) {
       if (t.extra) { try { saved = JSON.parse(t.extra); } catch {} }
       if (saved && saved.cwd && alive.isNet(p.path)) await alive.state(p.path); // как в openTab (t1300)
       const ex = checkExtra(kind, saved ? { args: saved.args, cwd: saved.cwd, env: saved.env, mcp: saved.mcp } : undefined, p);
-      if ('error' in ex) { notices.set(t.sid, `Не запустить заново: ${ex.error}`); continue; }
+      if ('error' in ex) { notices.set(t.sid, i18n.t('term.reopenFail', 'Не запустить заново: {why}', { why: ex.error })); continue; }
       mcpFile = mcpFileOf(ex.mcpArgs);
       // Держатель до конца запуска (t1353): ниже ожидания, а соседний терминал с тем же файлом может выйти.
       const hold = mcpHold(mcpFile);
@@ -1005,10 +1007,10 @@ async function revive(c, d, p, cols, rows) {
             held = { title: name, project: p.path, sid: t.sid };
             heldId = resumeId;
             launching.set(resumeId, held);
-            try { busy = await runningConversation(d, resumeId); } catch (err) { notices.set(t.sid, `Не запустить заново: ${/** @type {any} */ (err).message || err}`); continue; }
+            try { busy = await runningConversation(d, resumeId); } catch (err) { notices.set(t.sid, i18n.t('term.reopenFail', 'Не запустить заново: {why}', { why: /** @type {any} */ (err).message || err })); continue; }
           }
           if (busy) {
-            notices.set(t.sid, `Не запустить заново: разговор уже идёт во вкладке «${shownTitle(busy)}» (${busy.project || 'без проекта'})`);
+            notices.set(t.sid, i18n.t('term.reopenBusy', 'Не запустить заново: разговор уже идёт во вкладке «{title}» ({project})', { title: shownTitle(busy), project: busy.project || i18n.t('term.noProject', 'без проекта') }));
             c.log(`вкладка ${name} в ${p.path} не запущена заново: разговор ${resumeId} уже идёт во вкладке «${shownTitle(busy)}» (${busy.project || 'без проекта'}), терминал ${busy.sid}`);
             continue;
           }
@@ -1019,7 +1021,7 @@ async function revive(c, d, p, cols, rows) {
             // Тема — от прежнего разговора: новому её не переносить, вкладка снова «Claude 2», пока Claude не напишет свою.
             title: t.title, color: t.color, icon: t.icon, autoTitle: noConv || cxGone ? '' : t.autoTitle, titleManual: t.titleManual === '1',
             // Скрытая вкладка и её журнал (t1059) — как при открытии.
-            meta: { ...how.meta, ...(t.hidden === '1' ? { hidden: '1' } : {}), ...(t.logPath ? { logPath: t.logPath } : {}) },
+            meta: { ...how.meta, ...(t.hidden === '1' ? { hidden: '1' } : {}), ...(t.warm === '1' ? { warm: '1' } : {}), ...(t.logPath ? { logPath: t.logPath } : {}) },
             wake: wakeOf(kind, String(how.meta.claudeSessionId || ''), d, ex, ag, bypass, tabName(p.path, name), p),
           })).session;
           // Закрыли, пока шёл create: новый терминал гасим, в файл вкладок не пишем.
@@ -1094,7 +1096,7 @@ async function openTabHeld(c, p, kind, o, ex0, cols, rows, wc, human, follow, mo
   // Запрет в настройках Claude: пункт меню — отказ, настройка — обычный Claude и строка во вкладке.
   let bypass = false;
   let byOff = '';
-  if (human && human.bypass && kind !== 'claude') return { error: 'без вопросов о разрешениях — только у вкладки Claude' };
+  if (human && human.bypass && kind !== 'claude') return { error: i18n.t('term.bypassOnlyClaude', 'без вопросов о разрешениях — только у вкладки Claude') };
   // Claude на кредитах (t1357) следует настройке проекта, как Claude: в -p спросить «можно?» некому.
   if ((kind === 'claude' || kind === 'credits') && ((human && human.bypass) || ((human || follow) && p.bypass === true))) {
     byOff = bypassOff(p.path);
@@ -1119,7 +1121,7 @@ async function openTabHeld(c, p, kind, o, ex0, cols, rows, wc, human, follow, mo
       try { busy = await runningConversation(d, ex.resume); } catch (err) { launching.delete(ex.resume); return { error: String(/** @type {any} */ (err).message || err) }; }
       if (busy) launching.delete(ex.resume);
     }
-    if (busy) return { error: `разговор ${ex.resume} уже идёт во вкладке «${shownTitle(busy)}» (${busy.project || 'без проекта'}): два процесса испортили бы его журнал` };
+    if (busy) return { error: i18n.t('term.resumeBusy', 'разговор {id} уже идёт во вкладке «{title}» ({project}): два процесса испортили бы его журнал', { id: ex.resume, title: shownTitle(busy), project: busy.project || i18n.t('term.noProject', 'без проекта') }) };
   }
   try {
     return await openTabRun(c, d, p, kind, o, ex, k, cols, rows, wc);
@@ -1177,7 +1179,7 @@ async function openTabRun(c, d, p, kind, o, ex, k, cols, rows, wc) {
  * @param {{ core: boolean, task?: boolean }} [from] core — плагин из src\plugins (plugin-bridge.js builtIn); task — вкладку открывает kermach agent open (openAgentTask, t1760)
  */
 async function openFromPlugin(p, o, from) {
-  if (!ctx) return { error: 'терминалы ещё не готовы' };
+  if (!ctx) return { error: i18n.t('term.notReady', 'терминалы ещё не готовы') };
   if (!o || typeof o !== 'object') return { error: 'параметры вкладки: ждал объект' };
   const { kind, focus, followBypass, hidden, logPath, ...rest } = o;
   if (followBypass !== undefined && !(from && from.core)) return { error: i18n.t('term.followCore', 'Следовать настройке «без вопросов о разрешениях» могут только плагины при программе') };
@@ -1218,7 +1220,8 @@ function taskFile(project, text) {
   try { fs.writeFileSync(path.join(dir, '.gitignore'), '# Kermach: длинные задания агентам — не для git.\n*\n', { flag: 'wx' }); } catch (e) { if (!e || /** @type {any} */ (e).code !== 'EEXIST') throw e; }
   const ref = `agent-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
   const file = path.join(dir, `${ref}.md`);
-  fs.writeFileSync(file, text, { flag: 'wx' });
+  // С меткой кодировки UTF-8 (BOM, t1755): Codex на Windows читает файл Get-Content в PowerShell 5.1, без BOM — кодировкой 1251, кириллица мусором (как выжимка передачи, t1749).
+  fs.writeFileSync(file, `﻿${text}`, { flag: 'wx' });
   const rel = `.kermach/prompts/${ref}.md`;
   // Только буквы, цифры и пробелы: ссылка идёт и через чужую обёртку .cmd.
   return { file, rel, first: `Задание целиком в файле ${rel} в папке проекта. Прочитай этот файл полностью и выполняй его как первое сообщение.` };
@@ -1243,6 +1246,11 @@ const HAND_MARK = 'byHand';
 const FREE_WAIT_MS = 40000;
 /** Вкладка моложе этого может ещё запускаться: перед вводом ждём, пока экран затихнет, как при вводе после старта (t1760). */
 const YOUNG_MS = 60000;
+/**
+ * Сколько после Enter ждём строку на экране спящей вкладки (t1773): демон поднимает claude --resume и отдаёт ввод, когда тот готов
+ * (daemon.js WAKE_*, обычно 2–4 с, потолок 30 с). Срок ответа команды — 70 с, его занимает и FREE_WAIT_MS: ждём не дольше 25 с.
+ */
+const WAKE_SEEN_MS = 25000;
 /** Ввод во вкладку идёт по очереди (t1760): два задания разом в одну вкладку смешали бы знаки. sid → конец последнего ввода. @type {Map<string, Promise<any>>} */
 const typingIn = new Map();
 /** Ряд меню выбора: маркер «>», «❯» или «›», за ним номер пункта (t1760, busyOf). */
@@ -1274,18 +1282,45 @@ async function quietOf(projectId, sid, until) {
   }
 }
 
+/** Пауза между строкой и Enter, мс (d666). @param {number} n длина строки */
+const enterPause = (n) => Math.min(1500, 150 + Math.round(n * 1.5));
+
 /**
  * Строка и Enter отдельно (t1611), потом проверка, что строка видна на экране.
  * @param {string} projectId @param {string} sid @param {string} line
  * @returns {Promise<{ seen: boolean } | { error: string }>}
  */
 async function typeLine(projectId, sid, line) {
+  const slept = await asleepOf(projectId, sid);
   const w = await writeTab(projectId, sid, line);
   if (w && 'error' in w) return w;
-  await new Promise((ok) => setTimeout(ok, 150));
+  // Пауза растёт с длиной строки (d666, t1676): Codex разбирает вставку дольше, Enter после 150 мс на 440 знаках терялся 3 из 3,
+  // после 600 мс — 0 из 3 (spikes\t1676-edges\codex-esc.txt). 150 + 1,5 мс на знак, не больше 1,5 с: 440 знаков — 810 мс.
+  await new Promise((ok) => setTimeout(ok, enterPause(line.length)));
   await writeTab(projectId, sid, '\r');
+  const want = line.slice(0, 40).replace(/\s+/g, '');
+  const seen = async () => (await screenOf(projectId, sid)).replace(/\s+/g, '').includes(want);
   await new Promise((ok) => setTimeout(ok, 1500));
-  return { seen: (await screenOf(projectId, sid)).replace(/\s+/g, '').includes(line.slice(0, 40).replace(/\s+/g, '')) };
+  if (!slept) return { seen: await seen() };
+  // Спящая вкладка (t1751, t1773): демон придержал ввод, поднимает claude --resume и отдаёт строку, только когда тот готов (секунды).
+  // Ждём, пока процесс появится, потом — строку на экране; не дольше WAKE_SEEN_MS, иначе честное «не видно».
+  const end = Date.now() + WAKE_SEEN_MS;
+  while (Date.now() < end && await asleepOf(projectId, sid)) await new Promise((ok) => setTimeout(ok, 300));
+  while (Date.now() < end) {
+    if (await seen()) return { seen: true };
+    await new Promise((ok) => setTimeout(ok, 500));
+  }
+  return { seen: await seen() };
+}
+
+/** Спит ли вкладка (t1751: процесса нет, asleep в list демона). Нет связи или вкладки — false. @param {string} projectId @param {string} sid */
+async function asleepOf(projectId, sid) {
+  const r = await daemon();
+  if (!r.c) return false;
+  try {
+    const s = (await projectSessions(r.c, projectId)).find((/** @type {any} */ x) => x.sid === sid);
+    return !!(s && s.asleep);
+  } catch { return false; }
 }
 
 /** Поле ввода агента по экрану с цветами — разбор «Роадмапа» (fieldOfAnsi, им же пользуется limits/continue.js): текст поля, '' — пусто, null — поля не видно. @param {string} ansi */
@@ -1725,6 +1760,8 @@ function register(c) {
     d.on('created', (/** @type {any} */ m) => noteHidden(m.session));
     d.on('updated', (/** @type {any} */ m) => noteHidden(m.session));
     d.request('list').then((/** @type {any} */ r) => { for (const s of r.sessions || []) if (!hiddenS.has(s.sid)) noteHidden(s); }, () => {});
+    // Порог сна вкладок Claude из «Настроек» (t1771) — каждому новому клиенту: демон после перезапуска знает только умолчание.
+    sendSleep(d);
     // Агент сменил разговор (/clear) или Codex прислал первый номер (SessionStart, t777) — демон прислал новый meta.claudeSessionId
     // или meta.codexSessionId. В файл вкладок — сразу, даже без окна: иначе после перезагрузки машины вкладка запустилась бы
     // со старым разговором, а Codex, чьё окно закрыли до SessionStart, — с новым (t793).
@@ -1798,6 +1835,30 @@ function register(c) {
   /** Связь уже обрывалась — следующий клиент новый. */
   let lost = false;
   if (c.link) c.link.onClient(wire); else c.daemon.then(wire, () => {});
+  /** Порог сна, который демон уже принял (t1771): смена других настроек запроса не шлёт. */
+  let sleepSent = -1;
+  /** Клиент демона, который отказал в команде sleep (t1836): старый демон — запрос ему больше не шлём, «Настройки» говорят «после перезапуска». @type {any} */
+  let sleepRefused = null;
+  /** Порог сна из «Настроек» — демону запросом sleep. Старый демон команды не знает — одна строка в журнал, вкладки работают с его порогом. @param {any} d */
+  function sendSleep(d) {
+    if (sleepRefused === d) return;
+    const min = require('./settings').get().sleepMin;
+    d.request('sleep', { min }).then((/** @type {any} */ r) => {
+      sleepSent = min;
+      if (sleepRefused !== d) sleepRefused = null;
+      if (r && r.env) log(`порог сна вкладок Claude: в «Настройках» ${min} мин, а у демона переменная KERMACH_SLEEP_MIN — действует ${r.min} мин`);
+    }, (/** @type {any} */ err) => {
+      if (sleepRefused === d) return;
+      sleepRefused = d;
+      log(`порог сна вкладок Claude демону не передан: ${err && err.message || err} — заработает после перезапуска демона`);
+    });
+  }
+  require('./settings').onChange((/** @type {any} */ s) => { if (client && s.sleepMin !== sleepSent) sendSleep(client); });
+  // «Настройки» → «Общие» (t1836): принял ли демон порог сна. refused — нынешний демон команду не знает.
+  ipcMain.handle('term:sleepState', (e) => {
+    if (!sender.allowed(e, 'term:sleepState')) return sender.refused();
+    return { refused: !!client && sleepRefused === client };
+  });
 
   // Список вкладок окна. open — первый вызов при открытии окна: вкладки без живого терминала запускаются заново.
   // Только при открытии: иначе Claude, из которого вышли в открытом окне, тут же запускался бы снова.
@@ -2007,6 +2068,22 @@ function register(c) {
     const p = projectWindow.projectOf(e.sender);
     if (!p) return { error: 'окно без проекта' };
     return hideFromPlugin(p, String(sid || ''));
+  });
+  // «Прогрев кеша» в меню вкладки Claude (t1795): демон ставит или снимает meta.warm, файл вкладок — warm, чтобы revive включил снова.
+  ipcMain.handle('term:warm', async (e, { sid, on }) => {
+    if (!sender.allowed(e, 'term:warm')) return sender.refused();
+    const p = projectWindow.projectOf(e.sender);
+    if (!p) return { error: 'окно без проекта' };
+    const id = String(sid || '');
+    const r = await daemon();
+    const live = await liveOf(r, p.id, id);
+    if (!live) return { error: `у проекта нет живого терминала ${id}` };
+    if (!live.meta || live.meta.kind !== 'claude') return { error: 'прогрев кеша — только у вкладки Claude' };
+    try { await /** @type {any} */ (r.c).request('update', { sid: id, meta: { warm: on ? '1' : null } }); } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; }
+    const t = tabs.load(c.dataDir, p.id, log).tabs.find((x) => x.sid === id);
+    if (t) tabs.replace(c.dataDir, p.id, id, { ...t, warm: on ? '1' : undefined }, log);
+    log(`вкладка ${id} в ${p.path}: прогрев кеша ${on ? 'включён' : 'выключен'}`);
+    return { ok: true };
   });
 
   // Порядок вкладок мышкой (t211): окно присылает номера терминалов в новом порядке, файл вкладок их переставляет.

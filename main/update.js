@@ -67,12 +67,19 @@ function pickRelease(releases, platform) {
   return best;
 }
 
-/** Откуда можно скачивать: только https-адреса github.com и *.githubusercontent.com. @param {any} url */
-function downloadAllowed(url) {
+/**
+ * Откуда можно скачивать. Первый адрес файла — только выпуски нашего репозитория: https://github.com/<REPO>/releases/…
+ * Переходы (first = false) — ещё и *.githubusercontent.com: туда GitHub сам ведёт с адреса выпуска (t1650).
+ * @param {any} url @param {boolean} [first]
+ */
+function downloadAllowed(url, first = true) {
   try {
     const u = new URL(String(url));
     const host = u.hostname.toLowerCase();
-    return u.protocol === 'https:' && !u.username && !u.password && (host === 'github.com' || host.endsWith('.githubusercontent.com'));
+    if (u.protocol !== 'https:' || u.username || u.password || u.port) return false;
+    if (!first && host.endsWith('.githubusercontent.com')) return true;
+    if (host !== 'github.com') return false;
+    return !first || u.pathname.startsWith(`/${REPO}/releases/`);
   } catch { return false; }
 }
 
@@ -133,6 +140,10 @@ let superseded = false;
 let installing = null;
 /** Установщик уже запущен: программа вот-вот закроется, второй запуск не нужен. */
 let launched = false;
+/** Окна, где «Настройки» могут спросить об установке скачанного файла: скачали его или проверка ответила «уже скачан» (t1648). @type {Set<number>} */
+const holders = new Set();
+/** Окно, из которого идёт скачивание: отменить его может только оно (t1648). */
+let busyOwner = 0;
 
 const updatesDir = () => path.join(dataDir, 'updates');
 const current = () => require('../package.json').version;
@@ -141,7 +152,7 @@ let probeApi = '';
 /** Только для кода проб. Пустая строка возвращает настоящий адрес и проверку. @param {string} url */
 const setProbeApi = (url) => { probeApi = String(url || ''); };
 const apiUrl = () => probeApi || API;
-const urlOk = (/** @type {string} */ u) => !!probeApi || downloadAllowed(u);
+const urlOk = (/** @type {string} */ u, first = true) => !!probeApi || downloadAllowed(u, first);
 
 /** Убирает скачанное раньше. Во время скачивания не трогает. */
 function dropOld() {
@@ -297,7 +308,7 @@ function download(progress) {
     out.on('error', writeFailed);
     // Каждый переход проверяем отдельно: github.com ведёт на objects.githubusercontent.com.
     req.on('redirect', (_status, _method, to) => {
-      if (!urlOk(to)) { log(`обновление: переход отклонён: ${String(to).slice(0, 200)}`); finish('url'); return; }
+      if (!urlOk(to, false)) { log(`обновление: переход отклонён: ${String(to).slice(0, 200)}`); finish('url'); return; }
       wake();
       req.followRedirect();
     });
@@ -358,7 +369,7 @@ function sha256(file) {
  */
 function install() {
   if (launched) return Promise.resolve({ ok: true });
-  if (!installing) installing = runInstaller().finally(() => { installing = null; });
+  if (!installing) installing = runInstaller().finally(() => { installing = null; releaseIfFree(); });
   return installing;
 }
 
@@ -411,6 +422,29 @@ async function openPage() {
   return { ok: true };
 }
 
+/**
+ * Скачанный файл (около 120 МБ) никому не нужен: ни одно окно о нём не спрашивает. Удаляется сразу, а не при следующей проверке (t1648).
+ * Не трогает идущее скачивание, идущий запуск установщика и файл запущенного установщика.
+ */
+function releaseIfFree() {
+  if (holders.size || busy || installing || launched || !ready) return;
+  log(`обновление: «Настройки» закрыты без установки, файл ${ready.version} удалён`);
+  dropOld();
+}
+
+/** Окно больше не спрашивает об установке: закрыли «Настройки» или само окно. @param {number} id */
+function release(id) {
+  holders.delete(id);
+  releaseIfFree();
+}
+
+/** Окно может спросить об установке файла. Окно закроют — отметка снимается. @param {Electron.WebContents} wc */
+function hold(wc) {
+  if (holders.has(wc.id)) return;
+  holders.add(wc.id);
+  wc.once('destroyed', () => release(wc.id));
+}
+
 let registered = false;
 
 /** Зовёт settings.register. @param {{ dataDir: string, log: (m: string) => void }} c */
@@ -419,16 +453,35 @@ function register(c) {
   registered = true;
   dataDir = c.dataDir;
   log = c.log;
-  ipcMain.handle('update:check', (e) => (sender.allowed(e, 'update:check') ? check() : sender.refused()));
+  ipcMain.handle('update:check', async (e) => {
+    if (!sender.allowed(e, 'update:check')) return sender.refused();
+    const r = await check();
+    if (r.state === 'new' && r.fetched && !e.sender.isDestroyed()) hold(e.sender);
+    return r;
+  });
   ipcMain.handle('update:download', (e) => {
     if (!sender.allowed(e, 'update:download')) return sender.refused();
     const wc = e.sender;
     // Окно закрыли — скачивание некому показать и не с кем подтверждать установку.
     const gone = () => cancel();
     wc.once('destroyed', gone);
-    return download((pct) => { if (!wc.isDestroyed()) wc.send('update:progress', pct); }).finally(() => { if (!wc.isDestroyed()) wc.removeListener('destroyed', gone); });
+    const start = download((pct) => { if (!wc.isDestroyed()) wc.send('update:progress', pct); }).then((r) => {
+      if (!wc.isDestroyed()) { wc.removeListener('destroyed', gone); if (r.ok) hold(wc); }
+      return r;
+    });
+    if (busy && busyOwner === 0) {
+      busyOwner = wc.id;
+      start.finally(() => { busyOwner = 0; });
+    }
+    return start;
   });
-  ipcMain.handle('update:cancel', (e) => { if (!sender.allowed(e, 'update:cancel')) return sender.refused(); cancel(); return {}; });
+  // Отмена скачивания и закрытие «Настроек»: окно больше не спросит об установке, ненужный файл удаляется (t1648).
+  ipcMain.handle('update:cancel', (e) => {
+    if (!sender.allowed(e, 'update:cancel')) return sender.refused();
+    if (busyOwner === e.sender.id) cancel();
+    release(e.sender.id);
+    return {};
+  });
   ipcMain.handle('update:install', (e) => (sender.allowed(e, 'update:install') ? install() : sender.refused()));
   ipcMain.handle('update:open', (e) => (sender.allowed(e, 'update:open') ? openPage() : sender.refused()));
 }

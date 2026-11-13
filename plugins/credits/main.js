@@ -439,11 +439,44 @@ const selfStart = () => String(Math.round(Date.now() - process.uptime() * 1000))
  * @param {string|number} pid @param {string|number|undefined} at
  */
 function sameProc(pid, at) {
+  return procState(pid, at) === 'yes';
+}
+
+/**
+ * Сверка номера с тремя ответами (t1876): 'yes' — наш раннер; 'no' — номера нет, времени в шапке нет или процесс запущен позже pid_at;
+ * 'unknown' — номер жив, pid_at есть, но время запуска не узнать (PowerShell не ответил за 15 с под нагрузкой, чужой пользователь).
+ * Для «Стоп» 'unknown' — не гасить (sameProc); для «идёт ли» — идёт (running): второй запуск — вторая оплата с ключа человека.
+ * @param {string|number} pid @param {string|number|undefined} at @returns {'yes'|'no'|'unknown'}
+ */
+function procState(pid, at) {
   const n = Number(pid);
   const t = Number(at);
-  if (!n || !t || !alive(String(n))) return false;
+  if (!n || !t || !alive(String(n))) return 'no';
   const s = procStart(n);
-  return s > 0 && s <= t + PID_SLACK;
+  if (!s) return 'unknown';
+  return s <= t + PID_SLACK ? 'yes' : 'no';
+}
+
+/**
+ * Задание идёт по-настоящему (t1675): шапка «идёт» и номер принадлежит раннеру — сверка sameProc по pid_at.
+ * Для действий (запуск, повтор, отклонить, очередь): номер упавшего раннера мог достаться чужой программе, и очередь стояла бы «уже идёт».
+ * Номер этого же процесса (запуск внутри программы) — идёт без сверки. Список раз в 3 с (view) зовёт дешёвый alive(): сверка — PowerShell.
+ * @param {Record<string, string>} h шапка
+ */
+function running(h) {
+  if (h.status !== 'идёт' || !alive(h.pid)) return false;
+  return Number(h.pid) === process.pid || procState(h.pid, h.pid_at) !== 'no';
+}
+
+/**
+ * Отказ «уже идёт» с причиной (t1876): время запуска процесса не узнать — человеку сказать, почему очередь стоит и что делать.
+ * @param {string} id @param {Record<string, string>} h шапка
+ */
+function busyText(id, h) {
+  const base = `${id} уже идёт (процесс ${h.pid})`;
+  if (Number(h.pid) === process.pid || procState(h.pid, h.pid_at) !== 'unknown') return base;
+  return `${base}: Windows не сказала, когда запущен этот процесс, поэтому считаю, что задание ещё идёт, — второй запуск оплатился бы второй раз. `
+    + 'Подождите минуту и повторите; задание зависло — нажмите «Стоп»: процесс не тронется, задание снимется с «идёт»';
 }
 
 /** Цвета терминала — вон: в журнал cN.log текстом. @param {string} s */
@@ -458,6 +491,129 @@ function jobPrompt(j) {
   const body = j.body.replace(/^# [^\n]*\n?/, '').trim();
   return [`Задание ${j.id}: ${h.title}`, body, list(h.files).length ? `Файлы: ${list(h.files).join(', ')}` : '',
     h.check ? `Как проверить (программа запустит сама, после тебя): ${h.check}` : ''].filter(Boolean).join('\n\n');
+}
+
+// ── «Доработать» (t1560): замечания человека к готовому заданию — тот же разговор claude (--resume session) в той же копии ──
+// Замечания — блок в конце текста задания: «## Доработка N · дата», ниже «Замечания:» и текст. Пока блок без строки «Итог:» —
+// доработка ждёт запуска (раннер — отдельный процесс, текст ему передаёт файл). После запуска run() дописывает в блок итог и цену.
+const REDO_RE = /^## Доработка (\d+) · [^\n]*\n([\s\S]*?)(?=^## Доработка \d+ · |(?![\s\S]))/gm;
+
+/**
+ * Блоки доработок текста задания. budget (t1547) — потолок запуска доработки из строки «Потолок доработки: $x» над «Замечания:»;
+ * cost — «Цена доработки: $x» законченного блока. @param {string} body
+ * ok — итог блока «прошло». @returns {{ n: number, text: string, done: boolean, ok: boolean, budget: number, cost: number }[]}
+ */
+function redoBlocks(body) {
+  return [...String(body || '').matchAll(REDO_RE)].map((m) => {
+    const t = m[2];
+    const r = /^Замечания:\n?([\s\S]*?)(?=^Итог: |(?![\s\S]))/m.exec(t);
+    const top = t.split(/^Замечания:/m)[0];
+    const b = /^Потолок доработки: \$(\d+(?:\.\d+)?)\s*$/m.exec(top);
+    const c = /^Цена доработки: \$(\d+(?:\.\d+)?)/m.exec(t.slice(r ? r.index + r[0].length : 0));
+    return { n: Number(m[1]), text: (r ? r[1] : '').trim(), done: /^Итог: /m.test(t), ok: /^Итог: прошло/m.test(t), budget: b ? Number(b[1]) : 0, cost: c ? Number(c[1]) : 0 };
+  });
+}
+
+/** Доработка, которая ждёт запуска; нет — null. @param {Job} j */
+const redoPending = (j) => { const b = redoBlocks(j.body); const last = b[b.length - 1]; return last && !last.done ? last : null; };
+
+/** Почему задание нельзя доработать; '' — можно. @param {Job} j */
+function redoBlocked(j) {
+  const h = j.head;
+  if (h.kind !== 'агент') return `${j.id}: дорабатывается задание вида «агент», а это «${h.kind}»`;
+  if (h.status === 'идёт' && alive(h.pid)) return `${j.id} ещё идёт (процесс ${h.pid}) — дождитесь итога`;
+  if (h.status !== 'прошло' && h.status !== 'не прошло') return `${j.id}: доработать можно законченное задание, а оно «${h.status}»`;
+  if (h.decision) return `${j.id}: правки уже ${h.decision === 'принято' ? 'приняты' : 'отклонены'}, копии нет — заведите новое задание`;
+  if (!h.copy || !fs.existsSync(h.copy)) return `${j.id}: копии задания нет${h.copy ? ` (${h.copy})` : ''} — дорабатывать нечего`;
+  if (!h.session) return `${j.id}: разговора прошлого запуска нет — доработка продолжает его`;
+  return '';
+}
+
+/**
+ * Записать замечания (kermach credits redo, кнопка «Доработать»): новый блок в конце текста задания. Запуск — run(…, { redo: true }).
+ * opt.budget (t1547) — потолок этого запуска в долларах, строкой «Потолок доработки» в блоке; нет — потолок задания (budget шапки).
+ * opt.left (t1842) — потолок запуска — остаток потолка доработок (redoLeft), посчитанный после закрытия прерванного блока; остатка меньше
+ * REDO_MIN — отказ. У задания без budget в шапке потолка нет. opt.dataDir — папка данных Kermach: цена прерванного блока из журнала расходов.
+ * @param {string} dir @param {string} id @param {string} text @param {{ budget?: number, left?: boolean, dataDir?: string }} [opt] @returns {{ id: string, n: number, budget: number }}
+ */
+function redoAdd(dir, id, text, opt = {}) {
+  let j = get(dir, id);
+  const t = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!t) throw new Error('замечания — непустой текст: что поправить в результате');
+  if (t.length > 20000) throw new Error('замечания длиннее 20 000 знаков — сократите');
+  if (/^(## |Итог: )/m.test(t)) throw new Error('в замечаниях строка не может начинаться с «## » или «Итог: »');
+  const bad = redoBlocked(j);
+  if (bad) throw new Error(bad);
+  // t1842: блок без итога при шапке «не прошло» — доработку запускали и прервали. Заменить его — значит потерять потраченное: закрываем с ценой.
+  if (redoPending(j) && j.head.status !== 'прошло') { redoAbort(j, 'не прошло: запуск прерван, итога нет', opt.dataDir); j = get(dir, id); }
+  let budget = Number(opt.budget) > 0 ? Number(opt.budget) : 0;
+  if (opt.left) {
+    const l = redoLeft(j);
+    if (l.cap > 0 && l.left < REDO_MIN) throw new Error(`${id}: потолок доработок исчерпан — потрачено $${l.spent} из $${l.cap}; поднимите потолок задания (budget) или заведите новое задание`);
+    budget = l.cap > 0 ? l.left : 0;
+  }
+  const b = redoBlocks(j.body);
+  const n = (b.length ? b[b.length - 1].n : 0) + 1;
+  const src = fs.readFileSync(j.file, 'utf8');
+  const eol = src.includes('\r\n') ? '\r\n' : '\n';
+  // Ждущая доработка без итога (запуск не начался) заменяется новой: иначе агент получил бы старые замечания.
+  let base = src;
+  const last = b[b.length - 1];
+  if (last && !last.done) {
+    const i = src.lastIndexOf(`## Доработка ${last.n} · `);
+    if (i >= 0) base = src.slice(0, i);
+  }
+  const cap = budget > 0 ? `Потолок доработки: $${Math.round(budget * 100) / 100}${eol}` : '';
+  const block = `## Доработка ${last && !last.done ? last.n : n} · ${stamp()}${eol}${cap}Замечания:${eol}${t.split('\n').join(eol)}${eol}`;
+  fs.writeFileSync(j.file, `${base.replace(/\s+$/, '')}${eol}${eol}${block}`);
+  return { id, n: last && !last.done ? last.n : n, budget };
+}
+
+/** Остаток меньше этого — доработки нет (t1547, t1842): запуск на центы ничего не успеет. */
+const REDO_MIN = 0.05;
+
+/**
+ * Остаток потолка доработок (t1547, t1842): потолок задания (budget шапки) на все доработки вместе минус «Цена доработки» законченных блоков.
+ * cap 0 — у задания потолка нет. @param {Job} j @returns {{ cap: number, spent: number, left: number }}
+ */
+function redoLeft(j) {
+  const cap = Number(j.head.budget) || 0;
+  const spent = Math.round(redoBlocks(j.body).reduce((s, b) => s + (b.cost || 0), 0) * 1e4) / 1e4;
+  return { cap, spent, left: Math.floor((cap - spent) * 100) / 100 };
+}
+
+/**
+ * Закрыть начатую доработку без итога (t1842): «Остановить», упавший раннер. Обёртку гасят деревом, а строку журнала расходов она
+ * пишет только на конце хода — цена прерванного хода часто неизвестна. Цена — сумма журнала по заданию (поле job) с начала запуска
+ * (pid_at шапки, без запаса: pid_at пишется до запуска claude, а строка прошлого запуска бывает за секунду до него); журнал цены не знает — засчитан потолок запуска (блока или задания), чтобы остаток не оказался больше настоящего.
+ * Цена прибавляется к cost шапки. Блока без итога нет — null. @param {Job} j @param {string} result @param {string} [dataDir]
+ * @returns {{ n: number, cost: number, priced: boolean } | null}
+ */
+function redoAbort(j, result, dataDir) {
+  const last = redoPending(j);
+  if (!last) return null;
+  const since = Number(j.head.pid_at) || 0;
+  const rows = dataDir && since ? journalRows(dataDir).filter((r) => r.job === j.id && r.at >= since) : [];
+  const priced = rows.some((r) => r.cost > 0);
+  const cap = last.budget > 0 ? last.budget : Number(j.head.budget) || 0;
+  const runCost = Math.round((priced ? rows.reduce((s, r) => s + r.cost, 0) : cap) * 1e4) / 1e4;
+  const cost = String(Math.round(((Number(j.head.cost) || 0) + runCost) * 1e4) / 1e4);
+  patch(j.file, { cost });
+  redoFinish(j, 'не прошло', oneLine(result), runCost, cost, priced ? '' : ` (журнал расходов цены не знает — засчитан потолок запуска $${cap})`);
+  return { n: last.n, cost: runCost, priced };
+}
+
+/** Сообщение агенту на доработку: замечания и «Как проверить». @param {Job} j @param {string} text */
+function redoPrompt(j, text) {
+  return [`Доработка задания ${j.id}: ${j.head.title}`, 'Человек посмотрел твой результат в этой же копии и просит поправить. Его замечания:', text,
+    j.head.check ? `Как проверить (программа запустит сама, после тебя): ${j.head.check}` : ''].filter(Boolean).join('\n\n');
+}
+
+/** Дописать в блок доработки итог и цену запуска (блок — в конце файла). @param {Job} j @param {string} status @param {string} result @param {number} runCost @param {string} cost @param {string} [note] */
+function redoFinish(j, status, result, runCost, cost, note = '') {
+  const src = fs.readFileSync(j.file, 'utf8');
+  const eol = src.includes('\r\n') ? '\r\n' : '\n';
+  fs.writeFileSync(j.file, `${src.replace(/\s+$/, '')}${eol}Итог: ${status} — ${result}${eol}Цена доработки: $${runCost} · всего по заданию $${cost}${note}${eol}`);
 }
 
 /** Системный текст из agent.md. @param {Job} j @param {string} copy @param {string[]} allow */
@@ -492,8 +648,10 @@ function runCheck(cmd, cwd) {
  * Цена — сумма запусков задания; каждый запуск — строка в журнале расходов (<данные>/credits/journal.jsonl, поле job) и в cN.log.
  * @param {string} dir папка проекта
  * @param {string} id
- * @param {{ dataDir: string, out?: (s: string) => void }} opt dataDir — папка данных Kermach (ключ API, журнал расходов); out — лента в терминал
- * @returns {Promise<{ id: string, status: string, result: string, cost: string, need: string[], copy: string, session: string }>}
+ * opt.redo (t1560) — доработка: замечания из ждущего блока «## Доработка N» (redoAdd), тот же разговор claude (--resume session)
+ * в той же копии; итог и цена дописываются в блок. Копии или разговора нет — отказ, новой копии доработка не делает.
+ * @param {{ dataDir: string, out?: (s: string) => void, redo?: boolean }} opt dataDir — папка данных Kermach (ключ API, журнал расходов); out — лента в терминал
+ * @returns {Promise<{ id: string, status: string, result: string, cost: string, need: string[], copy: string, session: string, redo?: number }>}
  */
 async function run(dir, id, opt) {
   const j = get(dir, id);
@@ -501,10 +659,23 @@ async function run(dir, id, opt) {
   if (h.kind !== 'агент') throw new Error(`${id}: вид «${h.kind}» — run запускает задания вида «агент»`);
   // t1559: мост панели и «Добрать остаток» пишут «идёт» с pid этого процесса ещё до копии — это не второй запуск.
   const mine = h.pid === String(process.pid);
-  if (h.status === 'идёт' && alive(h.pid) && !mine) throw new Error(`${id} уже идёт (процесс ${h.pid})`);
+  if (!mine && running(h)) throw new Error(busyText(id, h));
+  const redo = opt.redo ? redoPending(j) : null;
+  if (opt.redo) {
+    // Мост уже написал «идёт» со своим pid — состояние он проверил до этого (redoAdd); здесь — копия, разговор, замечания.
+    const why = !redo ? `${id}: замечаний для доработки нет — kermach credits redo ${id} "что поправить"`
+      : !h.copy || !fs.existsSync(h.copy) ? `${id}: копии задания нет — дорабатывать нечего` : !h.session ? `${id}: разговора прошлого запуска нет` : '';
+    if (why) {
+      if (mine) patch(j.file, { status: 'не прошло', result: oneLine(`не прошло: ${why}`), pid: '', pid_at: '', closed: stamp() });
+      // t1842: claude не запускался — блок закрыт с ценой 0, иначе следующая доработка сочла бы его прерванным и засчитала потолок.
+      if (redo) { try { redoFinish(j, 'не прошло', oneLine(`не прошло: ${why}`), 0, String(Number(h.cost) || 0)); } catch { /* итог — в шапке */ } }
+      throw new Error(why);
+    }
+  }
   if (!opt.dataDir) {
     // Шапку «идёт» написал мост — без итога строка висела бы «идёт, но процесса нет».
     if (mine) patch(j.file, { status: 'не прошло', result: 'не прошло: нет папки данных Kermach', pid: '', pid_at: '', closed: stamp() });
+    if (redo) { try { redoFinish(j, 'не прошло', 'не прошло: нет папки данных Kermach', 0, String(Number(h.cost) || 0)); } catch { /* итог — в шапке */ } }
     throw new Error('нет папки данных Kermach');
   }
   const say = opt.out || (() => {});
@@ -533,9 +704,11 @@ async function run(dir, id, opt) {
   }
   const allow = list(h.allow, ';');
   const crypto = require('crypto');
-  const session = crypto.randomUUID();
+  // Доработка продолжает прошлый разговор: агент помнит, что делал, и видит свои правки в копии.
+  const session = redo ? h.session : crypto.randomUUID();
   patch(j.file, { status: 'идёт', result: '', need: '', copy, branch, session, pid: String(process.pid), pid_at: selfStart(), decision: '', closed: '' });
-  log(`\n=== ${stamp()} запуск ${id} · ${h.model || 'модель по умолчанию'}${h.effort ? ` · усилие ${h.effort}` : ''} · копия ${copy} (${branch}) · разговор ${session}`);
+  log(`\n=== ${stamp()} ${redo ? `доработка ${redo.n}` : 'запуск'} ${id} · ${h.model || 'модель по умолчанию'}${h.effort ? ` · усилие ${h.effort}` : ''} · копия ${copy} (${branch}) · разговор ${session}${redo ? ' (продолжение)' : ''}`);
+  if (redo) log(`замечания: ${oneLine(redo.text)}`);
   log(`разрешённые команды: ${allow.join(' ; ') || '—'}`);
   const tmp = path.join(opt.dataDir, 'credits');
   fs.mkdirSync(tmp, { recursive: true });
@@ -543,16 +716,17 @@ async function run(dir, id, opt) {
   const outFile = path.join(tmp, `${session}.job-out.json`);
   const jobFile = path.join(tmp, `${session}.job.json`);
   fs.writeFileSync(gate, JSON.stringify({ allow, copy }));
-  fs.writeFileSync(jobFile, JSON.stringify({ id, project: dir, prompt: jobPrompt(j), system: systemText(j, copy, allow), allow, model: h.model || '',
+  fs.writeFileSync(jobFile, JSON.stringify({ id, project: dir, prompt: redo ? redoPrompt(j, redo.text) : jobPrompt(j), system: systemText(j, copy, allow), allow, model: h.model || '',
     effort: EFFORT_EN[/** @type {'низкое'} */ (h.effort)] || '', out: outFile, gate,
     // t1522: потолок задания; обёртка daemon\credits-tab.js применит его, когда станет читать поле budget (карта во «Входящих»).
-    ...(Number(h.budget) > 0 ? { budget: Number(h.budget) } : {}) }));
+    // t1547: у доработки свой потолок — строка «Потолок доработки» блока (доработка по замечаниям проверяющего карты).
+    ...(redo && redo.budget > 0 ? { budget: redo.budget } : Number(h.budget) > 0 ? { budget: Number(h.budget) } : {}) }));
   /** @type {any} */
   let res = null;
   try {
     res = await new Promise((resolve) => {
       const { spawn } = require('child_process');
-      const c = spawn(process.execPath, [path.join(__dirname, '..', '..', 'daemon', 'credits-tab.js'), '--data', opt.dataDir, '--session', session, '--job', jobFile],
+      const c = spawn(process.execPath, [path.join(__dirname, '..', '..', 'daemon', 'credits-tab.js'), '--data', opt.dataDir, '--session', session, ...(redo ? ['--resume'] : []), '--job', jobFile],
         { cwd: copy, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       const feed = (/** @type {Buffer} */ d) => { const s = String(d); say(s); log(plain(s).replace(/\n$/, '')); };
       c.stdout && c.stdout.on('data', feed);
@@ -590,8 +764,9 @@ async function run(dir, id, opt) {
   } else { status = 'прошло'; result = `прошло: проверки нет, агент закончил — ${res.text || ''}`; }
   result = oneLine(result);
   patch(j.file, { status, result, need: need.join(' ; '), cost, pid: '', pid_at: '', closed: stamp() });
+  if (redo) { try { redoFinish(j, status, result, runCost, cost); } catch (e) { log(`итог доработки в задание не дописан: ${e instanceof Error ? e.message : e}`); } }
   log(`итог: ${status} — ${result} · цена запуска $${runCost}, всего по заданию $${cost}`);
-  return { id, status, result, cost, need, copy, session };
+  return { id, status, result, cost, need, copy, session, ...(redo ? { redo: redo.n } : {}) };
 }
 
 /** Копия задания или ошибка. @param {Job} j */
@@ -650,7 +825,7 @@ async function accept(dir, id) {
 /** «Отклонить»: удалить копию с правками, задание остаётся как было. @param {string} dir @param {string} id */
 async function reject(dir, id) {
   const j = get(dir, id);
-  if (j.head.status === 'идёт' && alive(j.head.pid)) throw new Error(`${id} ещё идёт (процесс ${j.head.pid}) — дождитесь итога`);
+  if (running(j.head)) throw new Error(`${id} ещё идёт (процесс ${j.head.pid}) — дождитесь итога`);
   const c = copyOf(j);
   const r = await worktree().remove(c.path, { force: true });
   if ('error' in r) throw new Error(`копия не удалена: ${r.error}`);
@@ -746,6 +921,14 @@ function plusMonth(s, k = 1) {
 
 /** Ходы журнала расходов: [{ at, cost }] по времени. Нет журнала — пусто. @param {string} dataDir */
 function journal(dataDir) {
+  return journalRows(dataDir).filter((m) => m.cost > 0).map((m) => ({ at: m.at, cost: m.cost }));
+}
+
+/**
+ * Строки журнала расходов целиком (t1842: поле job — задание, kind, unpriced) по времени; последние JOURNAL_TAIL байт.
+ * @param {string} dataDir @returns {{ at: number, cost: number, job: string, kind: string, unpriced: boolean }[]}
+ */
+function journalRows(dataDir) {
   let text = '';
   try {
     const f = path.join(dataDir, JOURNAL);
@@ -759,7 +942,7 @@ function journal(dataDir) {
       if (n < size) text = text.slice(text.indexOf('\n') + 1);
     } finally { fs.closeSync(fd); }
   } catch { return []; }
-  /** @type {{ at: number, cost: number }[]} */
+  /** @type {{ at: number, cost: number, job: string, kind: string, unpriced: boolean }[]} */
   const out = [];
   for (const l of text.split('\n')) {
     if (!l.trim()) continue;
@@ -767,7 +950,7 @@ function journal(dataDir) {
       const m = JSON.parse(l);
       const at = Number(m && m.at);
       const cost = Number(m && m.cost);
-      if (Number.isFinite(at) && Number.isFinite(cost) && cost > 0) out.push({ at, cost });
+      if (Number.isFinite(at) && Number.isFinite(cost) && cost >= 0) out.push({ at, cost, job: String(m.job || ''), kind: String(m.kind || ''), unpriced: !!m.unpriced });
     } catch { /* битая строка — мимо */ }
   }
   return out.sort((a, b) => a.at - b.at);
@@ -924,6 +1107,23 @@ function spawnRunner(dir, cmd, id) {
   return c.pid || 0;
 }
 
+/**
+ * Доработка без панели (t1547: замечания проверяющего карты «Роадмапа»): блок замечаний, раннер kermach credits redo cN
+ * и шапка «идёт» с его pid — как кнопка «Доработать» моста. runner — подмена для проб. @param {string} dir @param {string} id
+ * opt.left и opt.dataDir (t1842) — как у redoAdd: потолок запуска — остаток после закрытия прерванного блока.
+ * @param {string} text @param {{ budget?: number, left?: boolean, dataDir?: string, why?: string, runner?: (dir: string, cmd: string, id: string) => number }} [opt]
+ * @returns {{ n: number, pid: number, budget: number }}
+ */
+function redoStart(dir, id, text, opt = {}) {
+  const r = redoAdd(dir, id, text, { budget: opt.budget, left: opt.left, dataDir: opt.dataDir });
+  const j = get(dir, id);
+  const pid = (opt.runner || spawnRunner)(dir, 'redo', j.id);
+  if (!pid) return { n: r.n, pid: 0, budget: r.budget };
+  patch(j.file, { status: 'идёт', pid: String(pid), pid_at: String(Date.now()), result: '', closed: '' });
+  try { fs.appendFileSync(path.join(root(dir), `${j.id}.log`), `\n${stamp()} ${opt.why || 'доработка'}: доработка в прежней копии ${j.head.copy}, тот же разговор (процесс ${pid})\n`); } catch { /* журнал — не главное */ }
+  return { n: r.n, pid, budget: r.budget };
+}
+
 /** Погасить процесс деревом. @param {number} pid */
 function killTree(pid) {
   const { spawnSync } = require('child_process');
@@ -1072,7 +1272,9 @@ function recipes(dir, lang) {
 
 /** Поля задания для окна. @param {Job} j */
 const view = (j) => ({ id: j.id, num: j.num, error: j.error || '', running: j.head.status === 'идёт' && alive(j.head.pid), hasLog: fs.existsSync(path.join(path.dirname(j.file), `${j.id}.log`)),
-  hasAnswer: fs.existsSync(path.join(path.dirname(j.file), `${j.id}.answer.md`)), ...j.head, body: j.body });
+  hasAnswer: fs.existsSync(path.join(path.dirname(j.file), `${j.id}.answer.md`)), ...j.head, body: j.body,
+  // t1560: «Доработать» — у законченного агента с живой копией и разговором; redos — сколько доработок уже было.
+  canRedo: !j.error && !redoBlocked(j), redos: j.error ? 0 : redoBlocks(j.body).length });
 
 /**
  * Фабрика моста: экземпляр на окно проекта. ctx.project.path — папка проекта; ctx.dataDir — <данные>\plugins-data\credits,
@@ -1104,17 +1306,34 @@ function make(ctx) {
   /**
    * Запуск задания отдельным процессом (t1559): шапка «идёт» с pid раннера — сразу, до копии проекта (у большого проекта до минуты),
    * и первая строка журнала про подготовку. Раннер не запустился (pid 0) — шапку не трогаем. run() раннера свой pid в шапке пропускает.
-   * @param {Job} j @param {string} why
+   * @param {Job} j @param {string} why @param {string} [cmd] run или redo (t1560)
    */
-  const start = (j, why) => {
-    const pid = runner(dir, 'run', j.id);
+  const start = (j, why, cmd = 'run') => {
+    const pid = runner(dir, cmd, j.id);
     // Шапку «идёт» с pid заранее — только агенту: его run() в конце сам стирает pid. Запрос pid не пишет и не стирает
     // (второй запуск держит замок cN.lock, request.js) — остался бы мёртвый номер. pid_at — время запуска раннера: «Стоп» сверяет его.
     if (!pid || j.head.kind !== 'агент') return pid || 0;
     patch(j.file, { status: 'идёт', pid: String(pid), pid_at: String(Date.now()), result: '', closed: '' });
-    const prep = j.head.copy && fs.existsSync(j.head.copy) ? `запускаю в прежней копии ${j.head.copy}` : 'готовлю копию проекта — у большого проекта до минуты';
+    const prep = cmd === 'redo' ? `доработка в прежней копии ${j.head.copy}, тот же разговор` : j.head.copy && fs.existsSync(j.head.copy) ? `запускаю в прежней копии ${j.head.copy}` : 'готовлю копию проекта — у большого проекта до минуты';
     try { fs.appendFileSync(path.join(root(dir), `${j.id}.log`), `\n${stamp()} ${why}: ${prep} (процесс ${pid})\n`); } catch { /* журнал — не главное */ }
     return pid;
+  };
+  /**
+   * Повтор после неудачной доработки (t1842): «Запустить заново» и «Разрешить и повторить» продолжают её — тот же разговор и копия,
+   * замечания последнего блока новым блоком, потолок — остаток потолка доработок. Раннер упал (шапка «идёт», процесса нет) — блок
+   * закрывается с ценой из журнала. Последний блок прошёл, блоков нет, копии или разговора нет — null: обычный запуск.
+   * @param {Job} j @param {string} why
+   */
+  const redoAgain = (j, why) => {
+    const b = redoBlocks(j.body);
+    const last = b[b.length - 1];
+    if (!last || last.ok || !last.text || j.head.kind !== 'агент' || !j.head.copy || !fs.existsSync(j.head.copy) || !j.head.session) return null;
+    if (j.head.status === 'идёт' && !alive(j.head.pid)) {
+      redoAbort(j, 'не прошло: раннер доработки упал, итога нет', dataDir);
+      patch(j.file, { status: 'не прошло', result: 'не прошло: раннер доработки упал, итога нет', pid: '', pid_at: '', closed: stamp() });
+    }
+    const r = redoAdd(dir, j.id, last.text, { left: true, dataDir });
+    return { n: r.n, budget: r.budget, redo: true, pid: start(get(dir, j.id), `${why} — повтор доработки ${last.n}`, 'redo') };
   };
   /** Шаг «Добрать остаток»: решение plan() и, если время, запуск одного задания. Остаток дошёл до запаса — уведомление и без «Добрать». */
   const topupTick = () => {
@@ -1165,8 +1384,8 @@ function make(ctx) {
     },
     /** Очередь целиком по одному сверху вниз — отдельным процессом kermach credits run (без номера). */
     runQueue() {
-      const going = read(dir).find((j) => !j.error && j.head.status === 'идёт' && alive(j.head.pid));
-      if (going) throw new Error(`${going.id} уже идёт`);
+      const going = read(dir).find((j) => !j.error && running(j.head));
+      if (going) throw new Error(busyText(going.id, going.head));
       return { pid: runner(dir, 'run', '') };
     },
     /** Шаг «Добрать остаток» сейчас (таймер зовёт его сам). */
@@ -1195,20 +1414,35 @@ function make(ctx) {
       return { id: add(dir, { title: String(f.title || '').trim(), body: String(f.text || ''), kind: kind || undefined, model: f.model || undefined,
         effort: f.effort || undefined, check: f.check || undefined, allow: [] }) };
     },
-    /** @param {string} id */
+    /** «Запустить», «Запустить заново»; после неудачной или упавшей доработки — её повтор (t1842). @param {string} id */
     run(id) {
       const j = get(dir, ref(id));
-      if (j.head.status === 'идёт' && alive(j.head.pid)) throw new Error(`${j.id} уже идёт`);
+      if (running(j.head)) throw new Error(busyText(j.id, j.head));
+      const again = redoAgain(j, 'нажато «Запустить заново»');
+      if (again) return again;
       return { pid: start(j, 'нажато «Запустить»') };
+    },
+    /**
+     * «Доработать» (t1560): замечания — блоком в задание сразу (раннер — отдельный процесс, прочтёт из файла), потом запуск kermach credits redo cN:
+     * тот же разговор в той же копии. @param {string} id @param {string} text
+     */
+    redo(id, text) {
+      const j = get(dir, ref(id));
+      // t1842: потолок запуска — остаток потолка доработок задания, как у доработки по замечаниям проверяющего.
+      const r = redoAdd(dir, j.id, String(text || ''), { left: true, dataDir });
+      return { n: r.n, budget: r.budget, pid: start(get(dir, j.id), 'нажато «Доработать»', 'redo') };
     },
     /** «Разрешить и повторить»: команды need — в allow сразу (файл меняется до запуска), потом обычный запуск. @param {string} id */
     retry(id) {
       const j = get(dir, ref(id));
       const need = list(j.head.need, ';');
       if (!need.length) throw new Error(`${j.id}: разрешение не требовалось`);
-      if (j.head.status === 'идёт' && alive(j.head.pid)) throw new Error(`${j.id} уже идёт`);
+      if (running(j.head)) throw new Error(busyText(j.id, j.head));
       const allow = [...new Set([...list(j.head.allow, ';'), ...need])];
       patch(j.file, { allow: `[${allowLine(allow)}]`, need: '' });
+      // t1842: не прошла доработка — повтор продолжает её: тот же разговор, те же замечания, остаток потолка.
+      const again = redoAgain(get(dir, j.id), 'нажато «Разрешить и повторить»');
+      if (again) return { added: need, ...again };
       return { added: need, pid: start(j, 'нажато «Разрешить и повторить»') };
     },
     /** @param {string} id */
@@ -1220,11 +1454,14 @@ function make(ctx) {
       // t1574: раннер упал, шапка осталась «идёт», а номер Windows отдала другой программе. Гасим деревом, только если
       // время запуска процесса совпало с pid_at; не совпало или его нет — процесс не трогаем, задание снимаем с «идёт».
       if (!sameProc(pid, j.head.pid_at)) {
+        redoAbort(j, 'не прошло: раннер не опознан — снято человеком', dataDir);
         patch(j.file, { status: 'не прошло', result: `не прошло: процесс ${pid} не опознан как раннер задания (номер мог достаться другой программе) — не гасил`, pid: '', pid_at: '', closed: stamp() });
         try { fs.appendFileSync(path.join(root(dir), `${j.id}.log`), `${stamp()} «Стоп»: процесс ${pid} не опознан как раннер (время запуска не совпало) — не гасил, задание снято\n`); } catch { /* журнал — не главное */ }
         return { stopped: 0, unknown: pid };
       }
       killTree(pid);
+      // t1842: прерванная доработка — итог и цена в блок, пока в шапке есть pid_at: иначе потраченное не вошло бы в остаток потолка.
+      redoAbort(get(dir, j.id), 'не прошло: остановлено человеком', dataDir);
       patch(j.file, { status: 'не прошло', result: 'не прошло: остановлено человеком', pid: '', pid_at: '', closed: stamp() });
       try { fs.appendFileSync(path.join(root(dir), `${j.id}.log`), `${stamp()} остановлено человеком (процесс ${pid})\n`); } catch { /* журнал — не главное */ }
       return { stopped: pid };
@@ -1247,6 +1484,8 @@ function make(ctx) {
       if (on) { try { topupTick(); } catch (e) { say(`«Добрать остаток»: ${e instanceof Error ? e.message : e}`); } }
       return st;
     },
+    /** Флажок «Агенты карт могут отправлять пачки» (t1675) — тот же флаг, что kermach batch allow on. @param {boolean} on */
+    batchAgents: (on) => saveSettings(dir, { batchAgents: on === true }),
     /** @param {string} lang */
     i18n: (lang) => ({ dict: dict(lang) }),
     /** Пачки проекта для окна. */
@@ -1288,5 +1527,5 @@ function make(ctx) {
 
 // Хранилище — свойства фабрики: cli.js и request.js берут их как раньше (require('./main').read и т. д.).
 module.exports = Object.assign(make, { DIR, KINDS, EFFORTS, STATUS, MODEL, EDITABLE, root, read, add, get, done, edit, guessKind, list, parse,
-  cmdAllowed, splitCmd, alive, sameProc, selfStart, run, accept, reject, retry, diff, patchHead: patch, stamp, settings, saveSettings, grants,
+  cmdAllowed, splitCmd, alive, sameProc, procState, running, selfStart, run, accept, reject, retry, diff, redoAdd, redoBlocks, redoBlocked, redoStart, redoLeft, redoAbort, REDO_MIN, journalRows, patchHead: patch, stamp, settings, saveSettings, grants,
   journal, balance, balanceNow, plan, loadFlag, addGrant, removeGrant, suggestGrant, plusMonth, LOAD_FLAG, TOPUP_DAYS, TOPUP_RESERVE, recipes, packInput });

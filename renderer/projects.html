@@ -51,7 +51,9 @@
   #autosN.new { color: var(--accent); border-color: rgba(var(--accent-rgb),.5); }
 
   /* Строка счёта: слева сколько проектов, справа «Свернуть незакреплённые» и переключатель «список / плитка». */
-  #count { display: flex; align-items: center; gap: 10px; padding: 0 16px 8px 26px; font-size: 11px; color: var(--muted); flex-shrink: 0; }
+  /* Узкое окно (t1678, d401): строка переносится целыми кнопками, подписи кнопок и счёт в две строки не ломаются. */
+  #count { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 0 16px 8px 26px; font-size: 11px; color: var(--muted); flex-shrink: 0; }
+  #count > * { white-space: nowrap; }
   #allAgents { margin-left: -6px; }
   /* Сколько всего требуют ответа — оранжевым, как состояние (t31). Занимает остаток строки, кнопки справа. */
   #allNeed { flex: 1; margin-left: -6px; display: flex; align-items: center; gap: 4px; color: var(--need); }

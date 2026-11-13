@@ -123,8 +123,32 @@ const encoded = (script) => Buffer.from(script, 'utf16le').toString('base64');
 
 /** PowerShell: вход через stdin, выход — stdout. В командной строке процесса токена нет. @param {string} script @param {string} input @returns {Promise<string>} */
 function ps(script, input) {
+  // t1863: сам запуск powershell.exe (CreateProcess, проверка антивирусом) синхронен и держал главный поток 2 с при запуске.
+  // Запуск — в рабочем потоке: главный поток только ждёт сообщение. Токен — в workerData, в командной строке его нет.
+  const args = ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded(script)];
+  let Worker;
+  try { ({ Worker } = require('worker_threads')); } catch { Worker = null; }
+  if (!Worker) return psDirect(args, input);
   return new Promise((res, rej) => {
-    const p = execFile(PS(), ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded(script)], { windowsHide: true, timeout: 20000 }, (err, out) => {
+    const w = new Worker(PS_WORKER, { eval: true, workerData: { exe: PS(), args, input } });
+    let done = false;
+    w.once('message', (/** @type {{ ok: boolean, out: string }} */ m) => { done = true; if (m.ok) res(String(m.out || '').trim()); else rej(new Error(String(m.out).split('\n')[0])); });
+    w.once('error', (e) => { if (!done) { done = true; rej(new Error(String(e && e.message).split('\n')[0])); } });
+    w.once('exit', () => { if (!done) { done = true; rej(new Error('рабочий поток PowerShell закрылся без ответа')); } });
+  });
+}
+
+/** Текст рабочего потока ps (t1863): execFile в потоке, ответ — одно сообщение. */
+const PS_WORKER = `const { parentPort, workerData: d } = require('worker_threads');
+const p = require('child_process').execFile(d.exe, d.args, { windowsHide: true, timeout: 20000 }, (err, out) => {
+  parentPort.postMessage(err ? { ok: false, out: String(err.message) } : { ok: true, out: String(out || '') });
+});
+if (p.stdin) p.stdin.end(d.input);`;
+
+/** Запасной путь без worker_threads. @param {string[]} args @param {string} input @returns {Promise<string>} */
+function psDirect(args, input) {
+  return new Promise((res, rej) => {
+    const p = execFile(PS(), args, { windowsHide: true, timeout: 20000 }, (err, out) => {
       if (err) rej(new Error(String(err.message).split('\n')[0])); else res(String(out || '').trim());
     });
     if (p.stdin) p.stdin.end(input);
@@ -150,8 +174,11 @@ async function token() {
   return tokenMem;
 }
 
-/** Адрес API: настоящий Telegram или подставной сервер пробы. */
-const apiBase = () => String(process.env.KERMACH_TG_API || 'https://api.telegram.org').replace(/\/+$/, '');
+/** Адрес API: настоящий Telegram или подставной сервер пробы — только http://127.0.0.1[:порт], иначе токен ушёл бы на чужой сервер (t1805). */
+const apiBase = () => {
+  const own = String(process.env.KERMACH_TG_API || '').trim();
+  return (/^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/.test(own) ? own : 'https://api.telegram.org').replace(/\/+$/, '');
+};
 
 /**
  * Вызов метода Bot API. Ответ — result или исключение с текстом без токена.
@@ -213,18 +240,18 @@ async function save(patch) {
   if (pt.clear === true) { s = { ...empty(), offset: 0 }; tokenMem = ''; }
   if (typeof pt.token === 'string' && pt.token.trim()) {
     const tk = pt.token.trim();
-    if (process.platform !== 'win32') return { error: 'Хранение токена пока только на Windows' };
-    if (!/^\d{5,}:[\w-]{20,200}$/.test(tk)) return { error: 'Это не похоже на токен бота: он выглядит как 123456789:AAE… (выдаёт @BotFather)' };
-    try { s.enc = await protect(tk); } catch (e) { return { error: `Токен не зашифрован: ${scrub(e)}` }; }
+    if (process.platform !== 'win32') return { error: tr('telegram.err1', 'Хранение токена пока только на Windows') };
+    if (!/^\d{5,}:[\w-]{20,200}$/.test(tk)) return { error: tr('telegram.err2', 'Это не похоже на токен бота: он выглядит как 123456789:AAE… (выдаёт @BotFather)') };
+    try { s.enc = await protect(tk); } catch (e) { return { error: tr('telegram.err3', 'Токен не зашифрован: {v0}', { v0: scrub(e) }) }; }
     tokenMem = tk;
     s.last4 = tk.slice(-4).replace(/[^\w-]/g, ''); s.prevCode = s.code || s.prevCode; s.code = newCode(); s.chat = null; s.owner = null; s.offset = 0; s.checked = 0; s.sent = [];
   }
   if (pt.dupMin !== undefined) {
     const n = Number(pt.dupMin);
-    if (!Number.isFinite(n) || n <= 0 || n > DUP_MAX) return { error: `Минуты до дубля — число больше 0 и не больше ${DUP_MAX}` };
+    if (!Number.isFinite(n) || n <= 0 || n > DUP_MAX) return { error: tr('telegram.err4', 'Минуты до дубля — число больше 0 и не больше {DUP_MAX}', { DUP_MAX }) };
     s.dupMin = n;
   }
-  try { write(clean(s)); } catch (e) { return { error: `telegram.json не записан: ${scrub(e)}` }; }
+  try { write(clean(s)); } catch (e) { return { error: tr('telegram.err5', 'telegram.json не записан: {v0}', { v0: scrub(e) }) }; }
   log(`telegram: ${s.enc ? 'токен сохранён (DPAPI)' : 'токена нет'}, группа ${s.chat ? `«${s.chat.title}»` : 'не найдена'}, минуты до дубля ${s.dupMin}`);
   return info();
 }
@@ -236,7 +263,7 @@ async function save(patch) {
  */
 async function check() {
   let s = read();
-  if (!s.enc) return { ok: false, error: 'Токен бота не задан' };
+  if (!s.enc) return { ok: false, error: tr('telegram.err6', 'Токен бота не задан') };
   if (ensureCode(s)) write(clean(s));
   try {
     const me = await api('getMe');
@@ -268,7 +295,7 @@ async function check() {
     await api('sendMessage', { chat_id: s.chat.id, text: `Kermach: проверка связи. Сообщения о вставших картах будут приходить сюда. Ответы принимаю только от ${ow} и только ответом (reply) на сообщение о карте.` });
     // t1578: пока ждали Telegram, poll() и send() могли сдвинуть offset и дописать sent — пишем поверх свежего файла только своё.
     const s2 = read();
-    if (s2.enc !== s.enc) return { ok: false, error: 'Настройки Telegram сменились во время проверки — нажмите «Проверить» ещё раз' };
+    if (s2.enc !== s.enc) return { ok: false, error: tr('telegram.err7', 'Настройки Telegram сменились во время проверки — нажмите «Проверить» ещё раз') };
     s2.chat = s.chat; s2.owner = s.owner; s2.code = s.code; s2.prevCode = s.prevCode; s2.checked = Date.now();
     s = s2;
     write(clean(s));
@@ -405,11 +432,11 @@ function op(op) {
 /** Кнопка «Новый код» (t1527): прежний код больше не назначает владельца. */
 function newCodeOp() {
   const s = read();
-  if (!s.enc) return { error: 'Токен бота не задан' };
+  if (!s.enc) return { error: tr('telegram.err8', 'Токен бота не задан') };
   if (s.chat && s.owner) return info(s);
   s.prevCode = s.code || s.prevCode;
   s.code = newCode();
-  try { write(clean(s)); } catch (e) { return { error: `telegram.json не записан: ${scrub(e)}` }; }
+  try { write(clean(s)); } catch (e) { return { error: tr('telegram.err9', 'telegram.json не записан: {v0}', { v0: scrub(e) }) }; }
   log('telegram: новый код для группы');
   return info(s);
 }
@@ -421,4 +448,4 @@ function init(dataDir, l) {
   tokenMem = '';
 }
 
-module.exports = { init, op, info, save, check, configured, dupMs, send, close, watch, poll, irreversible, scrub, DUP_DEF };
+module.exports = { init, op, info, save, check, configured, dupMs, send, close, watch, poll, irreversible, scrub, DUP_DEF, _ps: ps };

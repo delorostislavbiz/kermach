@@ -91,7 +91,9 @@ module.exports = {
     if (!token) return none('not_logged_in', 'в файле входа Gemini нет access_token');
     const exp = num(creds.expiry_date);
     if (exp !== null && exp <= Date.now()) return none('expired', 'нет данных: войдите в Gemini (токен входа истёк, Kermach его не обновляет)');
-    const api = String(env.KERMACH_GEMINI_API || API).replace(/\/+$/, '');
+    // Свой адрес — только местный http на 127.0.0.1 (проба), иначе токен входа ушёл бы на чужой сервер (t1746).
+    const own = String(env.KERMACH_GEMINI_API || '').trim();
+    const api = (/^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/.test(own) ? own : API).replace(/\/+$/, '');
     const fail = (/** @type {{ status: number, error?: string, timedOut?: boolean, stopped?: boolean }} */ r, /** @type {string} */ what) => {
       if (r.stopped) return none('stopped', 'чтение прервано');
       if (r.timedOut) return none('timeout', `${what}: сервер не ответил вовремя`);

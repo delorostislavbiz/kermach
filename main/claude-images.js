@@ -28,10 +28,10 @@ function fileOf(id, dir) {
 /**
  * Картинка номер n разговора id: { url: 'data:image/png;base64,…' } или { missing: true } — разговора, номера или данных нет.
  * Номер встречается дважды (сообщение отредактировали и отправили снова) — берётся последний.
- * @param {string} id @param {number} n @param {string} [dir] папка разговоров, по умолчанию ~/.claude/projects
+ * @param {string} id @param {number} n @param {string} [dir] папка разговоров, по умолчанию ~/.claude/projects (CLAUDE_CONFIG_DIR/projects, если задана: туда пишет вкладка, t1193, d386)
  * @returns {Promise<{ url?: string, missing?: boolean }>}
  */
-async function imageOf(id, n, dir = path.join(os.homedir(), '.claude', 'projects')) {
+async function imageOf(id, n, dir = path.join(process.env.CLAUDE_CONFIG_DIR ? path.resolve(process.env.CLAUDE_CONFIG_DIR) : path.join(os.homedir(), '.claude'), 'projects')) {
   if (typeof id !== 'string' || !UUID_RE.test(id) || !Number.isInteger(n) || n < 1) return { missing: true };
   const key = `${dir}|${id}|${n}`;
   const had = seen.get(key);

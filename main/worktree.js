@@ -13,7 +13,9 @@ const { gitExe } = require('./find-program');
 let tr = (/** @type {string} */ k, /** @type {string} */ ru, /** @type {any} */ v) => require('./i18n').t(k, ru, v);
 /** @param {(k: string, ru: string, v?: any) => string} f */
 const useText = (f) => { tr = f; };
-const i18n = { t: (/** @type {string} */ k, /** @type {string} */ ru, /** @type {any} */ v) => tr(k, ru, v) };
+/** Подстановка {имя} ещё раз после tr (t1811): текст из useText, который переменных не подставил, всё равно полный. */
+const fillIn = (/** @type {string} */ s, /** @type {any} */ v) => (v ? String(s).replace(/\{(\w+)\}/g, (m, n) => (v[n] !== undefined ? String(v[n]) : m)) : s);
+const i18n = { t: (/** @type {string} */ k, /** @type {string} */ ru, /** @type {any} */ v) => fillIn(tr(k, ru, v), v) };
 
 const GIT_MS = 60000;
 /** Файл вне git крупнее — не копируем (кэши, дампы); .env и ключи малы. */
@@ -45,15 +47,32 @@ function isSettings(f) {
 /** @param {number} n байт */
 const mb = (n) => `${(n / 1024 / 1024).toFixed(1)} МБ`;
 
-/** @param {string[]} args @param {string} cwd @param {object} [env] @returns {Promise<{ code: number, out: string, err: string }>} */
+/**
+ * nogit: true — git не запустился (ENOENT при живой папке cwd): Git не установлен или не найден (t1669, d447).
+ * @param {string[]} args @param {string} cwd @param {object} [env] @returns {Promise<{ code: number, out: string, err: string, nogit?: boolean }>}
+ */
 function git(args, cwd, env) {
   return new Promise((resolve) => {
     const g = gitExe();
     execFile(g.file, [...g.pre, ...args], { cwd, timeout: GIT_MS, windowsHide: true, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8', env: env && { ...process.env, ...env } }, (e, out, err) => {
       const code = e ? (typeof (/** @type {any} */ (e)).code === 'number' ? /** @type {any} */ (e).code : 1) : 0;
-      resolve({ code, out: String(out || ''), err: String(err || (e && e.message) || '') });
+      const nogit = !!e && (/** @type {any} */ (e)).code === 'ENOENT' && isDir(cwd);
+      resolve({ code, out: String(out || ''), err: String(err || (e && e.message) || ''), ...(nogit ? { nogit } : {}) });
     });
   });
+}
+
+/** @param {string} d */
+function isDir(d) {
+  try { return fs.statSync(d).isDirectory(); } catch { return false; }
+}
+
+/** Текст отказа, когда git не запускается (t1669, d447). */
+const noGitText = () => i18n.t('worktree.err23', 'git не найден — Git не установлен или его нет в PATH. Установите Git (git-scm.com) и откройте терминал заново');
+
+/** git запускается в этой папке (t1669, d447): false — Git не установлен или не найден. @param {string} dir */
+async function hasGit(dir) {
+  return !(await git(['--version'], dir)).nogit;
 }
 
 /** Проект под git: в папке есть .git (папка у основного проекта, файл у копии). @param {string} dir */
@@ -120,7 +139,8 @@ async function workTree(dir, opt = {}) {
   const env = { GIT_INDEX_FILE: path.join(tmp, 'idx'), GIT_OPTIONAL_LOCKS: '0' };
   try {
     const head = await git(['rev-parse', 'HEAD^{tree}'], dir);
-    if (head.code !== 0) return { error: 'в проекте нет ни одного коммита' };
+    if (head.nogit) return { error: noGitText() };
+    if (head.code !== 0) return { error: i18n.t('worktree.err1', 'в проекте нет ни одного коммита') };
     const nested = opt.untracked === false ? [] : await emptyNested(dir);
     const skip = nested.map((n) => `:(exclude,literal)${n}`);
     const add = opt.untracked === false ? ['add', '-u'] : ['add', '-A', ...(skip.length ? ['--', '.', ...skip] : [])];
@@ -173,13 +193,14 @@ async function baseOf(dir, name) {
  * @returns {Promise<{ path: string, branch: string, copied: string[], skipped: string[], changed: number, nested: string[], untracked: number } | { error: string }>}
  */
 async function create(dir, opt = {}) {
-  if (!isGit(dir)) return { error: 'не git-проект' };
+  if (!isGit(dir)) return { error: i18n.t('worktree.err2', 'не git-проект') };
   const head = await git(['rev-parse', '--verify', 'HEAD'], dir);
-  if (head.code !== 0) return { error: 'в проекте нет ни одного коммита — копию не из чего делать' };
+  if (head.nogit) return { error: noGitText() };
+  if (head.code !== 0) return { error: i18n.t('worktree.err3', 'в проекте нет ни одного коммита — копию не из чего делать') };
   const t = target(dir, opt.now || new Date(), opt.name);
   const branch = `kermach/${t.name}`;
-  if (fs.existsSync(t.dir)) return { error: `копия с именем ${t.name} уже есть: ${t.dir}` };
-  if ((await git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], dir)).code === 0) return { error: `ветка ${branch} уже есть — выберите другое имя` };
+  if (fs.existsSync(t.dir)) return { error: i18n.t('worktree.err4', 'копия с именем {name} уже есть: {dir}', { name: t.name, dir: t.dir }) };
+  if ((await git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], dir)).code === 0) return { error: i18n.t('worktree.err5', 'ветка {branch} уже есть — выберите другое имя', { branch }) };
   const from = await baseOf(dir, t.name);
   if ('error' in from) return from;
   fs.mkdirSync(t.root, { recursive: true });
@@ -246,11 +267,11 @@ async function rmTree(p) {
 async function remove(copyDir, opt = {}) {
   let gitFile = false;
   try { gitFile = fs.lstatSync(path.join(copyDir, '.git')).isFile(); } catch { /* нет .git */ }
-  if (!gitFile) return { error: 'это не копия (нет файла .git): удалять нечего' };
+  if (!gitFile) return { error: i18n.t('worktree.err6', 'это не копия (нет файла .git): удалять нечего') };
   const common = await git(['rev-parse', '--path-format=absolute', '--git-common-dir'], copyDir);
-  if (common.code !== 0) return { error: 'git не ответил про основной проект: ' + (common.err.trim().split('\n').pop() || '') };
+  if (common.code !== 0) return { error: i18n.t('worktree.err7', 'git не ответил про основной проект: ') + (common.err.trim().split('\n').pop() || '') };
   const gitDir = common.out.trim();
-  if (path.basename(gitDir) !== '.git') return { error: 'основной проект не найден: ' + gitDir };
+  if (path.basename(gitDir) !== '.git') return { error: i18n.t('worktree.err8', 'основной проект не найден: ') + gitDir };
   const main = path.dirname(gitDir);
   const dirty = await leftovers(copyDir);
   if (!dirty) return { error: i18n.t('projects.removeCopyGit', 'git status не ответил в копии') };
@@ -263,16 +284,16 @@ async function remove(copyDir, opt = {}) {
     try { fs.renameSync(copyDir, trash); break; } catch (e) {
       const code = /** @type {any} */ (e).code;
       if ((code === 'EBUSY' || code === 'EPERM') && i < 9) { await new Promise((r) => setTimeout(r, 300)); continue; }
-      return { error: 'папка занята: ' + (code || e), busy: true };
+      return { error: i18n.t('worktree.err9', 'папка занята: ') + (code || e), busy: true };
     }
   }
   const pr = await git(['worktree', 'prune'], main);
   if (pr.code !== 0) {
     try { fs.renameSync(trash, copyDir); } catch { /* осталась под другим именем */ }
-    return { error: 'git worktree prune не удался: ' + pr.err.trim() };
+    return { error: i18n.t('worktree.err10', 'git worktree prune не удался: ') + pr.err.trim() };
   }
   // Сбой здесь (t1084): git копию уже забыл, папки под прежним именем нет — назад не переименовываем, отдаём остаток (leftover).
-  try { await rmTree(trash); } catch (e) { return { error: 'не всё удалилось, остаток в ' + trash + ': ' + (/** @type {any} */ (e).code || /** @type {any} */ (e).message || e), leftover: trash }; }
+  try { await rmTree(trash); } catch (e) { return { error: i18n.t('worktree.err11', 'не всё удалилось, остаток в ') + trash + ': ' + (/** @type {any} */ (e).code || /** @type {any} */ (e).message || e), leftover: trash }; }
   let branchDeleted = false;
   if (branch.startsWith('kermach/')) branchDeleted = (await git(['branch', '-d', branch], main)).code === 0;
   return { removed: true, branch, branchDeleted };
@@ -382,7 +403,7 @@ async function copies(main) {
  */
 async function diffCopy(main, c, opt = {}) {
   const base = await git(['merge-base', 'HEAD', c.branch], main);
-  if (base.code !== 0) return { error: `нет общей основы проекта и ${c.branch}` };
+  if (base.code !== 0) return { error: i18n.t('worktree.err12', 'нет общей основы проекта и {branch}', { branch: c.branch }) };
   const w = await workTree(c.path);
   if ('error' in w) return w;
   const range = [base.out.trim(), w.tree];
@@ -438,6 +459,78 @@ async function conflictLines(main, tree, f) {
 }
 
 /**
+ * Сторона копии для слияния (t1669, d619, d710). Первый коммит ветки после общей основы — коммит-снимок несохранённых правок
+ * проекта (baseOf). Файл из снимка, который агент потом не менял, а человек после создания копии поменял (несохранённо или коммитом,
+ * его рабочая папка — wtree), — не правка агента: со стороны копии он возвращается к общей основе, и слияние берёт файл человека.
+ * Без этого слияние отказывало «несохранённые правки в файлах слияния» или давало конфликт со старым снимком.
+ * Файл, который человек с тех пор не трогал, остаётся как был (t1172/t1173: правка человека из снимка входит в коммит слияния).
+ * Возвращает коммит для merge-tree: B или B' — дочерний коммит B без таких файлов; родитель слияния — по-прежнему B.
+ * @param {string} main @param {string} H @param {string} B @param {string} wtree дерево рабочей папки проекта (workTree)
+ * @returns {Promise<{ commit: string, dropped: string[] } | { error: string }>}
+ */
+async function agentSide(main, H, B, wtree) {
+  const same = { commit: B, dropped: /** @type {string[]} */ ([]) };
+  const mb = await git(['merge-base', H, B], main);
+  if (mb.code !== 0) return same;
+  const base = mb.out.trim();
+  const first = await git(['rev-list', '--first-parent', '--reverse', `${base}..${B}`], main);
+  const S = first.code === 0 ? (first.out.split('\n')[0] || '').trim() : '';
+  if (!S) return same;
+  const info = await git(['log', '-1', '--format=%P%n%ae%n%s', S], main);
+  const [parents = '', mail = '', subject = ''] = info.out.split('\n');
+  if (info.code !== 0 || parents.trim() !== base || mail.trim() !== 'copy@kermach.local' || !subject.startsWith('Kermach: несохранённые правки проекта перед копией')) return same;
+  const list = async (/** @type {string} */ a, /** @type {string} */ b) => {
+    const r = await git(['-c', 'core.quotePath=false', 'diff-tree', '-r', '--name-only', '-z', a, b], main);
+    return r.code === 0 ? zList(r.out) : null;
+  };
+  const snap = await list(`${base}^{tree}`, `${S}^{tree}`);
+  const agent = await list(`${S}^{tree}`, `${B}^{tree}`);
+  const human = await list(`${S}^{tree}`, wtree);
+  if (!snap || !agent || !human) return same;
+  const a = new Set(agent);
+  const h = new Set(human);
+  const dropped = snap.filter((f) => !a.has(f) && h.has(f));
+  if (!dropped.length) return same;
+  let tmp = '';
+  try {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kermach-side-'));
+    const env = { GIT_INDEX_FILE: path.join(tmp, 'index'), GIT_LITERAL_PATHSPECS: '1' };
+    const rt = await git(['read-tree', B], main, env);
+    if (rt.code !== 0) return { error: `git read-tree: ${rt.err.trim().split('\n').pop()}` };
+    // Всё дерево основы, а не пути в командной строке: список файлов снимка бывает длиннее предела строки Windows.
+    const was = await git(['-c', 'core.quotePath=false', 'ls-tree', '-r', '-z', base], main, env);
+    if (was.code !== 0) return { error: `git ls-tree: ${was.err.trim().split('\n').pop()}` };
+    const want = new Set(dropped);
+    /** @type {string[]} */
+    const info2 = [];
+    const back = new Set();
+    for (const rec of zList(was.out)) {
+      const m = /^(\d+) \w+ ([0-9a-f]+)\t(.*)$/s.exec(rec);
+      if (m && want.has(m[3])) { info2.push(`${m[1]},${m[2]},${m[3]}`); back.add(m[3]); }
+    }
+    for (let i = 0; i < info2.length; i += 50) {
+      const r = await git(['update-index', '--add', ...info2.slice(i, i + 50).flatMap((x) => ['--cacheinfo', x])], main, env);
+      if (r.code !== 0) return { error: `git update-index: ${r.err.trim().split('\n').pop()}` };
+    }
+    const gone = dropped.filter((f) => !back.has(f));
+    for (let i = 0; i < gone.length; i += 50) {
+      const r = await git(['update-index', '--force-remove', '--', ...gone.slice(i, i + 50)], main, env);
+      if (r.code !== 0) return { error: `git update-index: ${r.err.trim().split('\n').pop()}` };
+    }
+    const wt = await git(['write-tree'], main, env);
+    if (wt.code !== 0) return { error: `git write-tree: ${wt.err.trim().split('\n').pop()}` };
+    const who = { GIT_AUTHOR_NAME: 'Kermach', GIT_AUTHOR_EMAIL: 'copy@kermach.local', GIT_COMMITTER_NAME: 'Kermach', GIT_COMMITTER_EMAIL: 'copy@kermach.local' };
+    const c = await git(['-c', 'commit.gpgsign=false', 'commit-tree', wt.out.trim(), '-p', B, '-m', 'Kermach: сторона копии без файлов снимка, которые человек поменял позже'], main, who);
+    if (c.code !== 0) return { error: `git commit-tree: ${c.err.trim().split('\n').pop()}` };
+    return { commit: c.out.trim(), dropped };
+  } catch (e) {
+    return { error: `${/** @type {any} */ (e).code || ''} ${/** @type {any} */ (e).message || e}`.trim() };
+  } finally {
+    if (tmp) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* временная папка */ } }
+  }
+}
+
+/**
  * Вливает копию в проект (t1173, ГИТ-устройство.md (в), этап 9; ответ пользователя 3).
  * 1) В копии нет несохранённого — иначе отказ. 2) merge-tree --write-tree: слияние без касания папок и индекса. 3) Конфликт — ничего не меняем,
  * отдаём файлы и строки. 4) Правки человека в проекте, которые отличаются от итога слияния в тех же файлах, — отказ со списком.
@@ -452,17 +545,22 @@ async function conflictLines(main, tree, f) {
 async function mergeCopy(main, c) {
   if (fs.existsSync(c.path)) {
     const st = await git(['-c', 'core.quotePath=false', 'status', '--porcelain'], c.path);
-    if (st.code !== 0) return { error: 'git status не ответил в копии' };
+    if (st.code !== 0) return { error: i18n.t('worktree.err13', 'git status не ответил в копии') };
     const dirty = st.out.split('\n').filter(Boolean);
-    if (dirty.length) return { error: 'в копии несохранённые правки — закоммитьте их в копии', copyDirty: dirty };
+    if (dirty.length) return { error: i18n.t('worktree.err14', 'в копии несохранённые правки — закоммитьте их в копии'), copyDirty: dirty };
   }
   const head = await git(['rev-parse', '--verify', 'HEAD'], main);
   const tip = await git(['rev-parse', '--verify', `refs/heads/${c.branch}`], main);
-  if (head.code !== 0 || tip.code !== 0) return { error: `нет коммита проекта или ветки ${c.branch}` };
+  if (head.code !== 0 || tip.code !== 0) return { error: i18n.t('worktree.err15', 'нет коммита проекта или ветки {branch}', { branch: c.branch }) };
   const H = head.out.trim();
   const B = tip.out.trim();
   if ((await git(['merge-base', '--is-ancestor', B, H], main)).code === 0) return { nothing: true };
-  const mt = await git(['-c', 'core.quotePath=false', 'merge-tree', '--write-tree', '--name-only', '-z', '--no-messages', H, B], main);
+  // Правки человека: рабочая папка против HEAD (ниже — мешают ли они слиянию).
+  const w = await workTree(main);
+  if ('error' in w) return w;
+  const side = await agentSide(main, H, B, w.tree);
+  if ('error' in side) return side;
+  const mt = await git(['-c', 'core.quotePath=false', 'merge-tree', '--write-tree', '--name-only', '-z', '--no-messages', H, side.commit], main);
   if (mt.code !== 0 && mt.code !== 1) return { error: `git merge-tree: ${mt.err.trim().split('\n').pop()}` };
   const [tree, ...hit] = zList(mt.out);
   if (mt.code === 1) {
@@ -473,9 +571,7 @@ async function mergeCopy(main, c) {
   const ch = await git(['-c', 'core.quotePath=false', 'diff-tree', '-r', '--name-only', '-z', `${H}^{tree}`, tree], main);
   if (ch.code !== 0) return { error: `git diff-tree: ${ch.err.trim()}` };
   const files = zList(ch.out);
-  // Правки человека: рабочая папка против HEAD; мешают только те, что в файлах слияния и не совпадают с его итогом.
-  const w = await workTree(main);
-  if ('error' in w) return w;
+  // Мешают только правки человека в файлах слияния, которые не совпадают с его итогом.
   const names = async (/** @type {string} */ a, /** @type {string} */ b, /** @type {string[]} */ ...more) => new Set(zList((await git(['-c', 'core.quotePath=false', 'diff-tree', '-r', '--name-only', '-z', ...more, a, b], main)).out));
   /** @type {Set<string>} */
   let human = new Set();
@@ -484,11 +580,11 @@ async function mergeCopy(main, c) {
     human = await names(w.headTree, w.tree);
     const differ = await names(w.tree, tree);
     const clash = files.filter((f) => human.has(f) && differ.has(f));
-    if (clash.length) return { error: 'у человека несохранённые правки в файлах слияния', humanDirty: clash };
+    if (clash.length) return { error: i18n.t('worktree.err16', 'у человека несохранённые правки в файлах слияния'), humanDirty: clash };
     // Старая копия (до t1561) несёт коммит-снимок с неотслеженными файлами проекта: слияние унесло бы их в историю ветки (t1367, d627).
     const carried = files.filter((f) => added.has(f) && human.has(f) && !differ.has(f));
     if (carried.length > UNTRACKED_MAX) {
-      return { error: `слияние принесло бы в историю проекта ${carried.length} файлов, которых нет в git проекта (снимок рабочей папки в старой копии; например ${carried.slice(0, 3).join(', ')}) — ничего не изменено. Сделайте новую копию (kermach copy new) и перенесите в неё коммиты агента (git cherry-pick)` };
+      return { error: i18n.t('worktree.err17', 'слияние принесло бы в историю проекта {n} файлов, которых нет в git проекта (снимок рабочей папки в старой копии; например {list}) — ничего не изменено. Сделайте новую копию (kermach copy new) и перенесите в неё коммиты агента (git cherry-pick)', { n: carried.length, list: carried.slice(0, 3).join(', ') }) };
     }
   }
   const pts = await git(['for-each-ref', '--count=1', '--format=%(refname)', 'refs/kermach/points/'], main);
@@ -535,9 +631,9 @@ async function mergeCopy(main, c) {
     let r;
     try { r = await git(['update-ref', '-m', `kermach copy merge ${c.branch}: откат`, 'HEAD', H, M], main); } catch (e) { r = { code: 1, out: '', err: String(/** @type {any} */ (e).message || e) }; }
     if (r.code !== 0) {
-      return { error: `${why}. Вернуть ветку не удалось (${r.err.trim().split('\n').pop()}): HEAD остался на коммите слияния ${M.slice(0, 8)}, верните вручную: git update-ref HEAD ${H} ${M}${tail}` };
+      return { error: i18n.t('worktree.err18', '{why}. Вернуть ветку не удалось ({err}): HEAD остался на коммите слияния {m}, верните вручную: git update-ref HEAD {h} {mf}{tail}', { why, err: r.err.trim().split('\n').pop(), m: M.slice(0, 8), h: H, mf: M, tail }) };
     }
-    return { error: `${why}. Ничего не влито: ветка возвращена на прежний коммит ${H.slice(0, 8)}${tail}` };
+    return { error: i18n.t('worktree.err19', '{why}. Ничего не влито: ветка возвращена на прежний коммит {h}{tail}', { why, h: H.slice(0, 8), tail }) };
   };
   try {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kermach-mg-'));
@@ -556,17 +652,17 @@ async function mergeCopy(main, c) {
     for (const [n, args] of /** @type {[string, string[]][]} */ ([['checkout', ['checkout', M]], ['rm', ['rm', '-q', '--cached', '--ignore-unmatch']]])) {
       if (!spec[n]) continue;
       const r = await git([...args, `--pathspec-from-file=${spec[n]}`, '--pathspec-file-nul'], main, lit);
-      if (r.code !== 0) return await undo(`файлы слияния не выписаны: git ${n}: ${r.err.trim().split('\n').pop()}`);
+      if (r.code !== 0) return await undo(i18n.t('worktree.err21', 'файлы слияния не выписаны: git {n}: {err}', { n, err: r.err.trim().split('\n').pop() }));
     }
     for (const f of gone) { try { fs.unlinkSync(path.join(main, f)); } catch { /* уже нет */ } }
   } catch (e) {
     const why = `${/** @type {any} */ (e).code || ''} ${/** @type {any} */ (e).message || e}`.replace(/\s+/g, ' ').trim();
-    if (moved) return await undo(`файлы слияния не выписаны: ${why}`);
-    return { error: `слияние не начато, ничего не изменено: ${why}` };
+    if (moved) return await undo(i18n.t('worktree.err22', 'файлы слияния не выписаны: {why}', { why }));
+    return { error: i18n.t('worktree.err20', 'слияние не начато, ничего не изменено: {why}', { why }) };
   } finally {
     if (tmp) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* временная папка */ } }
   }
   return { merged: files.length, files, commit: M };
 }
 
-module.exports = { isGit, create, remove, extras, isSettings, target, slug, leftovers, placeOf, copies, diffCopy, saveCopy, mergeCopy, workTree, useText };
+module.exports = { isGit, create, remove, extras, isSettings, target, slug, leftovers, placeOf, hasGit, noGitText, copies, diffCopy, saveCopy, mergeCopy, workTree, useText };

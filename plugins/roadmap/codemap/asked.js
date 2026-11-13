@@ -51,7 +51,17 @@ function writeFileOf(mapFile, root) {
  */
 function ownFile(file) {
   const st = fs.lstatSync(file, { throwIfNoEntry: false });
-  if (st && (!st.isFile() || st.nlink > 1)) { try { fs.unlinkSync(file); } catch (e) { if (/** @type {any} */ (e).code !== 'ENOENT') throw e; } }
+  if (!st || (st.isFile() && st.nlink <= 1)) return;
+  try {
+    // Папка на месте имени (t1677, d293): unlinkSync на ней — EPERM, record глотал ошибку, и журнал не писался никогда.
+    // Как .gitignore карты (worker.js mapDir, t911): пустую убрать, непустую отодвинуть в сторону — чужое не удаляем.
+    if (st.isDirectory()) {
+      try { fs.rmdirSync(file); } catch (e) {
+        if (!['ENOTEMPTY', 'EEXIST'].includes(/** @type {any} */ (e).code)) throw e;
+        fs.renameSync(file, `${file}.dir-${Date.now()}`);
+      }
+    } else fs.unlinkSync(file);
+  } catch (e) { if (/** @type {any} */ (e).code !== 'ENOENT') throw e; }
 }
 
 /** @param {string} text */

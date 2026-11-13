@@ -787,6 +787,8 @@ function gitSetup(host) {
     const was = ns && ns.oldPath ? `<span class="was">${esc(I18n.t('git.bylo', 'было: {path}', { path: ns.oldPath }))}</span>` : '';
     const n = !ns ? '' : ns.binary ? esc(I18n.t('git.dvoichnyy', 'двоичный')) : `<span class="p">+${ns.add}</span> <span class="m">−${ns.del}</span>`;
     row.innerHTML = `<span class="st ${L}">${L}</span><span class="nm">${esc(name)}</span>${was}<span class="n">${n}</span>`;
+    // t1673 (d430): «папка/» — вложенный репозиторий или пустая новая папка: сравнения по файлу у неё нет, вкладку не открываем.
+    if (bare !== f.path) return row;
     row.onclick = () => openDiff(f.path, ns && ns.oldPath ? ns.oldPath : '');
     return row;
   };
@@ -811,6 +813,8 @@ function gitSetup(host) {
     bar.hidden = false;
     const n = last.total;
     bar.textContent = I18n.t('git.vetka', 'Ветка: {branch}{v2}{v3} · {v4}', { branch: last.branch, v2: last.ahead ? ` ↑${last.ahead}` : '', v3: last.behind ? ` ↓${last.behind}` : '', v4: n ? I18n.t('git.izmenenoFaylov', 'изменено файлов: {n}', { n: n }) : I18n.t('git.bezIzmeneniy', 'без изменений') });
+    // t1673 (d131): папка проекта внутри чужого репозитория — ветка его, это и пишем.
+    if (last.outer) bar.textContent += ` · ${I18n.t('git.vnutriRepo', 'папка внутри репозитория {name}', { name: last.outer })}`;
     bar.title = last.upstream ? I18n.t('git.v', 'в {upstream}', { upstream: last.upstream }) : I18n.t('git.bezUdalennoyVetki', 'без удалённой ветки');
     panel.hidden = !open;
     host.right.hidden = !open && ![...host.right.children].some((c) => !(/** @type {HTMLElement} */ (c)).hidden);

@@ -27,6 +27,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Worker } = require('worker_threads');
+/** t1811: текст ошибки на языке программы; без главного процесса — русский. */
+const tr = (/** @type {string} */ k, /** @type {string} */ ru, /** @type {any} */ v) => { try { return require('../../main/i18n').t(k, ru, v); } catch { return ru.replace(/\{(\w+)\}/g, (m, n) => (v && n in v ? String(v[n]) : m)); } };
 const live = require('./live');
 const handoff = require('./handoff');
 /** Переменная программы: KERMACH_<имя>, нет — TERMINALUS_<имя> до t1307 (platform.envOf). @param {string} n */
@@ -85,16 +87,19 @@ function cardStateOf(st, status, newer, source) {
 }
 /** Статус карты из шапки её файла: путь → { t: mtimeMs, status } (t1142), общий для окон. @type {Map<string, { t: number, status: string }>} */
 const cardFiles = new Map();
-/** Статус карты tN проекта root или null, если файла нет. @param {string} root @param {string} card */
-function cardStatus(root, card) {
+/**
+ * Статус карты tN проекта root или null, если файла нет. Асинхронно (t1670, d600): синхронный stat на каждую запись «ждёт» с картой
+ * держал главный процесс ~0,04 мс на запись, а dress идёт и по всему списку «Ждут меня». @param {string} root @param {string} card @returns {Promise<string | null>}
+ */
+async function cardStatus(root, card) {
   const file = path.join(root, '.kermach', 'roadmap', `${card}.md`);
   let t;
-  try { t = fs.statSync(file).mtimeMs; } catch { cardFiles.delete(file); return null; }
+  try { t = (await fs.promises.stat(file)).mtimeMs; } catch { cardFiles.delete(file); return null; }
   const c = cardFiles.get(file);
   if (c && c.t === t) return c.status;
   let status = '';
   try {
-    const head = fs.readFileSync(file, 'utf8').split(/\r?\n---/)[0];
+    const head = (await fs.promises.readFile(file, 'utf8')).split(/\r?\n---/)[0];
     const m = /^status:[ \t]*(.*)$/m.exec(head);
     status = m ? m[1].trim() : '';
   } catch { return null; }
@@ -354,12 +359,15 @@ module.exports = (ctx) => {
     // Список проектов — один раз за проход (t1468): stat projects.json на каждую запись тормозил ввод в главном процессе.
     const projectOf = projectOwner(projects());
     const tabName = tabNamesOf(ctx);
+    // Свежая вкладка agy ищет замок только в папке своего окна (t1673, d398): папки разговоров — из этих записей.
+    const agyWhere = { root: ctx.project && ctx.project.path, cwdOf: new Map(r.items.filter((/** @type {any} */ i) => i.agent === 'agy' && i.cwd)
+      .map((/** @type {any} */ i) => [String(i.id).toLowerCase(), String(i.cwd)])) };
     for (const it of r.items) {
       // Вкладку переименовали руками — её имя главнее заголовка из журнала (t1506).
       const tn = tabName[String(it.id || '').toLowerCase()];
       if (tn) { it.title = tn; it.titleFrom = 'tab'; }
       it.projectId = projectOf(it.cwd);
-      it.live = live.liveOf(it, now.tabs, now.outside);
+      it.live = live.liveOf(it, now.tabs, now.outside, agyWhere);
       const st = stateOf(it, it.live, days, at);
       it.state = st.state;
       it.stateWhy = st.why;
@@ -407,10 +415,20 @@ module.exports = (ctx) => {
       const at = String(it.createdAt || '');
       if (!newest.has(k) || at > String(newest.get(k))) newest.set(k, at);
     }
+    // Статусы — один раз на пару «проект карта» и все сразу (t1670, d600): stat асинхронный, главный процесс не ждёт диск.
+    /** @type {Map<string, Promise<string | null>>} */
+    const statusOf = new Map();
     for (const it of items) {
       if (!it.card || !it.projectId || it.state !== 'wait') continue;
       const root = roots.get(it.projectId);
-      const status = root ? cardStatus(root, it.card) : null;
+      const k = `${it.projectId} ${it.card}`;
+      if (root && !statusOf.has(k)) statusOf.set(k, cardStatus(root, it.card));
+    }
+    await Promise.all(statusOf.values());
+    for (const it of items) {
+      if (!it.card || !it.projectId || it.state !== 'wait') continue;
+      const root = roots.get(it.projectId);
+      const status = root ? await (statusOf.get(`${it.projectId} ${it.card}`) || null) : null;
       if (status === null) continue;
       const newer = String(it.createdAt || '') < String(newest.get(`${it.projectId} ${it.card}`));
       const source = status === 'ждёт ответа' && !newer ? await sourceAlive(String(root), it.projectId, it.card) : false;
@@ -633,19 +651,19 @@ module.exports = (ctx) => {
     async trash(a) {
       const o = await one(a);
       if ('error' in o) return o;
-      if (o.live) return { error: 'идущий разговор удалить нельзя' };
+      if (o.live) return { error: tr('history.err1', 'идущий разговор удалить нельзя') };
       // agy (t1122): журнал — лишь часть разговора, сводка и база шагов остаются у agy; его файлы «История» только читает.
-      if (o.k.agent === 'agy') return { error: 'разговор Antigravity в Корзину не убирается: его файлы «История» только читает' };
+      if (o.k.agent === 'agy') return { error: tr('history.err2', 'разговор Antigravity в Корзину не убирается: его файлы «История» только читает') };
       // Grok (t1118): журнал — один файл из десятка в папке разговора, а prompt_history.jsonl проекта ссылается на номер; файлы Grok «История» только читает.
-      if (o.k.agent === 'grok') return { error: 'разговор Grok в Корзину не убирается: его файлы «История» только читает' };
+      if (o.k.agent === 'grok') return { error: tr('history.err3', 'разговор Grok в Корзину не убирается: его файлы «История» только читает') };
       const root = rootOf(o.row);
-      if (!insideReal(o.row.file, root)) return { error: `журнал вне папки журналов ${root} — не удаляю` };
+      if (!insideReal(o.row.file, root)) return { error: tr('history.err4', 'журнал вне папки журналов {root} — не удаляю', { root }) };
       const { shell } = require('electron');
       const items = [o.row.file];
       const own = path.join(path.dirname(o.row.file), o.k.id);
       if (o.k.agent === 'claude' && fs.existsSync(own) && insideReal(own, root)) items.push(own);
       for (const it of items) {
-        try { await shell.trashItem(it); } catch (e) { ctx.log(`в Корзину не ушёл ${it}: ${why(e)}`); return { error: `в Корзину не ушло: ${why(e)}` }; }
+        try { await shell.trashItem(it); } catch (e) { ctx.log(`в Корзину не ушёл ${it}: ${why(e)}`); return { error: tr('history.err5', 'в Корзину не ушло: {v0}', { v0: why(e) }) }; }
       }
       ctx.log(`в Корзину: разговор ${o.k.agent} ${o.k.id} (${items.length === 2 ? 'журнал и папка' : 'журнал'})`);
       await call(ctx, 'forget', { key: o.k.key });
@@ -655,7 +673,7 @@ module.exports = (ctx) => {
     async reveal(a) {
       const o = await one(a);
       if ('error' in o) return o;
-      if (!insideReal(o.row.file, rootOf(o.row))) return { error: 'журнал вне папки журналов' };
+      if (!insideReal(o.row.file, rootOf(o.row))) return { error: tr('history.err6', 'журнал вне папки журналов') };
       require('electron').shell.showItemInFolder(o.row.file);
       return { ok: true };
     },
@@ -666,7 +684,7 @@ module.exports = (ctx) => {
       // Только папка: путь к .exe, .cmd или .lnk из журнала shell.openPath запустил бы (t793).
       let dir = false;
       try { dir = !!cwd && fs.statSync(cwd).isDirectory(); } catch { /* нет или нет доступа — как «папки нет» */ }
-      if (!dir) return { error: `папки нет: ${cwd || '(не записана)'}` };
+      if (!dir) return { error: tr('history.err7', 'папки нет: {v0}', { v0: cwd || '(не записана)' }) };
       const err = await require('electron').shell.openPath(cwd);
       return err ? { error: err } : { ok: true };
     },
@@ -712,7 +730,7 @@ module.exports = (ctx) => {
         if (!seen) return { error: 'нет seen — время разговора, которое видел человек' };
         if (a.done) m[k.key] = { seen };
         else if (typeof a.until === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(a.until) && a.until > dayOf(Date.now())) m[k.key] = { seen, until: a.until };
-        else return { error: 'отложить можно до даты позже сегодняшней (ГГГГ-ММ-ДД)' };
+        else return { error: tr('history.err8', 'отложить можно до даты позже сегодняшней (ГГГГ-ММ-ДД)') };
       }
       saveMarks(ctx);
       for (const u of users) u.send('changed', null);
@@ -721,7 +739,7 @@ module.exports = (ctx) => {
     staleDays(a) {
       if (a.days !== undefined) {
         const d = Number(a.days);
-        if (!Number.isFinite(d) || d <= 0 || d > 3650) return { error: 'порог — число дней от 1 до 3650' };
+        if (!Number.isFinite(d) || d <= 0 || d > 3650) return { error: tr('history.err9', 'порог — число дней от 1 до 3650') };
         if (!ctx.settings) return { error: 'настроек нет' };
         ctx.settings.set({ ...ctx.settings.get(), staleDays: d });
       }

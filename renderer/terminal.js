@@ -226,17 +226,20 @@ function measureTerminal(host, fontSize) {
   host.appendChild(pane);
   if (!pane.clientWidth || !pane.clientHeight) { pane.remove(); return null; }
   const term = new Terminal(termOptions(fontSize));
+  /** @type {WebGL2RenderingContext | null} */
+  let ctx = null;
   try {
     const fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     term.open(pane);
-    try { term.loadAddon(new WebglAddon.WebglAddon()); } catch (e) { /* как у вкладки: остаётся DOM */ }
+    try { const gl = new WebglAddon.WebglAddon(); term.loadAddon(gl); ctx = glContext(gl); } catch (e) { /* как у вкладки: остаётся DOM */ }
     const d = fitAddon.proposeDimensions();
     return d && Number.isFinite(d.cols) && Number.isFinite(d.rows) ? { cols: d.cols, rows: d.rows } : null;
   } catch (e) {
     return null;
   } finally {
     term.dispose();
+    glLose(ctx);
     pane.remove();
   }
 }
@@ -378,6 +381,21 @@ const glCell = {};
  * @type {Map<HTMLElement, () => void>}
  */
 const glClears = new Map();
+/**
+ * Контекст WebGL аддона (addon-webgl 0.19: _renderer._gl). Нужен до dispose: потом отрисовщика уже нет.
+ * @param {any} gl @returns {WebGL2RenderingContext | null}
+ */
+function glContext(gl) {
+  try { return (gl && gl._renderer && gl._renderer._gl) || null; } catch (e) { return null; }
+}
+/**
+ * Отдать контекст браузеру сразу (t1732). dispose аддона снимает холст, но контекст живёт до сборки мусора — при переключении
+ * двух десятков вкладок их копится больше 16, и Chromium отбирает контекст у видимых («Too many active WebGL contexts»).
+ * @param {WebGL2RenderingContext | null} ctx
+ */
+function glLose(ctx) {
+  try { const ext = ctx && !ctx.isContextLost() && ctx.getExtension('WEBGL_lose_context'); if (ext) ext.loseContext(); } catch (e) { /* уже потерян */ }
+}
 let glClearQueued = false;
 /**
  * Один сброс на такт: тему и шрифт получают все вкладки окна по очереди, каждая зовёт сброс — текстура рисуется заново один раз.
@@ -476,7 +494,9 @@ function createTerminal(pane, io, fontSize = 17) {
     renderer = 'dom';
     glLive.delete(pane);
     glClears.delete(pane);
+    const ctx = glContext(gl);
     try { gl.dispose(); } catch (e) { /* контекст уже потерян */ }
+    glLose(ctx);
   };
   /**
    * Подгонка как у FitAddon (fit, proposeDimensions), но клетка — WebGL того же шрифта, даже если вкладка сейчас на DOM-рендере.

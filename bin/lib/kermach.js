@@ -145,11 +145,16 @@ const ROADMAP_HELP = `kermach roadmap — доска «Роадмапа» про
   kermach roadmap new t ["Заголовок"] --from-note d1,d2 [--phase fN] [--text "что сделать"] [--why "зачем"] [--check "как проверить"]
                                        карта из заметок: их номер получают в taken сразу. Заголовок и текст берутся из заметок;
                                        --text дописывается перед ними. Уже взята в эту карту — новой карты нет
-  kermach roadmap note [list] [--all]  новые заметки, новые сверху, до 40 строк. --all — все, с состоянием: новая, взята, снята
+  kermach roadmap note [list] [--all | --new]  новые заметки, новые сверху, до 40 строк. --all — все, с состоянием: новая, взята, снята. --new — все новые без обрезки
   kermach roadmap note take d1 [d2 ...] [--title "заголовок"] [--phase fN]
                                        взять заметки в одну карту: как кнопка «в карту», без окна. Без --phase — во «Входящие»
   kermach roadmap note drop d1 --why "причина"
                                        снять заметку с причиной: как кнопка «снять». Файл остаётся: cancelled и строка «Снята (дата): причина»
+  kermach roadmap note restore d1     вернуть снятую по ошибке заметку: cancelled и строка «Снята (дата): …» убираются, заметка снова новая
+                                       take, drop, restore и new t --from-note — дело главной: из вкладки агента карты (KERMACH_CARD) отказ, код 5,
+                                       кроме карты, которой главная разрешила работу с заметками
+  kermach roadmap note allow tN [--off]  разрешить карте tN работу с заметками: notes: да в шапке и отпечаток в папке данных Kermach.
+                                       Только главная сессия; отметку, вписанную в карту руками, программа не признаёт. --off — снять
   kermach roadmap close tN --done "что сделано" --proof "файл с доказательством" --tested "вид" [--used "помогла: d12 — чем помогла"]
                                        закрыть карту: status: готово, closed: по часам, разделы и отзыв used:
                                        в --used — только записи, которые помогли, и чем: «помогла: dN — чем», «чем» —
@@ -160,8 +165,23 @@ const ROADMAP_HELP = `kermach roadmap — доска «Роадмапа» про
                                        --proof называет файл: путь от папки проекта или абсолютный, можно «файл:строка», с пробелами
                                        и кириллицей. Файла нет или он старше начала работы карты — отказ, код 4. Начало — последний запуск
                                        карты; нет записи запуска — created; карту вернули из «готово» — новый круг, нужен файл новее него.
-                                       «Как проверить» с --only — среди файлов нужен свежий only-result.txt.
+                                       «Как проверить» с --only — среди файлов нужен свежий only-result.txt,
+                                       и в нём нет проваленных проверок (строки «НЕТ  имя») и обрыва гейта (самый новый итог «ИТОГ: НЕТ»,
+                                       даже без имён): есть — отказ, код 4, с их именами.
+                                       По каждой проверке решает самый новый итог: починили и прогнали в only-result-2.txt — проходит.
                                        Ревью и разведка: файл должен быть, свежесть не нужна.
+                                       Файл-список .kermach/proofs/tN/checklist.md обязателен: строка «- пункт — файл[:строка]» на каждый пункт
+                                       «Что сделать» и «Как проверить», несколько файлов — через «;». Каждый файл из него есть, и хотя бы один
+                                       не старше начала работы карты: пункты, которые в этом круге не дорабатывали, ссылаются на старые файлы.
+                                       Нет списка, пункта без файла, файла из списка или все файлы старые — отказ, код 4.
+                                       Ревью и разведка без списка — как раньше; список есть — его файлы должны быть.
+                                       Ссылки «файл:строка» в --done и в файле-списке («a.js:12», «src/a.js:10-20»; путь с пробелом — в обратных кавычках) сверяются:
+                                       файла нет или в нём меньше строк — отказ, код 4, с самой ссылкой. Путь — от папки проекта,
+                                       папок из «Файлы» или папки доказательств; голое имя или неполный путь, которых там нет, не сверяются.
+                                       Не сверяются (t1830): ссылка в цитате «…» или "…" вместе с другими словами, после слов «Текст ошибки:»,
+                                       «проверяющий:», «пишет», «удалил», «убрал», «было» в той же фразе, и абсолютный путь вне папки проекта,
+                                       которого нет на диске (стек чужой машины). Отказ называет, где ссылка: в --done или в checklist.md.
+                                       Цифры не сверяются.
                                        --tested — вид проверки, на чём проверена работа: настоящая (то, с чем будет работать человек:
                                        настоящий агент, окно, установщик, сайт или сервер), подставная (подставной агент, заглушка,
                                        пробная доска), только человек; несколько — через запятую. Обязателен, кроме ревью и разведки:
@@ -169,7 +189,9 @@ const ROADMAP_HELP = `kermach roadmap — доска «Роадмапа» про
   kermach roadmap close tN --done "что сделано" --no-file "причина" --tested "только человек"
                                        закрыть без файла: отменена, сделано в другой карте, работу сделал человек. Причина — в поле «Доказательство».
                                        --tested обязателен и здесь: проверить такую карту программа не может, поэтому «только человек».
-                                       Только главная сессия: из вкладки агента карты — отказ, код 5
+                                       Только главная сессия: из вкладки агента карты — отказ, код 5.
+                                       Человек принял работу словами — сперва kermach roadmap answer tN "его слова", потом close --no-file:
+                                       без answer проверяющий его слов не увидит и вернёт карту. Отмене карты answer не нужен
   kermach roadmap run tN [--bg]       запустить карту, как кнопка «Запустить»: вкладка агента в окне проекта, status: в работе;
                                        печатает номер, вкладку, агента и модель. Только в терминале Kermach этого проекта,
                                        окно проекта открыто. --bg — в фоне: вкладка скрыта, у карты кнопка «Показать»,
@@ -254,7 +276,7 @@ const ROADMAP_HELP = `kermach roadmap — доска «Роадмапа» про
 
 Коды выхода: 0 — готово, 1 — не те аргументы, 2 — run не из терминала Kermach этого проекта, 3 — доски нет в этой папке и выше
 (у run — окно проекта закрыто или Kermach не отвечает), 4 — файл не создан, у run — отказ запуска (карты нет, уже запущена, готова),
-у grade — карта не «готово» или проверка не дала итога, у close — файла из --proof нет, он старый или нет only-result.txt,
+у grade — карта не «готово» или проверка не дала итога, у close — файла из --proof нет, он старый, нет only-result.txt, в нём проваленная проверка, нет файла-списка checklist.md или его файла, или неверная ссылка файл:строка,
 5 — answer из вкладки агента карты: ответ человека агент сам не пишет;
 grade оттуда же — тоже 5: проверку заново агент сам не запускает; close --no-file оттуда же — тоже 5. У check 4 — проверка нашла ошибки.`;
 
@@ -271,6 +293,108 @@ const clean = (s) => String(s == null ? '' : s).replace(CONTROL, '').replace(BID
 function die(msg, code) {
   process.stderr.write(`kermach: ${clean(msg)}\n`);
   process.exit(code);
+}
+
+/** @type {string | undefined} */
+let closeLangCache;
+/** Язык доски для отказов close (t1697): lang: паспорта uk, en, de или '' — русский; доски нет — русский. */
+function closeLang() {
+  if (closeLangCache !== undefined) return closeLangCache;
+  closeLangCache = '';
+  try {
+    const project = boardProject();
+    if (project) closeLangCache = require('../../plugins/roadmap/board.js').boardLang(project) || '';
+  } catch { /* доска не читается — русский */ }
+  return closeLangCache;
+}
+/** Русские шаблоны отказов close → ключ словаря translate/LL.json (t1697). Русский текст — в коде, переводы — в словарях. */
+const CLOSE_KEYS = /** @type {Record<string, string>} */ ({
+  'roadmap close: нужен номер карты, например kermach roadmap close t12 --done "…" --proof "…". Справка — kermach roadmap --help': 'close.needRef',
+  'не понял аргумент {a}. Справка — kermach roadmap --help': 'close.badArg',
+  'после --no-file нужна причина: почему доказательства-файла нет, например --no-file "отменена: сделано в t12"': 'close.noFileWhy',
+  'после {a} нужно значение': 'close.needValue',
+  'roadmap close --no-file: нет доступа — команду вызвал агент карты (вкладка с KERMACH_CARD). Закрыть карту без файла может только главная сессия; агент сохраняет вывод проверки файлом и называет его в --proof': 'close.noFileAgent',
+  'roadmap close: --proof и --no-file вместе не бывают: либо файл, либо причина, почему его нет': 'close.proofAndNoFile',
+  'roadmap close: нужны оба — --done "что сделано" и --proof "файл с доказательством"': 'close.needBoth',
+  'roadmap close: --tested: неверное значение {bad}. Допустимы: {ok}; несколько — через запятую. Карта не закрыта': 'close.badTested',
+  'roadmap close: --used не разобран: {bad} — в --used только записи, которые помогли, и чем: «помогла: d<номер> — чем помогла», «чем» не меньше двух слов, несколько — через «;», например --used "помогла: d12 — нашёл ту же причину". Не помогшие записи не перечисляйте; ни одна не помогла — закройте без --used. Карта не закрыта': 'close.badUsed',
+  'карта не закрыта: нет доступа — эта вкладка работает над {own}, а закрыть просили {ref}. Агент карты закрывает только свою карту; чужую карту закрывает её агент или главная сессия. Нашли, что {ref} уже сделана, — запишите это заметкой: kermach roadmap new d "…" --type заметка': 'close.notOwn',
+  'карта не закрыта: нужен --tested, на чём проверена работа. Настоящая — то, с чем будет работать человек: настоящий агент, окно, установщик, сайт или сервер. Подставная — подставной агент, заглушка, пробная доска. Только человек — проверить может только он. Несколько — через запятую, например --tested "настоящая, подставная". Подставная проба — нормально, скрывать её нельзя. Справка — kermach roadmap --help': 'close.needTested',
+  '. Нового файла не будет (работу сделал или принял человек, карта отменена) — закрыть без файла может только главная сессия; агент карты ставит status: ждёт ответа и пишет вопрос в карту': 'close.hintAgent',
+  '. Файла и не будет (работу сделал человек, карта отменена) — закройте так: --no-file "причина"; --no-file доступен только главной сессии, не вкладке агента карты. Человек принял работу или ответил словами — сперва kermach roadmap answer {ref} "слова человека", иначе проверяющий его слов не увидит и вернёт карту': 'close.hintMain',
+  'карта не закрыта: {why}': 'close.notClosed',
+  '. Справка — kermach roadmap --help': 'close.help',
+  'в --proof нет файла, который есть на диске. В --proof написано: «{said}». Искал от папок: {bases}. Что сделать: сохраните вывод проверки или снимок файлом в {dir} и назовите его путь в --proof': 'close.whyNoFile',
+  'все файлы из --proof старше, чем {since}: {list}. Что сделать: прогоните проверку заново, сохраните её вывод свежим файлом в {dir} и назовите его в --proof': 'close.whyOld',
+  '«Как проверить» велит прогнать --only, а only-result.txt старше, чем {since}: {list}. Что сделать: прогоните --only заново, скопируйте итог в only-result.txt и назовите его в --proof': 'close.whyOnlyOld',
+  'в --proof только файлы, которые ничего не доказывают: {list}. Файлы доски, журналы сессии и правленые файлы из поля «Файлы» не доказательство. Что сделать: сохраните вывод проверки или снимок файлом в {dir} и назовите его путь в --proof': 'close.whyNotProof',
+  '«Как проверить» велит прогнать --only, а only-result.txt пустой: {list}. Что сделать: прогоните --only, скопируйте его итог в only-result.txt и назовите его в --proof': 'close.whyOnlyEmpty',
+  '«Как проверить» велит прогнать --only, а в --proof нет файла only-result.txt. Что сделать: прогоните --only, скопируйте итог в {dir}only-result.txt и назовите этот путь в --proof': 'close.whyNoOnly',
+});
+/** t1682: строки о флаге нагрузки — ответы wave, status и отказ close. Ключи словаря — flag.* */
+const FLAG_SAY = /** @type {Record<string, string>} */ ({
+  wave: 'Сейчас стоит флаг нагрузки ({file} в папке проекта): волна принята, но новые карты не запускает, пока файл не уберут. Что делать: флаг ставят, когда ноутбуку не хватает памяти; уберите файл, когда нагрузка спадёт, — волна продолжит сама, без новой команды',
+  status: 'Флаг нагрузки: стоит ({file} в папке проекта) — волны не запускают новые карты, проверяющие ждут. Уберите файл, когда нагрузка спадёт, — всё продолжится само',
+  closeAgent: '. Сейчас стоит флаг нагрузки ({file} в папке проекта): тяжёлое (--only, проба с Electron, настоящий claude или codex) не запускайте. Проверку прогнать нельзя — запишите в карту, что сделано, и причину «нет доступа: флаг нагрузки», поставьте status: ждёт ответа',
+  closeMain: '. Сейчас стоит флаг нагрузки ({file} в папке проекта): проверки --only и пробы с Electron не запускаются, пока файл не уберут. Уберите его, когда нагрузка спадёт, и прогоните проверку заново',
+});
+for (const [k, ru] of Object.entries(FLAG_SAY)) CLOSE_KEYS[ru] = `flag.${k}`;
+/**
+ * Строка о флаге нагрузки на языке доски (t1682) или '' — флага нет. Флаг лежит в папке основного проекта: из копии — тоже там. Один stat на команду.
+ * @param {string} project @param {'wave' | 'status' | 'closeAgent' | 'closeMain'} kind
+ */
+function flagNote(project, kind) {
+  const fs = require('fs');
+  const path = require('path');
+  const FILE = 'СТОП-НАГРУЗКА.txt';
+  const home = copyMain(project) || project;
+  return fs.existsSync(path.join(home, FILE)) || fs.existsSync(path.join(project, FILE)) ? closeSay(FLAG_SAY[kind], { file: FILE }) : '';
+}
+/** @type {Record<string, Record<string, string>>} */
+const closeDict = {};
+/**
+ * Отказ close на языке доски (t1697): русский шаблон → перевод из translate/LL.json по ключу CLOSE_KEYS; нет перевода — русский. Подстановки {имя}.
+ * @param {string} ru @param {Record<string, string>} [vars]
+ */
+function closeSay(ru, vars = {}) {
+  const lang = closeLang();
+  let t = ru;
+  if (lang && CLOSE_KEYS[ru]) {
+    try {
+      if (!closeDict[lang]) closeDict[lang] = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'plugins', 'translate', `${lang}.json`), 'utf8'));
+      t = closeDict[lang][CLOSE_KEYS[ru]] || ru;
+    } catch { /* словаря нет — русский */ }
+  }
+  return t.replace(/\{(\w+)\}/g, (m, n) => (n in vars ? vars[n] : m));
+}
+/**
+ * Причина отказа proofCheck на языке доски (t1697): board.js пишет её по-русски; для другой доски текст собирается заново по коду и найденным файлам.
+ * @param {{ code: string, why: string, found: { file: string, mtime: number }[] }} r @param {any} card @param {string} proof @param {string[]} bases
+ */
+function closeWhy(r, card, proof, bases) {
+  if (!closeLang()) return r.why;
+  const p = (/** @type {number} */ n) => String(n).padStart(2, '0');
+  const when = (/** @type {number} */ ms) => { const d = new Date(ms); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+  const list = (/** @type {{ file: string, mtime: number }[]} */ a) => a.slice(0, 5).map((f) => `${f.file} — ${when(f.mtime)}`).join('; ');
+  const dir = `.kermach/proofs/${card.id}/`;
+  const m = /старше, чем начало работы карты (\S+ \S+)/.exec(r.why);
+  const since = m ? m[1] : '';
+  const said = String(proof || '').replace(/\s+/g, ' ').trim();
+  const isOnly = (/** @type {{ file: string }} */ f) => /^(only[-_.]|result-partial).*\.txt$/i.test(require('path').basename(f.file));
+  if (r.code === 'нет файла') return closeSay('в --proof нет файла, который есть на диске. В --proof написано: «{said}». Искал от папок: {bases}. Что сделать: сохраните вывод проверки или снимок файлом в {dir} и назовите его путь в --proof', { said: said.length > 120 ? `${said.slice(0, 120)}…` : said, bases: bases.join(', '), dir });
+  if (r.code === 'старый файл') return closeSay('все файлы из --proof старше, чем {since}: {list}. Что сделать: прогоните проверку заново, сохраните её вывод свежим файлом в {dir} и назовите его в --proof', { since, list: list(r.found), dir });
+  if (r.code === 'не доказательство') return closeSay('в --proof только файлы, которые ничего не доказывают: {list}. Файлы доски, журналы сессии и правленые файлы из поля «Файлы» не доказательство. Что сделать: сохраните вывод проверки или снимок файлом в {dir} и назовите его путь в --proof', { list: r.found.slice(0, 5).map((f) => f.file).join('; '), dir });
+  if (r.code === 'нет only-result') {
+    // t1800: пустой only-result.txt — своя причина (t1681), а не «старше» с пустым временем.
+    const blank = (/** @type {{ file: string }} */ f) => { try { return !require('fs').readFileSync(f.file, 'utf8').trim(); } catch { return false; } };
+    const empty = /only-result\.txt пустой/.test(r.why) ? r.found.filter((f) => isOnly(f) && blank(f)) : [];
+    if (empty.length) return closeSay('«Как проверить» велит прогнать --only, а only-result.txt пустой: {list}. Что сделать: прогоните --only, скопируйте его итог в only-result.txt и назовите его в --proof', { list: list(empty) });
+    const old = r.found.filter(isOnly);
+    return old.length
+      ? closeSay('«Как проверить» велит прогнать --only, а only-result.txt старше, чем {since}: {list}. Что сделать: прогоните --only заново, скопируйте итог в only-result.txt и назовите его в --proof', { since, list: list(old) })
+      : closeSay('«Как проверить» велит прогнать --only, а в --proof нет файла only-result.txt. Что сделать: прогоните --only, скопируйте итог в {dir}only-result.txt и назовите этот путь в --proof', { dir });
+  }
+  return r.why;
 }
 
 /** @param {string[]} argv */
@@ -513,32 +637,35 @@ function roadmapArgs(rest) {
   // t1043: close tN --done … --proof … [--used …] — карта закрыта одной командой: статус, время по часам, разделы.
   if (rest[0] === 'close') {
     const ref = rest[1] || '';
-    if (!/^t\d{1,6}$/.test(ref)) die('roadmap close: нужен номер карты, например kermach roadmap close t12 --done "…" --proof "…". Справка — kermach roadmap --help', 1);
+    if (!/^t\d{1,6}$/.test(ref)) die(closeSay('roadmap close: нужен номер карты, например kermach roadmap close t12 --done "…" --proof "…". Справка — kermach roadmap --help'), 1);
     /** @type {{ close: string, done?: string, proof?: string, used?: string, nofile?: string, tested?: string }} */
     const o = { close: ref };
     for (let i = 2; i < rest.length; i++) {
       const a = rest[i];
       const v = rest[++i];
-      if (!['--done', '--proof', '--used', '--no-file', '--tested'].includes(a)) die(`не понял аргумент ${a}. Справка — kermach roadmap --help`, 1);
-      if (v === undefined || !v.trim()) die(a === '--no-file' ? 'после --no-file нужна причина: почему доказательства-файла нет, например --no-file "отменена: сделано в t12"' : `после ${a} нужно значение`, 1);
+      if (!['--done', '--proof', '--used', '--no-file', '--tested'].includes(a)) die(closeSay('не понял аргумент {a}. Справка — kermach roadmap --help', { a }), 1);
+      if (v === undefined || !v.trim()) die(a === '--no-file' ? closeSay('после --no-file нужна причина: почему доказательства-файла нет, например --no-file "отменена: сделано в t12"') : closeSay('после {a} нужно значение', { a }), 1);
       if (a === '--no-file') o.nofile = v.trim();
       else o[/** @type {'done' | 'proof' | 'used' | 'tested'} */ (a.slice(2))] = v.trim();
     }
     // t1638: выход без файла — только главной. ENV('CARD'), как у answer: в пачке KERMACH_CARD=t1,t2 и у построителя тоже отказ.
-    if (o.nofile !== undefined && ENV('CARD')) die('roadmap close --no-file: нет доступа — команду вызвал агент карты (вкладка с KERMACH_CARD). Закрыть карту без файла может только главная сессия; агент сохраняет вывод проверки файлом и называет его в --proof', 5);
-    if (o.nofile !== undefined && o.proof) die('roadmap close: --proof и --no-file вместе не бывают: либо файл, либо причина, почему его нет', 1);
-    if (!o.done || (!o.proof && o.nofile === undefined)) die('roadmap close: нужны оба — --done "что сделано" и --proof "файл с доказательством"', 1);
+    if (o.nofile !== undefined && ENV('CARD')) die(closeSay('roadmap close --no-file: нет доступа — команду вызвал агент карты (вкладка с KERMACH_CARD). Закрыть карту без файла может только главная сессия; агент сохраняет вывод проверки файлом и называет его в --proof'), 5);
+    if (o.nofile !== undefined && o.proof) die(closeSay('roadmap close: --proof и --no-file вместе не бывают: либо файл, либо причина, почему его нет'), 1);
+    if (!o.done || (!o.proof && o.nofile === undefined)) die(closeSay('roadmap close: нужны оба — --done "что сделано" и --proof "файл с доказательством"'), 1);
     // t1642: неверное значение — отказ сразу, карта ещё не нужна. Обязательность зависит от вида карты: её проверяет обработчик close.
     if (o.tested) {
-      const { TESTED, testedWords } = require('../../plugins/roadmap/board.js');
+      const { TESTED, testedWords, say } = require('../../plugins/roadmap/board.js');
       const t = testedWords(o.tested);
-      if (t.bad.length || !t.words.length) die(`roadmap close: --tested: неверное значение ${t.bad.map((/** @type {string} */ s) => `«${s}»`).join(', ') || '«»'}. Допустимы: ${TESTED.join(', ')}; несколько — через запятую. Карта не закрыта`, 1);
+      // t1697: допустимые слова — на языке доски (их и принимает testedWords), русские — запасные.
+      const lang = closeLang();
+      const ok = TESTED.map((/** @type {string} */ w) => (lang ? `${say(w, lang)} (${w})` : w)).join(', ');
+      if (t.bad.length || !t.words.length) die(closeSay('roadmap close: --tested: неверное значение {bad}. Допустимы: {ok}; несколько — через запятую. Карта не закрыта', { bad: t.bad.map((/** @type {string} */ s) => `«${s}»`).join(', ') || '«»', ok }), 1);
       o.tested = t.words.join(', ');
     }
     // t1333: --used тем же разбором, что замечания доски (board.js usedWarn) — «нет» не попадает в used: замечанием.
     if (o.used) {
       const bad = require('../../plugins/roadmap/board.js').usedWarn(o.used, {});
-      if (bad.length) die(`roadmap close: --used не разобран: ${bad.map((/** @type {string} */ s) => `«${s}»`).join(', ')} — в --used только записи, которые помогли, и чем: «помогла: d<номер> — чем помогла», «чем» не меньше двух слов, несколько — через «;», например --used "помогла: d12 — нашёл ту же причину". Не помогшие записи не перечисляйте; ни одна не помогла — закройте без --used. Карта не закрыта`, 1);
+      if (bad.length) die(closeSay('roadmap close: --used не разобран: {bad} — в --used только записи, которые помогли, и чем: «помогла: d<номер> — чем помогла», «чем» не меньше двух слов, несколько — через «;», например --used "помогла: d12 — нашёл ту же причину". Не помогшие записи не перечисляйте; ни одна не помогла — закройте без --used. Карта не закрыта', { bad: bad.map((/** @type {string} */ s) => `«${s}»`).join(', ') }), 1);
     }
     return o;
   }
@@ -546,13 +673,21 @@ function roadmapArgs(rest) {
   if (rest[0] === 'note') {
     const verb = rest[1] && !rest[1].startsWith('--') ? rest[1] : 'list';
     const args = verb === rest[1] ? rest.slice(2) : rest.slice(1);
-    /** @type {{ note: string, refs: string[], all?: boolean, why?: string, title?: string, phase?: string }} */
+    /** @type {{ note: string, refs: string[], all?: boolean, fresh?: boolean, why?: string, title?: string, phase?: string }} */
     const o = { note: verb, refs: [] };
-    if (!['list', 'take', 'drop'].includes(verb)) die(`roadmap note: нет такого действия: ${verb}. Есть list, take, drop. Справка — kermach roadmap --help`, 1);
+    if (!['list', 'take', 'drop', 'restore', 'allow'].includes(verb)) die(`roadmap note: нет такого действия: ${verb}. Есть list, take, drop, restore, allow. Справка — kermach roadmap --help`, 1);
+    // t1694: разрешение карте ставит только главная — ENV('CARD'), как у answer: и пачка, и построитель получают отказ.
+    if (verb === 'allow') {
+      if (ENV('CARD')) die('roadmap note allow: нет доступа — команду вызвал агент карты (вкладка с KERMACH_CARD). Разрешить карте работу с заметками может только главная сессия', 5);
+      const off = args.length === 2 && args[1] === '--off';
+      if (!/^t\d{1,6}$/.test(args[0] || '') || (args.length !== 1 && !off)) die('roadmap note allow: нужен один номер карты, например kermach roadmap note allow t12 [--off]. Справка — kermach roadmap --help', 1);
+      return { note: 'allow', refs: [], ref: args[0], off };
+    }
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
       const val = () => { const v = args[++i]; if (v === undefined || !v.trim()) die(`после ${a} нужно значение`, 1); return v.trim(); };
       if (verb === 'list' && a === '--all') o.all = true;
+      else if (verb === 'list' && a === '--new') o.fresh = true;
       else if (verb === 'drop' && a === '--why') o.why = val();
       else if (verb === 'take' && a === '--title') o.title = val();
       else if (verb === 'take' && a === '--phase') { const v = val(); if (!/^f\d{1,6}$/.test(v)) die('--phase: номер фазы, например f2', 1); o.phase = v; }
@@ -561,6 +696,7 @@ function roadmapArgs(rest) {
     }
     if (verb !== 'list' && !o.refs.length) die(`roadmap note ${verb}: нужен номер заметки, например d12. Справка — kermach roadmap --help`, 1);
     if (verb === 'drop' && o.refs.length > 1) die('roadmap note drop: одна заметка за раз: у каждой своя причина', 1);
+    if (verb === 'restore' && o.refs.length > 1) die('roadmap note restore: одна заметка за раз', 1);
     if (verb === 'drop' && !o.why) die('roadmap note drop: нужна причина: --why "почему снята"', 1);
     return o;
   }
@@ -577,7 +713,7 @@ function roadmapArgs(rest) {
     else if (a === '--card' && kind === 'd') { const v = val(); if (!/^t\d{1,6}$/.test(v)) die('--card: номер карты, например t12', 1); o.card = v; }
     // t1043: запись или карта готова одной командой — поля проверяет board.create, неверное значение — отказ с текстом.
     else if (kind === 'd' && (a === '--type' || a === '--how' || a === '--agent' || a === '--error')) o[/** @type {'type' | 'how' | 'agent' | 'error'} */ (a.slice(2))] = val().trim();
-    // t698: --global — «для всех проектов» (global: да), запись уходит в общую базу; без --stack её никто не получит: подача — по stack.
+    // t698: --global пишет global: да в шапку. Общую базу, куда шла такая запись, убрали в t1685 — поле осталось только данными.
     else if (a === '--global' && kind === 'd') o.global = true;
     else if (a === '--stack' && kind === 'd') o.stack = val().split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
     else if (a === '--files') o.files = val().split(',').map((s) => s.trim()).filter(Boolean);
@@ -614,15 +750,19 @@ function roadmapArgs(rest) {
 const MAX_LINES = 40;
 const cut = (/** @type {string} */ s, n) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
 
-/** Заметки для разбора без окна (t1628): новые сверху, до 40 строк; --all — все и с состоянием. @param {any} board @param {any} b @param {boolean} all @returns {string[]} */
-function noteLines(board, b, all) {
+/**
+ * Заметки для разбора без окна (t1628): новые сверху, до 40 строк; --all — все и с состоянием; --new (t1683) — все новые без обрезки, на него ссылается приёмка.
+ * @param {any} board @param {any} b @param {boolean} all @param {boolean} [whole] @returns {string[]}
+ */
+function noteLines(board, b, all, whole = false) {
   const notes = b.decisions.filter((/** @type {any} */ d) => d.type === 'заметка').sort((/** @type {any} */ x, /** @type {any} */ y) => (y.date || '').localeCompare(x.date || '') || y.num - x.num);
   const fresh = notes.filter((/** @type {any} */ d) => board.noteState(d) === 'новая');
   const mark = (/** @type {any} */ d) => (d.cancelled ? `снята ${d.cancelled}: ${cut(d.dropWhy, 60) || 'причины нет'}` : d.taken ? `взята в ${d.taken}` : 'новая');
-  const show = all ? notes : fresh.slice(0, MAX_LINES);
+  const show = all ? notes : whole ? fresh : fresh.slice(0, MAX_LINES);
   const out = [`Заметок: новых ${fresh.length}, всего ${notes.length}`];
   for (const d of show) out.push(`${d.id}${all ? ` [${mark(d)}]` : ''} ${cut(d.title, 90)}${d.card ? ` (${d.card})` : ''}`);
-  if (show.length < (all ? notes : fresh).length) out.push(`и ещё ${fresh.length - show.length} новых: kermach roadmap note --all`);
+  // t1702: обрезан только список новых — ссылка на все новые (--new), а не на все заметки с взятыми и снятыми (--all).
+  if (show.length < (all ? notes : fresh).length) out.push(`и ещё ${fresh.length - show.length} новых: kermach roadmap note --new`);
   return out;
 }
 
@@ -685,6 +825,47 @@ function boardProject() {
 }
 
 /**
+ * Файлы копии, которые ничего не доказывают свежестью (t1669, d688): под git и не менялись с создания копии.
+ * Git выписал их в копию в момент создания, и время файла — время копии, а не работы. Основа — коммит-снимок
+ * несохранённых правок проекта (первый коммит ветки после общей основы с проектом) или сама общая основа.
+ * git не ответил — пустая проверка (ничего не устарело), как было до t1669.
+ * @param {string} copy папка копии @param {string} main папка основного проекта @returns {(file: string) => boolean}
+ */
+function copyStale(copy, main) {
+  const path = require('path');
+  const cp = require('child_process');
+  const none = () => false;
+  try {
+    const { gitExe } = require(path.join(__dirname, '..', '..', 'main', 'find-program.js'));
+    const g = gitExe();
+    const run = (/** @type {string} */ cwd, /** @type {string[]} */ a) => {
+      const r = cp.spawnSync(g.file, [...g.pre, '-c', 'core.quotePath=false', ...a], { cwd, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024, timeout: 30000 });
+      if (r.status !== 0) throw new Error(`git ${a[0]}: ${r.stderr || r.error}`);
+      return String(r.stdout || '');
+    };
+    const mainHead = run(main, ['rev-parse', 'HEAD']).trim();
+    const fork = run(copy, ['merge-base', 'HEAD', mainHead]).trim();
+    let base = fork;
+    const first = (run(copy, ['rev-list', '--first-parent', '--reverse', `${fork}..HEAD`]).split('\n')[0] || '').trim();
+    if (first) {
+      const [par = '', mail = '', subj = ''] = run(copy, ['log', '-1', '--format=%P%n%ae%n%s', first]).split('\n');
+      if (par.trim() === fork && mail.trim() === 'copy@kermach.local' && subj.startsWith('Kermach: несохранённые правки проекта перед копией')) base = first;
+    }
+    const z = (/** @type {string} */ out) => out.split('\0').filter(Boolean);
+    const changed = new Set(z(run(copy, ['diff', '--name-only', '-z', base])));
+    const tracked = new Set(z(run(copy, ['ls-files', '-z'])));
+    const key = (/** @type {string} */ f) => (process.platform === 'win32' ? f.toLowerCase() : f);
+    const root = key(path.resolve(copy));
+    return (file) => {
+      const abs = path.resolve(file);
+      if (!key(abs).startsWith(root + path.sep)) return false;
+      const rel = abs.slice(root.length + 1).split(path.sep).join('/');
+      return tracked.has(rel) && !changed.has(rel);
+    };
+  } catch { return none; }
+}
+
+/**
  * Папка основного проекта, когда команду зовут из копии (t1638): у копии .git — файл «gitdir: <проект>/.git/worktrees/<имя>».
  * Запись запуска и разборы проверяющего лежат под основным проектом, у копии их нет. Не копия — ''.
  * @param {string} project
@@ -696,6 +877,91 @@ function copyMain(project) {
     const m = /^gitdir:\s*(.+?)[\\/]\.git[\\/]worktrees[\\/][^\\/]+\s*$/m.exec(fs.readFileSync(path.join(project, '.git'), 'utf8'));
     return m ? path.resolve(project, m[1]) : '';
   } catch { return ''; /* .git — папка или её нет: не копия */ }
+}
+
+/**
+ * Разрешение карте работать с заметками (t1694): ключ notes: да в шапке карты и отпечаток в notes-allow.json папки данных плагина.
+ * Отпечаток пишет только kermach roadmap note allow из главной: агент, вписавший notes: да себе сам, отпечатка не получит.
+ * Как у answers.json — защита от ошибки агента, не от обмана: тот же пользователь Windows может записать файл сам.
+ */
+const NOTES_ALLOW = 'notes-allow.json';
+/** @param {string} project @param {string} ref */
+function notesAllowSha(project, ref) {
+  const path = require('path');
+  const key = process.platform === 'win32' ? path.resolve(project).toLowerCase() : path.resolve(project);
+  return require('crypto').createHash('sha1').update(`${key}|${ref}|notes: да`).digest('hex');
+}
+/** @returns {string} */
+function notesAllowFile() {
+  const path = require('path');
+  const { DATA_DIR } = require(path.join(__dirname, '..', '..', 'daemon', 'protocol.js'));
+  return path.join(DATA_DIR, 'plugins-data', 'roadmap', NOTES_ALLOW);
+}
+/** @returns {Record<string, { at: string, where: string }>} */
+function notesAllowRead() {
+  const fs = require('fs');
+  try {
+    const f = notesAllowFile();
+    if (fs.statSync(f).size > 1024 * 1024) return {};
+    const o = JSON.parse(fs.readFileSync(f, 'utf8'));
+    return o && o.items && typeof o.items === 'object' && !Array.isArray(o.items) ? o.items : {};
+  } catch { return {}; /* нет файла или битый — разрешений нет */ }
+}
+/** Значение notes в шапке карты из текста файла: '' — ключа нет. @param {string} text */
+function notesHead(text) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  const h = m && /^notes:[ \t]*(.*?)[ \t]*$/m.exec(m[1]);
+  return h ? h[1].toLowerCase() : '';
+}
+/**
+ * Отказ агенту карты в take, drop, restore и new t --from-note (t1694). Без KERMACH_CARD — главная, проходит как раньше.
+ * С ним проходит, только если каждая карта вкладки (пачка t1,t2 — все) — tN с notes: да и отпечатком главной.
+ * @param {string} project @param {string} what
+ */
+function notesGuard(project, what) {
+  const fs = require('fs');
+  const path = require('path');
+  const raw = String(ENV('CARD') || '').trim();
+  if (!raw) return;
+  const own = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const home = copyMain(project) || project;
+  const items = notesAllowRead();
+  const ok = own.length > 0 && own.every((ref) => {
+    if (!/^t\d{1,6}$/.test(ref)) return false;
+    let text = '';
+    try { text = fs.readFileSync(path.join(home, '.kermach', 'roadmap', `${ref}.md`), 'utf8'); } catch { return false; }
+    return notesHead(text) === 'да' && Object.hasOwn(items, notesAllowSha(home, ref));
+  });
+  if (!ok) die(`roadmap ${what}: нет доступа — команду вызвал агент карты (вкладка с KERMACH_CARD=${raw}). Брать и снимать заметки и заводить карту из заметки — дело главной сессии. Нашли, что заметка уже сделана или не нужна, — напишите это в «Что сделано» своей карты. Карте, которой это поручено, главная ставит разрешение: kermach roadmap note allow tN`, 5);
+}
+/** note allow tN [--off] (t1694): notes: да в шапке карты и отпечаток; --off — убрать оба. @param {string} project @param {string} ref @param {boolean} off */
+function notesAllow(project, ref, off) {
+  const fs = require('fs');
+  const path = require('path');
+  const file = path.join(project, '.kermach', 'roadmap', `${ref}.md`);
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return die(`roadmap note allow: карты ${ref} на доске нет: ${file}`, 4); }
+  const m = /^---(\r?\n)([\s\S]*?)\r?\n---/.exec(text);
+  if (!m) return die(`roadmap note allow: у карты ${ref} нет шапки между строками ---`, 4);
+  const eol = m[1];
+  const head = m[2].split(/\r?\n/).filter((l) => !/^notes:/.test(l));
+  if (!off) head.push('notes: да');
+  const next = `---${eol}${head.join(eol)}${eol}---${text.slice(m[0].length)}`;
+  const f = notesAllowFile();
+  const items = notesAllowRead();
+  const sha = notesAllowSha(project, ref);
+  if (off) delete items[sha];
+  else items[sha] = { at: new Date().toISOString(), where: `${project}|${ref}` };
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  const ftmp = `${f}.${process.pid}.tmp`;
+  fs.writeFileSync(ftmp, JSON.stringify({ items }, null, 1) + '\n', 'utf8');
+  fs.renameSync(ftmp, f);
+  if (next !== text) {
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, next, 'utf8');
+    fs.renameSync(tmp, file);
+  }
+  process.stdout.write(`${clean(off ? `${ref}: разрешение на работу с заметками снято` : `${ref}: работа с заметками разрешена — notes: да в шапке, отпечаток в ${f}`)}\n`);
 }
 
 /**
@@ -855,7 +1121,11 @@ async function roadmap(o) {
   if (o.start) return roadmapWindow('start', project, o);
   if (o.wave) return roadmapWindow('wave', project, o);
   if (o.status) {
-    process.stdout.write(`${clean(statusLines(board.read(project), o.phase).join('\n'))}\n`);
+    const lines = statusLines(board.read(project), o.phase);
+    // t1682: флаг нагрузки — второй строкой, до свёртки по MAX_LINES не теряется: без неё «В работе: нет» при флаге ничего не объясняет.
+    const flag = flagNote(project, 'status');
+    if (flag) lines.splice(1, 0, flag);
+    process.stdout.write(`${clean(lines.join('\n'))}\n`);
     return;
   }
   if (o.check) {
@@ -877,14 +1147,19 @@ async function roadmap(o) {
   }
   if (o.solo) return roadmapSolo(board, project, o.solo, !!o.off);
   if (o.note) {
+    if (o.note === 'allow') return notesAllow(project, o.ref, !!o.off);
+    if (o.note === 'take' || o.note === 'drop' || o.note === 'restore') notesGuard(project, `note ${o.note}`);
     try {
-      if (o.note === 'drop') {
+      if (o.note === 'restore') {
+        const r = board.noteRestore(project, o.refs[0]);
+        process.stdout.write(`${clean(`${r.id} возвращена: снята была ${r.was}, теперь снова новая. Файл ${r.file}`)}\n`);
+      } else if (o.note === 'drop') {
         const r = board.noteDrop(project, o.refs[0], o.why);
         process.stdout.write(`${clean(`${r.id} снята ${r.date}: ${r.why}. Запись остаётся в ${r.file}`)}\n`);
       } else if (o.note === 'take') {
         const r = board.noteCard(project, o.refs, { ...(o.title ? { title: o.title } : {}), ...(o.phase ? { phase: o.phase } : {}) });
         process.stdout.write(`${clean(r.again ? `${r.notes.join(', ')} уже взята в ${r.card}: новая карта не заведена` : `заведена ${r.card}: ${path.join(board.root(project), `${r.card}.md`)}\n${r.notes.join(', ')}: taken: ${r.card}`)}\n`);
-      } else process.stdout.write(`${clean(noteLines(board, board.read(project), !!o.all).join('\n'))}\n`);
+      } else process.stdout.write(`${clean(noteLines(board, board.read(project), !!o.all, !!o.fresh).join('\n'))}\n`);
     } catch (e) { return die(`roadmap note ${o.note}: ${String((e && /** @type {any} */ (e).message) || e)}`, 4); }
     return;
   }
@@ -964,11 +1239,14 @@ async function roadmap(o) {
   if (o.close) {
     /** @type {any} */
     let c;
+    // t1697: вкладка карты закрывает только свои карты: KERMACH_CARD=t12 или пачка t12,t13. Главная (без KERMACH_CARD) закрывает любую.
+    const own = String(ENV('CARD') || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (own.length && !own.includes(o.close)) return die(closeSay('карта не закрыта: нет доступа — эта вкладка работает над {own}, а закрыть просили {ref}. Агент карты закрывает только свою карту; чужую карту закрывает её агент или главная сессия. Нашли, что {ref} уже сделана, — запишите это заметкой: kermach roadmap new d "…" --type заметка', { own: own.join(', '), ref: o.close }), 5);
     // t1642: вид проверки обязателен у обычной карты, с файлом и без. Правило — только здесь, как у файла: окно и проверяющий пишут «готово» мимо него.
     if (!o.tested) {
       const main = copyMain(project);
       const card = (main && board.oneCard(main, o.close)) || board.oneCard(project, o.close);
-      if (card && card.kind === 'сделать') return die(`карта не закрыта: нужен --tested, на чём проверена работа. Настоящая — то, с чем будет работать человек: настоящий агент, окно, установщик, сайт или сервер. Подставная — подставной агент, заглушка, пробная доска. Только человек — проверить может только он. Несколько — через запятую, например --tested "настоящая, подставная". Подставная проба — нормально, скрывать её нельзя. Справка — kermach roadmap --help`, 1);
+      if (card && card.kind === 'сделать') return die(closeSay('карта не закрыта: нужен --tested, на чём проверена работа. Настоящая — то, с чем будет работать человек: настоящий агент, окно, установщик, сайт или сервер. Подставная — подставной агент, заглушка, пробная доска. Только человек — проверить может только он. Несколько — через запятую, например --tested "настоящая, подставная". Подставная проба — нормально, скрывать её нельзя. Справка — kermach roadmap --help'), 1);
     }
     // t1638: файл из --proof есть и новее начала работы. Правило — только здесь: окно и проверяющий пишут «готово» через board.update мимо него.
     if (o.nofile === undefined) {
@@ -977,15 +1255,43 @@ async function roadmap(o) {
       if (card) {
         const home = main || project;
         const bases = [...new Set([project, ...(main ? [main] : []), process.cwd()])];
-        const r = board.proofCheck(card, o.proof, bases, board.proofStart(card, runStarted(home, o.close), lastGrade(home, o.close)));
-        // Подсказка --no-file — только главной: агенту карты эта команда даёт отказ, код 5.
-        const noFileHint = r.code === 'нет файла' && !ENV('CARD') ? '. Файла и не будет (работу сделал человек, карта отменена) — закройте так: --no-file "причина"' : '';
-        if (!r.ok) return die(`карта не закрыта: ${r.why}${noFileHint}. Справка — kermach roadmap --help`, 4);
+        // t1831: новые отказы (файл-список, красная проверка, ссылки) — шаблоны board.CLOSE_SAY, перевод — словарь доски.
+        for (const [k, ru] of Object.entries(board.CLOSE_SAY)) CLOSE_KEYS[ru] = k;
+        const start = board.proofStart(card, runStarted(home, o.close), lastGrade(home, o.close));
+        // t1669 (d688): в копии git ставит отслеживаемым файлам время создания копии — старый файл выглядел свежим.
+        if (main) start.stale = copyStale(project, main);
+        const r = board.proofCheck(card, o.proof, bases, start, { say: closeSay });
+        // Подсказка --no-file — главной: агенту карты эта команда даёт отказ, код 5. t1697: и при «старом файле» — человек принял работу, нового файла не будет;
+        // агенту — что выход без файла есть только у главной, чтобы он спросил, а не гадал.
+        const hint = r.code === 'нет файла' || r.code === 'старый файл'
+          ? (ENV('CARD') ? closeSay('. Нового файла не будет (работу сделал или принял человек, карта отменена) — закрыть без файла может только главная сессия; агент карты ставит status: ждёт ответа и пишет вопрос в карту')
+            : closeSay('. Файла и не будет (работу сделал человек, карта отменена) — закройте так: --no-file "причина"; --no-file доступен только главной сессии, не вкладке агента карты. Человек принял работу или ответил словами — сперва kermach roadmap answer {ref} "слова человека", иначе проверяющий его слов не увидит и вернёт карту', { ref: card.id }))
+          // t1831: красная проверка, а человек велел закрыть — главной сессии сказано, как: answer, потом --no-file.
+          : r.code === 'красная проверка' && !ENV('CARD') ? closeSay(board.CLOSE_SAY['close.redMain'], { ref: card.id }) : '';
+        if (!r.ok) return die(`${closeSay('карта не закрыта: {why}', { why: closeWhy(r, card, o.proof, bases) })}${hint}${flagNote(project, ENV('CARD') ? 'closeAgent' : 'closeMain')}${closeSay('. Справка — kermach roadmap --help')}`, 4);
+        // t1804: ссылки «файл:строка» в --done ведут на файл, который есть, и на строку, которая в нём есть.
+        // t1802: файл-список «пункт — файл доказательства»: каждый названный файл есть и свежий.
+        const list = board.proofChecklist(card, bases, start, closeSay);
+        if (!list.ok) return die(`${closeSay('карта не закрыта: {why}', { why: list.why })}${closeSay('. Справка — kermach roadmap --help')}`, 4);
+        // t1830: --done и файл-список сверяются порознь — отказ называет, где неверная ссылка.
+        const C = board.CLOSE_SAY;
+        const said = (/** @type {any[]} */ a) => a.slice(0, 8).map((l) => `«${l.ref}»: ${closeSay(l.why === 'нет файла' ? C['close.linkNoFile'] : C['close.linkNoLine'])}`).join('; ');
+        const inDone = board.proofLinks(String(o.done), bases, card);
+        const inList = board.proofLinks(list.text, bases, card);
+        if (inDone.length || inList.length) {
+          const where = [inDone.length ? closeSay(C['close.linksDone'], { list: said(inDone) }) : '', inList.length ? closeSay(C['close.linksList'], { rel: `.kermach/proofs/${card.id}/${board.CHECKLIST}`, list: said(inList) }) : ''].filter(Boolean).join('; ');
+          return die(`${closeSay('карта не закрыта: {why}', { why: closeSay(C['close.links'], { where }) })}${closeSay('. Справка — kermach roadmap --help')}`, 4);
+        }
       }
     }
     try {
-      c = board.update(project, o.close, { status: 'готово', closed: board.stamp(), done: o.done, proof: o.nofile === undefined ? o.proof : `Без файла, причина: ${o.nofile}`, ...(o.tested ? { tested: o.tested } : {}), ...(o.used ? { used: o.used } : {}) });
-    } catch (e) { return die(`карта не закрыта: ${e instanceof Error ? e.message : e}`, 4); }
+      const fields = { status: 'готово', closed: board.stamp(), done: o.done, proof: o.nofile === undefined ? o.proof : `Без файла, причина: ${o.nofile}`, ...(o.tested ? { tested: o.tested } : {}), ...(o.used ? { used: o.used } : {}) };
+      // t1669 (d687): из копии — и в доску основного проекта: её видят окно, волна и проверяющий. Та же запись в доске копии
+      // при слиянии совпадает с файлом основного проекта и отказа «несохранённые правки» не даёт.
+      const main = copyMain(project);
+      if (main && board.oneCard(main, o.close)) c = board.update(main, o.close, fields);
+      if (board.oneCard(project, o.close) || !c) c = board.update(project, o.close, fields);
+    } catch (e) { return die(closeSay('карта не закрыта: {why}', { why: String(e instanceof Error ? e.message : e) }), 4); }
     process.stdout.write(`${clean(`закрыта ${o.close}: status: ${c.status}, closed: ${c.closed}`)}\n`);
     return;
   }
@@ -1006,6 +1312,7 @@ async function roadmap(o) {
   try {
     const files = o.files ? { files: o.files } : {};
     if (o.kind === 't' && o.from_note) {
+      notesGuard(project, 'new t --from-note');
       const r = board.noteCard(project, o.from_note, { ...(o.title ? { title: o.title } : {}), ...(o.phase ? { phase: o.phase } : {}), ...(o.bug_phase ? { bug_phase: o.bug_phase } : {}), ...(o.bug_by ? { bug_by: o.bug_by } : {}), ...(o.files ? { files: o.files.map((x) => '`' + x + '`').join(', ') } : {}), ...(o.text ? { what: o.text } : {}), ...(o.why ? { why: o.why } : {}), ...(o.verify ? { check: o.verify } : {}) });
       if (r.again) { process.stdout.write(`${clean(`${r.notes.join(', ')} уже взята в ${r.card}: новая карта не заведена`)}\n`); return; }
       id = r.card;
@@ -1026,7 +1333,7 @@ async function roadmap(o) {
     if (other) out.push(`похоже на ${like} «${other.title}»${other.status === 'готово' ? ' (готово)' : ''} — проверьте, не дубль ли: та же задача — допишите находку в ${like}, а файл ${id}.md удалите`);
   }
   for (const w of b.warnings.filter((/** @type {any} */ x) => x.file === `${id}.md`)) out.push(`замечание: ${w.reason}`);
-  if (o.global) out.push(o.stack ? 'Для всех проектов: копия уйдёт в общую базу при следующей сборке промпта карты.' : 'замечание: --global без --stack — в общую базу запись не уйдёт, допишите stack: в шапку');
+  if (o.global) out.push('замечание: --global только пишет global: да в шапку — общей базы записей нет (d648, убрана в t1685), в другие проекты запись не уйдёт');
   // t1439: без --check текст проверки уходил в «Что сделать» (t1433–t1435), а «Как проверить» оставалось пустым — проверка роадмапа держит волну фазы.
   const bare = o.kind === 't' && o.phase && !o.verify;
   if (bare) out.push(`замечание: карта в фазе ${o.phase} без --check — «Как проверить» пусто. Допишите его в файл (или заведите карту заново с --check "как проверить"): иначе проверка роадмапа не даст запустить волну фазы`);
@@ -1245,6 +1552,8 @@ async function roadmapWindow(cmd, board, o) {
     out.push(`волна ${r.letter} (${o.wave}, все): ${r.ids}`);
     if (r.skipped) out.push(`пропущены: ${r.skipped}`);
     if (r.cut) out.push(`прерванные волны этой фазы: ${r.cut} — их карты «в очереди» взяла новая волна; старую строку уберите кнопкой «убрать» в панели «Роадмапа»`);
+    const flag = flagNote(board, 'wave');
+    if (flag) out.push(flag);
   }
   process.stdout.write(`${clean(out.join('\n'))}\n`);
 }
@@ -1430,6 +1739,8 @@ async function copyCmd(o) {
   const i18n = require(path.join(__dirname, '..', '..', 'main', 'i18n.js'));
   worktree.useText(i18n.make({ lang: () => '', plugins: () => [], pluginOn: () => false, log: () => {} }).t);
   const at = await worktree.placeOf(process.cwd());
+  // t1669 (d447): без Git отказ называет Git, а не «не проект под git».
+  if (!at && !(await worktree.hasGit(process.cwd()))) die(`kermach copy: ${worktree.noGitText()}`, 3);
   if (!at) die('не проект под git: kermach copy работает в папке проекта с git или в папке его копии', 3);
   if (o.sub === 'new') {
     if (at.copy) die(`вы в копии ${at.copy}. Новую копию делайте из папки проекта: cd "${at.main}"`, 1);
@@ -1442,6 +1753,8 @@ async function copyCmd(o) {
       r.changed ? `несохранённые правки проекта в копии: файлов ${r.changed}` : 'от последнего коммита: несохранённых правок в проекте нет',
       ...(r.copied.length ? [`файлы настроек вне git скопированы: ${r.copied.join(', ')}`] : []),
       ...(r.nested.length ? [`пропущены вложенные git без коммитов (в копию не попадают): ${r.nested.join(', ')}`] : []),
+      // t1669 (d632): больше 100 неотслеженных файлов — снимок без них (t1561); агент должен об этом знать.
+      ...(r.untracked ? [`неотслеженных файлов ${r.untracked} — в копию не попадают; нужные — git add в проекте до копии`] : []),
       `перейди: cd "${r.path}"`,
     ].join('\n'))}\n`);
     return;

@@ -71,8 +71,14 @@ function find(a) {
 /** Включён ли: встроенные — всегда, остальные — только если включили в настройках. @param {Agent} a */
 const enabled = (a) => !!a.builtin || settings.agentOn(a.id);
 
-/** Список для настроек, меню «+» и подсказок браузера (pics, t438): весь каталог, найден ли каждый сейчас. @returns {{ id: string, title: string, found: boolean, enabled: boolean, builtin: boolean, pics: boolean }[]} */
-const list = () => CATALOG.map((a) => ({ id: a.id, title: a.title, found: !!find(a), enabled: enabled(a), builtin: !!a.builtin, pics: !!a.pics }));
+/** Путь к найденной программе для подписи строки (d355): у .cmd — сам .cmd, а не cmd.exe. @param {{ file: string, pre: string[] } | null | undefined} hit */
+const fileOf = (hit) => (hit ? (hit.pre.length ? hit.pre[hit.pre.length - 1] : hit.file) : '');
+
+/** Запись списка: list и listAsync отдают одну форму (t1875). @param {Agent} a @param {{ file: string, pre: string[] } | null | undefined} hit */
+const row = (a, hit) => ({ id: a.id, title: a.title, found: !!hit, file: fileOf(hit), enabled: enabled(a), builtin: !!a.builtin, pics: !!a.pics });
+
+/** Список для настроек, меню «+» и подсказок браузера (pics, t438): весь каталог, найден ли каждый сейчас. @returns {{ id: string, title: string, found: boolean, file: string, enabled: boolean, builtin: boolean, pics: boolean }[]} */
+const list = () => CATALOG.map((a) => row(a, find(a)));
 
 /**
  * То же, что list, но поиск идёт асинхронно: главный процесс не стоит на 22 именах × папках PATH (t204, ~100 мс). Кэша нет —
@@ -107,7 +113,8 @@ const searchFresh = () => {
 const listAsync = async () => {
   // «Включён» читается у каждого запроса в свой момент — включили во время поиска, список уже верный.
   const found = await searchFresh();
-  return CATALOG.map((a) => ({ id: a.id, title: a.title, found: a.cmd.some((n) => !!found.get(n)), enabled: enabled(a), builtin: !!a.builtin, pics: !!a.pics }));
+  // file — путь к найденной программе (d355): раздел «Агенты» может показать его подписью строки.
+  return CATALOG.map((a) => row(a, a.cmd.map((n) => found.get(n)).find(Boolean)));
 };
 
 /**
@@ -190,7 +197,7 @@ function named(projectPath) {
 // Агент, запущенный руками в простом терминале (t406): «+ Терминал», потом claude. Вид вкладки задаётся при запуске и остаётся shell,
 // поэтому кто работает в терминале сейчас, узнаётся по таблице процессов: потомки оболочки (pid из списка демона) — имя программы
 // или путь в командной строке по именам cmd из CATALOG. Как в Орке (inspectProcess по таблице процессов Windows), но проще: без своего
-// модуля на C++, таблицу отдаёт PowerShell (Get-CimInstance, как в stop-all.js). Заголовок окна (t334) не годится: у вкладки-терминала
+// модуля на C++, таблицу отдаёт PowerShell (Get-CimInstance; таблица stop-all и codex-limits — теперь в proc-table.js, t1189). Заголовок окна (t334) не годится: у вкладки-терминала
 // демон состояния по заголовку не шлёт, у Codex заголовка-темы нет, а выход из агента по заголовку не виден.
 // Один PowerShell живёт, пока есть запросы: запуск стоит 0,8–1,2 с, запрос в живом — 0,2 с (spikes\t406-shell-agent\probe-worker.js).
 // Узнанное — только в памяти главного процесса: в файл вкладок и демону не пишется, после перезапуска вкладка — терминал, пока агент не узнан снова.

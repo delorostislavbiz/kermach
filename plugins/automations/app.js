@@ -32,7 +32,10 @@ let filter = '';
 /** Проекты из списка программы: projects.json пишет окно «Проекты», здесь только чтение. @param {string} dataDir */
 function projectsOf(dataDir) {
   try {
-    const d = JSON.parse(fs.readFileSync(path.join(dataDir, 'projects.json'), 'utf8'));
+    const file = path.join(dataDir, 'projects.json');
+    // Предел размера (t1684): файл в сотни МБ подвесил бы главный процесс — тогда список пустой.
+    if (fs.statSync(file).size > 8 * 1024 * 1024) return [];
+    const d = JSON.parse(fs.readFileSync(file, 'utf8'));
     return Array.isArray(d.projects) ? d.projects.map((/** @type {any} */ p) => ({ path: String(p.path), name: String(p.name || path.basename(p.path)), color: String(p.color || '') })) : [];
   } catch { return []; }
 }

@@ -170,5 +170,17 @@
   "credits.rcpResearchText": "Each line is a question or a website address. Find the answer on the web and read the pages you need. Answer briefly, with links to the sources.",
   "credits.rcpCards": "Board card review",
   "credits.rcpCardsText": "Check the card against the rules of a good card. Answer as a list: where “How to check” is vague, where files are not named, where the card is too big and should be split. All good — answer “no remarks”.",
-  "credits.pkLineN": "line {n}"
+  "credits.pkLineN": "line {n}",
+  "credits.redo": "Rework",
+  "credits.redoHead": "Rework {id} · {t}",
+  "credits.redoNote": "Your notes go to the agent in the same conversation; it fixes things in the same copy. The result and cost are added to the job.",
+  "credits.redoText": "What to fix in the result",
+  "credits.redoSend": "Send for rework",
+  "credits.redoCancel": "Cancel",
+  "credits.redoNeed": "Write what to fix",
+  "credits.redoFail": "Rework not started: {e}",
+  "credits.batchAgents": "Card agents may send batches",
+  "credits.batchAgentsNote": "A card agent sends a batch of requests itself with kermach batch new — paid from the API key. Off — only a person sends batches.",
+  "credits.batchAgentsFail": "“Card agents may send batches” not saved: {e}",
+  "credits.busyUnknown": "{id} is already running (process {pid}): Windows did not report when this process started, so the task is treated as still running — a second run would be paid twice. Wait a minute and try again; if the task is stuck, press “Stop”: the process is left alone and the task stops being “running”"
 }

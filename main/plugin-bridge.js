@@ -33,6 +33,8 @@ const { ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const sender = require('./sender');
+/** t1811: текст ошибки на языке программы; без главного процесса — русский. */
+const tr = (/** @type {string} */ k, /** @type {string} */ ru, /** @type {any} */ v) => { try { return require('./i18n').t(k, ru, v); } catch { return ru.replace(/\{(\w+)\}/g, (m, n) => (v && n in v ? String(v[n]) : m)); } };
 const settings = require('./settings');
 const plugins = require('./plugins');
 
@@ -259,7 +261,7 @@ function mainOff(id, p) {
     mainRefused.add(key);
     /** @type {any} */ (ctx).log(`плагин ${id}: главная часть не загружена — свой плагин, галочки «главная часть» в «Настройках» нет (${p.path || 'вне окна проекта'})`);
   }
-  return { error: `главная часть плагина ${id} не включена: галочка «главная часть» в «Настройках»`, mainOff: true };
+  return { error: tr('bridge.err1', 'главная часть плагина {id} не включена: галочка «главная часть» в «Настройках»', { id }), mainOff: true };
 }
 
 /** Вызов главной части плагина для проекта: тот же путь у окна (plugin:call) и у терминала (callFor). @param {Project} p @param {unknown} id @param {unknown} cmd @param {unknown} args */

@@ -51,7 +51,7 @@ html:is([data-ui="kermach"], [data-ui="termius"]) #views { border-color: var(--l
 html:is([data-ui="kermach"], [data-ui="termius"]) #views button.on { background: var(--selected); }
 
 /* --- Группы карточками (t664): .gcard — фон --card, рамка --line, радиус 10, отступ 4; между карточками 6. --- */
-html:is([data-ui="kermach"], [data-ui="termius"]) #list { padding: 0 16px 16px; }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#barTools, #sideHead)) #list { padding: 0 16px 16px; }
 html:is([data-ui="kermach"], [data-ui="termius"]) .gcard { display: flex; flex-direction: column; gap: 1px; padding: 0 4px 4px; margin-top: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
 html:is([data-ui="kermach"], [data-ui="termius"]) .gcard:first-child { margin-top: 0; }
 /* Свёрнутая группа — одна строка заголовка, нижний отступ карточки не нужен. */
@@ -75,20 +75,21 @@ html:is([data-ui="kermach"], [data-ui="termius"]) .group.turn:not(.shut) .chev {
 html:is([data-ui="kermach"], [data-ui="termius"]) .group.turn.shut .chev { animation: kTurnShut .25s var(--ease-in) both; }
 
 /* Строка 48 px, радиус 7; под мышью — фон --selected и отступ слева 10 → 14 за .2 s. Строки «требует ответа» фон под мышью оставляют свой. */
-html:is([data-ui="kermach"], [data-ui="termius"]) .row { height: 48px; gap: 12px; padding: 0 10px; border-radius: 7px; transition: background .15s, padding .2s; }
-html:is([data-ui="kermach"], [data-ui="termius"]) .row:not(.need):hover { background: var(--selected); }
-html:is([data-ui="kermach"], [data-ui="termius"]) .row:hover { padding-left: 14px; }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#barTools, #sideHead)) .row { height: 48px; gap: 12px; padding: 0 10px; border-radius: 7px; transition: background .15s, padding .2s; }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#barTools, #sideHead)) .row:not(.need):hover { background: var(--selected); }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#barTools, #sideHead)) .row:hover { padding-left: 14px; }
 /* Плитка 30×30 радиус 8 с тинтом цвета проекта: .strip — на всю плитку с прозрачностью --tint-a, её фон — цвет проекта (по нему step3-6 узнаёт цвет). */
-html:is([data-ui="kermach"], [data-ui="termius"]) .row .pic { position: relative; width: 30px; height: 30px; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-html:is([data-ui="kermach"], [data-ui="termius"]) .row .pic .strip { position: absolute; inset: 0; width: auto; height: auto; border-radius: 0; opacity: var(--tint-a, .18); }
-html:is([data-ui="kermach"], [data-ui="termius"]) .row .pic svg { position: relative; width: 16px; height: 16px; }
-html:is([data-ui="kermach"], [data-ui="termius"]) .text { gap: 2px; }
-html:is([data-ui="kermach"], [data-ui="termius"]) .text .n { font-size: var(--fs-name); line-height: 17px; font-weight: 500; }
-html:is([data-ui="kermach"], [data-ui="termius"]) .text .p { font-size: var(--fs-cap); }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#barTools, #sideHead)) .row .pic { position: relative; width: 30px; height: 30px; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#barTools, #sideHead)) .row .pic .strip { position: absolute; inset: 0; width: auto; height: auto; border-radius: 0; opacity: var(--tint-a, .18); }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#barTools, #sideHead)) .row .pic svg { position: relative; width: 16px; height: 16px; }
+/* Имя и подпись строки — только окна «Проекты» (t1678, d388): в окне проекта у имени вкладки свои 13/16 px (index.html .term .n). */
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#barTools)) .text { gap: 2px; }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#barTools)) .text .n { font-size: var(--fs-name); line-height: 17px; font-weight: 500; }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#barTools)) .text .p { font-size: var(--fs-cap); }
 /* Справа — состояния с числом и «кто запущен», как раньше (решение по вопросу 1). «Требует ответа» — капсула 22 px с рамкой его цвета.
    Цвет состояний не меняю: его ставит projects-page.js из states.js, в Termius Dark это уже --warn и --ok (сверяет t31-states). */
-html:is([data-ui="kermach"], [data-ui="termius"]) .row .st.waiting { height: 22px; padding: 0 9px; border: 1px solid currentColor; border-radius: 11px; }
-html:is([data-ui="kermach"], [data-ui="termius"]) .row .states { align-items: center; }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#barTools, #sideHead)) .row .st.waiting { height: 22px; padding: 0 9px; border: 1px solid currentColor; border-radius: 11px; }
+html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#barTools, #sideHead)) .row .states { align-items: center; }
 
 /* Плитка проекта внутри карточки: фон --bg поверх --card, радиус 8. Цвет «требует ответа» — прежний (.tile.need). */
 html:is([data-ui="kermach"], [data-ui="termius"]) .tiles { padding: 0 0 2px; }
@@ -100,5 +101,5 @@ html:is([data-ui="kermach"], [data-ui="termius"]) .tile .n { font-size: var(--fs
 /* «Уменьшить движение» в системе — стрелка без поворота, строки без сдвига (каскад k-in выключает ui-kermach.css). */
 @media (prefers-reduced-motion: reduce) {
   html:is([data-ui="kermach"], [data-ui="termius"]) .group.turn .chev { animation: none; }
-  html:is([data-ui="kermach"], [data-ui="termius"]) .row { transition: none; }
+  html:is([data-ui="kermach"], [data-ui="termius"]):where(:has(#barTools, #sideHead)) .row { transition: none; }
 }

@@ -75,7 +75,7 @@ function writeTask(dir, text) {
   fs.mkdirSync(d, { recursive: true });
   try { fs.writeFileSync(path.join(d, '.gitignore'), '# Kermach: длинные задания агентам — не для git.\n*\n', { flag: 'wx' }); } catch { /* уже есть */ }
   const name = `multi-${Date.now().toString(36)}.md`;
-  fs.writeFileSync(path.join(d, name), text);
+  fs.writeFileSync(path.join(d, name), `﻿${text}`); // UTF-8 с BOM: Codex на Windows иначе читает кириллицу как 1251 (t1749, t1755)
   return i18n.t('git.multiFileFirst', 'Задание целиком в файле {rel} в папке проекта. Прочитай этот файл полностью и выполняй его.', { rel: `.kermach/prompts/${name}` });
 }
 
@@ -247,4 +247,4 @@ async function handle(ctx, cmd, args) {
   return { error: `нет команды ${cmd}` };
 }
 
-module.exports = { handle, taskFor };
+module.exports = { handle, taskFor, writeTask };

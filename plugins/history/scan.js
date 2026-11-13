@@ -499,7 +499,9 @@ function run(wd) {
   let toldAt = 0;
   /** @type {NodeJS.Timeout | null} */
   let toldLater = null;
+  // После stop — ни отправки, ни отложенного таймера: база закрыта, status() упал бы на ней (d733, t1756).
   const progress = (force = false) => {
+    if (stopped) return;
     const now = Date.now();
     if (!force && now - toldAt < 500) { if (!toldLater) toldLater = setTimeout(() => { toldLater = null; progress(true); }, 500); return; }
     toldAt = now;
@@ -509,7 +511,7 @@ function run(wd) {
   /** @type {NodeJS.Timeout | null} */
   let changedLater = null;
   const changed = () => {
-    if (changedLater) return;
+    if (changedLater || stopped) return;
     const wait = Math.max(0, 2000 - (Date.now() - changedAt));
     changedLater = setTimeout(() => { changedLater = null; changedAt = Date.now(); port.postMessage({ event: 'changed', payload: {} }); }, wait);
   };
@@ -746,6 +748,33 @@ function run(wd) {
     return { out, kids, agents };
   }
 
+  // Страница всех проектов (t1699): отбор, порядок и сдвиг — в SQL, в поток приходят только строки страницы.
+  // Раньше visible() читал sessions целиком на каждое «Показать ещё» (d706). Условия те же, что в visible() без охвата:
+  // не субагент, не пустой прочитанный журнал; порядок — updated по убыванию (null как строка 'null', как String() в list), при равенстве — порядок таблицы.
+  const SHOWN = `(s.parent IS NULL OR s.parent = '') AND NOT (COALESCE(s.messages, 0) = 0 AND COALESCE(s.first_prompt, '') = ''
+    AND s.key IN (SELECT key FROM files WHERE done))`;
+  /** @param {{ agent?: string, offset?: number }} a */
+  function pageAll(a) {
+    const o = Math.max(0, Number(a.offset) || 0);
+    /** @type {Record<string, number>} */
+    const agents = {};
+    for (const r of db.query(`SELECT s.agent AS agent, COUNT(*) AS n FROM sessions s WHERE ${SHOWN} GROUP BY s.agent`)) agents[r.agent] = Number(r.n);
+    const one = a.agent && a.agent !== 'all' ? String(a.agent) : '';
+    const total = one ? agents[one] || 0 : Object.values(agents).reduce((x, y) => x + y, 0);
+    const rows = db.query(`SELECT s.* FROM sessions s WHERE ${SHOWN}${one ? ' AND s.agent = ?' : ''}
+      ORDER BY COALESCE(s.updated, 'null') DESC, s.rowid LIMIT ? OFFSET ?`, ...(one ? [one] : []), PAGE, o);
+    /** @type {Map<string, number>} */
+    const kids = new Map();
+    const ids = rows.filter((r) => r.agent === 'codex').map((r) => r.id);
+    if (ids.length) {
+      for (const k of db.query(`SELECT parent, COUNT(*) AS n FROM sessions WHERE agent = 'codex' AND parent IN (${ids.map(() => '?').join(', ')}) GROUP BY parent`, ...ids)) {
+        kids.set(k.parent, Number(k.n));
+      }
+    }
+    // rows — сколько строк sessions пришло в поток; по нему проба t1699 видит, что таблица целиком не читается.
+    return { items: rows.map((r) => rec(r, kids)), total, offset: o, more: total > o + PAGE, agents, rows: rows.length };
+  }
+
   const page = (/** @type {any[]} */ items, /** @type {number} */ offset) => {
     const o = Math.max(0, Number(offset) || 0);
     return { items: items.slice(o, o + PAGE), total: items.length, offset: o, more: items.length > o + PAGE };
@@ -756,6 +785,7 @@ function run(wd) {
     status: () => status(),
     refresh: () => { work(true); return status(); },
     list(a) {
+      if (!a.scopePath) return pageAll(a);
       const { out, kids, agents } = visible(a);
       out.sort((x, y) => String(y.updated).localeCompare(String(x.updated)));
       return { ...page(out.map((r) => rec(r, kids)), a.offset), agents };
@@ -845,6 +875,9 @@ function run(wd) {
       for (const w of watchers) { try { w.close(); } catch { /* закрыт */ } }
       for (const t of timers) clearInterval(t);
       if (soon) clearTimeout(soon);
+      // Отложенные прогресс и «изменилось» (t1756): иначе через ≤500 мс таймер читает закрытую базу — «statement has been finalized».
+      if (toldLater) { clearTimeout(toldLater); toldLater = null; }
+      if (changedLater) { clearTimeout(changedLater); changedLater = null; }
       // Дождаться конца куска индекса: закрыть базу посреди записи нельзя.
       const until = Date.now() + 3000;
       while (busy && Date.now() < until) await new Promise((r) => setTimeout(r, 20));

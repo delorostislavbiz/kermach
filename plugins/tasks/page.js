@@ -10,22 +10,9 @@
   const t = (/** @type {string} */ k, /** @type {string} */ ru, /** @type {any} */ v) => I18n.t(`tasks.${k}`, ru, v);
   const $ = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.getElementById(id));
   const esc = (/** @type {any} */ s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  // TODO(t1159): служебные рисунки перенести в renderer\icons.js (файл вне зоны карты, заметка на карте).
+  // Служебные рисунки «Дел» — общий набор Icons.SVC (renderer\icons.js, t1672).
   /** @type {Record<string, string>} */
-  const SVC = {
-    chevR: '<path d="M9 6l6 6-6 6"/>', chevD: '<path d="M6 9l6 6 6-6"/>', arrowR: '<path d="M5 12h14M13 6l6 6-6 6"/>',
-    inbox: '<path d="M3 13l3-8h12l3 8v6H3zM3 13h5l1 3h6l1-3h5"/>',
-    repeat: '<path d="M4 11V9a3 3 0 0 1 3-3h12M16 3l3 3-3 3M20 13v2a3 3 0 0 1-3 3H5M8 21l-3-3 3-3"/>',
-    filter: '<path d="M4 5h16l-6 8v6l-4-2v-4z"/>',
-    at: '<circle cx="12" cy="12" r="4"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.5 7.1"/>',
-    plus: '<path d="M12 5v14M5 12h14"/>', search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
-    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
-    calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
-    flag: '<path d="M5 21V4h11l-2 4 2 4H5"/>', x: '<path d="M6 6l12 12M18 6L6 18"/>', clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', check: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
-    layers: '<path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5"/>',
-    more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>', star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
-    link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>', sort: '<path d="M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4"/>', gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>', trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
-  };
+  const SVC = /** @type {any} */ (window).Icons.SVC;
   const ico = (/** @type {string} */ n, s = 16, c = 'currentColor') => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="svc">${SVC[n] || ''}</svg>`;
   /** Палитра дел (макет t1156): имя → #hex; #RRGGBB — как есть. */
   const PAL = /** @type {Record<string, string>} */ ({ red: '#E5484D', orange: '#EC7A30', amber: '#D99A1E', lime: '#86A92B', green: '#2FA86A', teal: '#14A39A',
@@ -33,6 +20,8 @@
   const hex = (/** @type {string} */ c) => PAL[String(c || '').toLowerCase()] || (/^#[0-9a-f]{6}$/i.test(String(c || '')) ? String(c) : '');
   /** Значок дела или проекта из общего набора; цвет — только #hex. */
   const art = (/** @type {string} */ name, /** @type {string} */ color, s = 14) => Icons.svg(name || 'folder', hex(color) || PAL.gray, s);
+  /** Значок проекта: его картинка, если есть (Icons.projectArt проверяет её isImage), иначе значок цветом проекта (t1678, d681). @param {any} p */
+  const pArt = (p, s = 16) => (p.image ? Icons.projectArt({ icon: p.icon || 'folder', image: p.image }, hex(p.color) || PAL.gray, s) : art(p.icon, p.color, s));
   const list = (/** @type {string} */ v) => String(v || '').replace(/^\[|\]$/g, '').split(',').map((x) => x.trim()).filter(Boolean);
 
   /** @type {any} */
@@ -144,7 +133,7 @@
     const row = `<div class="${cls}" data-p="${esc(p.path)}" data-id="${esc(r.id)}" style="--lv:${lv};${fill ? `--hl:${color}` : ''}" title="${esc(r.id)}">`
       + `<span class="tw${has ? ' has' : ''}" data-act="fold">${has ? ico(folded ? 'chevR' : 'chevD', 14) : ''}</span>`
       + `<span class="c" data-act="done" title="${esc(t('doneHint', 'Сделано'))}"></span><span class="t" data-act="openTask">${esc(title)}</span><span class="ic">${icons}</span><span class="meta">${meta}</span><span class="more" data-act="menu" title="${esc(t('moreHint', 'Действия с делом'))}">${ico('more', 16)}</span></div>`;
-    const inner = has && !folded ? n.kids.filter((/** @type {any} */ k) => open(k.r) || k.kids.length || true).map((/** @type {any} */ k) => node(k, lv + 1, p)).join('') : '';
+    const inner = has && !folded ? n.kids.map((/** @type {any} */ k) => node(k, lv + 1, p)).join('') : '';
     return `<div class="br${color ? ' st' : ''}" style="--lv:${lv};${color ? `--st:${color}` : ''}">${row}${inner}</div>`;
   }
 
@@ -265,7 +254,7 @@
   const starHtml = (key) => `<span class="star${P().fav.includes(key) ? ' on' : ''}" data-act="star" data-v="${esc(key)}" title="${esc(t('favHint', 'В избранное'))}">${ico('star', 14)}</span>`;
   /** Название и значок пункта избранного по ключу вида; нет такого (проект убрали, фильтр удалили) — null. @param {string} key */
   function favItem(key) {
-    if (key.startsWith('project:')) { const p = projectOf(key.slice(8)); return p ? { icon: art(p.icon, p.color, 16), label: p.inbox ? `${p.name} (${t('inbox', 'Входящие')})` : p.name, n: p.ok ? p.rows.filter((/** @type {any} */ r) => open(r)).length : 0, off: !p.ok } : null; }
+    if (key.startsWith('project:')) { const p = projectOf(key.slice(8)); return p ? { icon: pArt(p, 16), label: p.inbox ? `${p.name} (${t('inbox', 'Входящие')})` : p.name, n: p.ok ? p.rows.filter((/** @type {any} */ r) => open(r)).length : 0, off: !p.ok } : null; }
     if (key.startsWith('label:')) { const l = key.slice(6); return { icon: ico('at'), label: l, n: cntP((r) => open(r) && list(r.head.labels).includes(l)), off: false }; }
     if (key.startsWith('filter:')) { const f = (data.filters || []).find((/** @type {any} */ x) => x.name === key.slice(7)); if (!f) return null; const b = byQuery(f.query); return { icon: ico('filter'), label: f.name, n: b.error ? 0 : cntP(b.ok), off: false }; }
     return null;
@@ -280,7 +269,7 @@
     const inbox = data.inbox ? projectOf(data.inbox) : null;
     let h = `<div class="tadd" data-act="add">${ico('plus', 18)}${esc(t('add', 'Добавить дело'))}</div>`
       + (shown('search') ? nav('search', ico('search'), t('search', 'Поиск'), 0, view.name === 'search') : '')
-      + (inbox && shown('inbox') ? nav(`project:${inbox.path}`, ico('inbox'), t('inbox', 'Входящие'), inbox.rows.filter((/** @type {any} */ r) => open(r) && !r.level).length, view.name === 'project' && view.path === inbox.path) : '')
+      + (inbox && shown('inbox') ? nav(`project:${inbox.path}`, ico('inbox'), t('inbox', 'Входящие'), inbox.rows.filter((/** @type {any} */ r) => open(r)).length, view.name === 'project' && view.path === inbox.path) : '')
       + (shown('today') ? nav('today', ico('sun'), t('todayView', 'Сегодня'), cnt(isToday), view.name === 'today') : '')
       + (shown('upcoming') ? nav('upcoming', ico('calendar'), t('upcoming', 'Предстоящее'), cnt(upcomingOk), view.name === 'upcoming') : '')
       + (shown('all') ? nav('all', ico('layers'), t('allView', 'Все дела'), cnt(allOk), view.name === 'all') : '')
@@ -301,8 +290,8 @@
       h += `<h4>${esc(t('projects', 'Проекты Kermach'))}</h4>`;
       for (const p of data.projects) {
         const label = p.inbox ? `${p.name} (${t('inbox', 'Входящие')})` : p.name;
-        if (!p.ok) { h += `<div class="nav off" title="${esc(p.path)}">${art(p.icon, p.color, 16)}<span class="l">${esc(p.name)}</span><small>${esc(t('folderGone', 'папка недоступна'))}</small></div>`; continue; }
-        h += nav(`project:${p.path}`, art(p.icon, p.color, 16), label, p.rows.filter((/** @type {any} */ r) => open(r)).length, view.name === 'project' && view.path.toLowerCase() === p.path.toLowerCase(), `project:${p.path}`);
+        if (!p.ok) { h += `<div class="nav off" title="${esc(p.path)}">${pArt(p, 16)}<span class="l">${esc(p.name)}</span><small>${esc(t('folderGone', 'папка недоступна'))}</small></div>`; continue; }
+        h += nav(`project:${p.path}`, pArt(p, 16), label, p.rows.filter((/** @type {any} */ r) => open(r)).length, view.name === 'project' && view.path.toLowerCase() === p.path.toLowerCase(), `project:${p.path}`);
       }
     }
     /** @type {Map<string, number>} */
@@ -328,7 +317,7 @@
     const p = projectOf(view.path);
     let head = '', sub = '', body = '';
     if (view.name === 'project' && p) {
-      head = `${art(p.icon, p.color, 20)}<span>${esc(p.inbox ? `${p.name} (${t('inbox', 'Входящие')})` : p.name)}</span>`;
+      head = `${pArt(p, 20)}<span>${esc(p.inbox ? `${p.name} (${t('inbox', 'Входящие')})` : p.name)}</span>`;
       const n = p.rows.filter((/** @type {any} */ r) => open(r)).length;
       sub = `${t('openCount', 'Открытых дел: {n}', { n })}${p.folded.length ? ` · ${t('foldedCount', 'свёрнуто веток: {n}', { n: p.folded.length })}` : ''}`;
       body = projectHtml(p) + toolsHtml();
@@ -970,7 +959,7 @@
     const views = [['search', 'search', t('search', 'Поиск')], ['inbox', 'inbox', t('inbox', 'Входящие')], ['today', 'sun', t('todayView', 'Сегодня')], ['upcoming', 'calendar', t('upcoming', 'Предстоящее')],
       ['all', 'layers', t('allView', 'Все дела')], ['filters', 'filter', t('filters', 'Фильтры и метки')], ['done', 'check', t('doneView', 'Выполненные')]];
     for (const [k, ic, lb] of views) add(ico(ic, 16), lb, t('ckView', 'вид'), () => goView(k));
-    for (const p of data.projects) if (p.ok) add(art(p.icon, p.color, 16), p.name, t('ckProject', 'проект'), () => goKey(`project:${p.path}`));
+    for (const p of data.projects) if (p.ok) add(pArt(p, 16), p.name, t('ckProject', 'проект'), () => goKey(`project:${p.path}`));
     /** @type {Set<string>} */
     const labels = new Set();
     for (const p of data.projects) for (const r of p.rows) if (open(r)) for (const l of list(r.head.labels)) labels.add(l);

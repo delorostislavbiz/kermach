@@ -124,7 +124,8 @@
   .bvws input.bad { outline: 1px solid #e5484d; background: rgba(229,72,77,.12); }
   .bvws .bvadd { margin-top: 6px; }
   .bvws .bvadd:disabled { opacity: .45; }
-  .dlg .set-pane .bvw { margin-left: 0 !important; }
+  /* В разделе «Браузер» строки «Мобильный», «Планшет», свои размеры и кнопка «Добавить размер» стоят ровно по левому краю: у всех inline-отступ 22 px (t1678, d431). */
+  .dlg .set-pane :is(.bvw, .bvwc, .bvaddw) { margin-left: 0 !important; }
   .dlg .set-pane .frm .stepper { margin-left: 0 !important; }
   .dlg .set-pane .set-off { color: var(--muted); font-size: 12px; }
   /* Папки новых проектов и «Входящих» (t1286): поле пути, кнопка «Выбрать…», подсказка и строка ошибки. */
@@ -156,6 +157,7 @@
   .dlg .agt .logo > * { max-width: 16px; max-height: 16px; }
   .dlg .agt .chk > span:not(.fixed) { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .dlg .agt .sub { color: var(--muted); font-size: 11px; }
+  .dlg .agt .apath { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dlg .agt .fixed { width: 16px; flex: 0 0 16px; }
   .dlg .agt .na .logo, .dlg .agt .na .nm { opacity: .5; }
   .dlg .agt .how { display: flex; flex-direction: column; gap: 4px; margin-top: 5px; }
@@ -319,22 +321,47 @@
     });
   }
 
+  /** Самый большой файл картинки проекта, байт (imageFromFile). */
+  const IMAGE_MAX = 20 * 1024 * 1024;
   /**
-   * Файл картинки → PNG як data:URL: не більше 128 точок за довшою стороною, пропорції зберігаються.
+   * Файл картинки → PNG как data:URL: не больше 128 точек по длинной стороне, пропорции сохраняются.
    * @param {File} file @returns {Promise<string>}
    */
   async function imageFromFile(file) {
-    const src = await new Promise((res, rej) => {
-      const r = new FileReader();
-      r.onload = () => res(String(r.result));
-      r.onerror = () => rej(r.error);
-      r.readAsDataURL(file);
-    });
+    // Размер — до чтения (t1678, d680): файл в гигабайты не читается в память целиком ради отказа. Значок — 128 точек, 20 МБ хватает и большой фотографии.
+    if (file.size > IMAGE_MAX) throw new Error('слишком большой файл');
+    const isSvg = /\.svg$/i.test(file.name || '') || file.type === 'image/svg+xml';
+    let src;
+    if (isSvg) {
+      // SVG показываем только как картинку (<img> из data:URL): скрипты и внешние ссылки в этом режиме не работают.
+      // Без размера в корне браузер может дать 0×0 — тогда берём размер из viewBox или 128.
+      const text = await file.text();
+      const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+      const root = doc.documentElement;
+      if (!root || root.nodeName.toLowerCase() !== 'svg' || doc.querySelector('parsererror')) throw new Error('не svg');
+      const vb = (root.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+      const hasSize = (a) => /^[\d.]+(px)?$/.test((root.getAttribute(a) || '').trim());
+      if (!hasSize('width') || !hasSize('height')) {
+        const vw = vb.length === 4 && vb[2] > 0 ? vb[2] : 128;
+        const vh = vb.length === 4 && vb[3] > 0 ? vb[3] : 128;
+        const kk = 128 / Math.max(vw, vh);
+        root.setAttribute('width', String(Math.round(vw * kk)));
+        root.setAttribute('height', String(Math.round(vh * kk)));
+      }
+      src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(root));
+    } else {
+      src = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(String(r.result));
+        r.onerror = () => rej(r.error);
+        r.readAsDataURL(file);
+      });
+    }
     const img = new Image();
     img.src = src;
     await img.decode();
-    if (!img.naturalWidth || !img.naturalHeight) throw new Error('порожня картинка');
-    const k = Math.min(1, 128 / Math.max(img.naturalWidth, img.naturalHeight));
+    if (!img.naturalWidth || !img.naturalHeight) throw new Error('пустая картинка');
+    const k = isSvg ? 128 / Math.max(img.naturalWidth, img.naturalHeight) : Math.min(1, 128 / Math.max(img.naturalWidth, img.naturalHeight));
     const cv = document.createElement('canvas');
     cv.width = Math.max(1, Math.round(img.naturalWidth * k));
     cv.height = Math.max(1, Math.round(img.naturalHeight * k));
@@ -347,7 +374,7 @@
   /**
    * «Цвет и значок» — для терминала и для проекта. Сверху — как это будет выглядеть в списке.
    * rename — ещё и поле имени («Цвет, значок и имя» у только что добавленной папки, t1212); пустое имя «Готово» не принимает.
-   * image — лише для проєкту: кнопка «Завантажити картинку». Вибір значка із сітки картинку прибирає; у відповіді image — '' без картинки.
+   * image — только для проекта: кнопка «Загрузить картинку». Выбор значка из сетки картинку убирает; в ответе image — '' без картинки.
    * @param {{ name: string, sub: string, subColor?: string, color: string, icon: string, image?: string, rename?: boolean }} o
    * @returns {Promise<{ color: string, icon: string, image?: string, name?: string } | null>} null — отмена
    */
@@ -364,7 +391,7 @@
         <div class="pal">${PALETTE.map((/** @type {string} */ c) => `<div class="sw" data-c="${c}" style="background:${c}" title="${c}"></div>`).join('')}
           <label class="own" title="${I18n.t('dialogs.vybratLyuboyCvet', 'Выбрать любой цвет')}"><b class="plus">${svg('plus', tc('text', '#C9D0DC'), 12)}</b><i></i><span>${I18n.t('dialogs.svoyCvet', 'Свой цвет')}</span><input type="color" tabindex="-1"></label></div></div>
       <div class="sec"><div class="head"><div class="cap">${I18n.t('dialogs.znachok', 'Значок')}</div><label class="find">${svg('search', tc('muted', '#8D91A5'), 13)}<input placeholder="${I18n.t('dialogs.poiskZnachka', 'Поиск значка')}" spellcheck="false"></label></div>
-        ${withImage ? `<div class="ci-image" style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><button type="button" class="bbtn ci-upload">${I18n.t('dialogs.zagruzitKartinku', 'Загрузить картинку')}</button><span class="ci-image-err" style="color:${tc('danger', '#F24E50')};font-size:12px"></span><input type="file" accept="image/*" hidden></div>` : ''}
+        ${withImage ? `<div class="ci-image" style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><button type="button" class="bbtn ci-upload">${I18n.t('dialogs.zagruzitKartinku', 'Загрузить картинку')}</button><span class="ci-image-err" style="color:${tc('danger', '#F24E50')};font-size:12px"></span><input type="file" accept="image/*,.svg,image/svg+xml" hidden></div>` : ''}
         <div class="grid"></div></div>
       <div class="btns"><button class="cancel">${I18n.t('common.cancel', 'Отмена')}</button><button class="ok">${I18n.t('common.done', 'Готово')}</button></div>`;
     const title = o.rename ? I18n.t('dialogs.cvetZnachokIImya', 'Цвет, значок и имя') : I18n.t('dialogs.cvetIZnachok', 'Цвет и значок');
@@ -825,6 +852,10 @@
       <div class="sec"><label class="chk"><input type="checkbox" class="snd"><span class="sndt"></span></label>
         <label class="chk ntfr"><input type="checkbox" class="ntf"><span class="ntft"></span></label>
         <label class="chk ntfr"><input type="checkbox" class="cps"><span class="cpst"></span></label></div>
+      <div class="sec slp"><div class="cap slpc"></div>
+        <div class="stepper"><input class="slpn" type="number" min="1" max="1440" step="1"><span class="hint slpu"></span>
+        <label class="chk" style="margin:0 0 0 12px"><input type="checkbox" class="slpo"><span class="slpt"></span></label></div>
+        <div class="dirh slpr" hidden></div></div>
       <div class="sec dirs">${['projectsBase', 'inboxDir'].map((k, i) => `${i ? '<div class="dirs-gap"></div>' : ''}<div class="cap" data-k="${k}"></div>
         <div class="stepper"><input class="dir" type="text" data-k="${k}" spellcheck="false"><button class="pick" data-k="${k}"></button></div>
         <div class="dirh" data-k="${k}"></div><div class="dire" data-k="${k}" hidden></div>`).join('')}</div></div>
@@ -867,6 +898,9 @@
       ['.tmt', 'dialogs.tema', 'Тема', 'textContent'],
       ['.cap.zoom', 'dialogs.razmerShriftaOkon', 'Размер шрифта окон', 'textContent'], ['.cap.font', 'dialogs.razmerShriftaTerminala', 'Размер шрифта терминала', 'textContent'],
       ['.cpst', 'dialogs.copySelect', 'Копировать выделенный текст сразу, без Ctrl+C', 'textContent'],
+      ['.slpc', 'dialogs.sleepCap', 'Усыплять вкладку Claude, когда она в «готово» дольше', 'textContent'], ['.slpu', 'dialogs.sleepUnit', 'мин', 'textContent'],
+      ['.slpt', 'dialogs.sleepOff', 'Не усыплять', 'textContent'],
+      ['.slpr', 'dialogs.sleepRestart', 'Заработает после перезапуска демона: нынешний демон этот срок не знает', 'textContent'],
       ['.m', 'dialogs.menshe', 'Меньше', 'title'], ['.p', 'dialogs.bolshe', 'Больше', 'title'],
       ['.sndt', 'dialogs.zvukKogdaAgentZakonchil', 'Звук, когда агент закончил или ждёт ответа', 'textContent'],
       ['.ntft', 'dialogs.notifyAgent', 'Всплывающее уведомление, когда агент закончил или ждёт ответа', 'textContent'],
@@ -933,6 +967,10 @@
       const snd = /** @type {HTMLInputElement} */ (q('.snd'));
       const ntf = /** @type {HTMLInputElement} */ (q('.ntf'));
       const cps = /** @type {HTMLInputElement} */ (q('.cps'));
+      // Сон вкладки Claude (t1771): минуты и «не усыплять» (sleepMin 0). Последние минуты помним — снятая галочка их возвращает.
+      const slpn = /** @type {HTMLInputElement} */ (q('.slpn'));
+      const slpo = /** @type {HTMLInputElement} */ (q('.slpo'));
+      let slpLast = 60;
       const paint = (/** @type {any} */ s) => {
         dlg.querySelectorAll('.seg button[data-z]').forEach((b) => b.classList.toggle('on', Number(/** @type {HTMLElement} */ (b).dataset.z) === s.uiZoom));
         theme(s);
@@ -940,6 +978,14 @@
         snd.checked = !!s.sound;
         ntf.checked = s.notify !== false;
         cps.checked = s.copySelect !== false;
+        const sm = typeof s.sleepMin === 'number' ? s.sleepMin : 60;
+        if (sm > 0) slpLast = sm;
+        slpo.checked = sm === 0;
+        slpn.disabled = sm === 0;
+        if (document.activeElement !== slpn) slpn.value = String(sm > 0 ? sm : slpLast);
+        // Демон без команды sleep (t1836): срок сохранён, но вкладки спят по-старому до перезапуска демона. Ответ — после запроса главного процесса.
+        const term = t && t.term;
+        if (term && term.sleepState) term.sleepState().then((/** @type {any} */ r) => { q('.slpr').hidden = !(r && r.refused); }, () => {});
         // Поле с ошибкой или в фокусе не перетираем: человек правит путь.
         // Только поля путей (data-k): ключ API, токен Telegram и даты начислений — не настройки, перерисовка их стирала (t1577).
         dlg.querySelectorAll('.dirs input.dir[data-k]').forEach((x) => { const i = /** @type {HTMLInputElement} */ (x); if (document.activeElement !== i && i.dataset.bad !== '1') i.value = s[i.dataset.k || ''] || ''; });
@@ -1002,7 +1048,7 @@
             warn.className = 'muted pown';
             warn.dataset.id = pl.id;
             warn.style.cssText = 'margin:-4px 0 6px 22px;font-size:11px';
-            tx(warn, 'dialogs.pluginOwn', 'Свой плагин: у него те же права, что у программы — запускает команды и агентов, читает и меняет файлы. Включайте, только если доверяете автору.');
+            tx(warn, 'dialogs.pluginOwn', 'Свой плагин: код окна работает отдельно от окна — в терминалы не пишет, файлы и сеть ему закрыты. Главная часть (main.js), если она есть и разрешена галочкой, получает те же права, что у программы: запускает команды, читает и меняет файлы. Включайте, только если доверяете автору.');
             plg.appendChild(warn);
             // Главная часть своего плагина (main.js) — require в главном процессе со всеми правами: отдельная галочка, без неё не грузится (t1384).
             if (pl.hasMain) {
@@ -1060,6 +1106,14 @@
           const sub = document.createElement('span');
           sub.className = 'sub';
           text.append(nm, sub);
+          // Путь к найденной программе (d355): вторая подпись, первая .sub — состояние (agentRows).
+          if (a.file) {
+            const where = document.createElement('span');
+            where.className = 'sub apath';
+            where.textContent = a.file;
+            where.title = a.file;
+            text.append(where);
+          }
           const mng = document.createElement('button');
           mng.className = 'mng';
           tx(mng, 'dialogs.agentyUpravlenie', 'Управление…');
@@ -1126,6 +1180,12 @@
       snd.addEventListener('change', () => change(t, { sound: snd.checked }));
       ntf.addEventListener('change', () => change(t, { notify: ntf.checked }));
       cps.addEventListener('change', () => change(t, { copySelect: cps.checked }));
+      slpo.addEventListener('change', () => change(t, { sleepMin: slpo.checked ? 0 : slpLast }));
+      slpn.addEventListener('change', () => {
+        const n = Math.round(Number(slpn.value));
+        if (!Number.isFinite(n) || n < 1) { slpn.value = String(slpLast); return; }
+        change(t, { sleepMin: Math.min(1440, n) });
+      });
       // Папки (t1286): путь проверяет главный процесс; ошибка — строкой под полем, settings.json не меняется, поле остаётся с введённым.
       const saveDir = async (/** @type {string} */ k, /** @type {string} */ v) => {
         const inp = /** @type {HTMLInputElement} */ (q(`.dirs input.dir[data-k="${k}"]`));
@@ -1367,9 +1427,10 @@
       return () => font(Number(num.value));
     }, 'set');
     off();
-    // Закрыли «Настройки» во время скачивания: подтверждать установку негде, файл удаляется (t1623).
+    // Закрыли «Настройки»: подтверждать установку негде. Идущее скачивание отменяется (t1623), скачанный файл удаляется,
+    // если об установке не спрашивает другое окно и установка не идёт (t1648).
     updOff();
-    if (updBusy) window.kermach.update.cancel();
+    window.kermach.update.cancel();
     return r;
   }
 

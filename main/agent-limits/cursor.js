@@ -28,7 +28,7 @@ function dirOf(env) {
 /** @param {NodeJS.ProcessEnv} env */
 function baseOf(env) {
   const b = (env.KERMACH_CURSOR_BASE_URL || '').trim().replace(/\/+$/, '');
-  return b && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(b) ? b : BASE;
+  return b && /^http:\/\/127\.0\.0\.1(:\d+)?$/.test(b) ? b : BASE; // только 127.0.0.1: localhost можно перенаправить в hosts (t1746)
 }
 
 /** sub и exp из JWT без проверки подписи (как Орка). @param {string} raw */

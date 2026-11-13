@@ -71,7 +71,9 @@ module.exports = {
     if (!findProgram('opencode', env) && !findProgram('opencode2', env)) return none('not_installed', 'OpenCode не установлен');
     const key = keyOf(env);
     if (!key) return none('not_logged_in', 'в OpenCode нет ключа OpenCode Go');
-    const r = await getJson(env.KERMACH_LIMITS_OPENCODE_URL || URL_DEFAULT, { Authorization: `Bearer ${key}`, Accept: 'application/json', 'User-Agent': 'Kermach' }, { timeoutMs, signal });
+    // Свой адрес — только местный http на 127.0.0.1 (проба), иначе ключ ушёл бы на чужой сервер (t1746).
+    const own = String(env.KERMACH_LIMITS_OPENCODE_URL || '').trim();
+    const r = await getJson(/^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/.test(own) ? own : URL_DEFAULT, { Authorization: `Bearer ${key}`, Accept: 'application/json', 'User-Agent': 'Kermach' }, { timeoutMs, signal });
     if (r.status === 401 || r.status === 403) return none('unauthorized', `сервер OpenCode не принял ключ (${r.status})`);
     if (r.error) return none(r.error, r.message);
     if (r.status !== 200) return none('bad_response', `сервер OpenCode ответил ${r.status}`);

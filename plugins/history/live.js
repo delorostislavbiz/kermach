@@ -154,7 +154,7 @@ function codexRunning(codexHome) {
  * @returns {Map<string, { pid: number, status: string }>}
  */
 function agyRunning(agyHome) {
-  /** @type {Map<string, { pid: number, status: string }>} */
+  /** @type {Map<string, { pid: number, status: string, agy?: boolean, born?: number }>} */
   const out = new Map();
   if (!agyHome) return out;
   const dir = path.join(agyHome, 'presence');
@@ -168,10 +168,49 @@ function agyRunning(agyHome) {
     /** @type {number | undefined} */
     let fd;
     try { fd = fs.openSync(path.join(dir, n), 'r'); fs.readSync(fd, buf, 0, 1, 0); }
-    catch (e) { if (/** @type {any} */ (e).code !== 'ENOENT') out.set(m[1].toLowerCase(), { pid: 0, status: '' }); }
+    catch (e) {
+      if (/** @type {any} */ (e).code === 'ENOENT') continue;
+      // born — когда создан замок (t1673, d398): по нему свежая вкладка agy узнаёт свой разговор, номера у вкладки нет.
+      let born = 0;
+      try { born = fs.statSync(path.join(dir, n)).birthtimeMs || 0; } catch { /* нет времени — без пары с вкладкой */ }
+      out.set(m[1].toLowerCase(), { pid: 0, status: '', agy: true, born });
+    }
     finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* уже закрыт */ } }
   }
   return out;
+}
+
+/** Замок создан чуть раньше вкладки: часы файловой системы и демона расходятся. */
+const AGY_SLACK_MS = 2000;
+
+/** Папка для сравнения: без регистра, слэши обратные, без хвостового. @param {any} p */
+const normDir = (p) => String(p || '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+
+/**
+ * Свежая вкладка agy без номера разговора (t1673, d398): её разговор — замок agy, созданный после запуска вкладки
+ * в папке проекта окна. Пара есть, только когда после запуска вкладки таких замков ровно один. Замки разговоров
+ * из других папок не считаются, разговор из другой папки пару не получает.
+ * Неточность: папка разговора известна из записей «Истории». Пока agy не записал её в свою базу (или запись не на этой
+ * странице списка), замок без папки считается как свой: два таких сразу — «в другом окне».
+ * @param {string} id номер разговора @param {Map<string, any>} tabs @param {Map<string, any>} outside
+ * @param {{ root?: string, cwdOf?: Map<string, string> }} [where] папка проекта окна и папки разговоров agy (номер → папка)
+ * @returns {{ sid: string, state: string } | null}
+ */
+function agyTabOf(id, tabs, outside, where = {}) {
+  const o = outside.get(id);
+  if (!o || !o.agy || !o.born) return null;
+  const root = normDir(where.root), cwdOf = where.cwdOf || new Map();
+  /** Папка разговора известна и не папка окна — замок чужой. @param {string} k */
+  const other = (k) => !!root && !!cwdOf.get(k) && normDir(cwdOf.get(k)) !== root;
+  if (other(id)) return null;
+  const locks = [...outside].filter(([k, x]) => x && x.agy && x.born && !other(k)).map(([, x]) => x);
+  /** @type {{ sid: string, state: string }[]} */
+  const hit = [];
+  for (const [k, t] of tabs) {
+    if (!k.startsWith('agytab:') || !t.at || o.born < t.at - AGY_SLACK_MS) continue;
+    if (locks.filter((x) => x.born >= t.at - AGY_SLACK_MS).length === 1) hit.push({ sid: t.sid, state: t.state });
+  }
+  return hit.length === 1 ? hit[0] : null;
 }
 
 /** Записи <grok>\active_sessions.json: [{ session_id, pid, cwd, opened_at }] (t1118). Файла нет или пишется — пусто. @param {string} grokHome */
@@ -214,7 +253,7 @@ function grokRunning(grokHome, getStartTimes = startTimes) {
  * @returns {Map<string, { sid: string, state: string, pid: number }>}
  */
 function tabsRunning(r) {
-  /** @type {Map<string, { sid: string, state: string, pid: number }>} */
+  /** @type {Map<string, { sid: string, state: string, pid: number, at?: number }>} */
   const out = new Map();
   for (const t of (r && Array.isArray(r.tabs) ? r.tabs : [])) {
     const sid = t && (t.claudeSessionId || t.codexSessionId || t.resumeId); // resumeId — grok и agy (t1194), app.js resumeIdOf
@@ -222,6 +261,11 @@ function tabsRunning(r) {
     const pid = Number(t && t.pid) > 0 ? Number(t.pid) : 0;
     if (id) out.set(id, { sid: String(t.sid), state: String(t.state || ''), pid });
     else if (pid && t && t.sid) out.set(`pid:${pid}`, { sid: String(t.sid), state: String(t.state || ''), pid }); // вкладка без номера разговора — по pid
+    // Свежая вкладка agy без номера (t1673, d398): пару ищет agyTabOf по времени запуска вкладки и созданию замка.
+    if (!id && t && t.sid && /^(agent:)?(antigravity|agy)$/.test(String(t.kind || ''))) {
+      const at = Date.parse(String(t.createdAt || ''));
+      if (at) out.set(`agytab:${t.sid}`, { sid: String(t.sid), state: String(t.state || ''), pid, at });
+    }
   }
   return out;
 }
@@ -231,15 +275,18 @@ function tabsRunning(r) {
  * @param {{ agent: string, id: string }} rec
  * @param {Map<string, { sid: string, state: string, pid: number }>} tabs
  * @param {Map<string, { pid: number, status: string }>} outside Claude и Codex вместе: номера — uuid, не пересекаются
+ * @param {{ root?: string, cwdOf?: Map<string, string> }} [where] для свежей вкладки agy: папка окна и папки разговоров (t1673)
  */
-function liveOf(rec, tabs, outside) {
+function liveOf(rec, tabs, outside, where) {
   const t = tabs.get(rec.id);
   if (t) return { where: 'tab', sid: t.sid, state: t.state };
   const o = outside.get(rec.id);
   // t1194: вкладка grok без номера в аргументах — тот же процесс, что в active_sessions.json. У agy pid в замке нет.
   if (o && o.pid > 0) { const p = tabs.get(`pid:${o.pid}`); if (p) return { where: 'tab', sid: p.sid, state: p.state }; }
+  const a = agyTabOf(rec.id, tabs, outside, where);
+  if (a) return { where: 'tab', sid: a.sid, state: a.state };
   if (o) return { where: 'outside', pid: o.pid, status: o.status };
   return null;
 }
 
-module.exports = { alive, startTimes, refreshStartTimes, claudePids, claudeRunning, codexRunning, agyRunning, grokPids, grokRunning, tabsRunning, liveOf };
+module.exports = { alive, startTimes, refreshStartTimes, claudePids, claudeRunning, codexRunning, agyRunning, agyTabOf, grokPids, grokRunning, tabsRunning, liveOf };
