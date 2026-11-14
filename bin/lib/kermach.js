@@ -242,7 +242,9 @@ const ROADMAP_HELP = `kermach roadmap — доска «Роадмапа» про
                                        агенту — «по слову главной сессии», а не «по слову человека»
   kermach roadmap grade tN             проверить закрытую карту («готово») заново: проверяющий (claude -p, только чтение)
                                        в папке проекта, следующий круг. Итог — в .kermach/grades/tN-K.md и строкой checked:
-                                       карты, статус не меняется; ответ не по образцу — сырой ответ в tN-K-raw.txt. Изменения
+                                       карты, статус не меняется; ответ не по образцу — сырой ответ в tN-K-raw.txt. Берёт и
+                                       карту «ждёт ответа», которой проверяющий не дал итога («не проверена: …» в checked:) —
+                                       вариант «1) проверить ещё раз»; принять её или вернуть агенту решает человек. Изменения
                                        для проверяющего — от created: карты. Ждёт ответа claude, до 30 мин. Только главная
                                        сессия: из вкладки агента карты — отказ, код 5.
   kermach roadmap new f "Название" --goal "цель"
@@ -974,9 +976,12 @@ function runStarted(project, id) {
   const path = require('path');
   try {
     const { DATA_DIR } = require(path.join(__dirname, '..', '..', 'daemon', 'protocol.js'));
-    const bag = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'settings.json'), 'utf8')).pluginSettings.roadmap;
+    // t1870: записи запусков — в plugins-data\roadmap\run-state.json; программа до t1870 и пробы держат их в settings.json. Берём самое позднее начало.
+    /** @param {string} f @param {(j: any) => any} pick */
+    const bagOf = (f, pick) => { try { return pick(JSON.parse(fs.readFileSync(f, 'utf8'))) || {}; } catch { return {}; } };
+    const bags = [bagOf(path.join(DATA_DIR, 'plugins-data', 'roadmap', 'run-state.json'), (j) => j), bagOf(path.join(DATA_DIR, 'settings.json'), (j) => j.pluginSettings.roadmap)];
     const key = process.platform === 'win32' ? path.resolve(project).toLowerCase() : path.resolve(project);
-    return Math.max(...['runs', 'solo'].map((n) => Number(bag[n] && bag[n][key] && bag[n][key][id] && bag[n][key][id].started) || 0));
+    return Math.max(0, ...bags.flatMap((bag) => ['runs', 'solo'].map((n) => Number(bag[n] && bag[n][key] && bag[n][key][id] && bag[n][key][id].started) || 0)));
   } catch { return 0; }
 }
 
@@ -1000,10 +1005,29 @@ function lastGrade(project, id) {
  */
 function checkLines(board, b, phase = '') {
   const found = board.checkBoard(b, phase ? { phase } : {});
-  const where = phase ? `фаза ${phase}` : 'незаконченные фазы';
-  if (!found.length) return [`Проверка роадмапа (${where}): ошибок нет.`];
-  return [...found.map((/** @type {any} */ x) => `- ${x.reason}`),
-    `Проверка роадмапа (${where}): ошибок ${found.length}. Волна фазы с ошибками не стартует, пока человек не нажмёт «запускать всё равно» в панели «Роадмапа».`];
+  const lang = (b && b.lang) || '';
+  // t1818: на доске uk, en, de — строки словаря доски (ключи roadmap.check.*, те же, что у панели window.js checkWhy); русская доска — reason из board.js.
+  /** @param {string} key @param {string} ru @param {Record<string, string | number>} [v] */
+  const say = (key, ru, v = {}) => {
+    let t = ru;
+    if (lang) {
+      try {
+        if (!closeDict[lang]) closeDict[lang] = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'plugins', 'translate', `${lang}.json`), 'utf8'));
+        t = closeDict[lang][`roadmap.check.${key}`] || ru;
+      } catch { /* словаря нет — русский */ }
+    }
+    return t.replace(/\{(\w+)\}/g, (m, n) => (n in v ? String(v[n]) : m));
+  };
+  /** @param {any} x */
+  const why = (x) => {
+    if (!lang) return x.reason;
+    const v = { phase: x.phase, id: x.id, dep: x.dep || '', ring: Array.isArray(x.ring) ? [...x.ring, x.ring[0]].join(' → ') : '', n: x.n || 0, all: x.all || 0 };
+    return say(x.code, x.reason, v);
+  };
+  const where = phase ? say('cliPhase', 'фаза {phase}', { phase }) : say('cliOpen', 'незаконченные фазы');
+  if (!found.length) return [say('cliNone', 'Проверка роадмапа ({where}): ошибок нет.', { where })];
+  return [...found.map((/** @type {any} */ x) => `- ${why(x)}`),
+    say('cliSum', 'Проверка роадмапа ({where}): ошибок {n}. Волна фазы с ошибками не стартует, пока человек не нажмёт «запускать всё равно» в панели «Роадмапа».', { where, n: found.length })];
 }
 
 /**
@@ -1210,7 +1234,7 @@ async function roadmap(o) {
     if (ENV('BROWSER_PIPE') && ENV('BROWSER_AUTH')) {
       /** @type {any} */
       const a = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), cmd: 'roadmap-answer', ref: o.answer, text: o.text, head: r.head, sha1: r.sha1, board: project, ...(o.from ? { from: o.from } : {}) }).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
-      if (a && a.ok && a.sent) sent = `агенту отправлено: вкладка ${a.sid}, статус ждёт ответа → в работе`;
+      if (a && a.ok && a.sent) sent = `агенту отправлено: вкладка ${a.sid}${a.wasAsk ? ', статус ждёт ответа → в работе' : ' (агент в работе, строка встанет в очередь вкладки), статус не менялся'}`;
       else if (a && a.ok && a.waiting) sent = `агенту отправится позже: ${a.why || 'вкладка агента занята'}`; // t1664: ждать может и запрос разрешения, не только поле ввода
       else if (a && a.ok) sent = `агенту не отправлено: ${a.why || 'вкладки нет'}`;
       else sent = `агенту не отправлено: вкладки нет (окно проекта: ${(a && a.error) || 'нет ответа'})`;
@@ -1233,6 +1257,8 @@ async function roadmap(o) {
     if (r.r.reminded) out.push(`со второго раза — после напоминания «только JSON»; первый ответ — ${r.raws.join(', ')}`);
     for (const x of r.r.items) out.push(`- ${x.ok ? 'да' : 'нет'} — ${x.criterion}`);
     if (String(r.r.remarks || '').trim()) out.push(`Замечания: ${String(r.r.remarks).trim()}`);
+    // t1889 (d567): карта «ждёт ответа» после «не проверена» — статус команда не меняет: «готово» мимо панели окно проверило бы ещё раз.
+    if (r.status === 'ждёт ответа') out.push('статус не менялся: ждёт ответа. Дальше решает человек: принять карту — «готово» в панели (проверяющий её больше не запускает) — или вернуть агенту');
     process.stdout.write(`${clean(out.join('\n'))}\n`);
     return;
   }

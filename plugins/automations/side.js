@@ -16,7 +16,9 @@ function autoSetup(host) {
   row.onmouseenter = () => { row.style.background = 'var(--hover)'; row.style.color = 'var(--text)'; };
   row.onmouseleave = () => { row.style.background = ''; row.style.color = 'var(--muted)'; };
   row.onclick = () => api.open({ project: host.project.path });
-  host.side.appendChild(row);
+  // Место по алфавиту папок, как при загрузке (t1845, t1895): перед первой строкой плагина, чья папка дальше; включили заново — встаёт туда же, не в конец.
+  const next = [...host.side.children].find((e) => e.id.startsWith('plugin-') && e.id > row.id);
+  host.side.insertBefore(row, next || null);
   host.side.hidden = false;
   let stopped = false;
   /** @type {any} */

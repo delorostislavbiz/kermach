@@ -1282,6 +1282,22 @@ async function quietOf(projectId, sid, until) {
   }
 }
 
+/**
+ * Дошла ли строка до агента (t1854, d686): начало строки есть на экране, но не в поле ввода.
+ * Поле ввода — от последней строки-приглашения («❯» у Claude Code, «›» у Codex, «>» у прочих) до низа экрана:
+ * отправленное сообщение уходит в историю выше, а поле внизу пустеет. Приглашения нет — прежнее правило: строка на экране.
+ * @param {string} screen текст экрана @param {string} want начало строки без пробелов
+ */
+function sentOn(screen, want) {
+  const flat = (s) => s.replace(/\s+/g, '');
+  if (!flat(screen).includes(want)) return false;
+  const rows = screen.split('\n');
+  let at = -1;
+  for (let i = rows.length - 1; i >= 0; i--) if (/^\s*[❯›>](\s|$)/.test(rows[i])) { at = i; break; }
+  if (at < 0) return true;
+  return !flat(rows.slice(at).join('\n')).includes(want);
+}
+
 /** Пауза между строкой и Enter, мс (d666). @param {number} n длина строки */
 const enterPause = (n) => Math.min(1500, 150 + Math.round(n * 1.5));
 
@@ -1299,7 +1315,7 @@ async function typeLine(projectId, sid, line) {
   await new Promise((ok) => setTimeout(ok, enterPause(line.length)));
   await writeTab(projectId, sid, '\r');
   const want = line.slice(0, 40).replace(/\s+/g, '');
-  const seen = async () => (await screenOf(projectId, sid)).replace(/\s+/g, '').includes(want);
+  const seen = async () => sentOn(await screenOf(projectId, sid), want);
   await new Promise((ok) => setTimeout(ok, 1500));
   if (!slept) return { seen: await seen() };
   // Спящая вкладка (t1751, t1773): демон придержал ввод, поднимает claude --resume и отдаёт строку, только когда тот готов (секунды).
@@ -1831,7 +1847,22 @@ function register(c) {
   agents.onRunning((sids) => {
     const seen = new Set();
     for (const sid of sids) for (const { wc } of [...watchersOf(sid)]) if (!seen.has(wc.id)) { seen.add(wc.id); wc.send('term:changed'); }
+    // Демону — кто запущен руками (t1858, d399): по нему он ставит состояние по заголовку. Старый демон команды не знает — одна строка в журнал.
+    const d = client;
+    if (!d || runsRefused === d) return;
+    for (const sid of sids) {
+      const kind = agents.runningIn(sid);
+      d.request('runs', { sid, runs: kind }).catch((/** @type {any} */ err) => {
+        const msg = String(err && err.message || err);
+        // Вкладка закрылась между опросом и запросом — не отказ демона.
+        if (/нет терминала/.test(msg) || runsRefused === d) return;
+        runsRefused = d;
+        log(`агент в терминале демону не передан: ${msg} — состояние у такой вкладки появится после перезапуска демона`);
+      });
+    }
   });
+  /** Клиент демона, который отказал в команде runs (t1858): старый демон — больше не шлём. @type {any} */
+  let runsRefused = null;
   /** Связь уже обрывалась — следующий клиент новый. */
   let lost = false;
   if (c.link) c.link.onClient(wire); else c.daemon.then(wire, () => {});

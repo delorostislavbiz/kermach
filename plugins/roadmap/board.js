@@ -380,11 +380,20 @@ function root(project) {
 
 /** Путь внутри папки доски; иначе — ошибка. @param {string} dir @param {string} name */
 function inside(dir, name) {
+  // t1871: ответ зависит только от двух строк — путь, уже признанный своим, не проверяем заново: path.relative на 2000 файлах
+  // настоящей доски стоил ~100 мс каждого чтения доски. Чужой путь в память не идёт и каждый раз даёт ошибку.
+  const k = `${dir}\n${name}`;
+  const was = INSIDE.get(k);
+  if (was !== undefined) return was;
   const file = path.join(dir, name);
   const rel = path.relative(dir, file);
   if (!rel || up(rel) || path.isAbsolute(rel) || rel.includes(path.sep)) throw new Error(`путь вне папки доски: ${name}`);
+  if (INSIDE.size >= 20000) INSIDE.clear();
+  INSIDE.set(k, file);
   return file;
 }
+/** Признанные своими пути inside (t1871): «папка\nимя» → полный путь. @type {Map<string, string>} */
+const INSIDE = new Map();
 
 /** Папка доски не ведёт за пределы проекта (ссылка или junction). @param {string} project @param {string} dir */
 function ownRoot(project, dir) {
@@ -1126,7 +1135,7 @@ function prime(project, opts = {}) {
           const key = `${st.mtimeMs}:${st.ctimeMs}:${st.size}`;
           const hit = TEXTS.get(file);
           const m = NAME_RE.exec(names[n]);
-          if (hit && hit.key === key) { /** @type {any} */ (hit).v = gen; if (m) parsedOf(m[1], Number(m[2]), names[n], file, hit, lang); continue; }
+          if (hit && hit.key === key) { /** @type {any} */ (hit).v = gen; if (m) warmOf(dir, names[n], m[1], parsedOf(m[1], Number(m[2]), names[n], file, hit, lang)); continue; }
           const text = await fs.promises.readFile(file, 'utf8');
           // Файл сменился, пока читали: ключ уже не его — без отметки прогрева, read() проверит сам.
           const st2 = await fs.promises.lstat(file);
@@ -1134,7 +1143,7 @@ function prime(project, opts = {}) {
           const got = `${st2.mtimeMs}:${st2.ctimeMs}:${st2.size}` === key ? { key, text, v: gen } : { key, text };
           TEXTS.set(file, got);
           // t1711: разбор здесь, по файлу между чтениями, — read() после прогрева берёт готовое, а не разбирает 2000 файлов одним куском.
-          if (m) parsedOf(m[1], Number(m[2]), names[n], file, got, lang);
+          if (m) warmOf(dir, names[n], m[1], parsedOf(m[1], Number(m[2]), names[n], file, got, lang));
         } catch { /* файл пропал или не читается — read() скажет */ }
       }
     };
@@ -1143,6 +1152,16 @@ function prime(project, opts = {}) {
   })().finally(() => PRIMING.delete(dir));
   PRIMING.set(dir, p);
   return p;
+}
+
+/**
+ * Прогрев памяти read() по разобранному файлу (t1871): путь (inside) и слова заголовка карты (titleOf для alike) — здесь, между чтениями прогрева,
+ * а не в read() одним куском: на настоящей доске (2000 файлов) это ~100 мс первого чтения. Сбой — молча: read() сделает сам и скажет ошибку.
+ * @param {string} dir @param {string} name @param {string} kind @param {{ r: any }} p
+ */
+function warmOf(dir, name, kind, p) {
+  try { inside(dir, name); } catch { return; }
+  if (kind === 't' && p && p.r && p.r.item && typeof p.r.item.title === 'string') titleOf(p.r.item.title);
 }
 
 /** Файлы доски по видам: номер → имена; заодно неверные имена. @param {string} dir */

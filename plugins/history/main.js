@@ -103,6 +103,8 @@ async function cardStatus(root, card) {
     const m = /^status:[ \t]*(.*)$/m.exec(head);
     status = m ? m[1].trim() : '';
   } catch { return null; }
+  // t1888: слово языка доски (awaiting answer, wartet auf Antwort) → русское слово разбором карты в board.js; карта не разобралась — слово как есть.
+  if (status) try { const c = require('../roadmap/board').oneCard(root, card); if (c && c.status) status = c.status; } catch { /* слово как есть */ }
   cardFiles.set(file, { t, status });
   return status;
 }
@@ -762,5 +764,6 @@ module.exports = (ctx) => {
 };
 module.exports.stateOf = stateOf;
 module.exports.cardStateOf = cardStateOf;
+module.exports.cardStatus = cardStatus;
 module.exports.hides = hides;
 module.exports.projectOwner = projectOwner;

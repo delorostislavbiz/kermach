@@ -20,6 +20,60 @@ const SLEEP_MAX = 1440;
 const DEFAULTS = { uiZoom: 100, termFont: 17, mdShift: 0, sound: true, notify: true, copySelect: true, sleepMin: 60, theme: '', ui: uiThemes.DEFAULT_UI, appearance: 'system', lang: '', projectsBase: '', inboxDir: '', plugins: {}, pluginMain: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
 /** Предел мешка настроек одного плагина в JSON, знаков (t256): больше — запись отклоняется, остаётся прежняя. */
 const BAG_MAX = 64 * 1024;
+/**
+ * Изменчивые ключи мешков плагинов (t1870): состояние работы, а не выбор человека. «Роадмап» меняет их на каждом событии карты
+ * (запуск, «готово», проверяющий, круг статусов — d829), а запись settings.json — файл целиком (у Ростислава 95 КБ),
+ * рассылка всем окнам, подписчики и строка «настройки:» в main.log. Они лежат в своём файле папки данных плагина:
+ * plugins-data\<плагин>\run-state.json { v: 1, <ключ>: … }. Плагин видит их в своём мешке как раньше (get/set), окнам они не уходят.
+ * @type {Record<string, string[]>}
+ */
+const VOLATILE = { roadmap: ['runs', 'past', 'solo', 'review', 'phaseReview', 'gradeCost', 'stalls'] };
+const VOL_FILE = 'run-state.json';
+/** Последний записанный текст файла плагина: тот же — не пишем. @type {Record<string, string>} */
+const volSaved = {};
+/** Файл изменчивых ключей плагина id. @param {string} id */
+const volFile = (id) => path.join(dataDir(), 'plugins-data', id, VOL_FILE);
+/** Изменчивые ключи мешка плагина: только то, что есть. @param {string} id @param {any} bag */
+const volOf = (id, bag) => {
+  /** @type {Record<string, any>} */
+  const o = {};
+  if (bag && typeof bag === 'object') for (const k of VOLATILE[id] || []) if (bag[k] !== undefined) o[k] = bag[k];
+  return o;
+};
+/** Мешки без изменчивых ключей — для settings.json, окон и сравнения. @param {Record<string, any>} bags */
+const stripVol = (bags) => {
+  /** @type {Record<string, any>} */
+  const out = { ...bags };
+  for (const id of Object.keys(VOLATILE)) {
+    if (!out[id] || typeof out[id] !== 'object') continue;
+    const b = { ...out[id] };
+    for (const k of VOLATILE[id]) delete b[k];
+    out[id] = b;
+  }
+  return out;
+};
+/** Настройки без изменчивых ключей: settings.json, окна (settings:changed, ответы IPC). @param {Settings} s */
+const plain = (s) => ({ ...s, pluginSettings: stripVol(s.pluginSettings) });
+/**
+ * Записать файлы изменчивых ключей, которые изменились: атомарно, временный файл и rename. Папку плагина создаём сами.
+ * Файл не записался — строка в журнал и false: settings.json тогда не чистим, иначе записи пропадут.
+ */
+function saveVol() {
+  let ok = true;
+  for (const id of Object.keys(VOLATILE)) {
+    const text = JSON.stringify({ v: 1, ...volOf(id, cur.pluginSettings[id]) });
+    if (volSaved[id] === text) continue;
+    const f = volFile(id);
+    try {
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f + '.tmp', text);
+      fs.renameSync(f + '.tmp', f);
+      volSaved[id] = text;
+    } catch (e) { ok = false; try { fs.unlinkSync(f + '.tmp'); } catch {} log(`настройки: ${f} не записан: ${e}`); }
+  }
+  return ok;
+}
+
 /** Пресеты раскладок окна проекта (t397): не больше PRESETS_MAX, имя до 60 знаков. */
 const PRESETS_MAX = 20;
 const LAYOUTS = ['cols2', 'cols3', 'one2', 'grid4'];
@@ -155,8 +209,52 @@ function sysLang(loc) {
 /** Поля lang в файле нет (t1303): язык ставит register после app ready. */
 let langUnset = false;
 
-/** Читает файл. Нет — молча умолчания; испорчен — умолчания и строка в журнал. @param {string} dataDir */
+/** Читает settings.json и файлы изменчивых ключей плагинов (t1870). @param {string} dataDir */
 function load(dataDir) {
+  loadMain(dataDir);
+  loadVol();
+  return cur;
+}
+
+/**
+ * Изменчивые ключи плагинов из run-state.json (t1870). Ключ есть и в settings.json — он главнее: после переноса он появляется там,
+ * только если его записала программа до t1870 или проба. Такие ключи переносим один раз: сначала файл плагина, потом settings.json без них.
+ * Файл испорчен — строка в журнал, файл откладываем в .bad-<время>, пустым поверх не пишем.
+ */
+function loadVol() {
+  /** @type {string[]} */
+  const moved = [];
+  for (const id of Object.keys(VOLATILE)) {
+    delete volSaved[id];
+    const had = volOf(id, cur.pluginSettings[id]);
+    /** @type {any} */
+    let j = {};
+    const f = volFile(id);
+    try {
+      const text = fs.readFileSync(f, 'utf8');
+      j = JSON.parse(text);
+      if (!j || typeof j !== 'object' || Array.isArray(j)) throw new Error('не объект');
+      volSaved[id] = text;
+    } catch (e) {
+      j = {};
+      if (!e || /** @type {any} */ (e).code !== 'ENOENT') {
+        const bad = `${f}.bad-${Date.now()}`;
+        try { fs.renameSync(f, bad); } catch { /* файла уже нет */ }
+        log(`настройки: ${f} не прочитан (${e instanceof Error ? e.message : e}), отложен в ${bad}`);
+      }
+    }
+    const merged = { ...volOf(id, j), ...had };
+    if (Object.keys(merged).length) cur.pluginSettings[id] = { ...(cur.pluginSettings[id] || {}), ...merged };
+    if (Object.keys(had).length) moved.push(`${id}: ${Object.keys(had).join(', ')}`);
+  }
+  if (moved.length && saveVol()) {
+    save();
+    log(`настройки: изменчивые ключи перенесены из settings.json в ${VOL_FILE} папки данных плагина (${moved.join('; ')})`);
+  }
+}
+
+/** Читает settings.json. Нет — молча умолчания; испорчен — умолчания и строка в журнал. @param {string} dataDir */
+function loadMain(dataDir) {
   file = path.join(dataDir, 'settings.json');
   cur = { ...DEFAULTS, plugins: {}, pluginMain: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
   langUnset = false;
@@ -189,9 +287,11 @@ function load(dataDir) {
   return cur;
 }
 
+/** settings.json без изменчивых ключей (t1870); их файл не записался — пишем их и в settings.json, чтобы не пропали. */
 function save() {
+  const vol = saveVol();
   try {
-    fs.writeFileSync(file + '.tmp', JSON.stringify({ v: 1, ...cur }, null, 2));
+    fs.writeFileSync(file + '.tmp', JSON.stringify({ v: 1, ...(vol ? plain(cur) : cur) }, null, 2));
     fs.renameSync(file + '.tmp', file);
   } catch (e) { log(`настройки: settings.json не записан: ${e}`); }
 }
@@ -203,7 +303,7 @@ const pages = () => webContents.getAllWebContents().filter((w) => !w.isDestroyed
 function apply(w) {
   if (w.isDestroyed()) return;
   w.setZoomFactor(cur.uiZoom / 100);
-  w.send('settings:changed', cur);
+  w.send('settings:changed', plain(cur));
 }
 
 /**
@@ -307,12 +407,26 @@ function set(patch) {
   const part = (/** @type {any} */ x) => (x && typeof x === 'object' ? x : {});
   // Мешок плагина заменяется целиком (t256): плагин присылает свой объект полностью; null — мешок удалить.
   const bags = { ...cur.pluginSettings, ...part(pt.pluginSettings) };
+  // t1870: мешок без изменчивых ключей (его прислало окно — окнам они не уходят, — или старый снимок) их не стирает: берём из cur.
+  for (const id of Object.keys(VOLATILE)) {
+    const nb = part(pt.pluginSettings)[id];
+    if (!nb || typeof nb !== 'object' || Array.isArray(nb)) continue;
+    const keep = Object.fromEntries(Object.entries(volOf(id, cur.pluginSettings[id])).filter(([k]) => nb[k] === undefined));
+    if (Object.keys(keep).length) bags[id] = { ...nb, ...keep };
+  }
   const merged = { ...cur, ...pt, plugins: { ...cur.plugins, ...part(pt.plugins) }, pluginMain: { ...cur.pluginMain, ...part(pt.pluginMain) }, agents: { ...cur.agents, ...part(pt.agents) }, pluginSettings: bags };
   const next = clean(merged, cur);
   if (next.uiZoom === cur.uiZoom && next.termFont === cur.termFont && next.mdShift === cur.mdShift && next.sound === cur.sound && next.notify === cur.notify && next.copySelect === cur.copySelect && next.sleepMin === cur.sleepMin && next.theme === cur.theme && next.lang === cur.lang && next.projectsBase === cur.projectsBase && next.inboxDir === cur.inboxDir
     && next.ui === cur.ui && next.appearance === cur.appearance
     && JSON.stringify(next.plugins) === JSON.stringify(cur.plugins) && JSON.stringify(next.pluginMain) === JSON.stringify(cur.pluginMain) && JSON.stringify(next.agents) === JSON.stringify(cur.agents)
     && JSON.stringify(next.pluginSettings) === JSON.stringify(cur.pluginSettings) && JSON.stringify(next.layoutPresets) === JSON.stringify(cur.layoutPresets)) return get();
+  // t1870: изменились только изменчивые ключи (запуски карт и т. п.) — пишем лишь их файл: без settings.json, строки «настройки:», рассылки окнам и подписчиков.
+  if (JSON.stringify(plain(next)) === JSON.stringify(plain(cur))) {
+    cur = next;
+    // Файл не записался — save() кладёт их в settings.json, иначе после перезапуска их не будет.
+    if (!saveVol()) save();
+    return get();
+  }
   // Схема плагина «Темы» и его выключатель тоже меняют вид: у Termius Dark светлая схема — светлые системные части окна (t710).
   const restyle = next.ui !== cur.ui || next.appearance !== cur.appearance || next.theme !== cur.theme || next.plugins.themes !== cur.plugins.themes;
   cur = next;
@@ -386,13 +500,13 @@ function register(c) {
   ipcMain.handle('settings:get', (e) => {
     if (!sender.allowed(e, 'settings:get')) return sender.refused();
     if (e.sender.getType() === 'window') e.sender.setZoomFactor(cur.uiZoom / 100);
-    return get();
+    return plain(get());
   });
   // telegramOp (t1496) — действие раздела «Telegram»: токен уходит в telegram.js и шифруется, в set() и settings.json не попадает.
   ipcMain.handle('settings:set', (e, patch) => {
     if (!sender.allowed(e, 'settings:set')) return sender.refused();
     if (patch && typeof patch === 'object' && patch.telegramOp) return require('./telegram').op(patch.telegramOp);
-    return set(patch);
+    return plain(set(patch));
   });
   // Поля «Папка новых проектов» и «Папка Входящих» (t1286): системный выбор папки, отмена — ''.
   ipcMain.handle('settings:pickDir', async (e, key) => {
@@ -406,7 +520,11 @@ function register(c) {
     return r.canceled || !r.filePaths[0] ? '' : r.filePaths[0];
   });
   // Записать папку (t1286): пусто — умолчание; относительный путь, нет папки или это файл — { error }, settings.json не меняется.
-  ipcMain.handle('settings:dir', async (e, key, value) => (sender.allowed(e, 'settings:dir') ? setDir(key, value) : sender.refused()));
+  ipcMain.handle('settings:dir', async (e, key, value) => {
+    if (!sender.allowed(e, 'settings:dir')) return sender.refused();
+    const r = await setDir(key, value);
+    return r && typeof r === 'object' && 'pluginSettings' in r ? plain(/** @type {Settings} */ (r)) : r;
+  });
   // Система сменила светлый/тёмный вид (на macOS и акцент) — новые темы в режиме «как в системе» перекрашиваются сразу (t506).
   syncNative();
   const sysChanged = () => { if (cur.ui !== 'termius') { for (const w of pages()) apply(w); dressAll(); } };

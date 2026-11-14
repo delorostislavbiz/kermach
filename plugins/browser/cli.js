@@ -762,7 +762,7 @@ async function roadmapAnswer(q, id) {
   const r = await require('../../main/plugin-bridge').callFor(id, 'roadmap', 'answer', [ref, q.text.slice(0, 20000), { head: q.head.slice(0, 200), sha1: String(q.sha1 || '').slice(0, 40), from: q.from === 'session' ? 'session' : '' }]);
   if (!r || 'error' in r) return fail(r && r.closed ? 3 : 4, r ? String(r.error) : 'нет ответа');
   const a = r.agent || {};
-  return { ok: true, sent: !!a.sent, waiting: !!a.waiting, sid: clean(a.sid || '').slice(0, 80), why: clean(a.why || '').slice(0, 300) };
+  return { ok: true, sent: !!a.sent, wasAsk: !!a.wasAsk, waiting: !!a.waiting, sid: clean(a.sid || '').slice(0, 80), why: clean(a.why || '').slice(0, 300) };
 }
 
 /** Причины пропуска карты волной словами (t1423) — как WHY окна «Роадмапа». */

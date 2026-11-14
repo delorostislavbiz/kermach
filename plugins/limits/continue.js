@@ -35,6 +35,23 @@ const enterPauseMs = (/** @type {string} */ text) => Math.min(3000, 150 + 3 * te
 const DRAW_MS = 1500;
 const LIMIT_FILES = /** @type {Record<string, string>} */ ({ claude: 'claude-rate-limits.json', codex: 'codex-rate-limits.json' });
 
+// t1881: таймер вкладки — каждые N минут писать агенту заданный текст. Хранится в той же записи continueTabs (поле timer: { on, min, text }),
+// поэтому переезд на новый sid и удаление с закрытой вкладкой — общие с t1880. Отсчёт в памяти окна: срок пришёл, а слать нельзя —
+// следующий через период, пропущенный раз не копится; после перезапуска окна отсчёт начинается заново.
+const TIMER_MIN = 5;
+const TIMER_MAX = 99 * 60 + 59;
+/** Длина «минуты» таймера. T1881_MINUTE_MS — только для пробы: короткий период без ожидания в минуты. Читается на каждом проходе. */
+const minuteMs = () => { const v = Number(process.env.T1881_MINUTE_MS); return v > 0 ? v : 60000; };
+const LOAD_FLAG = 'СТОП-НАГРУЗКА.txt';
+/** Период в минутах: не меньше 5, не больше 99 ч 59 мин. @param {any} v */
+const timerMinOf = (v) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.min(TIMER_MAX, Math.max(TIMER_MIN, n)) : 60; };
+/** Таймер записи вкладки или null. @param {any} rec */
+const timerOf = (rec) => {
+  const t = rec && rec.timer;
+  if (!t || typeof t !== 'object') return null;
+  return { on: t.on === true, min: timerMinOf(t.min), text: cleanText(t.text) };
+};
+
 /**
  * t1730: Claude Code 2.1.319 сам продолжает после сброса лимита через 30–90 с (autoContinueAtUsageLimit, d723), а мы пишем через 15–25 с — вышло бы два «продолжай».
  * Ключ true — Claude продолжит сам. Ключ false — сам не продолжит, пишем мы. Ключа нет — включено ли, зависит от флага Claude, которого снаружи не видно:
@@ -78,6 +95,11 @@ const cleanText = (v) => String(v == null ? '' : v).replace(/[\r\n\t]+/g, ' ').r
 const defaultText = () => {
   const ru = 'Продолжай с того места, где остановился.';
   return i18n ? i18n.t('limits.continueDefault', 'Продолжай с того места, где остановился.') : ru;
+};
+/** t1881: текст таймера по умолчанию. */
+const defaultTimerText = () => {
+  const ru = 'Как дела? Если работа не закончена — продолжай.';
+  return i18n ? i18n.t('limits.timerDefault', ru) : ru;
 };
 
 /** Текст без пробелов: перенос в узкой вкладке рвёт строку в любом месте, даже внутри времени, а без пробелов разрыва не видно. @param {string} s */
@@ -263,21 +285,142 @@ function make(ctx, opts = {}) {
   /** @param {string} key @param {Record<string, any>} fields */
   const patch = (key, fields) => change((all) => { if (!all[key]) return false; Object.assign(all[key], fields); return true; });
 
+  const bag = () => { try { return ctx.settings.get() || {}; } catch { return {}; } };
+  /**
+   * t1880: своя настройка вкладки — continueTabs[«проект|вкладка»] = { on?: boolean, text?: string }. Мешок плагина общий на все проекты, поэтому в ключе проект.
+   * Нет поля on — включатель общий; пустой text — общий текст. Нет записи — вкладка целиком на общей настройке.
+   * @returns {Record<string, { on?: boolean, text?: string }>} записи только этого проекта, ключ — вкладка
+   */
+  const ownTabs = () => {
+    const all = bag().continueTabs;
+    /** @type {Record<string, any>} */
+    const out = {};
+    if (all && typeof all === 'object') for (const [k, v] of Object.entries(all)) if (k.startsWith(`${projectId}|`) && v && typeof v === 'object') out[k.slice(projectId.length + 1)] = v;
+    return out;
+  };
   const settingsNow = () => {
-    /** @type {any} */
-    let s = {};
-    try { s = ctx.settings.get() || {}; } catch { /* настроек нет — выключено */ }
-    return { on: s.continueOn === true, text: typeof s.continueText === 'string' ? s.continueText : '' };
+    const s = bag();
+    return { on: s.continueOn === true, text: typeof s.continueText === 'string' ? s.continueText : '', tabs: ownTabs() };
+  };
+  /** Включено ли и какой текст у вкладки: своё, иначе общее, иначе текст по умолчанию. @param {ReturnType<typeof settingsNow>} set @param {string} sid */
+  const tabSet = (set, sid) => {
+    const own = set.tabs[sid] || {};
+    return { on: typeof own.on === 'boolean' ? own.on : set.on, text: cleanText(own.text) || cleanText(set.text) || defaultText() };
+  };
+  /** Последний список вкладок Claude и Codex этого проекта: окну — строки своих настроек. @type {{ sid: string, kind: string, title: string, conv: string, ownTitle: string }[]} */
+  let tabsKnown = [];
+  /** Сколько проходов подряд вкладки со своей настройкой нет ни среди живых, ни среди ждущих восстановления. @type {Map<string, number>} */
+  const tabGone = new Map();
+  /** t1881: срок следующего сообщения таймера по вкладке; sig — период, при смене которого отсчёт начинается заново. @type {Map<string, { at: number, sig: string }>} */
+  const timerNext = new Map();
+  /** @param {any} r ответ ctx.terminals() */
+  const remember = (r) => {
+    if (!r || !Array.isArray(r.tabs)) return;
+    tabsKnown = r.tabs.filter((/** @type {any} */ t) => LIMIT_FILES[t.kind] && t.alive !== false).map((/** @type {any} */ t) => ({ sid: String(t.sid), kind: t.kind, title: t.title || '', ...looks(t) }));
+    for (const t of tabsKnown) seenLive.add(t.sid);
+  };
+  /** t1886: вкладки, которые этот экземпляр видел живыми, — после перезапуска программы старых sid в нём нет. @type {Set<string>} */
+  const seenLive = new Set();
+  /** t1886: вкладки, закрытые руками: их запись удалена и не переезжает. @type {Set<string>} */
+  const closedTabs = new Set();
+  /**
+   * sid из файла вкладок проекта (src/main/tabs.js, только чтение): закрытие руками убирает запись сразу, revive заменяет её на новый sid.
+   * Файл не прочитан или модуля нет — null: закрытость по нему не решаем. @returns {Set<string> | null}
+   */
+  const savedSids = () => {
+    try {
+      const tabsFile = require('../../main/tabs');
+      return new Set(tabsFile.load(limitsDir, projectId, ctx.log).tabs.map((/** @type {any} */ t) => String(t.sid)));
+    } catch { return null; }
+  };
+  /**
+   * Постоянные признаки вкладки: номер разговора и заголовок, данный при открытии. Подъём вкладок после перезапуска демона (terminals.js revive)
+   * даёт вкладке новый sid, а эти признаки переносит: по ним запись переезжает на новый sid. @param {any} t вкладка из ctx.terminals()
+   */
+  const looks = (t) => ({ conv: String((t && (t.claudeSessionId || t.codexSessionId || t.resumeId)) || ''), ownTitle: String((t && t.ownTitle) || '') });
+  /**
+   * t1880, круг 2: записи, чьей вкладки нет, переезжают на живую вкладку без своей записи — с тем же номером разговора,
+   * а без номера — на единственную вкладку того же вида с тем же заголовком открытия. Отвечает, сколько переехало. @param {any} r
+   */
+  const moveRevived = (r) => {
+    const was = bag();
+    const all = { ...(was.continueTabs || {}) };
+    const mine = ownTabs();
+    const live = r.tabs.filter((/** @type {any} */ t) => LIMIT_FILES[t.kind] && t.alive !== false && !mine[String(t.sid)]);
+    const have = new Set(r.tabs.map((/** @type {any} */ t) => String(t.sid)));
+    const waiting = new Set(Array.isArray(r.waiting) ? r.waiting.map(String) : []);
+    const saved = savedSids();
+    const moved = [];
+    const closed = [];
+    for (const [sid, v] of Object.entries(mine)) {
+      if (have.has(sid) || !v || !v.kind) continue;
+      // t1886: тот же номер разговора — та же беседа, поднятая заново (revive берёт прежний номер): переезд безопасен всегда.
+      let to = v.conv ? live.filter((/** @type {any} */ t) => looks(t).conv === v.conv) : [];
+      // Вкладку этот экземпляр видел живой, а теперь её нет ни в живых, ни в waiting, ни в файле вкладок — её закрыли руками
+      // (term:close сразу убирает запись из файла, src/main/tabs.js remove). Запись удаляется сейчас и никуда не переезжает:
+      // новая вкладка того же вида получает тот же заголовок (freeTitle) и иначе взяла бы чужие «продолжай» и таймер.
+      // Демон упал при открытом окне — запись в файле остаётся до подъёма, такая вкладка закрытой не считается.
+      if (!to.length && seenLive.has(sid) && !waiting.has(sid) && saved && !saved.has(sid)) closedTabs.add(sid);
+      if (closedTabs.has(sid)) { delete all[`${projectId}|${sid}`]; tabGone.delete(sid); timerNext.delete(sid); closed.push(sid); continue; }
+      // Номер не совпал или его нет (свежий Codex; Claude, чей разговор не найден, revive начинает новый) — по заголовку, и только с вкладки,
+      // которую поднимают заново: она в waiting или в файле вкладок, либо этот экземпляр её живой не видел (окно открыто после перезапуска программы,
+      // revive уже заменил её в файле).
+      const revivable = waiting.has(sid) || (saved ? saved.has(sid) : false) || !seenLive.has(sid);
+      if (!to.length && v.ownTitle && revivable) to = live.filter((/** @type {any} */ t) => t.kind === v.kind && looks(t).ownTitle === v.ownTitle);
+      if (to.length !== 1) continue;
+      const nsid = String(to[0].sid);
+      delete all[`${projectId}|${sid}`];
+      all[`${projectId}|${nsid}`] = { ...v, ...looks(to[0]) };
+      live.splice(live.indexOf(to[0]), 1);
+      tabGone.delete(sid);
+      moved.push(`${sid} → ${nsid}`);
+    }
+    if (!moved.length && !closed.length) return 0;
+    ctx.settings.set({ ...was, continueTabs: all });
+    if (closed.length) ctx.log(`продолжение после лимита: вкладка закрыта, её своя настройка удалена: ${closed.join(', ')}`);
+    if (moved.length) ctx.log(`продолжение после лимита: вкладка запущена заново с новым номером, своя настройка перенесена: ${moved.join(', ')}`);
+    return moved.length + closed.length;
+  };
+  /**
+   * Своя настройка уходит вместе с закрытой вкладкой. Вкладки нет 3 прохода подряд ни в живых, ни в waiting (сохранённые, ещё не поднятые после перезапуска программы) — запись удаляем.
+   * Три прохода — как AWAY_PASSES: один пустой список бывает, пока демон поднимается. @param {any} r
+   */
+  const dropClosed = (r) => {
+    if (!r || !Array.isArray(r.tabs)) return;
+    moveRevived(r);
+    const have = new Set([...r.tabs.map((/** @type {any} */ t) => String(t.sid)), ...(Array.isArray(r.waiting) ? r.waiting.map(String) : [])]);
+    const drop = [];
+    for (const sid of Object.keys(ownTabs())) {
+      if (have.has(sid)) { tabGone.delete(sid); continue; }
+      const n = (tabGone.get(sid) || 0) + 1;
+      tabGone.set(sid, n);
+      if (n >= AWAY_PASSES) drop.push(sid);
+    }
+    if (!drop.length) return;
+    const was = bag();
+    const tabs = { ...(was.continueTabs || {}) };
+    for (const sid of drop) { delete tabs[`${projectId}|${sid}`]; tabGone.delete(sid); }
+    ctx.settings.set({ ...was, continueTabs: tabs });
+    ctx.log(`продолжение после лимита: вкладка закрыта, её своя настройка удалена: ${drop.join(', ')}`);
   };
 
-  /** Что показать окну: только эта программа и этот проект; строка ушла с экрана — случай не показываем. */
+  /** Что показать окну: только эта программа и этот проект; строка ушла с экрана или вкладка выключена — случай не показываем. */
   const view = () => {
     const s = settingsNow();
-    const all = s.on ? load() : {};
+    const anyOn = s.on || Object.values(s.tabs).some((t) => t.on === true);
+    const all = anyOn ? load() : {};
     const cases = Object.entries(all)
-      .filter(([, c]) => c.project === projectId && (c.status === 'wait' || c.status === 'noTime') && !c.away)
+      .filter(([, c]) => c.project === projectId && (c.status === 'wait' || c.status === 'noTime') && !c.away && tabSet(s, c.sid).on)
       .map(([key, c]) => ({ key, sid: c.sid, title: c.title || c.sid, at: c.until ? Math.max(c.until + AFTER_RESET_MS, Number(c.nextTry) || 0) : 0, tries: c.tries || 0, line: c.line, status: c.status }));
-    return { on: s.on, text: s.text, defaultText: defaultText(), cases, claudeSelf: autoNow() === true };
+    const tabs = tabsKnown.map((t) => {
+      const own = s.tabs[t.sid] || {};
+      const tm = timerOf(own);
+      const nx = timerNext.get(t.sid);
+      return { ...t, on: typeof own.on === 'boolean' ? own.on : null, text: cleanText(own.text), timer: tm ? { ...tm, next: tm.on && nx ? nx.at : 0 } : null };
+    });
+    const onTabs = tabsKnown.filter((t) => tabSet(s, t.sid).on).length;
+    const timerTabs = tabsKnown.filter((t) => { const tm = timerOf(s.tabs[t.sid]); return !!(tm && tm.on); }).length;
+    return { on: s.on, text: s.text, defaultText: defaultText(), timerDefault: defaultTimerText(), timerMin: TIMER_MIN, cases, claudeSelf: autoNow() === true, tabs, onTabs, timerTabs };
   };
   const tell = () => { try { ctx.send('continue', view()); } catch { /* окно закрыто */ } };
 
@@ -445,6 +588,58 @@ function make(ctx, opts = {}) {
     return true;
   }
 
+  /**
+   * t1881: почему таймер сейчас не пишет во вкладку, или ''. Флаг нагрузки в папке проекта; вкладка спит (демон отдаёт pid 0, t1751);
+   * агент работает, ждёт ответа на запрос разрешения или задал вопрос текстом (reply.ask, t1483); поле не пусто или на экране меню.
+   * @param {any} tab
+   */
+  async function timerBlock(tab) {
+    const dir = ctx.project && ctx.project.path;
+    if (dir && fs.existsSync(path.join(dir, LOAD_FLAG))) return `флаг нагрузки (${LOAD_FLAG})`;
+    if (tab.pid === 0) return 'вкладка спит';
+    if (!tab.state || tab.state === 'exited') return 'агент не запущен';
+    if (tab.state === 'working') return 'агент работает';
+    if (tab.state === 'waiting') return 'агент ждёт ответа на запрос';
+    if (tab.reply && tab.reply.ask) return 'агент задал вопрос и ждёт ответа';
+    const plain = txtOf(await ctx.readTab(tab.sid, 'text'));
+    if (plain === null) return 'экран не прочитан';
+    const field = await fieldIsEmpty(tab.sid, plain);
+    if (field) return field;
+    // Свежий взгляд перед самой записью: за чтением экрана агент мог начать работу или открыть запрос.
+    const again = await ctx.terminals();
+    const t = ((again && again.tabs) || []).find((/** @type {any} */ x) => x.sid === tab.sid);
+    if (!t || t.pid === 0 || !t.state || t.state === 'working' || t.state === 'waiting' || t.state === 'exited' || (t.reply && t.reply.ask)) return 'состояние вкладки сменилось';
+    return '';
+  }
+
+  /** Шаг таймера одной вкладки. Ответ true — запись во вкладку была. @param {any} tab @param {ReturnType<typeof timerOf>} tm @param {number} now */
+  async function timerStep(tab, tm, now) {
+    const sid = String(tab.sid);
+    if (!tm || !tm.on) { timerNext.delete(sid); return false; }
+    const period = tm.min * minuteMs();
+    const sig = `${tm.min}|${period}`;
+    const nx = timerNext.get(sid);
+    if (!nx || nx.sig !== sig) { timerNext.set(sid, { at: now + period, sig }); return false; }
+    if (now < nx.at) return false;
+    // Срок пришёл: следующий — через период от этой минуты, отправили или нет. Пропущенный раз не копится.
+    nx.at = now + period;
+    const why = await timerBlock(tab);
+    if (why) { ctx.log(`таймер вкладки ${sid}: сообщение пропущено, следующее через ${tm.min} мин: ${why}`); tell(); return false; }
+    // t1886: настройка взята в начале прохода, а чтение экрана ждёт. Человек мог выключить таймер или закрыть вкладку за это время — перечитываем перед записью.
+    const nowTm = stopped ? null : timerOf(settingsNow().tabs[sid]);
+    if (!nowTm || !nowTm.on) { timerNext.delete(sid); ctx.log(`таймер вкладки ${sid}: выключен во время прохода, сообщение не отправлено`); return false; }
+    const text = nowTm.text || defaultTimerText();
+    /** @type {any} */
+    let r;
+    try { r = await ctx.writeTab(sid, text); } catch (e) { ctx.log(`таймер вкладки ${sid}: текст не записан: ${e}`); return true; }
+    if (!r || r.error) { ctx.log(`таймер вкладки ${sid}: текст не записан: ${(r && r.error) || 'нет ответа'}`); return false; }
+    const enter = await pressEnter(sid, text);
+    if (enter) ctx.log(`таймер вкладки ${sid} (${tab.title || 'без имени'}): текст в поле, Enter не нажат: ${enter}`);
+    else ctx.log(`таймер вкладки ${sid} (${tab.title || 'без имени'}): отправлено «${text}»`);
+    tell();
+    return true;
+  }
+
   /** Строки случая нет на экране, вкладки может не быть. Сброс прошёл — случай закрыт; сброс впереди — ждём, но не показываем. @param {any} c @param {number} now */
   function absent(c, now) {
     const n = (missing.get(c.key) || 0) + 1;
@@ -458,10 +653,15 @@ function make(ctx, opts = {}) {
 
   async function passInner() {
     const set = settingsNow();
-    if (!set.on) { seen.clear(); missing.clear(); return; }
+    // t1880: общая выключена и своих записей у вкладок проекта нет — делать нечего, как раньше.
+    if (!set.on && !Object.keys(set.tabs).length) { seen.clear(); missing.clear(); return; }
     const { limitOf } = require('../roadmap/grader');
     const r = await ctx.terminals();
     if (stopped || !r || !Array.isArray(r.tabs)) return;
+    const known = tabsKnown.map((t) => `${t.sid}|${t.title}`).join(',');
+    remember(r);
+    dropClosed(r);
+    if (known !== tabsKnown.map((t) => `${t.sid}|${t.title}`).join(',')) tell();
     const now = clock();
     // Отметка «идёт отправка» от прошлого запуска: дошло ли, неясно, повторять нельзя. В этом экземпляре проходы не пересекаются, поэтому своей отправки здесь нет.
     change((all) => {
@@ -469,7 +669,6 @@ function make(ctx, opts = {}) {
       for (const c of Object.values(all)) if (c.project === projectId && c.status === 'sending') { c.status = 'sent'; c.enter = 'unknown'; any = true; ctx.log(`продолжение после лимита: вкладка ${c.sid}: отправка оборвалась, дошло ли, неясно, повтора не будет`); }
       return any;
     });
-    const text = cleanText(set.text) || defaultText();
     const fake = process.env.T1729_LIMIT_LINE;
     let wrote = false;
     // Вкладку закрыли или агент вышел: строки у неё больше не будет, иначе случай так и висел бы в списке.
@@ -478,6 +677,14 @@ function make(ctx, opts = {}) {
     for (const tab of r.tabs) {
       if (stopped) return;
       if (!LIMIT_FILES[tab.kind] || tab.alive === false) continue;
+      // t1881: таймер — до проверок «продолжать после сброса»: он работает и при выключенной настройке. Одно сообщение за проход:
+      // кто-то уже написал — срок таймера остаётся, он сработает на следующем проходе.
+      if (!wrote) { if (await timerStep(tab, timerOf(set.tabs[String(tab.sid)]), now)) wrote = true; }
+      else if (!timerOf(set.tabs[String(tab.sid)])) timerNext.delete(String(tab.sid));
+      // t1880: у вкладки своя настройка. Выключена — как выключенная общая раньше: первый взгляд после включения снова первый.
+      const own = tabSet(set, String(tab.sid));
+      if (!own.on) { seen.delete(tab.sid); continue; }
+      const text = own.text;
       if (tab.state) { if (tab.state === 'working' && lastState.get(tab.sid) && lastState.get(tab.sid) !== 'working') startedAt.set(tab.sid, Math.max(startedAt.get(tab.sid) || 0, now)); lastState.set(tab.sid, tab.state); }
       const screen = txtOf(await ctx.readTab(tab.sid, 'text'));
       if (screen === null || !screen.trim()) continue;
@@ -560,6 +767,68 @@ function make(ctx, opts = {}) {
       if (on !== (was.continueOn === true)) ctx.log(`продолжение после лимита: настройка ${on ? 'включена' : 'выключена'}`);
       return view();
     },
+    /**
+     * t1880: своя настройка вкладки. on: true, false — своё; null — как общая. text: своё, пусто — общий. Оба поля как общие — запись удаляется.
+     * @param {{ sid?: any, on?: any, text?: any }} v
+     */
+    async tabSet(v) {
+      const sid = v && v.sid != null ? String(v.sid) : '';
+      if (!sid) return { error: 'нет вкладки' };
+      // Свежий список вкладок: без него запись осталась бы без номера разговора и не переехала бы после перезапуска демона (t1880, круг 2).
+      if (!tabsKnown.some((t) => t.sid === sid)) { try { remember(await ctx.terminals()); } catch { /* признаки возьмём из прежней записи */ } }
+      const was = bag();
+      const tabs = { ...(was.continueTabs && typeof was.continueTabs === 'object' ? was.continueTabs : {}) };
+      const key = `${projectId}|${sid}`;
+      const cur = tabs[key] || {};
+      const on = 'on' in v ? (v.on === true || v.on === false ? v.on : null) : (typeof cur.on === 'boolean' ? cur.on : null);
+      const text = 'text' in v ? cleanText(v.text) : cleanText(cur.text);
+      /** @type {Record<string, any>} */
+      const next = {};
+      if (on !== null) next.on = on;
+      if (text) next.text = text;
+      // t1881: таймер живёт в той же записи — правка включателя или текста его не стирает.
+      if (cur.timer) next.timer = cur.timer;
+      // Признаки вкладки — для переезда записи на новый sid после перезапуска демона.
+      const known = tabsKnown.find((t) => t.sid === sid);
+      if (Object.keys(next).length) tabs[key] = { ...next, ...(known ? { kind: known.kind, conv: known.conv, ownTitle: known.ownTitle } : { kind: cur.kind, conv: cur.conv, ownTitle: cur.ownTitle }) };
+      else delete tabs[key];
+      ctx.settings.set({ ...was, continueTabs: tabs });
+      if (on !== (typeof cur.on === 'boolean' ? cur.on : null)) ctx.log(`продолжение после лимита: вкладка ${sid}: своя настройка ${on === null ? 'как общая' : on ? 'включена' : 'выключена'}`);
+      return view();
+    },
+    /**
+     * t1881: таймер вкладки. on — включён ли, min — период в минутах (меньше 5 — 5), text — текст, пусто — по умолчанию.
+     * Выключенный таймер с пустым текстом и периодом по умолчанию не хранится. @param {{ sid?: any, on?: any, min?: any, text?: any }} v
+     */
+    timerSet(v) {
+      const sid = v && v.sid != null ? String(v.sid) : '';
+      if (!sid) return { error: 'нет вкладки' };
+      const was = bag();
+      const tabs = { ...(was.continueTabs && typeof was.continueTabs === 'object' ? was.continueTabs : {}) };
+      const key = `${projectId}|${sid}`;
+      const cur = tabs[key] || {};
+      const old = timerOf(cur) || { on: false, min: 60, text: '' };
+      const tm = { on: 'on' in v ? v.on === true : old.on, min: 'min' in v ? timerMinOf(v.min) : old.min, text: 'text' in v ? cleanText(v.text) : old.text };
+      const rest = { ...cur };
+      delete rest.timer;
+      const keep = tm.on || tm.text || tm.min !== 60;
+      const known = tabsKnown.find((t) => t.sid === sid);
+      const looksOf = known ? { kind: known.kind, conv: known.conv, ownTitle: known.ownTitle } : { kind: cur.kind, conv: cur.conv, ownTitle: cur.ownTitle };
+      const ownLeft = typeof rest.on === 'boolean' || !!cleanText(rest.text);
+      if (keep) tabs[key] = { ...rest, ...looksOf, timer: tm };
+      else if (ownLeft) tabs[key] = rest;
+      else delete tabs[key];
+      ctx.settings.set({ ...was, continueTabs: tabs });
+      // Новый период или включение — отсчёт с этой минуты.
+      if (tm.on !== old.on || tm.min !== old.min) timerNext.delete(sid);
+      if (tm.on !== old.on || (tm.on && tm.min !== old.min)) ctx.log(`таймер вкладки ${sid}: ${tm.on ? `включён, каждые ${tm.min} мин` : 'выключен'}`);
+      return view();
+    },
+    /** Свежий список вкладок для окна: проход идёт только при включённой настройке. */
+    async refresh() {
+      try { const r = await ctx.terminals(); if (r && Array.isArray(r.tabs) && moveRevived(r)) tell(); remember(r); } catch { /* останется прежний список */ }
+      return view();
+    },
     /** @param {string} key */
     cancel(key) {
       let done = false;
@@ -581,4 +850,4 @@ function make(ctx, opts = {}) {
   };
 }
 
-module.exports = Object.assign(make, { menuRowsOf, claudeAuto, selfLine, claudeSelf, cleanText, lineOf, sameLimit, sameCase, resetAt, fileReset, FILE, STEP_MS, AFTER_RESET_MS, DAY_MS, PAUSES_MS, MAX_TRIES });
+module.exports = Object.assign(make, { timerOf, timerMinOf, TIMER_MIN, menuRowsOf, claudeAuto, selfLine, claudeSelf, cleanText, lineOf, sameLimit, sameCase, resetAt, fileReset, FILE, STEP_MS, AFTER_RESET_MS, DAY_MS, PAUSES_MS, MAX_TRIES });

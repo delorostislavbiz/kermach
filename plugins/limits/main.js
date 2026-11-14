@@ -133,9 +133,12 @@ function make(ctx) {
     handle(cmd, ...args) {
       // t1734: лимиты других агентов (main\agent-limits) — только у тех, чья живая вкладка есть в проекте. Без ctx.terminals
       // (проверки с одной папкой данных) поля agents нет: ответ прежний, синхронный.
-      if (cmd === 'get' && typeof c.terminals === 'function') return agentsOf(c, dataDir).then((agents) => ({ ...base(), agents }));
+      // t1880: список вкладок для своих настроек — свежий на каждый запрос окна, проход его обновляет только при включённой настройке.
+      if (cmd === 'get' && typeof c.terminals === 'function') return Promise.all([agentsOf(c, dataDir), cont ? cont.refresh() : null]).then(([agents]) => ({ ...base(), agents }));
       if (cmd === 'get') return base();
       if (cont && cmd === 'continueSet') return cont.set(args[0]);
+      if (cont && cmd === 'continueTabSet') return cont.tabSet(args[0]);
+      if (cont && cmd === 'timerSet') return cont.timerSet(args[0]);
       if (cont && cmd === 'continueCancel') return cont.cancel(args[0]);
       return { error: `нет команды ${cmd}` };
     },

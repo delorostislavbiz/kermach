@@ -16,7 +16,7 @@ const { execFile, execFileSync, spawn } = require('child_process');
 const { PROTOCOL_VERSION, PIPE, LEGACY_PIPE, DATA_DIR, KEY_FILE, lineReader, frame } = require('./protocol');
 const ownRoot = require('./own-root');
 const platform = require('./platform');
-const { hideSecrets } = require('./secrets');
+const { hideSecrets, hideKnown } = require('./secrets');
 
 const SCROLLBACK = 5000;
 const IDLE_MS = Number(platform.envOf(process.env, 'IDLE_MS')) || 10000;
@@ -281,17 +281,42 @@ function rowCells(b, y, cols) {
  * Сменить размер копии экрана и вернуть курсор на прежнее место в длинной строке (t451) — как keepCursor окна (src\renderer\terminal.js),
  * там подробности. Иначе снимок для окна, которое подключается заново, ставит курсор у правого края.
  * В колбэке пустой записи — после разбора уже пришедшего вывода (t465). Смена высоты на Windows — низ экрана на месте, как у окна (t1181).
- * @param {any} term @param {() => void} resize @param {() => number} [rowsTo] новая высота, если меняется только она, иначе 0
+ * Смена ширины на Windows (t1851, угол окна) — как у окна (terminal.js), там подробности: видимые ряды без переноса, keepBottom, внизу один пустой ряд.
+ * @param {any} term @param {() => void} resize @param {() => ({ cols: number, rows: number } | number | null)} [to] новый размер (число — новая высота)
  */
-function keepCursor(term, resize, rowsTo) {
-  term.write('', () => keepCursorNow(term, resize, rowsTo));
+function keepCursor(term, resize, to) {
+  term.write('', () => keepCursorNow(term, resize, to));
 }
 
-/** @param {any} term @param {() => void} resize @param {() => number} [rowsTo] */
-function keepCursorNow(term, resize, rowsTo) {
+/** @param {any} term @param {() => void} resize @param {() => ({ cols: number, rows: number } | number | null)} [to] */
+function keepCursorNow(term, resize, to) {
   const before = term.buffer.active;
   if (before.type !== 'normal' || term.modes.originMode) return resize();
-  if (process.platform === 'win32' && rowsTo && rowsTo() && rowsTo() !== term.rows) return keepBottom(term, resize);
+  // Число — новая высота при той же ширине (так зовут пробы t1181), 0 — не трогать.
+  const r = process.platform === 'win32' && to ? to() : null;
+  const t = typeof r === 'number' ? (r ? { cols: term.cols, rows: r } : null) : r;
+  if (t && t.cols !== term.cols) {
+    const buf = term._core._bufferService.buffer;
+    let low = term.rows - 1;
+    while (low > buf.y && !buf.lines.get(buf.ybase + low).translateToString(true)) low--;
+    if (low > buf.y) {
+      const fill = buf.getNullCell();
+      for (let y = 0; y < term.rows; y++) {
+        const ln = buf.lines.get(buf.ybase + y);
+        if (!ln) continue;
+        ln.isWrapped = false;
+        if (t.cols < term.cols) ln.replaceCells(t.cols, term.cols, fill);
+      }
+      keepBottom(term, resize);
+      // ConPTY после смены ширины прижимает текст к низу: внизу один пустой ряд, сверху — ряды из истории.
+      let empty = 0;
+      while (empty < term.rows - 1 && !buf.lines.get(buf.ybase + term.rows - 1 - empty).translateToString(true)) empty++;
+      const k = Math.min(empty - 1, buf.ybase, term.rows - 2 - buf.y);
+      if (k > 0) { buf.lines.splice(buf.ybase + term.rows - k, k); buf.ybase -= k; buf.ydisp = buf.ybase; buf.y += k; }
+      return;
+    }
+  }
+  if (t && t.rows !== term.rows && t.cols === term.cols) return keepBottom(term, resize);
   const cols0 = term.cols;
   let y = before.baseY + before.cursorY;
   let offset = before.cursorX;
@@ -448,6 +473,9 @@ class Session {
     // ask (t1483) — вопрос текстом в конце ответа (askOf), если ответ кончается «?».
     /** @type {{ text: string, at: string, ask?: string } | null} */
     this.reply = null;
+    // Значения, скрытые hideCmdSecrets в командах вкладки (t1853): ответ агента их повторяет — talkOf скрывает их и там. Только в памяти, до CMD_SECRETS_MAX.
+    /** @type {Set<string>} */
+    this.cmdSecrets = new Set();
     // «Не смотрел» (t1470): агент закончил (done), а окно проекта эту вкладку после того на экране не открывало. Снимает команда seen и новый ход.
     // Не в desc — в sessions.json не пишется: переживает перезапуск окна, после перезапуска демона false.
     this.unseen = false;
@@ -455,6 +483,11 @@ class Session {
     // Не в desc — в sessions.json не пишется: после перезапуска демона вкладка запускается заново, прежнее состояние уже неправда.
     // Не в meta — update принимает meta целиком, окно со старой meta затёрло бы состояние (карта t83).
     this.state = '';
+    // Агент, запущенный руками в простом терминале (t1858, d399): его узнаёт окно по таблице процессов (agents.js) и сообщает командой runs.
+    // Только для состояния по заголовку (stateAgent): сон, прогрев и хуки по-прежнему смотрят на вид вкладки (agent). В sessions.json не пишется.
+    this.runs = '';
+    // Что прислало окно, как есть (codex тоже): окно сверяет с ним узнанное и шлёт снова, если разошлось.
+    this.runsKind = '';
     // Чем поставлено состояние (by): повтор того же от хука и OSC 9 Codex рассылается один раз (t1210).
     this.stateBy = '';
     this.stateAt = '';
@@ -552,7 +585,7 @@ class Session {
   info() {
     // Спящая вкладка (t1751): процесса нет — номер 0, asleep: true. Состояние остаётся «готово»: статусы карт и звук от сна не меняются.
     return { ...this.desc, pid: this.sleep === 'asleep' ? 0 : this.pty.pid, cols: this.cols, rows: this.rows, attached: this.subs.size, hook: this.hook, state: this.state, stateAt: this.stateAt,
-      prompt: this.prompt, reply: this.reply, unseen: this.unseen, ...(this.sleep ? { asleep: true } : {}) };
+      prompt: this.prompt, reply: this.reply, unseen: this.unseen, runs: this.runs, runsKind: this.runsKind, ...(this.sleep ? { asleep: true } : {}) };
   }
 
   /**
@@ -797,6 +830,35 @@ class Session {
    * У обычного терминала состояния нет.
    * @param {string} state код из STATES @param {string} by откуда узнали: hook, title, osc9, input, clear (новый номер разговора из строки состояния, t82)
    */
+  /** Чьи правила состояния у вкладки: вид вкладки или агент, запущенный в ней руками (t1858). */
+  get stateAgent() {
+    return this.agent || this.runs;
+  }
+
+  /**
+   * Окно узнало агента в простом терминале или его выход (t1858). Принимаются агенты, у которых по заголовку видны и «работает», и конец хода:
+   * claude и каталог TITLE_RULES. Codex — нет: конец хода у него — OSC 9 и строка хода, без них вкладка застряла бы в «работает».
+   * Смена — сброс в «состояния нет», как при смене вида (agentChanged). @param {string} kind вид от окна: claude, agent:<id> или ''
+   * @returns {string} что принято
+   */
+  setRuns(kind) {
+    const k = String(kind || '');
+    const id = k.startsWith('agent:') ? k.slice(6) : k;
+    const runs = this.agent ? '' : id === 'claude' || Object.hasOwn(TITLE_RULES, id) ? id : '';
+    this.runsKind = k;
+    if (runs === this.runs) return runs;
+    log(`терминал ${this.sid}: агент во вкладке ${this.runs || 'нет'} → ${runs || 'нет'}${k && !runs ? ` (${k} не принят)` : ''}`);
+    this.runs = runs;
+    this.settleUntil = 0;
+    this.workingAt = 0;
+    if (this.state) {
+      this.state = '';
+      this.stateAt = new Date().toISOString();
+      broadcast({ ev: 'state', sid: this.sid, state: '', by: 'runs', at: this.stateAt });
+    }
+    return runs;
+  }
+
   setState(state, by) {
     // Хук и OSC 9 — событие самого агента: рассылаем, даже если состояние уже стоит. Иначе звук пропадает,
     // когда заголовок или ввод успели поставить его раньше (разрешил без спиннера, ✳ раньше Stop, «Action Required» раньше OSC 9 — t129).
@@ -804,7 +866,7 @@ class Session {
     // Codex сообщает конец хода и вопрос дважды: хуком (t1210) и OSC 9. Второе то же состояние от другого из них — не новое событие: иначе два звука.
     const twice = this.agent === 'codex' && state === this.state && (this.stateBy === 'hook' || this.stateBy === 'osc9') && this.stateBy !== by;
     const told = (by === 'hook' || by === 'osc9') && state !== 'working' && !twice;
-    if (!this.agent || (state === this.state && !told)) return;
+    if (!this.stateAgent || (state === this.state && !told)) return;
     // Ход прогрева (t1826): «работает» и конец хода прячем — окна, доска и звук его не видят, stateAt не двигается.
     // Любое другое (запрос разрешения, ошибка) — ход уже не прогрев: состояние как обычно.
     if (this.warmTurn) {
@@ -816,7 +878,7 @@ class Session {
     }
     // loud — звук и мигание по заголовку (t338): у агента без хуков заголовок — единственный голос. Claude и Codex звучат от хука и OSC 9.
     const now = Date.now();
-    const loud = by === 'title' && Object.hasOwn(TITLE_RULES, this.agent)
+    const loud = by === 'title' && Object.hasOwn(TITLE_RULES, this.stateAgent)
       && (state === 'waiting' || (state === 'done' && now - this.workingAt >= LOUD_WORK_MS));
     if (state === 'working') { this.workingAt = now; this.busySeen = false; }
     // Строку хода считать заново с нового состояния (t626): иначе строка, видная до вопроса, после быстрого Esc сразу вернула бы «работает».
@@ -840,13 +902,14 @@ class Session {
    */
   titleState(t) {
     const settled = Date.now() >= this.settleUntil;
-    if (this.agent === 'claude') {
+    const a = this.stateAgent;
+    if (a === 'claude') {
       if (CLAUDE_WORK.test(t)) { if (settled) this.setState('working', 'title'); } else if (CLAUDE_IDLE.test(t) && this.state === 'working') this.setState('done', 'title');
-    } else if (this.agent === 'codex') {
+    } else if (a === 'codex') {
       if (CODEX_ASK_TITLE.test(t)) this.setState('waiting', 'title');
       else if (CODEX_WORK.test(t) && settled && this.state !== 'waiting') this.setState('working', 'title');
-    } else if (Object.hasOwn(TITLE_RULES, this.agent)) {
-      const r = TITLE_RULES[this.agent];
+    } else if (Object.hasOwn(TITLE_RULES, a)) {
+      const r = TITLE_RULES[a];
       if (r.ask.test(t)) this.setState('waiting', 'title');
       else if (r.work.test(t)) { if (settled) this.setState('working', 'title'); } else if (r.idle.test(t) && this.state === 'working') this.setState('done', 'title');
     }
@@ -1214,7 +1277,7 @@ class Session {
     if (!this.ptyExited) {
       try { this.pty.resize(cols, rows); } catch (e) { log(`терминал ${this.sid}: resize не прошёл: ${/** @type {any} */ (e).message || e}`); }
     }
-    keepCursor(this.term, () => this.term.resize(cols, rows), () => (cols === this.term.cols ? rows : 0));
+    keepCursor(this.term, () => this.term.resize(cols, rows), () => ({ cols, rows }));
   }
 
   /**
@@ -1370,7 +1433,7 @@ function writeSessions() {
   }
 }
 
-const NEEDS_SESSION = new Set(['attach', 'detach', 'read', 'write', 'resize', 'update', 'kill', 'seen']);
+const NEEDS_SESSION = new Set(['attach', 'detach', 'read', 'write', 'resize', 'update', 'kill', 'seen', 'runs']);
 
 /** Ключ канала из hello совпал (t275). Сверка как у приёмника хуков. @param {any} key */
 function keyOk(key) {
@@ -1482,6 +1545,9 @@ function handle(c, msg) {
       return void codexHookCheck(msg.file, pre, typeof msg.cwd === 'string' && msg.cwd ? msg.cwd : os.homedir(), msg.again === true)
         .then((r) => c.reply(id, { args: r.args, check: r }), (e) => c.fail(id, String(e)));
     }
+    // Агент, узнанный окном в простом терминале (t1858). Ответ — что принято: окно сверяет его с info().runs.
+    case 'runs':
+      return c.reply(id, { runs: s.setRuns(msg.runs) });
     // Порог сна вкладок Claude из «Настроек» (t1771): минуты, 0 — не усыплять. Переменная KERMACH_SLEEP_MIN главнее — ответ называет действующий порог.
     case 'sleep': {
       const n = Number(msg.min);
@@ -1721,9 +1787,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
  * Что просит PermissionRequest (t1133): tool — имя инструмента, what — начало команды, пути или адреса из tool_input, одной строкой.
  * Окно пишет это тому, кто запустил скрытую вкладку: «просит разрешение», а не «ждёт ответа». Другие события — пусто.
- * @param {string} event @param {any} e
+ * known (t1898) — значения, скрытые в командах этой вкладки: просьба человека даёт токен, команда агента его повторяет.
+ * @param {string} event @param {any} e @param {Set<string> | null} [known]
  */
-function permOf(event, e) {
+function permOf(event, e, known = null) {
   if (event !== 'PermissionRequest') return {};
   const inp = e.tool_input && typeof e.tool_input === 'object' ? e.tool_input : {};
   // AskUserQuestion (t1483): what — текст первого вопроса, его дашборд пишет «Задал вопрос: …».
@@ -1731,7 +1798,8 @@ function permOf(event, e) {
   const raw = q || inp.command || inp.file_path || inp.path || inp.url || inp.pattern || inp.description || '';
   const line = (s, n) => String(s || '').replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
   // Строка уходит во вкладку оркестратора и в уведомление Windows (t1135): секреты скрыть до обрезки, чтобы не остался обрезок ключа.
-  return { tool: line(e.tool_name, 60), what: line(hideSecrets(hideCmdSecrets(String(raw))), 160) };
+  const text = known && known.size ? hideKnown(String(raw), known) : String(raw);
+  return { tool: line(e.tool_name, 60), what: line(hideSecrets(hideCmdSecrets(text)), 160) };
 }
 
 const TALK_MAX = 300;
@@ -1740,14 +1808,16 @@ const TRANSCRIPT_TAIL = 64 * 1024;
 /**
  * Команда агенту и начало ответа (t1469): UserPromptSubmit — prompt, Stop — last_assistant_message (Codex; у Claude Code поле есть не во всех версиях),
  * без него — последний ответ из хвоста transcript_path. Одной строкой, секреты скрыты до обрезки 300 знаков. Другие события и пустой текст — null.
- * @param {string} event @param {any} e @returns {{ key: 'prompt' | 'reply', text: string, ask?: string } | null}
+ * known (t1853) — значения, скрытые в командах этой вкладки: в ответе они скрываются, даже если образцов hideSecrets для них нет.
+ * @param {string} event @param {any} e @param {Set<string> | null} [known] @returns {{ key: 'prompt' | 'reply', text: string, ask?: string } | null}
  */
-function talkOf(event, e) {
+function talkOf(event, e, known = null) {
   let key, raw;
   if (event === 'UserPromptSubmit') { key = 'prompt'; raw = e.prompt; }
   else if (event === 'Stop') { key = 'reply'; raw = e.last_assistant_message || lastReply(e.transcript_path); }
   else return null;
   if (typeof raw !== 'string') return null;
+  if (known && known.size) raw = hideKnown(raw, known);
   const one = (/** @type {string} */ s) => hideSecrets(hideCmdSecrets(s)).replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim();
   const text = one(raw).slice(0, TALK_MAX);
   if (!text) return null;
@@ -1799,16 +1869,48 @@ function lastReply(file) {
   return '';
 }
 
+const CMD_SECRETS_MAX = 64;
+
+/** Значения, которые hideCmdSecrets скрыл бы в команде (t1853), — без кавычек и переносов строки. @param {string} s @returns {string[]} */
+function cmdSecretValues(s) {
+  const out = [];
+  hideCmdSecrets(s, (v) => { out.push(v); });
+  return out;
+}
+
 /**
  * Секреты в аргументах команды любой длины (t1135): у hideSecrets bearer — от 20 знаков, а заголовок и пароль в команде короче бывают.
- * Заголовок Authorization и *-Token/*-Key, curl -u user:пароль, --password/--token значение. @param {string} s
+ * Заголовок Authorization и *-Token/*-Key, JSON и ИМЯ_TOKEN=, curl -u user:пароль, --password/--token значение, ?key= в адресе (t1898).
+ * Образцы общие с cmdSecretValues: fn получает каждое скрытое значение без кавычек и пробелов. Группа 1 остаётся, группа 2 — значение:
+ * в кавычках — целиком, с пробелами; токен, разорванный переносом строки до закрывающей кавычки, — целиком; иначе до пробела, кавычки, «,;&}».
+ * (?<![\w-]) — только с начала слова (t1899): иначе длинное слово (hex 100 КБ) перебирается с каждой буквы, время — квадрат длины.
+ * @param {string} s @param {(v: string) => void} [fn]
  */
-function hideCmdSecrets(s) {
-  return s
-    .replace(/((?:authorization|proxy-authorization)\s*:\s*(?:[A-Za-z]+\s+)?)([^\s"'`]+)/gi, '$1[REDACTED:заголовок]')
-    .replace(/([\w-]*(?:token|api-?key|secret)\s*:\s*)([^\s"'`]+)/gi, '$1[REDACTED:заголовок]')
-    .replace(/((?:^|\s)(?:-u|--user)\s+["'`]?[^\s:"'`]*:)([^\s"'`]+)/g, '$1[REDACTED:пароль]')
-    .replace(/((?:^|\s)--?(?:password|passwd|pass|token|api-key|secret)(?:\s+|=)["'`]?)([^\s"'`]+)/gi, '$1[REDACTED:пароль]');
+function hideCmdSecrets(s, fn) {
+  const V = '("[^"\\n]{1,200}"|\'[^\'\\n]{1,200}\'|[^\\s"\'`]+(?:\\r?\\n[^\\s"\'`]+)*(?=["\'`])|[^\\s"\'`,;&}]+)';
+  const rules = [
+    ['заголовок', '((?:authorization|proxy-authorization)\\s*:\\s*(?:[A-Za-z]+\\s+)?)' + V],
+    // JSON "token": "…" и переменная MY_TOKEN=… (t1898).
+    ['заголовок', '((?<![\\w-])[\\w-]*(?:token|api-?key|secret|passw(?:or)?d)["\']?\\s*[:=]\\s*)' + V],
+    // -u 1000:1000 у docker — не пароль: в имени нужна не цифра (t1898).
+    ['пароль', '((?:^|\\s)(?:-u|--user)\\s+["\'`]?[^\\s:"\'`]*[^\\d\\s:"\'`][^\\s:"\'`]*:)([^\\s"\'`]+)'],
+    ['пароль', '((?:^|\\s)--?(?:password|passwd|pass|token|api-key|secret)(?:\\s+|=))' + V],
+    // ?key=… в адресе (t1898): запрос разрешения curl «https://x.y/v1?key=…».
+    ['адрес', '([?&](?:key|api[_-]?key|token|access[_-]?token|secret|password|pass|sig|signature)=)([^\\s&#"\'`]+)'],
+  ];
+  // Слова человека после --secret, token: — не секрет (t1898: «secret: string», «--token none», «--password через»); заглушки $X, <x>, {x} — тоже.
+  const notSecret = /^(?:true|false|yes|no|on|off|null|none|nil|undefined|string|number|boolean|bool|int|str|any|object|empty|required|optional|[$%<{].*|[^\x00-\x7f]+)$/i;
+  for (const [label, rx] of rules) {
+    s = s.replace(new RegExp(rx, 'gi'), (g, pre, val) => {
+      const q = /^["']/.test(val) && val.length > 1 && val.endsWith(val[0]) ? val[0] : '';
+      const v = (q ? val.slice(1, -1) : val).replace(/\s+/g, '');
+      // От 3 знаков (t1898): «abc» из команды скрывается и в ответе — hideKnown берёт значение только целым словом, чужие слова не съедаются.
+      if (v.length < 3 || v.startsWith('[REDACTED') || notSecret.test(v)) return g;
+      if (fn) fn(v);
+      return `${pre}${q}[REDACTED:${label}]${q}`;
+    });
+  }
+  return s;
 }
 
 /**
@@ -1880,8 +1982,15 @@ function onHook(source, e, tabKey) {
     return;
   }
   const same = event === 'Notification' && s.state === 'waiting' && s.hook && s.hook.event === 'PermissionRequest';
-  s.hook = same ? s.hook : { event, at: new Date().toISOString(), sessionId, source, ...permOf(event, e) };
-  const said = talkOf(event, e);
+  // Команда вкладки (t1853): человека — prompt, агента — команда в запросе разрешения. Скрытое в ней запоминается для ответа.
+  const cmd = event === 'UserPromptSubmit' ? e.prompt : event === 'PermissionRequest' && e.tool_input && typeof e.tool_input === 'object' ? e.tool_input.command : null;
+  if (typeof cmd === 'string') for (const v of cmdSecretValues(cmd)) {
+    s.cmdSecrets.delete(v); s.cmdSecrets.add(v);
+    if (s.cmdSecrets.size > CMD_SECRETS_MAX) s.cmdSecrets.delete(/** @type {string} */ (s.cmdSecrets.values().next().value));
+  }
+  // Память раньше permOf (t1898): what уходит во вкладку оркестратора и на дашборд — токен из этой же команды или прошлой просьбы скрыт.
+  s.hook = same ? s.hook : { event, at: new Date().toISOString(), sessionId, source, ...permOf(event, e, s.cmdSecrets) };
+  const said = talkOf(event, e, s.cmdSecrets);
   if (said) s[said.key] = { text: said.text, at: s.hook.at, ...(said.ask ? { ask: said.ask } : {}) };
   broadcast({ ev: 'hook', sid: s.sid, hook: s.hook, ...(said ? { [said.key]: s[said.key] } : {}) });
   const state = event === 'Notification' ? (NOTIFY_WAIT.includes(String(e.notification_type || '')) ? 'waiting' : '') : HOOK_STATE[event];

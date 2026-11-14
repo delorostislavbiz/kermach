@@ -58,4 +58,22 @@ function hideSecrets(text) {
   });
 }
 
-module.exports = { hideSecrets };
+/**
+ * Скрыть в тексте значения, уже скрытые в команде той же вкладки (t1853): ответ агента повторяет короткий токен из команды,
+ * а образцов hideSecrets для него нет (bearer — от 20 знаков). Длинные раньше коротких: короткое может быть частью длинного.
+ * t1898: только целым словом — «string» не режет «substring», «1000» не режет «10000»; пробел или перенос строки внутри значения
+ * (агент перенёс токен, пароль с пробелом) не мешают — память хранит значение без пробелов.
+ * @param {string} text @param {Iterable<string>} values
+ */
+function hideKnown(text, values) {
+  let s = String(text);
+  for (const v of [...values].sort((a, b) => b.length - a.length)) {
+    const chars = [...String(v).replace(/\s+/g, '')];
+    if (!chars.length || !s.includes(chars[0])) continue;
+    const body = chars.map((c) => c.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')).join('\\s*');
+    s = s.replace(new RegExp(`(?<![\\p{L}\\p{N}_])${body}(?![\\p{L}\\p{N}_])`, 'gu'), '[REDACTED:из_команды]');
+  }
+  return s;
+}
+
+module.exports = { hideSecrets, hideKnown };

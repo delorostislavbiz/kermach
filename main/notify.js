@@ -12,6 +12,7 @@
 // Windows показывает уведомление, только если ID программы зарегистрирован (t712): register() при запуске, toast-reg.js.
 // Первое уведомление ждёт записи ключа (t1201, d241): иначе Windows покажет его без имени и значка.
 // Ключ и CLSID пишет только собранная программа (app.isPackaged, d71): запуск electron.exe из node_modules не перетирает ключи Kermach.exe.
+// И только владелец ключа (whoOwns, t1857): собранная проба из Mac\ или spikes\ не перетирает ключ рабочей копии и уведомлений не показывает.
 
 const path = require('path');
 const i18n = require('./i18n');
@@ -36,20 +37,76 @@ const toastId = () => `electron.app.${require('electron').app.getName()}`;
 
 /**
  * Запуск программы, только Windows: постоянный CLSID и ключ ID уведомлений с именем и значком. До первого уведомления.
- * В проверках ключ не пишется — только строка в журнал. @param {{ log: (msg: string) => void }} o
+ * В проверках ключ не пишется — только строка в журнал. owns — кто владеет ключом (по умолчанию whoOwns, читает реестр);
+ * проба подставляет свой, чтобы не зависеть от реестра машины.
+ * @param {{ log: (msg: string) => void, owns?: (id: string, execDir: string) => Promise<{ owner: boolean, why: string }> }} o
  */
-function register({ log }) {
+function register({ log, owns = whoOwns }) {
   if (process.platform !== 'win32') return;
   const { app } = require('electron');
   if (!app.isPackaged) { log('уведомления: запуск не из собранной программы — ключи в реестре не пишу'); return; }
-  try { app.setToastActivatorCLSID(TOAST_CLSID); } catch (e) { log(`уведомления: CLSID не задан: ${e instanceof Error ? e.message : e}`); }
   const id = toastId();
   if (testing()) { log(`уведомления: ID ${id}, ключ не пишу — проверка`); return; }
-  const icon = path.join(__dirname, '..', 'icons', 'tray@2x.png');
-  keyWrite = toastReg.add(id, { DisplayName: app.getName(), IconUri: icon, CustomActivator: TOAST_CLSID })
-    .catch((e) => `сбой: ${e instanceof Error ? e.message : e}`)
-    .then((why) => { keyWrite = null; log(`уведомления: ID ${id}, ключ ${toastReg.keyOf(id)} ${why ? `не записан: ${why}` : 'записан'}`); });
+  // Владелец ключа решается до первого уведомления (t1857): show и remind ждут keyWrite.
+  keyWrite = owns(id, path.dirname(process.execPath))
+    // Реестр не прочитан — пишет, как до t1857: рабочая программа без уведомлений хуже, чем редкий перехват ключа пробой.
+    .catch((e) => ({ owner: true, why: `владелец не выяснен, пишу: ${e instanceof Error ? e.message : e}` }))
+    .then(async (r) => {
+      owner = r.owner;
+      if (!r.owner) { log(`уведомления: ID ${id}, ключ и CLSID не трогаю — ${r.why}; уведомления этой копии не показываются`); return; }
+      try { app.setToastActivatorCLSID(TOAST_CLSID); } catch (e) { log(`уведомления: CLSID не задан: ${e instanceof Error ? e.message : e}`); }
+      const icon = path.join(__dirname, '..', 'icons', 'tray@2x.png');
+      const why = await toastReg.add(id, { DisplayName: app.getName(), IconUri: icon, CustomActivator: TOAST_CLSID })
+        .catch((e) => `сбой: ${e instanceof Error ? e.message : e}`);
+      log(`уведомления: ID ${id}, владелец ключа — ${r.why}; ключ ${toastReg.keyOf(id)} ${why ? `не записан: ${why}` : 'записан'}`);
+    })
+    .then(() => { keyWrite = null; });
 }
+
+/**
+ * Кто владеет ключом ID уведомлений и CLSID (t1857, d396). Щелчок по уведомлению Windows уходит той копии, что записала ключ
+ * последней, поэтому собранная проба из Mac\ или spikes\ не должна перетирать ключ рабочей программы.
+ * По порядку:
+ * 1) копия из папки установки (запись Uninstall издателя Kermach, update.installLocations) — владелец, забирает ключ;
+ * 2) папка копии уже в ключе (IconUri = <папка>\resources\app\icons\…) — владелец;
+ * 3) в ключе другая папка и её exe на месте — не владелец: живую копию не вытесняет ни проба, ни чужая запись Uninstall
+ *    (её пишут и пробные сборки установщика под своим именем, update.js installLocations);
+ * 4) ключа нет или exe из ключа больше нет — владелец, если нет живой установки (exe в папке установки на месте); есть — ключ ждёт её.
+ * @param {string} id @param {string} execDir
+ * @param {{ locations?: () => Promise<string[]>, query?: (id: string) => Promise<string>, exists?: (f: string) => boolean, exe?: string }} [dep] для проб
+ * @returns {Promise<{ owner: boolean, why: string }>}
+ */
+async function whoOwns(id, execDir, dep = {}) {
+  const same = (/** @type {string} */ a, /** @type {string} */ b) => path.win32.resolve(a).toLowerCase() === path.win32.resolve(b).toLowerCase();
+  const exists = dep.exists || require('fs').existsSync;
+  const exeIn = (/** @type {string} */ dir) => path.win32.join(dir, dep.exe || path.basename(process.execPath));
+  const locations = await (dep.locations || require('./update').installLocations)();
+  if (locations.some((l) => same(l, execDir))) return { owner: true, why: 'установленная копия' };
+  const icon = (await (dep.query || iconOf)(id)).trim();
+  const at = icon.toLowerCase().lastIndexOf('\\resources\\');
+  const dir = at > 0 ? icon.slice(0, at) : '';
+  if (dir && same(dir, execDir)) return { owner: true, why: 'та же копия, что в ключе' };
+  if (dir && exists(exeIn(dir))) return { owner: false, why: `ключом владеет ${dir}` };
+  const inst = locations.find((l) => exists(exeIn(l)));
+  if (inst) return { owner: false, why: `ключ ждёт установленную копию ${inst}` };
+  return { owner: true, why: dir ? `копии из ключа больше нет (${exeIn(dir)})` : 'ключа ещё нет' };
+}
+
+/**
+ * IconUri ключа ID уведомлений; ключа нет — пусто. PowerShell, а не reg.exe: reg.exe выводит в кодировке OEM,
+ * и папка с кириллицей не сошлась бы (как в update.installLocations). @param {string} id @returns {Promise<string>}
+ */
+function iconOf(id) {
+  const key = `HKCU:\\Software\\Classes\\AppUserModelId\\${id}`.replace(/'/g, "''");
+  const ps = `[Console]::OutputEncoding=[Text.Encoding]::UTF8; (Get-ItemProperty -LiteralPath '${key}' -ErrorAction SilentlyContinue).IconUri`;
+  return new Promise((resolve, reject) => {
+    require('child_process').execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8', windowsHide: true, timeout: 15000 },
+      (err, out) => (err ? reject(err) : resolve(String(out || ''))));
+  });
+}
+
+/** Эта копия владеет ключом (whoOwns). Нет — уведомления не показываются: щелчок ушёл бы другой копии. */
+let owner = true;
 
 /** Идёт запись ключа в реестр (register); пока она не кончилась, show и remind ждут (t1201). @type {Promise<void> | null} */
 let keyWrite = null;
@@ -84,6 +141,7 @@ function show(o, what, log) {
   const body = i18n.t(b[0], b[1]);
   const line = `уведомление: ${what}${o.hidden ? ' (в фоне)' : ''} — «${title}» | «${body}»`;
   if (testing()) { log(`${line} — выключено для проверки`); return; }
+  if (!owner) { log(`${line} — не показано: ключом уведомлений владеет другая копия программы`); return; }
   if (!o.on) { log(`${line} — выключено настройкой`); return; }
   const { Notification } = require('electron');
   if (typeof Notification !== 'function' || !Notification.isSupported()) { log(`${line} — система уведомлений не поддерживает`); return; }
@@ -129,6 +187,7 @@ function remind(o, log) {
   if (keyWrite) { keyWrite.then(() => remind(o, log)); return 'shown'; } // исход покажет журнал после записи ключа; вызывающие значение не читают
   const line = `уведомление: «${o.title}» | «${o.body}»`;
   if (testing()) { log(`${line} — выключено для проверки`); return 'test'; }
+  if (!owner) { log(`${line} — не показано: ключом уведомлений владеет другая копия программы`); return 'no'; }
   if (!o.on) { log(`${line} — выключено настройкой`); return 'off'; }
   const { Notification } = require('electron');
   if (typeof Notification !== 'function' || !Notification.isSupported()) { log(`${line} — система уведомлений не поддерживает`); return 'no'; }
@@ -204,4 +263,4 @@ function reopen(o, log) {
   } catch (e) { log(`уведомление: щелчок по ${o.sid} — окно не открылось: ${e instanceof Error ? e.message : e}`); }
 }
 
-module.exports = { register, show, remind, open, forget, shownSize: () => shown.size, allow };
+module.exports = { register, whoOwns, show, remind, open, forget, shownSize: () => shown.size, allow };

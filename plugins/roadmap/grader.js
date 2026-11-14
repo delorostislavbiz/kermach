@@ -323,10 +323,15 @@ const ANSWER_TRIES = 10;
 const ANSWER_SETTLE_MS = 500;
 /** Синхронная пауза, как board.save. @param {number} ms */
 const pause = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
-/** rename с повтором: на Windows чужое чтение в эти миллисекунды даёт EPERM или EBUSY. @param {string} from @param {string} to */
-function renameRetry(from, to) {
+/**
+ * rename с повтором: на Windows чужое чтение в эти миллисекунды даёт EPERM или EBUSY.
+ * still — перед повтором: false — цель уже не та, rename не делаем, from удалён, ответ false. @param {string} from @param {string} to @param {() => boolean} [still]
+ */
+function renameRetry(from, to, still) {
   for (let i = 0; ; i++) {
-    try { fs.renameSync(from, to); return; } catch (e) {
+    // t1889 (d521): файл держал другой писатель (close) — после паузы он мог уже записать своё; still() — цель та же, что при сборке текста.
+    if (i > 0 && still && !still()) { try { fs.unlinkSync(from); } catch { /* уже нет */ } return false; }
+    try { fs.renameSync(from, to); return true; } catch (e) {
       if (i >= 9 || !e || !['EPERM', 'EBUSY', 'EACCES'].includes(/** @type {any} */ (e).code)) { try { fs.unlinkSync(from); } catch { /* уже нет */ } throw e; }
       pause(30);
     }
@@ -407,11 +412,18 @@ function answer(dataDir, project, ref, text, now = new Date(), from = '') {
       // board.save пишет через «.<карта>.<pid>.<…>.tmp» и rename: такой файл есть — close посреди записи, наш rename стёр бы его «Что сделано».
       const dir = path.dirname(file), mark = `.${path.basename(file)}.`;
       const busy = () => { try { return fs.readdirSync(dir).some((n) => n.startsWith(mark) && n.endsWith('.tmp')); } catch { return false; } };
-      for (let w = 0; busy() && w < 40; w++) pause(25);
-      if (busy() || fs.readFileSync(file, 'utf8') !== old) { if (i < ANSWER_TRIES) continue; throw new Error('карту всё время меняют — ответ не записан, отпечаток сохранён'); }
+      // t1889 (d521): свой временный файл — до последней сверки: между сверкой и rename остаётся чтение карты, а не запись всего файла.
+      // Rename не прошёл (файл держит close) — перед повтором сверяем снова: close успел записать — собираем заново поверх его текста.
+      // Окно не закрыто совсем (close замка не знает), только сужено; общий замок карты в board.save — отдельная работа.
       const tmp = `${file}.${process.pid}.tmp`;
+      const unchanged = () => { try { return !busy() && fs.readFileSync(file, 'utf8') === old; } catch { return false; } };
       fs.writeFileSync(tmp, next, 'utf8');
-      renameRetry(tmp, file);
+      for (let w = 0; busy() && w < 40; w++) pause(25);
+      if (!unchanged() || !renameRetry(tmp, file, unchanged)) {
+        try { fs.unlinkSync(tmp); } catch { /* уже нет */ }
+        if (i < ANSWER_TRIES) continue;
+        throw new Error('карту всё время меняют — ответ не записан, отпечаток сохранён');
+      }
       // close прочитал карту до нашего rename и записал после (board.save повторяет rename до 300 мс) — раздела нет: дописываем снова поверх его «Что сделано».
       const has = () => answerSections(fs.readFileSync(file, 'utf8')).some((a) => a.head === head && a.text === mine.text);
       let kept = true;
@@ -834,7 +846,10 @@ async function regrade(project, id, o = {}) {
   const size = require('./size');
   const c = board.read(project).cards.find((/** @type {any} */ x) => x.id === id);
   if (!c) return { error: `карты ${id} на доске нет` };
-  if (c.status !== 'готово') return { error: `карта ${id} не закрыта (status: ${c.status}) — заново проверяется только карта «готово»` };
+  // t1889 (d567): проверяющий окна дважды не дал итога (twice, build) — «ждёт ответа» и «не проверена: …» в checked:, человеку вариант «1) проверить ещё раз».
+  // Его и выполняет эта команда. «Ждёт ответа» по вопросу агента или по итогу проверяющего (checked не «не проверена») — отказ, как прежде.
+  const unchecked = c.status === 'ждёт ответа' && /^не проверена:/.test(String((c.extra || {}).checked || '').trim());
+  if (c.status !== 'готово' && !unchecked) return { error: `карта ${id} не закрыта (status: ${c.status}) — заново проверяется только карта «готово» или «ждёт ответа», которой проверяющий не дал итога` };
   const round = nextRound(project, id);
   const since = createdAt(c.created) || Date.now();
   const base = await baseAt(project, since);
@@ -863,7 +878,7 @@ async function regrade(project, id, o = {}) {
   const k = Number(/-(\d+)\.md$/.exec(name)?.[1]) || round;
   const line = checkedLine(k, Math.max(3, k), r);
   board.update(project, id, { checked: line });
-  return { round: k, effort, raws, file: `${GRADES}/${name}`, line, r };
+  return { round: k, effort, raws, file: `${GRADES}/${name}`, line, r, status: c.status };
 }
 
 module.exports = { TEMPLATE, VERDICTS, GRADES, REMIND, remindOf, SOFT, SOFT_BLOCK, SAMPLE_BLOCK, sampleGap, MODEL, STEPS, hasCommand, skipOf, effortOf, timeoutOf, baseOf, baseAt, pathsOf, changesOf, changesInfo, proofsOf, template, build, ANSWERS, answerSections, answer, answersOf, parse, sessionOf, rawOf, limitOf, limitWait, flags, grade, gradesDir, saveRaws, withRaw, shared, running, SLOTS, queued, slot, adopt, cancel, release, report, howLine, checkedLine, nextRound, regrade };

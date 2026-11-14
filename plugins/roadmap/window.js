@@ -3390,13 +3390,28 @@ function roadmapSetup(host) {
     if (I18n.lang() === 'ru' || !w || !Object.hasOwn(WHY, w.k)) return e;
     return WHY[w.k](w.v && typeof w.v === 'object' ? w.v : {});
   };
+  /** Имя вкладки задания в причине отказа (t1818): main.js шлёт bag (compose, newcard, orch) и русское of; неизвестный bag — of как есть. @param {any} v */
+  const whyTab = (v) => {
+    const b = String((v && v.bag) || '');
+    if (b === 'compose') return T('why.ofCompose', 'составления');
+    if (b === 'newcard') return T('why.ofNewcard', 'новой карты');
+    if (b === 'orch') return T('why.ofOrch', 'главной сессии');
+    return String((v && v.of) || '');
+  };
+  /** Первая половина longFile (t1818): c — long или cmd, what — «промпт» или «задание»; старый ответ без c — русская cause как есть. @param {any} v */
+  const whyCause = (v) => {
+    const what = v.what === 'промпт' ? T('why.whatPrompt', 'промпт') : T('why.whatTask', 'задание');
+    if (v.c === 'long') return T('why.causeLong', '{what} {n} знаков длиннее {max}', { what, n: v.n, max: v.max });
+    if (v.c === 'cmd') return T('why.causeCmd', 'ядро не передало {what} аргументом ({err})', { what, err: v.err });
+    return String(v.cause || '');
+  };
   /** @type {Record<string, (v: any) => string>} */
   const WHY = {
     noBoard: (v) => T('why.noBoard', 'доски нет: сначала «Составить роадмап»', v),
     hasBoard: (v) => T('why.hasBoard', 'доска уже есть: папка {dir} заведена', v),
     opening: (v) => T('why.opening', 'вкладка уже открывается', v),
-    noDaemon: (v) => T('why.noDaemon', 'демон не ответил, открыта ли вкладка: {e}', v),
-    reconnecting: (v) => T('why.reconnecting', 'вкладка уже открыта: она ещё подключается после перезапуска', v),
+    noDaemon: (v) => T('why.noDaemon', 'демон не ответил, открыта ли вкладка {of}: {e}', { ...v, of: whyTab(v) }),
+    reconnecting: (v) => T('why.reconnecting', 'вкладка {of} уже открыта: она ещё подключается после перезапуска', { ...v, of: whyTab(v) }),
     tplRead: (v) => T('why.tplRead', 'задание не прочитано: {e}', v),
     tplNoHead: (v) => T('why.tplNoHead', 'в {file} нет заголовка «## »: задание пустое', v),
     tplBlank: (v) => T('why.tplBlank', 'в {file} после заголовка «## » пусто: задание пустое', v),
@@ -3405,7 +3420,7 @@ function roadmapSetup(host) {
     planMissing: (v) => T('why.planMissing', 'файл плана не найден: {file}', v),
     picking: (v) => T('why.picking', 'окно выбора файла уже открыто', v),
     pickFail: (v) => T('why.pickFail', 'окно выбора файла не открылось: {e}', v),
-    longFile: (v) => T('why.longFile', 'задание не записано в файл: {e}', v),
+    longFile: (v) => T('why.longFile', '{cause}, а файл для него не записан: {e}', { ...v, cause: whyCause(v) }),
     tabFail: (v) => T('why.tabFail', 'вкладка не открылась: {e}', v),
   };
   const composeRun = async (how = 'compose') => {

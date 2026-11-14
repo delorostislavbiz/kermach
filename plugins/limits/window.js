@@ -236,7 +236,113 @@ function limitsSetup(host) {
     const self = document.createElement('p');
     self.id = 'limitsContinueClaudeSelf';
     self.style.cssText = 'margin:0 0 12px;line-height:1.5';
-    box.append(h, p, self, lab, tl, inp, list, acts);
+    // t1880: своя настройка у каждой вкладки Claude и Codex. «Как общая» — включатель сверху, пустой текст — общий текст.
+    const th = document.createElement('div');
+    th.style.cssText = 'margin-top:14px;font-weight:600';
+    const tp = document.createElement('p');
+    tp.style.cssText = 'margin:2px 0 6px;color:var(--muted);line-height:1.5';
+    const tabsBox = document.createElement('div');
+    tabsBox.id = 'limitsContinueTabs';
+    tabsBox.style.cssText = 'display:grid;grid-template-columns:minmax(80px,auto) auto 1fr;gap:6px 8px;align-items:center;max-height:30vh;overflow:auto';
+    let tabsDrawn = '';
+    // t1881: предупреждение о таймере вкладок — одной строкой над списком вкладок.
+    const tw = document.createElement('p');
+    tw.id = 'limitsTimerWarn';
+    tw.style.cssText = 'margin:0 0 6px;line-height:1.5;color:var(--warn, var(--text))';
+    box.append(h, p, self, lab, tl, inp, th, tp, tw, tabsBox, list, acts);
+    /** @param {any} t вкладка из view().tabs @param {string} common общий текст или текст по умолчанию */
+    const tabRow = (t, common) => {
+      const name = document.createElement('span');
+      name.textContent = t.title || t.sid;
+      name.title = t.kind;
+      name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px';
+      const sel = document.createElement('select');
+      sel.dataset.sid = t.sid;
+      sel.className = 'lctab-on';
+      sel.style.cssText = 'background:var(--input);color:var(--text);border:1px solid var(--line);border-radius:6px;font:inherit;padding:3px 4px';
+      for (const [v, k, ru] of [['', 'limits.continueTabCommon', 'Как общая'], ['on', 'limits.continueTabOn', 'Вкл'], ['off', 'limits.continueTabOff', 'Выкл']]) {
+        const o = document.createElement('option');
+        o.value = v;
+        o.textContent = I18n.t(k, ru);
+        sel.appendChild(o);
+      }
+      sel.value = t.on === true ? 'on' : t.on === false ? 'off' : '';
+      sel.onchange = () => { host.call('continueTabSet', { sid: t.sid, on: sel.value === 'on' ? true : sel.value === 'off' ? false : null }).then(setCont).catch(() => {}); };
+      const ti = document.createElement('input');
+      ti.type = 'text';
+      ti.dataset.sid = t.sid;
+      ti.className = 'lctab-text';
+      ti.maxLength = 1000;
+      ti.value = t.text || '';
+      ti.placeholder = common;
+      ti.style.cssText = inp.style.cssText;
+      const saveTab = () => host.call('continueTabSet', { sid: t.sid, text: ti.value }).then(setCont).catch(() => {});
+      ti.onchange = saveTab;
+      ti.dataset.saved = ti.value;
+      tabsBox.append(name, sel, ti);
+      // t1881: таймер вкладки — включатель, период часами и минутами, свой текст. Строка во всю ширину под строкой вкладки.
+      const tr = document.createElement('div');
+      tr.className = 'lctimer';
+      tr.dataset.sid = t.sid;
+      tr.style.cssText = 'grid-column:1/-1;display:flex;gap:6px;align-items:center;margin:-2px 0 4px 12px;color:var(--muted)';
+      const tOnL = document.createElement('label');
+      tOnL.style.cssText = 'display:flex;gap:4px;align-items:center;white-space:nowrap';
+      const tOn = document.createElement('input');
+      tOn.type = 'checkbox';
+      tOn.className = 'lctimer-on';
+      tOn.dataset.sid = t.sid;
+      const tOnT = document.createElement('span');
+      tOnL.append(tOn, tOnT);
+      const num = (/** @type {string} */ cls, /** @type {number} */ max) => {
+        const n = document.createElement('input');
+        n.type = 'number';
+        n.className = cls;
+        n.dataset.sid = t.sid;
+        n.min = '0';
+        n.max = String(max);
+        n.style.cssText = 'width:52px;box-sizing:border-box;background:var(--input);color:var(--text);border:1px solid var(--line);border-radius:6px;font:inherit;padding:3px 4px';
+        return n;
+      };
+      const tH = num('lctimer-h', 99);
+      const tHT = document.createElement('span');
+      const tM = num('lctimer-m', 59);
+      const tMT = document.createElement('span');
+      const tT = document.createElement('input');
+      tT.type = 'text';
+      tT.className = 'lctimer-text';
+      tT.dataset.sid = t.sid;
+      tT.maxLength = 1000;
+      tT.style.cssText = `${inp.style.cssText};flex:1;min-width:80px`;
+      const tNext = document.createElement('span');
+      tNext.className = 'lctimer-next';
+      tNext.style.cssText = 'white-space:nowrap';
+      tr.append(tOnL, tH, tHT, tM, tMT, tT, tNext);
+      tabsBox.append(tr);
+      const saveTimer = () => {
+        const min = (Math.max(0, Number(tH.value) || 0)) * 60 + Math.max(0, Number(tM.value) || 0);
+        return host.call('timerSet', { sid: t.sid, on: tOn.checked, min, text: tT.value }).then(setCont).catch(() => {});
+      };
+      tOn.onchange = saveTimer;
+      tH.onchange = saveTimer;
+      tM.onchange = saveTimer;
+      tT.onchange = saveTimer;
+      /** @param {any} x вкладка из view().tabs @param {string} def текст таймера по умолчанию */
+      const fillTimer = (x, def) => {
+        const tm = x.timer || { on: false, min: 60, text: '' };
+        tOnT.textContent = I18n.t('limits.timerOn', 'Таймер: каждые');
+        tHT.textContent = I18n.t('limits.timerHours', 'ч');
+        tMT.textContent = I18n.t('limits.timerMinutes', 'мин');
+        tT.placeholder = def;
+        tOn.checked = !!tm.on;
+        if (document.activeElement !== tH) tH.value = String(Math.floor(tm.min / 60));
+        if (document.activeElement !== tM) tM.value = String(tm.min % 60);
+        if (document.activeElement !== tT) { tT.value = tm.text || ''; tT.dataset.saved = tT.value; }
+        tNext.textContent = tm.on && tm.next ? I18n.t('limits.timerNext', 'следующее в {time}', { time: limitsClock(tm.next, Date.now()) }) : '';
+      };
+      return { sel, ti, saveTab, tT, saveTimer, fillTimer };
+    };
+    /** @type {Map<string, { sel: HTMLSelectElement, ti: HTMLInputElement, saveTab: () => any, tT: HTMLInputElement, saveTimer: () => any, fillTimer: (x: any, def: string) => void }>} */
+    const rows = new Map();
     const draw = () => {
       const c = (data && data.continue) || {};
       h.textContent = I18n.t('limits.continueDialog', 'Продолжать после сброса лимита');
@@ -250,7 +356,30 @@ function limitsSetup(host) {
       if (document.activeElement !== inp) inp.value = c.text || '';
       inp.placeholder = c.defaultText || '';
       list.textContent = '';
-      for (const x of c.on ? c.cases || [] : []) {
+      th.textContent = I18n.t('limits.continueTabsTitle', 'Вкладки');
+      tp.textContent = I18n.t('limits.continueTabsHint', 'У каждой вкладки можно задать своё: включить, выключить или оставить как общая. Пустой текст — общий текст сверху.');
+      const tabs = Array.isArray(c.tabs) ? c.tabs : [];
+      th.hidden = tp.hidden = !tabs.length;
+      const common = (c.text || '') || c.defaultText || '';
+      // Строки пересоздаются только при смене состава вкладок: иначе ответ на ввод в одной строке сбросил бы фокус и набранный текст.
+      const sig = tabs.map((/** @type {any} */ t) => `${t.sid}|${t.title}|${I18n.t('limits.continueTabCommon', 'Как общая')}`).join(',');
+      if (sig !== tabsDrawn) {
+        for (const r of rows.values()) { if (r.ti.value !== r.ti.dataset.saved) r.saveTab(); if (r.tT.value !== r.tT.dataset.saved) r.saveTimer(); }
+        tabsDrawn = sig;
+        tabsBox.textContent = '';
+        rows.clear();
+        for (const t of tabs) rows.set(t.sid, tabRow(t, common));
+      } else for (const t of tabs) {
+        const r = rows.get(t.sid);
+        if (!r) continue;
+        r.sel.value = t.on === true ? 'on' : t.on === false ? 'off' : '';
+        r.ti.placeholder = common;
+        if (document.activeElement !== r.ti) { r.ti.value = t.text || ''; r.ti.dataset.saved = r.ti.value; }
+      }
+      for (const t of tabs) { const r = rows.get(t.sid); if (r) r.fillTimer(t, c.timerDefault || ''); }
+      tw.hidden = !tabs.length;
+      tw.textContent = I18n.t('limits.timerWarn', 'Таймер пишет агенту свой текст через заданный период, не чаще раза в 5 минут. Каждое сообщение тратит лимит подписки. Работает, пока окно проекта открыто; пропускает раз, если агент работает, ждёт ответа, в поле есть текст, вкладка спит или стоит флаг нагрузки.');
+      for (const x of c.cases || []) {
         const row = document.createElement('div');
         row.append(caseText(x));
         if (x.at) row.appendChild(cancelBtn(x));
@@ -266,6 +395,7 @@ function limitsSetup(host) {
       document.removeEventListener('keydown', key, true);
       // Enter и закрытие без ухода из поля: change ещё не сработал, а текст человек уже набрал.
       if (inp.value !== String(((data && data.continue) || {}).text || '')) saveText();
+      for (const r of rows.values()) { if (r.ti.value !== r.ti.dataset.saved) r.saveTab(); if (r.tT.value !== r.tT.dataset.saved) r.saveTimer(); }
       ov.remove();
       dlg = null;
     };
@@ -292,18 +422,29 @@ function limitsSetup(host) {
     const b = document.createElement('button');
     b.id = 'limitsContinueOpen';
     b.style.cssText = 'padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;text-decoration:underline dotted';
-    b.textContent = c.on ? I18n.t('limits.continueOn', 'Продолжать после сброса: вкл') : I18n.t('limits.continueOff', 'Продолжать после сброса: выкл');
+    b.textContent = c.on ? I18n.t('limits.continueOn', 'Продолжать после сброса: вкл')
+      : c.onTabs > 0 ? I18n.t('limits.continueSome', 'Продолжать после сброса: вкл во вкладках: {n}', { n: c.onTabs }) : I18n.t('limits.continueOff', 'Продолжать после сброса: выкл');
     b.title = I18n.t('limits.continueDialog', 'Продолжать после сброса лимита');
     b.onclick = openDlg;
     cbar.appendChild(b);
-    if (c.on && c.claudeSelf) {
+    // t1881: у скольких вкладок включён таймер; нажатие открывает то же окно настройки.
+    if (c.timerTabs > 0) {
+      const tb = document.createElement('button');
+      tb.id = 'limitsTimerBar';
+      tb.style.cssText = b.style.cssText;
+      tb.textContent = I18n.t('limits.timerBar', 'Таймер во вкладках: {n}', { n: c.timerTabs });
+      tb.onclick = openDlg;
+      cbar.appendChild(tb);
+    }
+    if ((c.on || c.onTabs > 0) && c.claudeSelf) {
       const s = document.createElement('span');
       s.id = 'limitsContinueClaudeSelfBar';
       s.title = I18n.t('limits.continueClaudeSelf', 'Claude продолжит сам: в его настройках включено продолжение после лимита. Программа пишет только во вкладки Codex.');
       s.textContent = I18n.t('limits.continueClaudeSelfShort', 'Claude продолжит сам');
       cbar.appendChild(s);
     }
-    const list = c.on ? c.cases || [] : [];
+    // t1880: случаи выключенных вкладок главная часть уже не отдаёт, поэтому без проверки общего включателя.
+    const list = c.cases || [];
     // Лимит обычно настигает все вкладки сразу: длинный список ушёл бы за край окна. Две и больше — счётчик, вкладки и отмена в окне настройки.
     if (list.length > 1) {
       const many = document.createElement('button');

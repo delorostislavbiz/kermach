@@ -261,18 +261,44 @@ function rowCells(b, y, cols) {
  * от области прокрутки — там не трогаем. Проба — spikes\t451-cursor\probe.js. Такая же функция — в экране демона (daemon.js).
  * Всё — в колбэке пустой записи (t465): xterm разбирает write не сразу, и курсор, снятый до разбора пришедшего вывода,
  * ставился туда, где он был до этого вывода. Проба — spikes\t465-cursor\probe-race.js.
- * Смена одной высоты на Windows — keepBottom (t1181).
- * @param {any} term @param {() => void} resize @param {() => number} [rowsTo] новая высота, если меняется только она, иначе 0
+ * Смена высоты на Windows — keepBottom (t1181). Смена ширины, одной или вместе с высотой (угол окна, t1851): ConPTY строки видимого экрана
+ * по новой ширине не переносит и сразу рисует экран заново, а xterm переносил длинные ряды (линии, строку состояния) — лишние ряды
+ * выталкивали верх экрана в историю, и после перерисовки строки ответа Claude Code стояли дважды. Поэтому видимые ряды
+ * обрезаются по новой ширине и теряют признак переноса (их всё равно перерисуют), история переносится как обычно, высота — keepBottom.
+ * Только когда под курсором есть нарисованные ряды, как в keepBottom; иначе прежний путь. Проба — spikes\t1851-both.
+ * @param {any} term @param {() => void} resize @param {() => ({ cols: number, rows: number } | null)} [to] новый размер
  */
-function keepCursor(term, resize, rowsTo) {
-  term.write('', () => keepCursorNow(term, resize, rowsTo));
+function keepCursor(term, resize, to) {
+  term.write('', () => keepCursorNow(term, resize, to));
 }
 
-/** @param {any} term @param {() => void} resize @param {() => number} [rowsTo] */
-function keepCursorNow(term, resize, rowsTo) {
+/** @param {any} term @param {() => void} resize @param {() => ({ cols: number, rows: number } | null)} [to] */
+function keepCursorNow(term, resize, to) {
   const before = term.buffer.active;
   if (before.type !== 'normal' || term.modes.originMode) return resize();
-  if (WIN && rowsTo && rowsTo() && rowsTo() !== term.rows) return keepBottom(term, resize);
+  const t = WIN && to ? to() : null;
+  if (t && t.cols !== term.cols) {
+    const buf = term._core._bufferService.buffer;
+    let low = term.rows - 1;
+    while (low > buf.y && !buf.lines.get(buf.ybase + low).translateToString(true)) low--;
+    if (low > buf.y) {
+      const fill = buf.getNullCell();
+      for (let y = 0; y < term.rows; y++) {
+        const ln = buf.lines.get(buf.ybase + y);
+        if (!ln) continue;
+        ln.isWrapped = false;
+        if (t.cols < term.cols) ln.replaceCells(t.cols, term.cols, fill);
+      }
+      keepBottom(term, resize);
+      // ConPTY после смены ширины прижимает текст к низу: внизу один пустой ряд, сверху — ряды из истории (t1851, шаг 100→120).
+      let empty = 0;
+      while (empty < term.rows - 1 && !buf.lines.get(buf.ybase + term.rows - 1 - empty).translateToString(true)) empty++;
+      const k = Math.min(empty - 1, buf.ybase, term.rows - 2 - buf.y);
+      if (k > 0) { buf.lines.splice(buf.ybase + term.rows - k, k); buf.ybase -= k; buf.ydisp = buf.ybase; buf.y += k; }
+      return;
+    }
+  }
+  if (t && t.rows !== term.rows && t.cols === term.cols) return keepBottom(term, resize);
   const cols0 = term.cols;
   let y = before.baseY + before.cursorY;
   let offset = before.cursorX;
@@ -532,7 +558,7 @@ function createTerminal(pane, io, fontSize = 17) {
     /** @type {any} */ (term)._core._renderService.clear();
     term.resize(d.cols, d.rows);
   };
-  const rowsTo = () => { const d = proposed(); return d && d.cols === term.cols ? d.rows : 0; };
+  const rowsTo = () => proposed();
   const refit = () => { if (!pane.isConnected) return; keepCursor(term, fit, rowsTo); term.refresh(0, term.rows - 1); };
   /** Рендер по видимости панели; сменился — подгонка (обычно без смены размера, клетка та же) и перерисовка (t465, t1070). */
   /** Отложенная отдача WebGL ушедшей в фон вкладки (t1687). @type {ReturnType<typeof setTimeout> | null} */

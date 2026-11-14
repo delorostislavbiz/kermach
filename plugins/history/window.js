@@ -531,7 +531,10 @@ function historySetup(host) {
       : it.agent === 'grok' ? { kind: 'agent:grok', args: ['--resume', it.id], cwd: it.cwd || host.project.path } : { kind: it.agent === 'codex' ? 'codex' : 'claude', resume: it.id, cwd: it.cwd || host.project.path, ...(it.agentName ? { agent: it.agentName } : {}) };
     const r = await host.openTab(o);
     if (stopped) return;
-    if (r && r.error) { why.set(k, I18n.t('history.resumeFailed', 'Не продолжить: {why}', { why: r.error })); sel = k; draw(); }
+    if (r && r.error) { why.set(k, I18n.t('history.resumeFailed', 'Не продолжить: {why}', { why: r.error })); sel = k; draw(); return; }
+    // t1822: пометку «идёт во вкладке» ставит главная часть по списку демона, а новая вкладка сама список не перечитывает:
+    // без этого пометка ждала случайного «changed» индекса и под нагрузкой не приходила. fresh — мимо кэша вкладок (LIVE_MS).
+    if (open || tab) load(false, true);
   };
   /** Главное действие строки по её состоянию. @param {any} it */
   const primary = (it) => {

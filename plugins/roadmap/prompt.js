@@ -324,13 +324,16 @@ const boardWords = (lang) => Object.fromEntries(Object.keys(board.WORDS).map((w)
  * При кавычках вне них берутся и слова, похожие на путь (t982): «a.js, `b\c.js`» — оба; проза («см.», «(главное)», «1.2») — нет.
  * Для сравнения: / вместо \, без ./ в начале, без регистра. @param {string | string[]} v
  */
+/** Слова поля «Файлы», которые значат «файлов нет» (t1887): русская, украинская и английская доска. */
+const NO_FILES = /^(нет|немає|нема|none|no|n\/a)(\s+(файлов|файлів|files))?$/;
 function paths(v) {
   const s = Array.isArray(v) ? v.join(',') : String(v || '');
   const ticks = [...s.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
   const loose = ticks.length ? s.replace(/`[^`]+`/g, ' ').split(/[\s,;]+/).map((w) => w.replace(/[.;,:]+$/, ''))
     .filter((w) => /^[\p{L}\p{N}_.\-/\\]+$/u.test(w) && (/[/\\]/.test(w) || /\.[A-Za-z][A-Za-z0-9]{0,7}$/.test(w))) : [];
   const raw = ticks.length ? [...ticks, ...loose] : s.split(/[,;\n]/);
-  const out = raw.map((p) => p.trim().replace(/[.;,]+$/, '').replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()).filter((p) => p && !/^[—–-]$/.test(p));
+  // t1887 (d693): «нет», «none», «—» — файлов нет, а не путь: иначе волна видит общий файл «нет» и пускает такие карты по одной.
+  const out = raw.map((p) => p.trim().replace(/[.;,]+$/, '').replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()).filter((p) => p && !/^[—–-]$/.test(p) && !NO_FILES.test(p));
   return [...new Set(out)];
 }
 
@@ -629,14 +632,48 @@ let alikeLast = { key: '', out: /** @type {Record<string, string>} */ ({}) };
  * @param {import('./board').Decision[]} decisions @returns {Record<string, string>}
  */
 function alikeNotes(decisions) {
+  const g = alikeSteps(decisions);
+  let r = g.next();
+  while (!r.done) r = g.next();
+  return r.value;
+}
+/**
+ * Как alikeNotes, но кусками не дольше sliceMs с уступкой циклу событий между ними (t1871): на настоящей доске (839 записей)
+ * подсчёт целиком держал главный процесс ~230 мс при первом открытии доски. Ответ тот же и кладётся в тот же кэш (alikeLast).
+ * @param {import('./board').Decision[]} decisions @param {number} [sliceMs] @param {() => boolean} [stop] — true: бросить подсчёт
+ * @returns {Promise<Record<string, string> | null>} null — подсчёт брошен по stop
+ */
+async function alikeNotesSliced(decisions, sliceMs = 30, stop = () => false) {
+  const g = alikeSteps(decisions);
+  let t = Date.now();
+  let r = g.next();
+  while (!r.done) {
+    if (Date.now() - t >= sliceMs) { await new Promise((res) => setImmediate(res)); if (stop()) return null; t = Date.now(); }
+    r = g.next();
+  }
+  return r.value;
+}
+/**
+ * Подсчёт alikeNotes шагами (t1871): yield — место, где можно уступить циклу событий. decisions между шагами не меняются — это снимок доски.
+ * @param {import('./board').Decision[]} decisions @returns {Generator<void, Record<string, string>, void>}
+ */
+function* alikeSteps(decisions) {
   const live = decisions.filter((d) => !d.cancelled && !board.section(d));
   const key = live.map((d) => `${d.id}${d.type}${d.title}${d.text}${d.differs || ''}`).join('');
   if (key === alikeLast.key) return { ...alikeLast.out };
-  const docs = live.map((d) => ({ d, s: stems(`${d.title}
-${String(d.text || '').replace(new RegExp(`^${board.ERROR_LINE}`, 'gm'), '')}`) }));
+  yield;
+  /** @type {{ d: import('./board').Decision, s: Set<string> }[]} */
+  const docs = [];
+  for (const d of live) {
+    docs.push({ d, s: stems(`${d.title}
+${String(d.text || '').replace(new RegExp(`^${board.ERROR_LINE}`, 'gm'), '')}`) });
+    if (docs.length % 50 === 0) yield;
+  }
   /** Слово → номера записей в docs, где оно есть. @type {Map<string, number[]>} */
   const has = new Map();
-  docs.forEach((x, i) => { for (const w of x.s) has.set(w, [...(has.get(w) || []), i]); });
+  // t1871: push вместо копии списка на каждое слово — порядок номеров тот же.
+  docs.forEach((x, i) => { for (const w of x.s) { const l = has.get(w); if (l) l.push(i); else has.set(w, [i]); } });
+  yield;
   const idf = (/** @type {string} */ w) => Math.log(docs.length / ((has.get(w) || []).length || 1));
   const weight = docs.map((x) => [...x.s].reduce((a, w) => a + idf(w), 0));
   // Для второго прохода: имена из кода в `…` без путей и основы строк «Причина:».
@@ -656,7 +693,10 @@ ${String(d.text || '').replace(new RegExp(`^${board.ERROR_LINE}`, 'gm'), '')}`) 
   };
   /** @type {Record<string, string>} */
   const out = {};
-  docs.forEach((x, i) => {
+  yield;
+  for (let i = 0; i < docs.length; i++) {
+    const x = docs[i];
+    if (i && i % 20 === 0) yield;
     // Общий вес слов с каждой более старой записью — по спискам слова, без перебора всех пар.
     const both = new Float64Array(docs.length);
     for (const w of x.s) { const v = idf(w); for (const j of has.get(w) || []) if (docs[j].d.num < x.d.num) both[j] += v; }
@@ -670,7 +710,7 @@ ${String(d.text || '').replace(new RegExp(`^${board.ERROR_LINE}`, 'gm'), '')}`) 
     // t970: «Причина» есть у обеих — решает она, общее имя не в счёт: на t881 d238 → d234 (общие `.cmd`, `safe`) — разные причины.
     if (best < 0) both.forEach((v, j) => { const s = v ? v / (weight[i] + weight[j] - v) : 0; if (s >= ALIKE_LOW && s > top && (whySim(i, j) >= ALIKE_WHY || (rareCode(i, j) && !(why[i].size && why[j].size)))) { top = s; best = j; } });
     if (best >= 0) out[x.d.id] = docs[best].d.id;
-  });
+  }
   alikeLast = { key, out };
   return { ...out };
 }
@@ -1333,4 +1373,4 @@ const adopt = (project, opts = {}) => task(project, ADOPT, opts);
 const ADVISOR_LINE = lineOf('advisor', {});
 const ADVISOR_ONCE = lineOf('advisorOnce', {});
 
-module.exports = { orient, warmMap, fail, TEMPLATES, defuseAt, langOf, langName, nameIn, builtinIn, tr, SAY, LINES, ADVISOR_LINE, ADVISOR_ONCE, line, templates, templateFile, stale, staleAll, paths, shared, fresh, pick, search, wrongNotes, noteLine, listLine, alikeNotes, alikePattern, mergeTitle, notes, build, compose, newcard, adopt };
+module.exports = { orient, warmMap, fail, TEMPLATES, defuseAt, langOf, langName, nameIn, builtinIn, tr, SAY, LINES, ADVISOR_LINE, ADVISOR_ONCE, line, templates, templateFile, stale, staleAll, paths, shared, fresh, pick, search, wrongNotes, noteLine, listLine, alikeNotes, alikeNotesSliced, alikePattern, mergeTitle, notes, build, compose, newcard, adopt };

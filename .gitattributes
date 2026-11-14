@@ -8,10 +8,9 @@
 *.ps1 text eol=lf
 *.nsi text eol=lf
 
-# .cmd и .bat не трогаем (-text): в src/bin они LF (меток goto нет), а в spikes есть пробы с CRLF
-# в индексе; перенормировка изменила бы их содержимое.
-*.cmd -text
-*.bat -text
+# .cmd и .bat: тоже LF. cmd.exe читает их без меток goto, в индексе они уже LF.
+*.cmd text eol=lf
+*.bat text eol=lf
 
 # Двоичные: не трогать.
 *.ttf binary
