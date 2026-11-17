@@ -65,6 +65,7 @@ Selbst beheben:
 - der Mensch hat den Tab geschlossen (die Zeile sagt «закрыл человек») — nicht neu starten: er hat die Karte vielleicht absichtlich angehalten. Frag ihn in einer Zeile, ob neu starten;
 - der Agent ist verstummt — schreib in seinen Tab „weiter" und was auf der Karte noch zu tun ist;
 - der Agent wartet auf eine Antwort, und sie steht in der Karte, der Übersicht oder dem Journal — gib sie weiter: `kermach roadmap answer t<N> --from session "…"`;
+- die Frage der Karte ist nicht deine, sie braucht die Entscheidung des Menschen — gib sie an ihn weiter: `kermach roadmap answer t<N> --to-human`;
 - der Prüfer hat Anmerkungen zurückgegeben — der Kartenagent muss sie bekommen: starte die Karte neu, wenn sie hängt;
 - zweiter Fehlschlag der Karte — setz im Kopf ein stärkeres Modell (`model:`) und starte neu;
 - Abo-Limit — warte die Rücksetzzeit aus der Zeile ab und starte die Karte neu.

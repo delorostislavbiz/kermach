@@ -10,6 +10,9 @@
 // Связь с демоном и переподключение после обрыва — main\daemon-link.js.
 
 const { app, ipcMain, dialog, clipboard, session, shell, Menu } = require('electron');
+// Обёртки над синхронными вызовами (t1993) — до остальных модулей: взявший функцию fs или child_process при загрузке держал бы исходную.
+// Журнал они получат в hang-watch.start; строки до него ждут в очереди.
+require('./hang-watch').wrapSync();
 const sender = require('./sender');
 const appScheme = require('./app-scheme');
 const fs = require('fs');

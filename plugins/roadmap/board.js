@@ -382,17 +382,24 @@ function root(project) {
 function inside(dir, name) {
   // t1871: ответ зависит только от двух строк — путь, уже признанный своим, не проверяем заново: path.relative на 2000 файлах
   // настоящей доски стоил ~100 мс каждого чтения доски. Чужой путь в память не идёт и каждый раз даёт ошибку.
-  const k = `${dir}\n${name}`;
-  const was = INSIDE.get(k);
+  // t1997: память по папкам — склейка «папка\nимя» на каждый файл стоила ~10 мс на доске в 10 000 файлов, и общий предел на все окна чистил всё сразу.
+  let m = INSIDE.get(dir);
+  const was = m && m.get(name);
   if (was !== undefined) return was;
   const file = path.join(dir, name);
   const rel = path.relative(dir, file);
   if (!rel || up(rel) || path.isAbsolute(rel) || rel.includes(path.sep)) throw new Error(`путь вне папки доски: ${name}`);
-  if (INSIDE.size >= 20000) INSIDE.clear();
-  INSIDE.set(k, file);
+  if (!m) {
+    // Папок досок больше 64 — давняя прочь. Предел здесь, а не константой рядом: проба t1871 запускает текст этой функции отдельно.
+    for (const old of INSIDE.keys()) { if (INSIDE.size < 64) break; INSIDE.delete(old); }
+    m = new Map();
+    INSIDE.set(dir, m);
+  }
+  if (m.size >= 20000) m.clear();
+  m.set(name, file);
   return file;
 }
-/** Признанные своими пути inside (t1871): «папка\nимя» → полный путь. @type {Map<string, string>} */
+/** Признанные своими пути inside (t1871): папка → имя → полный путь. @type {Map<string, Map<string, string>>} */
 const INSIDE = new Map();
 
 /** Папка доски не ведёт за пределы проекта (ссылка или junction). @param {string} project @param {string} dir */
@@ -998,13 +1005,97 @@ function readSmall(file) {
  * Тексты файлов доски по пути (t1197): файл не менялся (mtime, ctime, размер те же) — открывать и читать его заново не нужно.
  * Открытие файла в Electron стоит ~5 мс на файл, пока антивирус его не знает, — на доске в 950 файлов это секунды.
  * Только для чтения доски: перед записью файла читаем набело через readSmall.
- * @type {Map<string, { key: string, text: string }>}
+ * t1997: ключ и отметка прогрева v — у каждого файла доски, всегда; текст — только у TEXTS_MAX последних файлов доски (HELD).
+ * Текст старого файла выброшен — ключ остаётся, и read() берёт готовый разбор из PARSED, не открывая файл. Раньше переполнение
+ * чистило память всех окон целиком, и доска больше 5000 файлов на каждой сверке читалась вся синхронно: 5–9 с главного процесса (t1994).
+ * @type {Map<string, { key: string, text?: string, v?: number }>}
  */
 const TEXTS = new Map();
+/** Сколько текстов держать на одну доску (t1997); раньше — на все окна вместе. */
 const TEXTS_MAX = 5000;
+/** Сколько досок держать в памяти (t1997): сигнала «окно закрыто» здесь нет. Больше — доска, которую дольше всех не читали, уходит из памяти целиком. */
+const BOARDS_MAX = 16;
+/**
+ * Папка доски → файлы, чей текст в памяти, давние первыми (t1997). Порядок самих досок — порядок чтения: давно читанная — первой.
+ * @type {Map<string, Set<string>>}
+ */
+const HELD = new Map();
+
+/** Журнал программы (t1997): у board.js своего нет — его даёт setLog или opts.log слежения. @type {((s: string) => void) | null} */
+let LOG = null;
+/** Доски, где текстов больше предела (t1997): папка → строка уже в журнале. Журнала ещё нет — строка ждёт его. @type {Map<string, boolean>} */
+const FULL = new Map();
+
+/** Журнал для строк board.js (t1997). @param {((s: string) => void) | null} f */
+function setLog(f) {
+  LOG = typeof f === 'function' ? f : null;
+  sayFull();
+}
+
+/** Строка о переполнении — одна на доску за жизнь процесса (t1997). */
+function sayFull() {
+  if (!LOG) return;
+  for (const [dir, said] of FULL) {
+    if (said) continue;
+    FULL.set(dir, true);
+    try { LOG(`доска ${dir}: файлов больше ${TEXTS_MAX} — тексты давних файлов в памяти не держу; файл читается заново, только когда сменилось его время или размер`); } catch { /* журнал не принял строку */ }
+  }
+}
+
+/**
+ * Файлы доски, чьи тексты в памяти (t1997); touch — доска только что читалась, в конец очереди досок.
+ * Досок больше BOARDS_MAX — самая давняя уходит целиком. @param {string} dir @param {boolean} touch
+ */
+function heldOf(dir, touch) {
+  let s = HELD.get(dir);
+  if (s && !touch) return s;
+  if (s) HELD.delete(dir); else s = new Set();
+  HELD.set(dir, s);
+  for (const old of HELD.keys()) {
+    if (HELD.size <= BOARDS_MAX) break;
+    forget(old);
+  }
+  return s;
+}
+
+/** Доска уходит из памяти целиком (t1997): тексты, ключи, разбор, «похожие». Следующее чтение начнёт с файлов. @param {string} dir */
+function forget(dir) {
+  HELD.delete(dir);
+  ALIKE_LAST.delete(dir);
+  for (const f of TEXTS.keys()) if (path.dirname(f) === dir) TEXTS.delete(f);
+  for (const f of PARSED.keys()) if (path.dirname(f) === dir) PARSED.delete(f);
+}
+
+/**
+ * Запись в TEXTS (t1997): текст — в конец очереди доски. Текстов больше TEXTS_MAX — у самого давнего файла текст выбрасываем,
+ * ключ и отметку прогрева оставляем: прогрев и read() видят, что файл не менялся, и берут разбор из PARSED.
+ * @param {string} file @param {{ key: string, text?: string, v?: number }} hit
+ */
+function hold(file, hit) {
+  TEXTS.set(file, hit);
+  const dir = path.dirname(file);
+  const s = heldOf(dir, false);
+  s.delete(file);
+  s.add(file);
+  if (s.size <= TEXTS_MAX) return;
+  let old = /** @type {string} */ (s.values().next().value);
+  // Паспорт — не выбрасываем: его текст нужен каждому чтению (язык доски), иначе первое чтение после прогрева большой доски открывало бы его.
+  if (path.basename(old) === 'passport.md') { s.delete(old); s.add(old); old = /** @type {string} */ (s.values().next().value); }
+  s.delete(old);
+  const e = TEXTS.get(old);
+  if (e) e.text = undefined;
+  if (!FULL.has(dir)) { FULL.set(dir, false); sayFull(); }
+}
+
+/** Файл ушёл с доски (t1997): ключ и текст прочь. @param {string} file */
+function drop(file) {
+  TEXTS.delete(file);
+  const s = HELD.get(path.dirname(file));
+  if (s) s.delete(file);
+}
 
 /** Как readSmall, но неизменённый файл отдаёт из памяти. @param {string} file */
-function readCached(file) { return readKeyed(file, 0).text; }
+function readCached(file) { return /** @type {string} */ (readKeyed(file, 0).text); }
 
 /** mtime файла из ключа TEXTS (t1701): без lstat; файла в памяти нет — undefined. @param {string} file @returns {number | undefined} */
 function mtimeOf(file) {
@@ -1022,21 +1113,31 @@ let primeGen = 0;
 
 /**
  * Текст и ключ файла (mtime, ctime, размер). trust — номер прогрева: запись, проверенная им, отдаётся без lstat.
- * @param {string} file @param {number} trust @returns {{ key: string, text: string }}
+ * need = false (t1997) — нужен только ключ: текст, выброшенный из памяти, не читается. Его прочитает parsedOf, если разбора нет.
+ * @param {string} file @param {number} trust @param {boolean} [need] @returns {{ key: string, text?: string, v?: number }}
  */
-function readKeyed(file, trust) {
+function readKeyed(file, trust, need = true) {
   const was = TEXTS.get(file);
-  if (trust && was && /** @type {any} */ (was).v === trust) return was;
+  if (trust && was && was.v === trust && (!need || was.text !== undefined)) return was;
   const st = fs.lstatSync(file);
   if (st.isSymbolicLink()) throw new Error('ссылка на другой файл — не читаем');
   if (!st.isFile()) throw new Error('не файл');
   if (st.size > MAX_SIZE) throw new Error(`слишком большой: ${st.size} байт, предел ${MAX_SIZE}`);
   const key = `${st.mtimeMs}:${st.ctimeMs}:${st.size}`;
-  if (was && was.key === key) return was;
+  const same = !!was && was.key === key;
+  if (same && !need) return /** @type {{ key: string, text?: string, v?: number }} */ (was);
+  if (same && was && was.text !== undefined) {
+    // Текст нужен (паспорт для языка доски на каждом чтении) — файл в конец очереди, чтобы его текст не выбросили первым.
+    const s = HELD.get(path.dirname(file));
+    if (s && s.has(file)) { s.delete(file); s.add(file); }
+    return was;
+  }
   const text = fs.readFileSync(file, 'utf8');
-  if (TEXTS.size >= TEXTS_MAX) TEXTS.clear();
+  // Тот же ключ, текст был выброшен: текст — только этому вызову (разбор на новом языке), в память не возвращаем.
+  // Иначе он вытеснил бы текст следующего давнего файла, тому тоже понадобилось бы чтение — и смена языка читала бы всю доску.
+  if (same && was) return was.v ? { key, text, v: was.v } : { key, text };
   const hit = { key, text };
-  TEXTS.set(file, hit);
+  hold(file, hit);
   return hit;
 }
 
@@ -1049,13 +1150,15 @@ const PARSED = new Map();
 
 /**
  * Разбор файла доски из PARSED или заново (t1711); заново — кладётся в PARSED. Предмет — общий с кэшем: наружу отдавать копию.
- * @param {string} kind @param {number} num @param {string} name @param {string} file @param {{ key: string, text: string }} got @param {string} lang
+ * @param {string} kind @param {number} num @param {string} name @param {string} file @param {{ key: string, text?: string }} got @param {string} lang
  * @returns {{ r: any, hidden: Array<{ file: string, reason: string }> }}
  */
 function parsedOf(kind, num, name, file, got, lang) {
   const was = PARSED.get(file);
   if (was && was.key === got.key && was.lang === lang) return was;
-  const text = got.text;
+  // t1997: разбора нет, а текст выброшен из памяти (доска больше предела) — читаем файл; ключ — от этого чтения.
+  if (got.text === undefined) got = readKeyed(file, 0);
+  const text = /** @type {string} */ (got.text);
   const r = item(kind, num, name, text, lang);
   /** @type {Array<{ file: string, reason: string }>} */
   const hidden = [];
@@ -1079,13 +1182,14 @@ function parsedOf(kind, num, name, file, got, lang) {
  * @param {any} it
  */
 function copyItem(it) {
+  // t1997: копия целиком одним шагом, потом — только поля-массивы и поля-объекты. Сборка по полю стоила ~5 мкс на предмет: 50 мс на доске в 10 000 файлов.
   /** @type {any} */
-  const out = {};
-  for (const k in it) {
-    const v = it[k];
+  const out = { ...it };
+  for (const k in out) {
+    const v = out[k];
+    if (!v || typeof v !== 'object') continue;
     if (Array.isArray(v)) out[k] = v.map((x) => (x && typeof x === 'object' ? (Array.isArray(x) ? [...x] : { ...x }) : x));
-    else if (v && typeof v === 'object') { const o = /** @type {any} */ ({}); for (const j in v) { const w = v[j]; o[j] = w && typeof w === 'object' ? (Array.isArray(w) ? [...w] : { ...w }) : w; } out[k] = o; }
-    else out[k] = v;
+    else { const o = /** @type {any} */ ({ ...v }); for (const j in o) { const w = o[j]; if (w && typeof w === 'object') o[j] = Array.isArray(w) ? [...w] : { ...w }; } out[k] = o; }
   }
   return out;
 }
@@ -1122,6 +1226,7 @@ function prime(project, opts = {}) {
     /** @type {string[]} */
     let names = [];
     try { names = (await fs.promises.readdir(dir, { withFileTypes: true })).filter((e) => e.isFile() && !ignored(e.name) && e.name.endsWith('.md')).map((e) => e.name); } catch { return; }
+    heldOf(dir, true);
     let lang = '';
     try { lang = boardLang(project); } catch { /* паспорта нет — язык по умолчанию, как у read() */ }
     let i = 0;
@@ -1135,13 +1240,21 @@ function prime(project, opts = {}) {
           const key = `${st.mtimeMs}:${st.ctimeMs}:${st.size}`;
           const hit = TEXTS.get(file);
           const m = NAME_RE.exec(names[n]);
-          if (hit && hit.key === key) { /** @type {any} */ (hit).v = gen; if (m) warmOf(dir, names[n], m[1], parsedOf(m[1], Number(m[2]), names[n], file, hit, lang)); continue; }
+          // t1997: текст выброшен из памяти, а разбор того же файла на том же языке есть — файл не читаем. Паспорту текст нужен всегда (язык доски).
+          const pp = hit && hit.text === undefined && m ? PARSED.get(file) : undefined;
+          if (hit && hit.key === key && (hit.text !== undefined || (pp && pp.key === key && pp.lang === lang))) {
+            hit.v = gen;
+            if (m) warmOf(dir, names[n], m[1], parsedOf(m[1], Number(m[2]), names[n], file, hit, lang));
+            continue;
+          }
           const text = await fs.promises.readFile(file, 'utf8');
           // Файл сменился, пока читали: ключ уже не его — без отметки прогрева, read() проверит сам.
           const st2 = await fs.promises.lstat(file);
-          if (TEXTS.size >= TEXTS_MAX) TEXTS.clear();
           const got = `${st2.mtimeMs}:${st2.ctimeMs}:${st2.size}` === key ? { key, text, v: gen } : { key, text };
-          TEXTS.set(file, got);
+          // t1997: файл не менялся, его текст был выброшен, а разбор нужен заново (язык доски сменился) — текст только разбору, в память не кладём:
+          // иначе он вытеснит текст файла, до которого прогрев ещё не дошёл, и прогрев прочитает всю доску.
+          if (hit && hit.key === key && hit.text === undefined && m && got.v) { hit.v = gen; warmOf(dir, names[n], m[1], parsedOf(m[1], Number(m[2]), names[n], file, got, lang)); continue; }
+          hold(file, got);
           // t1711: разбор здесь, по файлу между чтениями, — read() после прогрева берёт готовое, а не разбирает 2000 файлов одним куском.
           if (m) warmOf(dir, names[n], m[1], parsedOf(m[1], Number(m[2]), names[n], file, got, lang));
         } catch { /* файл пропал или не читается — read() скажет */ }
@@ -1176,7 +1289,9 @@ function scan(dir) {
     const m = NAME_RE.exec(e.name);
     if (!m || !e.isFile()) { wrong.push(e.name); continue; }
     const id = `${m[1]}${Number(m[2])}`;
-    byId.set(id, [...(byId.get(id) || []), e.name]);
+    // t1997: в тот же массив, а не новый на каждый файл: на доске в 10 000 файлов это заметная часть чтения.
+    const had = byId.get(id);
+    if (had) had.push(e.name); else byId.set(id, [e.name]);
   }
   return { byId, wrong };
 }
@@ -1213,6 +1328,7 @@ function read(project, opts = {}) {
   if (!alive.ok(path.resolve(project)) || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return b;
   try { ownRoot(project, dir); } catch (e) { b.errors.push({ file: DIR, reason: e instanceof Error ? e.message : String(e) }); return b; }
   b.exists = true;
+  heldOf(dir, true);
   const { byId, wrong } = scan(dir);
   for (const n of wrong) b.errors.push({ file: n, reason: 'неверное имя: допустимы passport.md, counter.json, f<N>.md, t<N>.md, d<N>.md' });
   /** @type {Array<[string, number, string]>} */
@@ -1226,14 +1342,14 @@ function read(project, opts = {}) {
   const lang = b.lang = boardLang(project);
   const seen = new Set();
   for (const [kind, num, name] of todo) {
-    let r, text = '';
+    let r;
     const file = inside(dir, name);
     seen.add(file);
     /** @type {Array<{ file: string, reason: string }>} */
     let hidden = [];
     try {
-      const got = readKeyed(file, trust);
-      text = got.text;
+      // t1997: текст не нужен, когда разбор того же ключа есть: файл, чей текст выброшен из памяти, не читается.
+      const got = readKeyed(file, trust, false);
       ({ r, hidden } = parsedOf(kind, num, name, file, got, lang));
       if (!('error' in r)) r = { ...r, item: copyItem(r.item) };
     } catch (e) { r = { error: e instanceof Error ? e.message : String(e) }; }
@@ -1245,8 +1361,11 @@ function read(project, opts = {}) {
     else if (kind === 'd') b.decisions.push(/** @type {Decision} */ (r.item));
     else b.passport = /** @type {Passport} */ (r.item);
   }
-  // Файлы, которых на доске больше нет, — прочь из разбора (t1711): память не растёт от удалённых карт.
-  for (const f of PARSED.keys()) if (path.dirname(f) === dir && !seen.has(f)) PARSED.delete(f);
+  // Файлы, которых на доске больше нет, — прочь из разбора (t1711) и из TEXTS (t1997: её больше не чистит переполнение): память не растёт от удалённых карт.
+  for (const f of PARSED.keys()) if (!seen.has(f) && path.dirname(f) === dir) PARSED.delete(f);
+  // Из TEXTS — только файлы, которых нет на диске: ключ файла с неверным именем или парного номера нужен первому кругу слежения (seed), иначе он даст лишнее событие.
+  const onDisk = (/** @type {string} */ n) => { const m = NAME_RE.exec(n); return m ? (byId.get(`${m[1]}${Number(m[2])}`) || []).includes(n) : wrong.includes(n); };
+  for (const f of TEXTS.keys()) if (!seen.has(f) && path.dirname(f) === dir && !onDisk(path.basename(f))) drop(f);
   const c = readCounter(dir);
   if (c.error) b.errors.push({ file: 'counter.json', reason: c.error });
   b.counter = { t: Math.max(c.obj.t || 0, maxNum(byId, 't')), d: Math.max(c.obj.d || 0, maxNum(byId, 'd')) };
@@ -1271,7 +1390,7 @@ function read(project, opts = {}) {
   // t1691: заметку взяли в карту, а файл карты удалили (отмена — в Корзину) — заметка снова новая: take и drop работают, список её показывает.
   // Файл карты есть, но с ошибкой, — карта жива: заметка остаётся взятой. Номер удалённой карты — в takenGone.
   for (const d of b.decisions) if (d.type === 'заметка' && d.taken && !byId.has(d.taken)) { d.takenGone = d.taken; d.taken = ''; }
-  b.alike = alike(b.cards, b.inbox);
+  b.alike = alike(b.cards, b.inbox, dir);
   return b;
 }
 
@@ -1295,12 +1414,14 @@ function titleOf(t) {
 }
 /**
  * Для карт ids — самая похожая другая карта доски: в фазе, во «Входящих», готовая — все (дубль готовой карты тоже дубль).
- * Одинаковая доля — меньший номер: карты отсортированы по номеру. @param {Card[]} cards @param {string[]} ids @returns {Record<string, string>}
+ * Одинаковая доля — меньший номер: карты отсортированы по номеру. slot (t1997) — папка доски: у каждой доски свой последний ответ.
+ * @param {Card[]} cards @param {string[]} ids @param {string} [slot] @returns {Record<string, string>}
  */
-function alike(cards, ids) {
+function alike(cards, ids, slot = '') {
   // t1701: те же заголовки и те же карты для сравнения — тот же ответ: правка «Что сделано» заголовков не меняет.
   const key = `${ids.join(',')}\n${cards.map((c) => `${c.id}\t${c.title}`).join('\n')}`;
-  if (ALIKE_LAST.key === key) return { ...ALIKE_LAST.out };
+  const last = ALIKE_LAST.get(slot);
+  if (last && last.key === key) return { ...last.out };
   /** @type {Record<string, string>} */
   const out = {};
   const ws = new Map(cards.map((c) => [c.id, titleOf(c.title).ws]));
@@ -1318,11 +1439,20 @@ function alike(cards, ids) {
       if (r >= ALIKE && r > best) { best = r; out[id] = c.id; }
     }
   }
-  ALIKE_LAST = { key, out };
+  ALIKE_LAST.delete(slot);
+  ALIKE_LAST.set(slot, { key, out });
+  for (const old of ALIKE_LAST.keys()) {
+    if (ALIKE_LAST.size <= BOARDS_MAX + 1) break;
+    ALIKE_LAST.delete(old);
+  }
   return { ...out };
 }
-/** Последний ответ alike (t1701): ключ — список ids, номера и заголовки карт. */
-let ALIKE_LAST = { key: '', out: /** @type {Record<string, string>} */ ({}) };
+/**
+ * Последний ответ alike (t1701): ключ — список ids, номера и заголовки карт. t1997: по доскам — один общий ответ на все окна
+ * сбрасывался, когда сверялись два окна по очереди, и каждое чтение сравнивало карты заново: ~50 мс на двух досках по 3000 файлов.
+ * @type {Map<string, { key: string, out: Record<string, string> }>}
+ */
+const ALIKE_LAST = new Map();
 
 /** Файл по ссылке t12, f1, d3, passport: имя на диске (t09.md для t9) или новое. @param {string} project @param {string} ref */
 function locate(project, ref) {
@@ -1343,11 +1473,11 @@ function locate(project, ref) {
  * @param {string} file @param {string} text
  */
 function remember(file, text) {
-  const was = /** @type {any} */ (TEXTS.get(file));
+  const was = TEXTS.get(file);
   try {
     const st = fs.lstatSync(file);
-    TEXTS.set(file, { key: `${st.mtimeMs}:${st.ctimeMs}:${st.size}`, text, ...(was && was.v ? { v: was.v } : {}) });
-  } catch { TEXTS.delete(file); }
+    hold(file, { key: `${st.mtimeMs}:${st.ctimeMs}:${st.size}`, text, ...(was && was.v ? { v: was.v } : {}) });
+  } catch { drop(file); }
 }
 
 const SAVE_TRIES = 3;
@@ -1357,9 +1487,13 @@ const SAVE_PAUSE_MS = 150;
  * не уведёт запись наружу, чужой файл не затрётся. Rename — до 3 раз с паузой (на Windows редактор или антивирус держат файл долю секунды).
  * Прямой записи в файл карты нет: при падении в эти миллисекунды остались бы полфайла, а жёсткая ссылка на карту унесла бы запись наружу.
  * Не вышло — ошибка (окно оставляет введённое на месте), временный файл убран.
- * @param {string} file @param {string} text
+ * t2000: old — текст файла, из которого собран text. Файл был занят — его в этот миг мог писать агент. Перед каждым повтором файл
+ * сверяется с old: другой или пропал — не пишем, бросаем «файл поменяли во время записи», вызвавший перечитает файл. Не прочитался
+ * (занят) — попытка уходит без rename: вслепую не пишем. Сверка и rename — одним синхронным куском после паузы, как в grader.js (t1889).
+ * Первая попытка без сверки: обычная запись без гонки — как раньше. Без old — сверки нет.
+ * @param {string} file @param {string} text @param {string} [old]
  */
-function save(file, text) {
+function save(file, text, old) {
   const dir = path.dirname(file);
   let tmp = '';
   for (let i = 0; ; i++) {
@@ -1368,11 +1502,23 @@ function save(file, text) {
       if (!e || /** @type {any} */ (e).code !== 'EEXIST' || i >= 9) throw e;
     }
   }
+  const pause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, SAVE_PAUSE_MS);
   let last;
   for (let i = 0; i < SAVE_TRIES; i++) {
+    if (i > 0 && old !== undefined) {
+      /** @type {string | null} */
+      let now = null;
+      try { now = readSmall(file); } catch (e) {
+        if (e && ['EBUSY', 'EPERM', 'EACCES'].includes(/** @type {any} */ (e).code)) { last = e; if (i < SAVE_TRIES - 1) pause(); continue; }
+      }
+      if (now !== old) {
+        try { fs.unlinkSync(tmp); } catch { /* временного файла уже нет */ }
+        throw new Error(`файл поменяли во время записи (${path.basename(file)}): правка не записана — перечитайте файл и повторите`);
+      }
+    }
     try { fs.renameSync(tmp, file); remember(file, text); return; } catch (e) {
       last = e;
-      if (i < SAVE_TRIES - 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, SAVE_PAUSE_MS);
+      if (i < SAVE_TRIES - 1) pause();
     }
   }
   try { fs.unlinkSync(tmp); } catch { /* временного файла уже нет */ }
@@ -1578,7 +1724,8 @@ function update(project, ref, changes) {
   const off = Object.keys(want).filter((k) => (got[k] ? (kind === 'passport' ? got[k].value : fieldValue(got[k].value)) : '') !== want[k]);
   if (off.length) throw refuse({ hidden: off });
   const wrote = text !== old;
-  if (wrote) save(file, text);
+  // t2000: old — сверка перед повтором rename: агент записал карту, пока она была занята, — его правку не затираем, бросаем.
+  if (wrote) save(file, text, old);
   // t1163: карту из дела закрыли — дело «Дел» отмечается сделанным само (ДЕЛА-устройство.md, пункт д). Сбой «Дел» правку карты не отменяет.
   if (kind === 't' && 'from' in after.item && after.item.from && after.item.status === 'готово' && 'status' in changes) {
     try { require('../tasks/store').syncCards(project); } catch { /* дело поправится при следующем чтении окна «Дела» */ }
@@ -1680,7 +1827,8 @@ function merge(project, from, into, retitle, remove = fs.unlinkSync) {
   const text = joined(p);
   const after = item('d', dst.d.num, path.basename(dst.file), text);
   if ('error' in after) throw new Error(`объединение не принято: ${after.error}`);
-  save(dst.file, text);
+  // t2011: dst.text — сверка перед повтором rename (как update, t2000): старую запись правили, пока она была занята, — не затираем.
+  save(dst.file, text, dst.text);
   // t1014: повтор стоял в from других паттернов — его причина теперь в старой, ссылку переводим на неё. Утверждение этих паттернов снимается само:
   // отпечаток sha1 учитывает from. Делаем до удаления повтора: сбой здесь оставляет его файл, и повторное «объединить» доделает.
   /** @type {string[]} */
@@ -1688,14 +1836,15 @@ function merge(project, from, into, retitle, remove = fs.unlinkSync) {
   for (const d of read(project).decisions) {
     if (!isP(d) || d.id === src.d.id || d.id === dst.d.id || !d.from.includes(src.d.id)) continue;
     const at = locate(project, d.id);
-    const q = parse(readSmall(at.file));
+    const was = readSmall(at.file);
+    const q = parse(was);
     const h = (q.head || []).find((x) => x.key === 'from');
     if (!h) continue;
     q.lines[h.line] = `from: ${headValue(relink(d.from, d.id))}`;
     const t = joined(q);
     const r = item('d', d.num, path.basename(at.file), t);
     if ('error' in r) throw new Error(`${into} дописана, from паттерна ${d.id} не поправлен: ${r.error}`);
-    save(at.file, t);
+    save(at.file, t, was);
     repointed.push(d.id);
   }
   try { remove(src.file); } catch (e) {
@@ -1758,7 +1907,7 @@ function reviewed(project, ref, card) {
   const text = joined(p);
   const after = item('d', num, path.basename(file), text);
   if ('error' in after) throw new Error(`правка не принята: ${after.error}`);
-  save(file, text);
+  save(file, text, old);
   return was;
 }
 
@@ -1793,7 +1942,7 @@ function humanMark(project, ref, action, why = '', expect = '') {
   const text = joined(p);
   const after = item('f', num, path.basename(file), text, lang);
   if ('error' in after) throw new Error(`правка не принята: ${after.error}`);
-  save(file, text);
+  save(file, text, old);
   return { id: ref, text: part.text, state: action, date, why: action === 'skip' ? reason : '', was, file: path.basename(file) };
 }
 
@@ -1883,17 +2032,60 @@ function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return /** @type {any} */ (e).code === 'EPERM'; }
 }
 
+// t1992: шаг опроса чужого замка. Команда kermach — 25 мс, как было. Главный процесс — 100 мс: каждый круг (wx, чтение замка, проверка процесса)
+// стоит около 1,4 мс потока, при шаге 25 мс ожидание 5 с занимало ~290 мс (spikes/t1992-note-lock); человек лишних 0,1 с у кнопки не заметит.
+const LOCK_STEP_MS = 25;
+const LOCK_STEP_ASYNC_MS = 100;
+/**
+ * t1992: шаги с паузами — генератор: в месте паузы он отдаёт число миллисекунд, а ждёт водитель (как grader.answer, t1987).
+ * runSync ждёт Atomics.wait — команда kermach, свой процесс. runAsync ждёт setTimeout — главный процесс программы:
+ * Atomics.wait там держал все окна и демон, пока замок заметок у другой сессии, — до 5 с.
+ * @template T @param {Generator<number, T, void>} g @returns {T}
+ */
+function runSync(g) {
+  try {
+    for (let s = g.next(); ; s = g.next()) { if (s.done) return s.value; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, s.value); }
+  } finally { g.return(/** @type {any} */ (undefined)); }
+}
+/** Асинхронный водитель (t1992): паузы — setTimeout, поток свободен. @template T @param {Generator<number, T, void>} g @returns {Promise<T>} */
+async function runAsync(g) {
+  try {
+    for (let s = g.next(); ; s = g.next()) { if (s.done) return s.value; await new Promise((r) => setTimeout(r, s.value)); }
+  } finally { g.return(/** @type {any} */ (undefined)); }
+}
+
 /**
  * Выполнить fn под замком заметок доски: две сессии разом не заведут две карты на одну заметку и не дадут ей и taken, и cancelled.
  * Замок — файл .notes.lock (wx) с номером процесса и временем; после сбоя процесса он не висит: мёртвый номер или возраст — и его снимают.
+ * Синхронно — для команды kermach (свой процесс). В главном процессе программы — withNoteLockAsync (t1992).
  * @template T @param {string} project @param {() => T} fn @returns {T}
  */
-function withNoteLock(project, fn) {
+function withNoteLock(project, fn) { return runSync(noteLockSteps(project, fn, LOCK_STEP_MS)); }
+/**
+ * withNoteLock для главного процесса программы (t1992): ожидание чужого замка не держит поток; fn — та же, синхронная.
+ * @template T @param {string} project @param {() => T} fn @returns {Promise<T>}
+ */
+function withNoteLockAsync(project, fn) { return runAsync(noteLockSteps(project, fn, LOCK_STEP_ASYNC_MS)); }
+/**
+ * Шаги withNoteLock (t1992): yield — пауза перед новой попыткой взять замок.
+ * Взятие замка, fn и снятие замка идут одним синхронным куском, после последней паузы: под замком пауз нет, как прежде.
+ * @template T @param {string} project @param {() => T} fn @param {number} step пауза между попытками, мс @returns {Generator<number, T, void>}
+ */
+function* noteLockSteps(project, fn, step) {
   const dir = ensureRoot(project);
   const file = inside(dir, NOTE_LOCK);
   const mine = JSON.stringify({ pid: process.pid, at: Date.now(), r: Math.random().toString(36).slice(2) });
   const until = Date.now() + LOCK_WAIT_MS;
-  for (;;) {
+  for (let round = 0; ; round++) {
+    // t2004: предел и пауза — в начале каждого круга, кроме первого. Ветки ниже уходят на новый круг через continue: замок не прочитать
+    // (папка на его месте, файл в удалении на Windows), statSync упал, брошенный замок не переименовать (файл держат без права удаления).
+    // Когда предел и пауза стояли в конце круга, такой замок крутил цикл без конца и без паузы: 20 000 кругов за 6,5 с, процессор 6,6 с,
+    // а в главном процессе окна (withNoteLockAsync) — ещё и поток без единого yield (spikes/t2004-notelock/probe-cpu-before.txt).
+    // Снятый брошенный замок тоже ждёт один шаг перед новой попыткой — 25 мс в команде, 100 мс в окне.
+    if (round > 0) {
+      if (Date.now() > until) throw new Error('заметки сейчас правит другая сессия — повторите команду через несколько секунд');
+      yield step;
+    }
     try { fs.writeFileSync(file, mine, { flag: 'wx' }); break; } catch (e) {
       if (/** @type {any} */ (e).code !== 'EEXIST' && /** @type {any} */ (e).code !== 'EPERM') throw e;
     }
@@ -1916,8 +2108,6 @@ function withNoteLock(project, fn) {
       try { fs.unlinkSync(moved); } catch { /* нет */ }
       continue;
     }
-    if (Date.now() > until) throw new Error('заметки сейчас правит другая сессия — повторите команду через несколько секунд');
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
   }
   try { return fn(); } finally {
     try { if (fs.readFileSync(file, 'utf8') === mine) fs.unlinkSync(file); } catch { /* уже снят */ }
@@ -1933,6 +2123,8 @@ function withNoteLock(project, fn) {
  * @returns {{ card: string, notes: string[], again: boolean }}
  */
 function noteCard(project, refs, data = {}) { return withNoteLock(project, () => noteCardNow(project, refs, data)); }
+/** noteCard для главного процесса программы (t1992): чужой замок заметок ждётся без остановки потока. @param {string} project @param {string[]} refs @param {Record<string, any>} [data] @returns {Promise<{ card: string, notes: string[], again: boolean }>} */
+function noteCardAsync(project, refs, data = {}) { return withNoteLockAsync(project, () => noteCardNow(project, refs, data)); }
 /** @param {string} project @param {string[]} refs @param {Record<string, any>} data */
 function noteCardNow(project, refs, data) {
   const ids = [...new Set((refs || []).map(String))];
@@ -1976,6 +2168,8 @@ function noteCardNow(project, refs, data) {
  * @returns {{ id: string, date: string, why: string, file: string }}
  */
 function noteDrop(project, ref, why) { return withNoteLock(project, () => noteDropNow(project, ref, why)); }
+/** noteDrop для главного процесса программы (t1992). @param {string} project @param {string} ref @param {string} why @returns {Promise<{ id: string, date: string, why: string, file: string }>} */
+function noteDropAsync(project, ref, why) { return withNoteLockAsync(project, () => noteDropNow(project, ref, why)); }
 /** @param {string} project @param {string} ref @param {string} why */
 function noteDropNow(project, ref, why) {
   const reason = String(why || '').replace(/\s+/g, ' ').trim();
@@ -2009,7 +2203,7 @@ function noteDropNow(project, ref, why) {
   const text = joined(p);
   const after = item('d', num, path.basename(file), text, lang);
   if ('error' in after) throw new Error(`правка не принята: ${after.error}`);
-  save(file, text);
+  save(file, text, old);
   return { id: String(ref), date, why: reason, file };
 }
 
@@ -2040,7 +2234,7 @@ function noteRestoreNow(project, ref) {
   const after = item('d', num, path.basename(file), text, lang);
   if ('error' in after) throw new Error(`правка не принята: ${after.error}`);
   if (/** @type {any} */ (after.item).cancelled) throw new Error('правка не принята: cancelled осталась');
-  save(file, text);
+  save(file, text, old);
   return { id: String(ref), was: d.cancelled, file };
 }
 
@@ -2137,9 +2331,10 @@ function setLang(project, lang) {
   const changed = [];
   for (const x of plan) {
     // Файл правили, пока шёл перевод (агент закрыл карту) — его не затираем: он в skipped, его слова поправит повторная смена языка.
+    // t2011: x.text и в save — сверка ещё и перед повтором rename: файл был занят, агент его в этот миг дописал — тоже в skipped.
     try {
       if (readSmall(x.file) !== x.text) { skipped.push({ file: x.name, reason: 'файл изменился во время смены языка — не тронут' }); continue; }
-      save(x.file, x.out);
+      save(x.file, x.out, x.text);
       changed.push(x.name);
     } catch (e) { skipped.push({ file: x.name, reason: e instanceof Error ? e.message : String(e) }); }
   }
@@ -2166,6 +2361,8 @@ function watch(project, onChange, opts = {}) {
   const delay = opts.delay ?? 250, maxWait = opts.maxWait ?? 800, poll = opts.poll ?? 500, fast = opts.fast ?? 200, slice = opts.slice ?? 50;
   const HOT = 10, HOT_MS = 10 * 60 * 1000;
   const log = opts.log || (() => {});
+  // t1997: журнал программы для строки о переполнении памяти доски — окно даёт его слежению; setLog, если звали, не перекрываем.
+  if (opts.log && !LOG) setLog(opts.log);
   /** @type {NodeJS.Timeout | null} */
   let timer = null;
   /** @type {NodeJS.Timeout | null} */
@@ -2858,4 +3055,4 @@ function proofChecklist(card, bases, start, say = sayRu) {
   return { ok: true, why: '', text };
 }
 
-module.exports = { DIR, MAX_SIZE, mtimeOf, ERROR_LINE, LANGS, WORDS, stamp, humanMark, noteState, noteCard, noteDrop, noteRestore, withNoteLock, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, BUG_BY, bugByWord, TESTED, testedWords, KINDS, DTYPES, HOW, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, oneCard, boardLang, setLang, say, cardStart, passportEmpty, prime, update, addServed, merge, reviewed, differ, section, nextId, create, watch, codeMask, edges, sameField, alike, usedWarn, checkBoard, proofCandidates, proofFiles, proofNeedsOnly, proofStart, proofCheck, proofRed, linkRefs, linkCited, proofLinks, CHECKLIST, CLOSE_SAY, sayRu, proofChecklist };
+module.exports = { DIR, MAX_SIZE, mtimeOf, setLog, ERROR_LINE, LANGS, WORDS, stamp, humanMark, noteState, noteCard, noteCardAsync, noteDrop, noteDropAsync, noteRestore, withNoteLock, withNoteLockAsync, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, BUG_BY, bugByWord, TESTED, testedWords, KINDS, DTYPES, HOW, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, oneCard, boardLang, setLang, say, cardStart, passportEmpty, prime, update, addServed, merge, reviewed, differ, section, nextId, create, watch, codeMask, edges, sameField, alike, usedWarn, checkBoard, proofCandidates, proofFiles, proofNeedsOnly, proofStart, proofCheck, proofRed, linkRefs, linkCited, proofLinks, CHECKLIST, CLOSE_SAY, sayRu, proofChecklist };

@@ -27,6 +27,8 @@ const claudeImages = require('./claude-images');
 const { KINDS, agentOf, lookOf, kindOf, shownTitle } = require('./tab-look');
 const i18n = require('./i18n');
 const { withExtra, unwrap } = require('./cmd-shim');
+// Срок ответа демона на вызовы плагинов readTab, writeTab, terminals (t1999): завис — ответ { error }, а не вечное ожидание.
+const { ANSWER_MS } = require('../daemon/client');
 // Окружение команды kermach browser (старое имя terminalus, t381): канал, подпись проекта, папка команды в PATH — в каждый новый терминал проекта.
 const browserCli = require('../plugins/browser/cli');
 /** Переменная программы: KERMACH_<имя>, нет — TERMINALUS_<имя> до t1307 (platform.envOf). @param {string} n */
@@ -841,7 +843,7 @@ function resumeIdOf(meta) {
 function pick(s) {
   const k = lookOf(kindOf(s));
   return {
-    sid: s.sid, kind: kindOf(s), title: shownTitle(s), color: s.color || k.color, icon: s.icon || k.icon, pid: s.pid, createdAt: s.createdAt, alive: true,
+    sid: s.sid, kind: kindOf(s), title: titleOf(s), color: s.color || k.color, icon: s.icon || k.icon, pid: s.pid, createdAt: s.createdAt, alive: true,
     state: String(s.state || ''), pics: agents.takesPics(kindOf(s)),
     // Заголовок, данный при открытии (или руками), без темы Claude: revive его переносит, а sid меняет — плагин узнаёт по нему свою вкладку (t568).
     ownTitle: String(s.title || ''),
@@ -879,16 +881,17 @@ function pickLive(s) {
 /**
  * Что окно получает о вкладке из файла без живого терминала.
  * failed — revive не смог её запустить (причина в notice): окно красит её «не запустился», а не «завершён» (t349).
- * @param {import('./tabs').TabEntry} t
+ * @param {import('./tabs').TabEntry} t @param {string} dir папка проекта
  */
-function pickSaved(t) {
-  const s = { ...t, meta: { kind: t.kind, claudeSessionId: t.claudeSessionId, codexSessionId: t.codexSessionId, bypass: t.bypass, hidden: t.hidden, warm: t.warm }, pid: undefined };
-  return { ...pick(s), alive: false, failed: notices.has(t.sid), state: exits.get(t.sid) || 'exited', notice: notices.get(t.sid) || i18n.t('term.notStarted', '{title} не запущен — откройте окно заново', { title: shownTitle(s) }) };
+function pickSaved(t, dir) {
+  // Папка проекта — для titleOf (t2005): в файле вкладок её нет.
+  const s = { ...t, project: dir, meta: { kind: t.kind, claudeSessionId: t.claudeSessionId, codexSessionId: t.codexSessionId, bypass: t.bypass, hidden: t.hidden, warm: t.warm }, pid: undefined };
+  return { ...pick(s), alive: false, failed: notices.has(t.sid), state: exits.get(t.sid) || 'exited', notice: notices.get(t.sid) || i18n.t('term.notStarted', '{title} не запущен — откройте окно заново', { title: titleOf(s) }) };
 }
 
-/** То же, пока вкладка ждёт своей очереди в revive: окно рисует её сразу и заменит на живую, когда придёт term:changed (t192). @param {import('./tabs').TabEntry} t */
-function pickConnecting(t) {
-  return { ...pickSaved(t), connecting: true, failed: false, state: '', notice: i18n.t('term.connecting', 'подключается…') };
+/** То же, пока вкладка ждёт своей очереди в revive: окно рисует её сразу и заменит на живую, когда придёт term:changed (t192). @param {import('./tabs').TabEntry} t @param {string} dir */
+function pickConnecting(t, dir) {
+  return { ...pickSaved(t, dir), connecting: true, failed: false, state: '', notice: i18n.t('term.connecting', 'подключается…') };
 }
 
 /**
@@ -897,7 +900,9 @@ function pickConnecting(t) {
  * @param {any} s
  */
 const entryOf = (s) => ({
-  ...pick(s), reply: undefined, title: s.title || lookOf(kindOf(s)).title, autoTitle: s.autoTitle, titleManual: s.titleManual ? '1' : undefined,
+  ...pick(s), reply: undefined, title: s.title || lookOf(kindOf(s)).title,
+  // Имя для других сессий (t2005) — не тема: в файл вкладок не пишется, испорченное до t2005 уходит из файла.
+  autoTitle: isTabNameEcho(s.project, s.autoTitle) ? undefined : s.autoTitle, titleManual: s.titleManual ? '1' : undefined,
   claudeSessionId: s.meta && s.meta.claudeSessionId, codexSessionId: s.meta && s.meta.codexSessionId, extra: s.meta && s.meta.extra ? JSON.stringify(s.meta.extra) : undefined,
   agent: s.meta && s.meta.agent, agentMode: s.meta && s.meta.agentMode, bypass: s.meta && s.meta.bypass === '1' ? '1' : undefined,
   hidden: s.meta && s.meta.hidden ? '1' : undefined, warm: s.meta && s.meta.warm === '1' ? '1' : undefined, logPath: (s.meta && s.meta.logPath) || undefined,
@@ -909,9 +914,43 @@ const entryOf = (s) => ({
  * @param {string} dir папка проекта @param {string} title заголовок вкладки
  */
 function tabName(dir, title) {
-  const clean = (/** @type {string} */ s) => s.replace(/\s+/g, '-').replace(/[^\p{L}\p{N}_.-]/gu, '');
-  return [clean(path.basename(dir)), clean(title)].filter(Boolean).join('-').slice(0, 64);
+  const base = nameClean(path.basename(dir));
+  return [base, bareOfProject(base, nameClean(title))].filter(Boolean).join('-').slice(0, 64);
 }
+
+/** Имя для --name без пробелов и знаков, которых нет в SAFE cmd-shim.js (tabName). @param {string} s */
+const nameClean = (s) => s.replace(/\s+/g, '-').replace(/[^\p{L}\p{N}_.-]/gu, '');
+
+/**
+ * Заголовок без приставки проекта (t2005): «Pinter-Pinter-Claude» → «Claude». Имена, испорченные до t2005, — приставка повторена
+ * много раз и обрезана до 64 знаков: от хвоста «Pinter-Pin» остаётся обрывок приставки — его тоже нет. Регистр не важен:
+ * папка проекта на Windows может прийти в другом написании.
+ * @param {string} base папка проекта после nameClean @param {string} t заголовок после nameClean
+ */
+function bareOfProject(base, t) {
+  if (!base) return t;
+  const pre = `${base}-`.toLowerCase();
+  let cut = false;
+  while (t.toLowerCase().startsWith(pre)) { t = t.slice(pre.length); cut = true; }
+  return cut && pre.startsWith(t.toLowerCase()) ? '' : t;
+}
+
+/**
+ * Тема Claude — на деле имя для других сессий (t2005)? С --name Claude держит в заголовке «✳ <имя>» всё время, и после ответа тоже
+ * (spikes\t2005-tabname\real-title.txt), а демон берёт его темой. Тогда revive снова приписывал проект: «Pinter-Pinter-…-Claude».
+ * Имя — без пробелов (nameClean) и с приставкой папки проекта.
+ * @param {string} dir папка проекта @param {string} [t] autoTitle
+ */
+function isTabNameEcho(dir, t) {
+  const base = nameClean(path.basename(dir || ''));
+  return !!(base && t && /^[\p{L}\p{N}_.-]+$/u.test(t) && t.toLowerCase().startsWith(`${base}-`.toLowerCase()));
+}
+
+/**
+ * Заголовок вкладки для окна и сообщений: shownTitle, но имя для других сессий темой не считается (t2005) — виден заголовок вкладки.
+ * @param {any} s терминал или вкладка из файла @param {string} [dir] папка проекта; по умолчанию — s.project
+ */
+const titleOf = (s, dir = s && s.project) => shownTitle(s && isTabNameEcho(dir, s.autoTitle) ? { ...s, autoTitle: '' } : s);
 
 /**
  * Имя новой вкладки: «Claude», «Claude 2»… — наименьшее, которого нет ни у живых терминалов, ни во вкладках из файла.
@@ -936,9 +975,12 @@ function* watchersOf(sid) {
   }
 }
 
-/** Терминалы проекта у демона, по времени открытия. @param {import('../daemon/client').DaemonClient} c @param {string} id */
-async function projectSessions(c, id) {
-  const all = (await c.request('list')).sessions;
+/**
+ * Терминалы проекта у демона, по времени открытия. ms — срок ответа (t1999, вызовы плагинов); без него ждём, как раньше.
+ * @param {import('../daemon/client').DaemonClient} c @param {string} id @param {number} [ms]
+ */
+async function projectSessions(c, id, ms) {
+  const all = (await c.request('list', {}, undefined, ms)).sessions;
   return all.filter((/** @type {any} */ s) => s.project && projects.projectId(s.project) === id)
     .sort((/** @type {any} */ a, /** @type {any} */ b) => String(a.createdAt).localeCompare(String(b.createdAt)));
 }
@@ -972,7 +1014,8 @@ async function revive(c, d, p, cols, rows) {
     let mcpFile = '';
     try {
       const kind = kindOf({ meta: { kind: t.kind } });
-      const name = shownTitle({ ...t, meta: { kind } });
+      // Имя для других сессий, вернувшееся темой (t2005), — не заголовок: иначе tabName припишет проект ещё раз.
+      const name = titleOf({ ...t, meta: { kind } }, p.path);
       // Claude на кредитах (t1357) — тот же номер разговора: обёртка продолжает его claude -p --resume.
       const cl = kind === 'claude' || kind === 'credits';
       if (cl && !t.claudeSessionId) { notices.set(t.sid, i18n.t('term.noConversationId', 'У вкладки «{name}» нет номера разговора — запустить её заново нельзя.', { name })); continue; }
@@ -1010,8 +1053,8 @@ async function revive(c, d, p, cols, rows) {
             try { busy = await runningConversation(d, resumeId); } catch (err) { notices.set(t.sid, i18n.t('term.reopenFail', 'Не запустить заново: {why}', { why: /** @type {any} */ (err).message || err })); continue; }
           }
           if (busy) {
-            notices.set(t.sid, i18n.t('term.reopenBusy', 'Не запустить заново: разговор уже идёт во вкладке «{title}» ({project})', { title: shownTitle(busy), project: busy.project || i18n.t('term.noProject', 'без проекта') }));
-            c.log(`вкладка ${name} в ${p.path} не запущена заново: разговор ${resumeId} уже идёт во вкладке «${shownTitle(busy)}» (${busy.project || 'без проекта'}), терминал ${busy.sid}`);
+            notices.set(t.sid, i18n.t('term.reopenBusy', 'Не запустить заново: разговор уже идёт во вкладке «{title}» ({project})', { title: titleOf(busy), project: busy.project || i18n.t('term.noProject', 'без проекта') }));
+            c.log(`вкладка ${name} в ${p.path} не запущена заново: разговор ${resumeId} уже идёт во вкладке «${titleOf(busy)}» (${busy.project || 'без проекта'}), терминал ${busy.sid}`);
             continue;
           }
         }
@@ -1019,7 +1062,7 @@ async function revive(c, d, p, cols, rows) {
           const s = (await d.request('create', {
             file: how.file, args: how.args, cwd: (ex.x && ex.x.cwd) || p.path, env: browserCli.envFor(p, how.env), cols, rows, project: p.path,
             // Тема — от прежнего разговора: новому её не переносить, вкладка снова «Claude 2», пока Claude не напишет свою.
-            title: t.title, color: t.color, icon: t.icon, autoTitle: noConv || cxGone ? '' : t.autoTitle, titleManual: t.titleManual === '1',
+            title: t.title, color: t.color, icon: t.icon, autoTitle: noConv || cxGone || isTabNameEcho(p.path, t.autoTitle) ? '' : t.autoTitle, titleManual: t.titleManual === '1',
             // Скрытая вкладка и её журнал (t1059) — как при открытии.
             meta: { ...how.meta, ...(t.hidden === '1' ? { hidden: '1' } : {}), ...(t.warm === '1' ? { warm: '1' } : {}), ...(t.logPath ? { logPath: t.logPath } : {}) },
             wake: wakeOf(kind, String(how.meta.claudeSessionId || ''), d, ex, ag, bypass, tabName(p.path, name), p),
@@ -1121,7 +1164,7 @@ async function openTabHeld(c, p, kind, o, ex0, cols, rows, wc, human, follow, mo
       try { busy = await runningConversation(d, ex.resume); } catch (err) { launching.delete(ex.resume); return { error: String(/** @type {any} */ (err).message || err) }; }
       if (busy) launching.delete(ex.resume);
     }
-    if (busy) return { error: i18n.t('term.resumeBusy', 'разговор {id} уже идёт во вкладке «{title}» ({project}): два процесса испортили бы его журнал', { id: ex.resume, title: shownTitle(busy), project: busy.project || i18n.t('term.noProject', 'без проекта') }) };
+    if (busy) return { error: i18n.t('term.resumeBusy', 'разговор {id} уже идёт во вкладке «{title}» ({project}): два процесса испортили бы его журнал', { id: ex.resume, title: titleOf(busy), project: busy.project || i18n.t('term.noProject', 'без проекта') }) };
   }
   try {
     return await openTabRun(c, d, p, kind, o, ex, k, cols, rows, wc);
@@ -1303,8 +1346,9 @@ const enterPause = (n) => Math.min(1500, 150 + Math.round(n * 1.5));
 
 /**
  * Строка и Enter отдельно (t1611), потом проверка, что строка видна на экране.
+ * unsure (t1999) — демон не ответил на запись строки в срок: строка могла уйти во вкладку, слать заново нельзя.
  * @param {string} projectId @param {string} sid @param {string} line
- * @returns {Promise<{ seen: boolean } | { error: string }>}
+ * @returns {Promise<{ seen: boolean } | { error: string, unsure?: true }>}
  */
 async function typeLine(projectId, sid, line) {
   const slept = await asleepOf(projectId, sid);
@@ -1415,13 +1459,15 @@ async function taskToTab(p, s, text, write) {
       why = await busyOf(p.id, sid);
     }
     if (why === 'gone') return { gone: /** @type {true} */ (true) };
-    const title = shownTitle(s);
+    const title = titleOf(s);
     if (why) return { error: `вкладка ${sid} «${title}» занята: ${why}. Ждал ${FREE_WAIT_MS / 1000} с, задание не отправлено. Повторите позже или откройте новую вкладку: --new`, code: 5 };
     /** @type {{ rel: string, first: string, file: string } | null} */
     let tf = null;
     const line = lineOf(text, () => { tf = write(); return tf; });
     const y = await typeLine(p.id, sid, line);
     if ('error' in y) {
+      // t1999: дошла ли строка, неизвестно — файл задания оставляем: агент мог уже получить ссылку на него.
+      if (y.unsure) return { error: `задание во вкладку ${sid} «${title}», может быть, ушло: ${y.error}. Посмотрите вкладку, прежде чем слать его заново` };
       if (tf) { try { fs.unlinkSync(/** @type {any} */ (tf).file); } catch {} }
       return { error: `задание во вкладку ${sid} «${title}» не ушло: ${y.error}` };
     }
@@ -1507,7 +1553,10 @@ async function openAgentTask(p, id, text, o) {
     tail.then(() => { if (typingIn.get(sid) === tail) typingIn.delete(sid); });
     free();
     const y = await job;
-    if ('error' in y) return { error: `вкладка ${sid} открыта, но задание в неё не ушло: ${y.error}. Закройте её и откройте заново или напишите агенту задание сами` };
+    if ('error' in y) {
+      if (y.unsure) return { error: `вкладка ${sid} открыта, задание в неё, может быть, ушло: ${y.error}. Посмотрите вкладку, прежде чем слать его заново` };
+      return { error: `вкладка ${sid} открыта, но задание в неё не ушло: ${y.error}. Закройте её и откройте заново или напишите агенту задание сами` };
+    }
     return { session: r.session, how: `введено во вкладку после старта${tf ? ` (${fileHow()})` : ''}`, seen: y.seen };
   } catch (e) {
     return { error: `задание не записано в файл: ${/** @type {any} */ (e).message || e}` };
@@ -1670,6 +1719,7 @@ async function daemon() {
 /**
  * Вывод терминала проекта целиком (t256, ctx.readTab главной части плагина): команда read демона.
  * Только терминал этого проекта — плагин одного проекта не читает вкладки другого.
+ * Демон не ответил за ANSWER_MS — { error } (t1999): чтение без последствий, плагин спросит снова.
  * @param {string} projectId @param {string} sid @param {'text' | 'ansi'} [format]
  * @returns {Promise<{ text: string } | { error: string }>}
  */
@@ -1677,8 +1727,8 @@ async function readTab(projectId, sid, format) {
   const r = await daemon();
   if (!r.c) return { error: r.error || 'нет связи с демоном' };
   try {
-    if (!(await projectSessions(r.c, projectId)).some((/** @type {any} */ x) => x.sid === sid)) return { error: `у проекта нет терминала ${sid}` };
-    const res = await r.c.request('read', { sid, format: format === 'ansi' ? 'ansi' : 'text' });
+    if (!(await projectSessions(r.c, projectId, ANSWER_MS)).some((/** @type {any} */ x) => x.sid === sid)) return { error: `у проекта нет терминала ${sid}` };
+    const res = await r.c.request('read', { sid, format: format === 'ansi' ? 'ansi' : 'text' }, undefined, ANSWER_MS);
     return { text: String(res.text || '') };
   } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; }
 }
@@ -1686,30 +1736,42 @@ async function readTab(projectId, sid, format) {
 /**
  * Записать во вкладку проекта ровно эти байты (t276, ctx.writeTab главной части плагина): команда write демона. Enter — '\r' в data.
  * Только живой терминал этого проекта, как readTab. Запись во вкладку агента — ввод от имени человека.
+ * Срок ответа демона (t1999): не ответил на list — запись не отправлена. Не ответил на write — неизвестно, дошла ли: байты могли уйти во вкладку.
+ * Тогда { error, unsure: true }, и запись сама не повторяется — иначе агент получил бы строку дважды.
  * @param {string} projectId @param {string} sid @param {any} data
- * @returns {Promise<{ ok: true } | { error: string }>}
+ * @returns {Promise<{ ok: true } | { error: string, unsure?: true }>}
  */
 async function writeTab(projectId, sid, data) {
   if (typeof data !== 'string' || !data || data.length > 65536) return { error: 'data: строка от 1 до 65536 знаков' };
   const r = await daemon();
   if (!r.c) return { error: r.error || 'нет связи с демоном' };
   try {
-    if (!(await projectSessions(r.c, projectId)).some((/** @type {any} */ x) => x.sid === sid)) return { error: `у проекта нет терминала ${sid}` };
-    await r.c.request('write', { sid, data });
+    if (!(await projectSessions(r.c, projectId, ANSWER_MS)).some((/** @type {any} */ x) => x.sid === sid)) return { error: `у проекта нет терминала ${sid}` };
+  } catch (err) {
+    const e = /** @type {any} */ (err);
+    return { error: e && e.code === 'timeout' ? `${e.message} — запись во вкладку не отправлена` : String(e && e.message || err) };
+  }
+  try {
+    await r.c.request('write', { sid, data }, undefined, ANSWER_MS);
     return { ok: true };
-  } catch (err) { return { error: String(/** @type {any} */ (err).message || err) }; }
+  } catch (err) {
+    const e = /** @type {any} */ (err);
+    if (e && e.code === 'timeout') return { error: `${e.message} — неизвестно, дошла ли запись во вкладку; сама она не повторяется`, unsure: true };
+    return { error: String(e && e.message || err) };
+  }
 }
 
 /**
  * Живые вкладки проекта для главной части плагина (t276, ctx.terminals): то же, что окно получает о терминале (pick).
  * waiting (t582) — старые sid вкладок, которые revive ещё запустит заново: идёт revive — его очередь; окно ещё не просило список — вкладки из файла без живого терминала;
- * иначе пусто. Неудачный запуск уходит из очереди (revive, finally), и вкладка для плагина закрыта. @param {string} projectId
+ * иначе пусто. Неудачный запуск уходит из очереди (revive, finally), и вкладка для плагина закрыта.
+ * Демон не ответил за ANSWER_MS — { error } (t1999): сверка «Роадмапа» не встаёт, следующий вызов спросит снова. @param {string} projectId
  */
 async function projectTabs(projectId) {
   const r = await daemon();
   if (!r.c) return { error: r.error || 'нет связи с демоном' };
   try {
-    const live = await projectSessions(r.c, projectId);
+    const live = await projectSessions(r.c, projectId, ANSWER_MS);
     const left = reviveLeft.get(projectId);
     const w = projectWindow.windowFor(projectId);
     let waiting = left ? [...left] : [];
@@ -1918,7 +1980,7 @@ function register(c) {
       const order = tabs.arrange(c.dataDir, p.id, live.map(entryOf), log);
       const saved = new Map(tabs.load(c.dataDir, p.id, log).tabs.map((t) => [t.sid, t]));
       const left = reviveLeft.get(p.id);
-      const savedPick = (/** @type {string} */ sid) => { const t = /** @type {import('./tabs').TabEntry} */ (saved.get(sid)); return left && left.has(sid) ? pickConnecting(t) : pickSaved(t); };
+      const savedPick = (/** @type {string} */ sid) => { const t = /** @type {import('./tabs').TabEntry} */ (saved.get(sid)); return left && left.has(sid) ? pickConnecting(t, p.path) : pickSaved(t, p.path); };
       agents.pokeShells();
       return { sessions: order.map((x) => (x.live ? pickLive(bySid.get(x.sid)) : savedPick(x.sid))) };
     } catch (err) { if (o && o.open) beginRevive(e.sender); return { error: String(err) }; }

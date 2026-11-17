@@ -115,6 +115,58 @@ function read(dir) {
   return out.sort((a, b) => a.num - b.num);
 }
 
+/** @typedef {{ dir: string, names: string[], files: Map<string, { key: string, job: Job }> }} ScanMemo */
+/** Память scan: своя у каждого опроса. @returns {ScanMemo} */
+const scanMemo = () => ({ dir: '', names: [], files: new Map() });
+
+/**
+ * t1986: те же задания, что read, без синхронного fs — для опроса раз в секунду (панель «Роадмапа», askPoll).
+ * Имена файлов читаются заново, только когда сменилось время правки папки: задание добавили, удалили или переименовали.
+ * Файл читается заново, только когда сменились его время правки или размер: patch и done пишут файл на месте, время папки при этом прежнее.
+ * Нет папки — один stat за вызов.
+ * @param {string} dir @param {ScanMemo} memo @returns {Promise<Job[]>}
+ */
+async function scan(dir, memo) {
+  const d = root(dir);
+  const none = () => { memo.dir = ''; memo.names = []; memo.files.clear(); return []; };
+  let ds;
+  try { ds = await fs.promises.stat(d); } catch { return none(); }
+  const dk = String(ds.mtimeMs);
+  if (dk !== memo.dir) {
+    try { memo.names = (await fs.promises.readdir(d)).filter((n) => NAME_RE.test(n)); } catch { return none(); }
+    memo.dir = dk;
+    const keep = new Set(memo.names.map((n) => path.join(d, n)));
+    for (const f of [...memo.files.keys()]) if (!keep.has(f)) memo.files.delete(f);
+  }
+  const all = await Promise.all(memo.names.map(async (name) => {
+    const num = Number(/** @type {RegExpExecArray} */ (NAME_RE.exec(name))[1]);
+    const file = path.join(d, name);
+    const id = `c${num}`;
+    try {
+      /** @type {fs.Stats} */
+      let st;
+      try { st = await fs.promises.stat(file); } catch (e) {
+        // Файл пропал, а время папки то же (правка в тот же миг) — список перечитать в следующий раз, задания уже нет.
+        if (/** @type {any} */ (e).code === 'ENOENT') { memo.dir = ''; memo.files.delete(file); return null; }
+        throw e;
+      }
+      if (st.size > MAX_SIZE) throw new Error(`файл больше ${MAX_SIZE / 1024} КБ`);
+      const key = `${st.mtimeMs}:${st.size}`;
+      const was = memo.files.get(file);
+      if (was && was.key === key) return was.job;
+      const { head, body } = parse(await fs.promises.readFile(file, 'utf8'));
+      /** @type {Job} */
+      const job = { id, num, file, head, body };
+      memo.files.set(file, { key, job });
+      return job;
+    } catch (e) {
+      memo.files.delete(file);
+      return /** @type {Job} */ ({ id, num, file, head: {}, body: '', error: e instanceof Error ? e.message : String(e) });
+    }
+  }));
+  return /** @type {Job[]} */ (all.filter(Boolean)).sort((a, b) => a.num - b.num);
+}
+
 /** Следующий номер: counter.json и самый большой среди файлов. @param {string} dir */
 function nextNum(dir) {
   let n = 0;
@@ -1526,6 +1578,6 @@ function make(ctx) {
 }
 
 // Хранилище — свойства фабрики: cli.js и request.js берут их как раньше (require('./main').read и т. д.).
-module.exports = Object.assign(make, { DIR, KINDS, EFFORTS, STATUS, MODEL, EDITABLE, root, read, add, get, done, edit, guessKind, list, parse,
+module.exports = Object.assign(make, { DIR, KINDS, EFFORTS, STATUS, MODEL, EDITABLE, root, read, scan, scanMemo, add, get, done, edit, guessKind, list, parse,
   cmdAllowed, splitCmd, alive, sameProc, procState, running, selfStart, run, accept, reject, retry, diff, redoAdd, redoBlocks, redoBlocked, redoStart, redoLeft, redoAbort, REDO_MIN, journalRows, patchHead: patch, stamp, settings, saveSettings, grants,
   journal, balance, balanceNow, plan, loadFlag, addGrant, removeGrant, suggestGrant, plusMonth, LOAD_FLAG, TOPUP_DAYS, TOPUP_RESERVE, recipes, packInput });

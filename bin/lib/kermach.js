@@ -236,10 +236,17 @@ const ROADMAP_HELP = `kermach roadmap — доска «Роадмапа» про
                                        строку «Ответ …», вписанную в карту руками или агентом, он не видит. «-» — текст со
                                        стандартного ввода. Только главная сессия: из вкладки агента карты — отказ, код 5.
                                        Карта «ждёт ответа» и вкладка её агента жива — текст уходит агенту, как из поля
-                                       «Ответить» панели, статус → «в работе»; иначе строка «агенту не отправлено: …»
+                                       «Ответить» панели, статус → «в работе»; иначе строка «агенту не отправлено: …».
+                                       Вкладка не подтвердила запись вовремя — «дошёл ли до агента, неизвестно: …»:
+                                       посмотрите вкладку, а не отправляйте снова
   kermach roadmap answer tN --from session "текст"
                                        ответ главной сессии, а не человека: раздел «## Ответ главной сессии (ДД.ММ ЧЧ:ММ)»,
                                        агенту — «по слову главной сессии», а не «по слову человека»
+  kermach roadmap answer tN --to-human передать вопрос карты человеку (t2019). Пока главная сессия жива, вопрос карты идёт
+                                       только ей: человеку ни уведомления, ни Telegram, в панели — «ждёт главную сессию».
+                                       Эта команда сразу отдаёт вопрос человеку: уведомление Windows, Telegram, оранжевая
+                                       пометка. Сама программа отдаёт его, если главной нет или она молчит 30 мин.
+                                       Только главная сессия и только в терминале Kermach: агенту карты — отказ, код 5
   kermach roadmap grade tN             проверить закрытую карту («готово») заново: проверяющий (claude -p, только чтение)
                                        в папке проекта, следующий круг. Итог — в .kermach/grades/tN-K.md и строкой checked:
                                        карты, статус не меняется; ответ не по образцу — сырой ответ в tN-K-raw.txt. Берёт и
@@ -553,6 +560,12 @@ function roadmapArgs(rest) {
       if (rest[fi + 1] !== 'session') die('roadmap answer: --from принимает только session. Справка — kermach roadmap --help', 1);
       from = 'session';
       rest.splice(fi, 2);
+    }
+    // t2019: --to-human — передать вопрос карты человеку, без текста ответа.
+    const hi = rest.indexOf('--to-human');
+    if (hi >= 0) {
+      if (from || rest.length !== 3 || hi !== 2 || !/^t\d{1,6}$/.test(rest[1] || '')) die('roadmap answer: нужно kermach roadmap answer tN --to-human, без текста и без --from. Справка — kermach roadmap --help', 1);
+      return { toHuman: rest[1] };
     }
     const ref = rest[1] || '';
     if (!/^t\d{1,6}$/.test(ref) || rest.length < 3) die('roadmap answer: нужен номер карты и текст, например kermach roadmap answer t12 "вариант 1". Справка — kermach roadmap --help', 1);
@@ -1220,6 +1233,15 @@ async function roadmap(o) {
     process.stdout.write(`${clean(out.join('\n'))}\n`);
     return;
   }
+  if (o.toHuman) {
+    // t2019: положение вопроса живёт в окне проекта — без окна передать некому.
+    if (!ENV('BROWSER_PIPE') || !ENV('BROWSER_AUTH')) return die('roadmap answer --to-human: нет доступа — работает только в терминале Kermach с открытым окном проекта', 3);
+    /** @type {any} */
+    const a = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), cmd: 'roadmap-cli', sub: 'to-human', board: project, a: { ref: o.toHuman }, ...(ENV('TAB_KEY') ? { from: ENV('TAB_KEY') } : {}) }).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
+    if (!a || !a.ok) return die(`roadmap answer --to-human: ${(a && a.error) || 'нет ответа'}`, a && Number.isInteger(a.code) ? a.code : 3);
+    process.stdout.write(`${clean(a.already ? `${o.toHuman}: вопрос уже у человека` : `${o.toHuman}: вопрос передан человеку — уведомление Windows, Telegram (если настроен), оранжевая пометка в панели`)}\n`);
+    return;
+  }
   if (o.answer) {
     // Папка данных плагина — та же, что ctx.dataDir у окна (plugin-bridge.js): <папка данных Kermach>\plugins-data\roadmap.
     const { DATA_DIR } = require(path.join(__dirname, '..', '..', 'daemon', 'protocol.js'));
@@ -1236,6 +1258,8 @@ async function roadmap(o) {
       const a = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), cmd: 'roadmap-answer', ref: o.answer, text: o.text, head: r.head, sha1: r.sha1, board: project, ...(o.from ? { from: o.from } : {}) }).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
       if (a && a.ok && a.sent) sent = `агенту отправлено: вкладка ${a.sid}${a.wasAsk ? ', статус ждёт ответа → в работе' : ' (агент в работе, строка встанет в очередь вкладки), статус не менялся'}`;
       else if (a && a.ok && a.waiting) sent = `агенту отправится позже: ${a.why || 'вкладка агента занята'}`; // t1664: ждать может и запрос разрешения, не только поле ввода
+      // t2021: демон не ответил на запись в срок — ответ мог дойти. Не «не отправлено»: главная отправила бы его второй раз.
+      else if (a && a.ok && a.unsure) sent = `дошёл ли до агента, неизвестно: вкладка ${a.sid || 'агента'} не подтвердила запись вовремя. Посмотрите вкладку, прежде чем отправлять снова: ответ мог уже дойти; стоит в поле ввода без отправки — нажмите там Enter`;
       else if (a && a.ok) sent = `агенту не отправлено: ${a.why || 'вкладки нет'}`;
       else sent = `агенту не отправлено: вкладки нет (окно проекта: ${(a && a.error) || 'нет ответа'})`;
     }

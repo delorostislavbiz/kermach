@@ -484,6 +484,13 @@ function make(ctx, opts = {}) {
       tell();
       return;
     }
+    if (r && r.unsure) {
+      // t2020: демон не ответил на запись в срок (t1999) — текст мог уйти во вкладку. Как сбой выше: повтор дал бы агенту текст второй раз.
+      patch(key, { status: 'sent', enter: 'no' });
+      ctx.log(`продолжение после лимита: вкладка ${c.sid}: демон не ответил на запись, дошло ли, неясно, повтора не будет: ${r.error}`);
+      tell();
+      return;
+    }
     if (!r || r.error) {
       const why = (r && r.error) || 'нет ответа';
       if (tries >= MAX_TRIES) {
@@ -632,6 +639,8 @@ function make(ctx, opts = {}) {
     /** @type {any} */
     let r;
     try { r = await ctx.writeTab(sid, text); } catch (e) { ctx.log(`таймер вкладки ${sid}: текст не записан: ${e}`); return true; }
+    // t2021: демон не ответил на запись в срок (t1999) — текст мог уйти. Как catch выше: запись была, в этом проходе другого текста во вкладку нет, Enter не жмём.
+    if (r && r.unsure) { ctx.log(`таймер вкладки ${sid}: демон не ответил на запись, дошёл ли текст, неясно; Enter не нажат, следующее через ${nowTm.min} мин: ${r.error}`); tell(); return true; }
     if (!r || r.error) { ctx.log(`таймер вкладки ${sid}: текст не записан: ${(r && r.error) || 'нет ответа'}`); return false; }
     const enter = await pressEnter(sid, text);
     if (enter) ctx.log(`таймер вкладки ${sid} (${tab.title || 'без имени'}): текст в поле, Enter не нажат: ${enter}`);

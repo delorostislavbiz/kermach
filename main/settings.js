@@ -29,6 +29,14 @@ const BAG_MAX = 64 * 1024;
  */
 const VOLATILE = { roadmap: ['runs', 'past', 'solo', 'review', 'phaseReview', 'gradeCost', 'stalls'] };
 const VOL_FILE = 'run-state.json';
+/**
+ * Предел изменчивых ключей одного плагина, знаков в JSON. Свой, а не BAG_MAX: 16.11 мешок «Роадмапа» дорос до 65527 знаков из 65536,
+ * и каждая запись, которая его увеличивала, молча отбрасывалась — отметка проверяющего не сохранялась, сверка доски шла по кругу без пауз,
+ * главный поток был занят на 90 % (задержка набора в терминале).
+ */
+const VOL_MAX = 2 * 1024 * 1024;
+/** Когда про отказ записи мешка писали в журнал: не чаще раза в минуту на плагин. @type {Record<string, number>} */
+const bagTold = {};
 /** Последний записанный текст файла плагина: тот же — не пишем. @type {Record<string, string>} */
 const volSaved = {};
 /** Файл изменчивых ключей плагина id. @param {string} id */
@@ -120,8 +128,12 @@ function cleanFlags(raw, base) {
   return out;
 }
 
-/** Мешки настроек плагинов: имя — как имя папки, значение — объект не больше BAG_MAX знаков в JSON; не объект (null) — мешка нет. @param {any} raw @param {Record<string, any>} base */
-function cleanBags(raw, base) {
+/**
+ * Мешки настроек плагинов: имя — как имя папки, значение — объект не больше BAG_MAX знаков в JSON; не объект (null) — мешка нет.
+ * refused (t1989) — сюда причина отказа по имени плагина: set отдаёт её плагину (refusalOf), иначе он не знает, что записи нет.
+ * @param {any} raw @param {Record<string, any>} base @param {Record<string, string>} [refused]
+ */
+function cleanBags(raw, base, refused) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...base };
   /** @type {Record<string, any>} */
   const out = {};
@@ -129,8 +141,19 @@ function cleanBags(raw, base) {
     if (!/^[\w.-]{1,64}$/.test(k) || !v || typeof v !== 'object' || Array.isArray(v)) continue;
     let text = '';
     try { text = JSON.stringify(v); } catch { continue; }
-    if (text.length <= BAG_MAX) out[k] = JSON.parse(text);
-    else if (base[k]) out[k] = base[k];
+    // Изменчивые ключи (run-state.json) считаем отдельно: в BAG_MAX идёт только выбор человека.
+    const vol = VOLATILE[k] ? JSON.stringify(volOf(k, v)).length : 0;
+    const own = VOLATILE[k] ? JSON.stringify(stripVol({ [k]: v })[k]).length : text.length;
+    if (own <= BAG_MAX && vol <= VOL_MAX) { out[k] = JSON.parse(text); continue; }
+    if (base[k]) out[k] = base[k];
+    // Отказ — вслух: плагин считает, что записал, и молчаливый отказ заводит его в круг.
+    const reason = own > BAG_MAX ? `настройки ${own} знаков, предел ${BAG_MAX}` : `состояние ${vol} знаков, предел ${VOL_MAX}`;
+    if (refused) refused[k] = reason;
+    const now = Date.now();
+    if (!(now - (bagTold[k] || 0) < 60000)) {
+      bagTold[k] = now;
+      log(`настройки: запись плагина ${k} отклонена — ${reason}; осталось прежнее`);
+    }
   }
   return out;
 }
@@ -160,10 +183,10 @@ const agentOn = (id) => cur.agents[id] === true;
 
 /**
  * Приводит значения к допустимым; чужое и неверное заменяется текущим.
- * @param {any} raw @param {Settings} base
+ * @param {any} raw @param {Settings} base @param {Record<string, string>} [refused] — отказы записи мешков плагинов (cleanBags, t1989)
  * @returns {Settings}
  */
-function clean(raw, base) {
+function clean(raw, base, refused) {
   const r = raw && typeof raw === 'object' ? raw : {};
   const font = Math.round(Number(r.termFont));
   const shift = typeof r.mdShift === 'number' ? Math.round(r.mdShift) : NaN;
@@ -187,7 +210,7 @@ function clean(raw, base) {
     plugins: cleanFlags(r.plugins, base.plugins),
     pluginMain: cleanFlags(r.pluginMain, base.pluginMain || {}),
     agents: cleanFlags(r.agents, base.agents),
-    pluginSettings: cleanBags(r.pluginSettings, base.pluginSettings),
+    pluginSettings: cleanBags(r.pluginSettings, base.pluginSettings, refused),
     layoutPresets: cleanPresets(r.layoutPresets, base.layoutPresets || []),
   };
 }
@@ -400,6 +423,42 @@ const dressAll = () => { for (const w of BrowserWindow.getAllWindows()) dress(w)
 /** @returns {Settings} */
 const get = () => ({ ...cur, plugins: { ...cur.plugins }, pluginMain: { ...cur.pluginMain }, agents: { ...cur.agents }, pluginSettings: JSON.parse(JSON.stringify(cur.pluginSettings)), layoutPresets: JSON.parse(JSON.stringify(cur.layoutPresets)) });
 
+/** Глубокая заморозка: объект и всё внутри только для чтения. @param {any} v */
+const deepFreeze = (v) => {
+  if (v && typeof v === 'object' && !Object.isFrozen(v)) { Object.freeze(v); for (const k of Object.keys(v)) deepFreeze(v[k]); }
+  return v;
+};
+/**
+ * Замороженные копии мешков плагинов (t1991): мешок в cur → его копия. Ключ — сам объект мешка: set и load кладут в cur новые
+ * объекты (cleanBags — JSON.parse, loadVol — новый мешок), на месте мешок не меняется. Новый мешок — новая копия; старая уходит со сборкой мусора.
+ * @type {WeakMap<object, any>}
+ */
+const frozenBags = new WeakMap();
+/**
+ * Настройки одного плагина: только его часть. get() копирует все настройки программы — плагин, который читает свои
+ * настройки на каждую карту доски, занимал этим 45 % главного потока (замер kermach diag cpu, 16.11).
+ * t1991: копия одна до следующей записи и заморожена целиком. Раньше JSON-копия делалась на каждый вызов: 1,4 мс,
+ * при мешке 1,9 МБ — 36 мс, а «Роадмап» зовёт get десятки раз на круг (в круге 16.11 — 4718 мс из 10,4 с).
+ * Ответ общий для всех читателей, поэтому только для чтения: менять — в своей копии ({ ...s, поле }) и ctx.settings.set.
+ * @param {string} id @returns {any}
+ */
+const pluginSettingsOf = (id) => {
+  const s = cur.pluginSettings[id];
+  if (!s) return undefined;
+  let f = frozenBags.get(s);
+  if (!f) { f = deepFreeze(JSON.parse(JSON.stringify(s))); frozenBags.set(s, f); }
+  return f;
+};
+
+/** Отказы записи мешков в последнем вызове set (t1989): плагин → причина. @type {Record<string, string>} */
+let lastRefused = {};
+/**
+ * Причина, по которой последний set не записал мешок плагина id (предел BAG_MAX или VOL_MAX); записал — ''.
+ * Мост плагинов (plugin-bridge.js) читает её сразу после своего set: set синхронный, чужой вызов между ними не встанет.
+ * @param {string} id
+ */
+const refusalOf = (id) => lastRefused[id] || '';
+
 /** @param {any} patch @returns {Settings} */
 function set(patch) {
   const pt = patch && typeof patch === 'object' ? patch : {};
@@ -415,7 +474,9 @@ function set(patch) {
     if (Object.keys(keep).length) bags[id] = { ...nb, ...keep };
   }
   const merged = { ...cur, ...pt, plugins: { ...cur.plugins, ...part(pt.plugins) }, pluginMain: { ...cur.pluginMain, ...part(pt.pluginMain) }, agents: { ...cur.agents, ...part(pt.agents) }, pluginSettings: bags };
-  const next = clean(merged, cur);
+  // t1989: отказ виден по сборщику, а не по сравнению: мешок отклонён — next равен cur, и set выходит тем же ранним ответом, что и запись того же самого.
+  lastRefused = {};
+  const next = clean(merged, cur, lastRefused);
   if (next.uiZoom === cur.uiZoom && next.termFont === cur.termFont && next.mdShift === cur.mdShift && next.sound === cur.sound && next.notify === cur.notify && next.copySelect === cur.copySelect && next.sleepMin === cur.sleepMin && next.theme === cur.theme && next.lang === cur.lang && next.projectsBase === cur.projectsBase && next.inboxDir === cur.inboxDir
     && next.ui === cur.ui && next.appearance === cur.appearance
     && JSON.stringify(next.plugins) === JSON.stringify(cur.plugins) && JSON.stringify(next.pluginMain) === JSON.stringify(cur.pluginMain) && JSON.stringify(next.agents) === JSON.stringify(cur.agents)
@@ -540,4 +601,4 @@ function register(c) {
   ipcMain.on('settings:dict', (e) => { e.returnValue = sender.allowed(e, 'settings:dict') ? require('./i18n').dict() : null; });
 }
 
-module.exports = { register, load, get, set, setDir, look, schemes, background, dress, onChange, pluginOn, pluginMainOn, agentOn, sysLang, ZOOMS, TERM_MIN, TERM_MAX, SLEEP_MAX, DEFAULTS };
+module.exports = { register, load, get, pluginSettingsOf, refusalOf, set, setDir, look, schemes, background, dress, onChange, pluginOn, pluginMainOn, agentOn, sysLang, ZOOMS, TERM_MIN, TERM_MAX, SLEEP_MAX, DEFAULTS, BAG_MAX, VOL_MAX };

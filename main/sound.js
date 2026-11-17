@@ -33,6 +33,15 @@ const LOUD_STATES = new Map([['done', 'закончил'], ['waiting', 'ждёт
 /** Откуда должно прийти событие, чтобы прозвучать. */
 const LOUD_BY = new Set(['hook', 'osc9']);
 
+/**
+ * Вкладки, вопрос которых сейчас у главной сессии (t2019): «Роадмап» отмечает вкладку агента карты, пока вопрос карты идёт только главной.
+ * Такая вкладка не звучит, не мигает и не показывает уведомление. Отметку ставит и снимает плагин (hush), здесь — только пропуск.
+ * @type {Set<string>}
+ */
+const hushed = new Set();
+/** Отметить вкладку (on) или снять отметку. @param {string} sid @param {boolean} on */
+function hush(sid, on) { if (!sid) return; if (on) hushed.add(sid); else hushed.delete(sid); }
+
 /** Клиенты, к которым уже подключён звук: повторный attach того же клиента не удваивает звук. @type {WeakSet<object>} */
 const attached = new WeakSet();
 
@@ -70,11 +79,12 @@ function attach(client, c) {
   // пробы удаляли выключатель и грузили настоящий main.js — Ростислав слышал их сигналы. Правило — как у уведомлений (notify.js testing()).
   const quiet = !off && !!ENV('DATA') && ENV('SOUND') !== '1';
   if (off) c.log('звук: выключен переменной KERMACH_SOUND=0');
-  client.on('exit', (/** @type {any} */ m) => { if (m && m.sid) notify.forget(m.sid); });
+  client.on('exit', (/** @type {any} */ m) => { if (m && m.sid) { notify.forget(m.sid); hushed.delete(m.sid); } });
   client.on('state', (/** @type {any} */ m) => {
     if (!LOUD_STATES.has(m.state)) return;
     const what = `${m.sid} ${LOUD_STATES.get(m.state)} (${m.by})`;
     if (!LOUD_BY.has(m.by) && !m.loud) { c.log(`звук: ${what} — не звучит, не от агента`); return; }
+    if (hushed.has(m.sid)) { c.log(`звук: ${what} — молчу, вопрос карты у главной сессии`); return; }
     // Проект терминала — из списка демона: в событии state только номер терминала.
     client.request('list').then((/** @type {any} */ r) => {
       const s = (r.sessions || []).find((/** @type {any} */ x) => x.sid === m.sid);
@@ -99,4 +109,4 @@ function test() {
   electron.shell.beep();
 }
 
-module.exports = { attach, test };
+module.exports = { attach, test, hush };

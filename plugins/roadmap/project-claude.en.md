@@ -65,6 +65,7 @@ You fix it yourself:
 - the human closed the tab (the line says «закрыл человек») — do not restart: they may have stopped the card on purpose. Ask them in one line whether to restart;
 - the agent went quiet — write "continue" in its tab and what is left to do on the card;
 - the agent waits for an answer and the answer is in the card, the overview or the log — pass it on: `kermach roadmap answer t<N> --from session "…"`;
+- the card question is not yours, it needs the human's decision — hand it to the human: `kermach roadmap answer t<N> --to-human`;
 - the reviewer returned remarks — the card agent must get them: restart the card if it is stuck;
 - the card failed a second time — set a stronger model in its header (`model:`) and restart;
 - subscription limit — wait for the reset time from the line and restart the card.

@@ -255,6 +255,7 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .bgr .bs.wait { color: var(--rm-warn); }
     #plugin-roadmap-panel .bgr .bs.ask { color: var(--rm-warn); font-weight: 600; }
     #plugin-roadmap-panel .bgr .bs.ask::before { content: "? "; }
+    #plugin-roadmap-panel .bgr .bs.askmain { color: var(--rm-info); }
     #plugin-roadmap-panel .bgr .bs.stuck { color: var(--rm-bad); }
     #plugin-roadmap-panel .bgr .bs.stuck::before { content: "⚠ "; }
     #plugin-roadmap-panel .bgr .bs.stuck::after { content: var(--rm-note, " — вопроса нет"); }
@@ -318,6 +319,7 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .si.review { color: var(--rm-review); background: color-mix(in srgb, var(--rm-review) 18%, transparent); }
     #plugin-roadmap-panel .si.ok { color: var(--rm-ok); background: color-mix(in srgb, var(--rm-ok) 18%, transparent); }
     #plugin-roadmap-panel .meta.warn { color: var(--rm-warn); }
+    #plugin-roadmap-panel .meta.info { color: var(--rm-info); }
     #plugin-roadmap-panel .ph.fold, #plugin-roadmap-panel .card.fold { cursor: default; }
     #plugin-roadmap-panel .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px 22px 60px; text-align: center; color: var(--muted); line-height: 18px; }
     #plugin-roadmap-panel .empty .ic { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line, rgba(141,145,165,.14)); background: var(--raised, transparent); color: var(--rm-info); }
@@ -718,6 +720,7 @@ function roadmapSetup(host) {
   /** Слово состояния строки «В фоне»: st от главной части — work, wait, done, error, start. @param {string} st */
   const bgWord = (st) => (st === 'work' ? T('bgl.work', 'работает') : st === 'wait' ? T('bgl.wait', 'ждёт ответа') : st === 'ask' ? T('bgl.wait', 'ждёт ответа')
     : st === 'stuck' ? T('bgl.wait', 'ждёт ответа') : st === 'done' ? T('bgl.done', 'закончил')
+    : st === 'askmain' ? T('bgl.askMain', 'ждёт главную сессию')
     : st === 'doneask' ? T('bgl.doneAsk', 'карта готова, агент спрашивает')
     : st === 'error' ? T('bgl.error', 'упал') : T('bgl.start', 'запускается'));
   /** Раздел «В фоне» (t1073): строка на скрытую вкладку, кнопки по номеру вкладки. @param {any[]} rows */
@@ -747,7 +750,7 @@ function roadmapSetup(host) {
     return `<div class="bgl">${head}${rv}${gr}${rows.map((r) => `<div class="bgr" data-bgsid="${esc(r.sid)}">`
       + `<span class="bn">${r.card ? `<b>${esc(r.card)}</b> ` : ''}${esc(r.title || r.sid)}</span>`
       + `<span class="bm" title="${esc(ame(r))}">${esc(ame(r))}</span>`
-      + `<span class="bs ${esc(r.st)}"${r.st === 'stuck' ? ` title="${esc(T('bgl.stuckTitle', 'Агент замолчал, а открытого «## Вопрос» в карте нет: похоже, застрял. Посмотрите вкладку — «Показать»'))}" style="--rm-note:${esc(JSON.stringify(` — ${T('bgl.noQuestion', 'вопроса нет')}`))}"` : r.st === 'ask' ? ` title="${esc(T('bgl.askTitle', 'Карта ждёт вашего ответа: откройте карту и ответьте в поле'))}"` : r.st === 'doneask' ? ` title="${esc(T('bgl.doneAskTitle', 'Карта готова, но агент что-то спрашивает во вкладке. «Показать» — посмотреть и ответить, «Остановить» — закрыть вкладку'))}"` : ''}>${esc(bgWord(r.st))}</span><span class="bt" data-since="${Number(r.since) || 0}">${esc(lasted(Number(r.since) || 0))}</span>`
+      + `<span class="bs ${esc(r.st)}"${r.st === 'stuck' ? ` title="${esc(T('bgl.stuckTitle', 'Агент замолчал, а открытого «## Вопрос» в карте нет: похоже, застрял. Посмотрите вкладку — «Показать»'))}" style="--rm-note:${esc(JSON.stringify(` — ${T('bgl.noQuestion', 'вопроса нет')}`))}"` : r.st === 'ask' ? ` title="${esc(T('bgl.askTitle', 'Карта ждёт вашего ответа: откройте карту и ответьте в поле'))}"` : r.st === 'askmain' ? ` title="${esc(T('bgl.askMainTitle', 'Вопрос карты к главной сессии: она ответит сама. Вам он придёт, если главной нет, она не ответит за 30 мин или передаст его вам'))}"` : r.st === 'doneask' ? ` title="${esc(T('bgl.doneAskTitle', 'Карта готова, но агент что-то спрашивает во вкладке. «Показать» — посмотреть и ответить, «Остановить» — закрыть вкладку'))}"` : ''}>${esc(bgWord(r.st))}</span><span class="bt" data-since="${Number(r.since) || 0}">${esc(lasted(Number(r.since) || 0))}</span>`
       + `<button type="button" class="btn" data-bg="show">${esc(T('show', 'Показать'))}</button>`
       + `<button type="button" class="btn" data-bg="stop" title="${esc(T('bgl.stopTitle', 'Остановить агента и закрыть его вкладку, без вопроса — как kermach tab close --force'))}">${esc(T('bgl.stop', 'Остановить'))}</button></div>`).join('')}</div>`;
   };
@@ -822,13 +825,15 @@ function roadmapSetup(host) {
       const t = c.status === 'готово' ? when(stampAt(c.closed)) : when(c.run && c.run.started ? c.run.started : 0);
       if (t) meta += ` · ${t}`;
     }
-    if (c.status === 'ждёт ответа') tone = ' warn';
+    // t2019: вопрос у главной сессии — спокойный цвет и слова «ждёт главную сессию», оранжевое — только вопросу человеку.
+    if (c.status === 'ждёт ответа') tone = c.askMain ? ' info' : ' warn';
+    if (c.status === 'ждёт ответа' && c.askMain) meta = meta.replace(shownWord(c), T('bgl.askMain', 'ждёт главную сессию'));
     // t1633: цена законченной проверки — словом «оценка»: на подписке деньги не списываются.
     if (c.gradeCost && !c.grading) meta += ` · ${T('gradeCost', 'проверка ≈{cost}, оценка', { cost: costText(c.gradeCost) })}`;
     // t1215 (d333): строка «ждёт ответа» или «готово» не дошла до вкладки, из которой звали kermach roadmap run, — сказать здесь.
     if (c.untold) { meta += ` · ⚠ ${T('untold', 'некому сообщить')}`; tone = ' warn'; }
     const on = pick && sel.ids.has(c.id) ? ' sel' : '';
-    return `<div class="card${on}" data-id="${esc(c.id)}"><span class="si ${m.tone}">${esc(m.icon)}</span><span class="num">${esc(c.id)}</span>`
+    return `<div class="card${on}" data-id="${esc(c.id)}"><span class="si ${c.askMain && c.status === 'ждёт ответа' ? 'info' : m.tone}">${esc(m.icon)}</span><span class="num">${esc(c.id)}</span>`
       + `<span class="tt">${esc(c.title || c.id)}</span>${crBadge(c)}<span class="meta${tone}"${c.untold ? ` title="${esc(T('untoldHint', 'Строка «[Роадмап]» об этой карте не дошла до вкладки, из которой её запустили ({why}), и ушла уведомлением Windows. Откройте карту — пометка снимется; снимется и после следующего сообщения в ту вкладку', { why: c.untold }))}"` : ''}>${esc(meta)}</span></div>`;
   };
 
@@ -1703,17 +1708,48 @@ function roadmapSetup(host) {
       + `<span class="pnote">${esc(kt)}</span></div><pre class="box">${esc(t.text)}</pre></div>`;
     promptEl.innerHTML = html;
   };
-  /** Собрать промпт открытой карты заново: при открытии и когда файлы доски поменялись. */
+  /**
+   * Запросы prompt предпросмотра (t2003): новый не уходит, пока не пришёл ответ на прошлый, а от событий доски — не чаще раза в PROMPT_GAP.
+   * Раньше каждое событие board давало запрос, и на большой доске они шли один за другим и накладывались.
+   * busy — запрос в пути; again — пока он шёл, просили ещё: 'now' — открытие или смена карты, 'soon' — событие доски;
+   * at — когда ушёл последний запрос; timer — отложенный запрос от событий доски.
+   * @type {{ busy: boolean, again: '' | 'now' | 'soon', at: number, timer: any }}
+   */
+  const pq = { busy: false, again: '', at: 0, timer: null };
+  const PROMPT_GAP = 2000;
+  /** Собрать промпт открытой карты заново сразу: при открытии, смене карты, повторном открытии панели. Запрос в пути — следующий сразу после ответа. */
   const loadPrompt = async () => {
-    if (!pv) return;
+    if (!pv || stopped) return;
+    if (pq.busy) { pq.again = 'now'; return; }
+    // Запрос уходит сейчас и увидит все правки до него: отложенный от событий доски не нужен.
+    if (pq.timer) { clearTimeout(pq.timer); pq.timer = null; }
+    pq.busy = true;
+    pq.again = '';
+    pq.at = Date.now();
     const id = pv.id;
-    const r = await api('prompt', id);
-    if (!pv || pv.id !== id || stopped) return;
-    const d = new Date();
-    pv.r = r;
-    pv.at = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-    if (r && r.error) host.log(`промпт ${id} не собран: ${r.error}`);
-    paintPrompt();
+    /** @type {any} */
+    let r;
+    try { r = await api('prompt', id); } finally { pq.busy = false; }
+    if (pv && pv.id === id && !stopped) {
+      const d = new Date();
+      pv.r = r;
+      pv.at = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      if (r && r.error) host.log(`промпт ${id} не собран: ${r.error}`);
+      paintPrompt();
+    }
+    const again = pq.again;
+    pq.again = '';
+    if (again === 'now') loadPrompt();
+    else if (again === 'soon') loadPromptSoon();
+  };
+  /** Файлы доски поменялись: собрать заново не чаще раза в PROMPT_GAP; последнее событие пачки обязательно даёт запрос — иначе предпросмотр останется старым. */
+  const loadPromptSoon = () => {
+    if (!pv || stopped) return;
+    if (pq.busy) { if (!pq.again) pq.again = 'soon'; return; }
+    if (pq.timer) return;
+    const wait = pq.at + PROMPT_GAP - Date.now();
+    if (wait <= 0) { loadPrompt(); return; }
+    pq.timer = setTimeout(() => { pq.timer = null; loadPromptSoon(); }, wait);
   };
   const showPrompt = () => {
     if (!cur) return;
@@ -1726,6 +1762,7 @@ function roadmapSetup(host) {
   };
   const closePrompt = () => {
     pv = null;
+    if (pq.timer) { clearTimeout(pq.timer); pq.timer = null; }
     promptEl.hidden = true;
     promptEl.textContent = '';
     if (cur) { cardEl.hidden = false; growAll(); }
@@ -3161,7 +3198,9 @@ function roadmapSetup(host) {
       const head = String(r.head || '').replace(/^## /, ''), ag = r.agent || {};
       const wy = ag.code === 'ask' ? T('ans.why.ask', 'агент показывает запрос разрешения или вопрос с вариантами, поэтому ответ ждёт: он уйдёт агенту, когда на запрос ответят. Ответить можно и в самой вкладке')
         : ag.code === 'typed' ? T('ans.why.typed', 'во вкладке агента набран текст — ответ уйдёт, когда поле опустеет') : String(ag.why || '');
+      // t2021: unsure — демон не ответил на запись в срок, ответ мог дойти. Не «запустите снова»: повтор дал бы его агенту дважды.
       cur.ansMsg = ag.sent ? T('ans.sent', 'Ответ записан в карту ({head}) и отправлен агенту', { head })
+        : ag.unsure ? T('ans.unsure', 'Ответ записан в карту ({head}). Дошёл ли он до агента, неизвестно: вкладка не подтвердила запись вовремя. Посмотрите вкладку, прежде чем отправлять снова; если ответ стоит в поле ввода без отправки — нажмите там Enter', { head })
         : ag.waiting ? T('ans.wait', 'Ответ записан в карту ({head}). Запускать карту не нужно: агент получит его сам{why}', { head, why: wy ? ` — ${wy}` : '' })
         : T('ans.ok', 'Ответ записан в карту ({head}). Запустите карту снова — агент его прочтёт', { head });
     }
@@ -3807,7 +3846,7 @@ function roadmapSetup(host) {
     // Вкладка итога сменила состояние (t1182) — старая строка под фазой («уже пишется») уступает «записан» / «не записан».
     const sumSt = (/** @type {any} */ x, /** @type {string} */ ph) => x && x.reports && x.reports[ph] ? x.reports[ph].sumSt : undefined;
     if (waveNote && sumSt(b, waveNote.phase) && sumSt(b, waveNote.phase) !== sumSt(last, waveNote.phase)) waveNote = null;
-    last = b; if (open) drawSoft(); refreshPassport(); refreshPhase(); inboxSoft(); humanSoft(); notesSoft(); paintDecs(); if (!foundEl.hidden) paintFound(); if (cur) refreshCard(); if (pv) loadPrompt(); });
+    last = b; if (open) drawSoft(); refreshPassport(); refreshPhase(); inboxSoft(); humanSoft(); notesSoft(); paintDecs(); if (!foundEl.hidden) paintFound(); if (cur) refreshCard(); if (pv) loadPromptSoon(); });
   // Скрытая вкладка карты «готово» (t1060): главная часть выждала паузу, окно закрывает её без вопроса; экран демон пишет в .kermach/runs/<карта>-<время>.log.
   host.on('runClose', (/** @type {any} */ x) => {
     const term = host.bridge && host.bridge.term;
@@ -3864,6 +3903,7 @@ function roadmapSetup(host) {
   return () => {
     stopped = true;
     if (syncTimer) clearTimeout(syncTimer);
+    if (pq.timer) clearTimeout(pq.timer);
     clearInterval(bgClock);
     document.removeEventListener('mousemove', bandMove);
     document.removeEventListener('mouseup', bandStop);
