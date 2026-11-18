@@ -785,7 +785,7 @@
         filters: t('filters', 'Фильтры и метки'), done: t('doneView', 'Выполненные'), projects: t('projects', 'Проекты Kermach'), labels: t('labels', 'Метки'),
         filtersList: t('filtersH', 'Фильтры'), counts: t('cfgCounts', 'Числа у пунктов') });
       h += `<div class="mh">${esc(t('cfgTitle', 'Что показывать в панели'))}</div>` + Object.keys(names).map((k) => `<div class="mi" data-m="hide:${k}"><span>${esc(names[k])}</span><span class="tog${P().hide.includes(k) ? '' : ' on'}" style="margin-left:auto"></span></div>`).join('')
-        + `<div class="mh">${esc(t('cfgHint', 'Скрытое открывается через Ctrl+K'))}</div>`
+        + `<div class="mh">${esc(t('cfgHint', 'Скрытое открывается через ⌘K'))}</div>`
         + `<hr><div class="mi" data-m="nodate:" title="${esc(t('cfgNodateHint', 'Слова «завтра», «в пятницу» и дедлайн в фигурных скобках в строке добавления остаются в названии'))}"><span>${esc(t('cfgNodate', 'Распознавать дату в названии'))}</span><span class="tog${P().nodate ? '' : ' on'}" style="margin-left:auto"></span></div>`
         + `<div class="mi" data-m="badge:" title="${esc(t('cfgBadgeHint', 'Синяя плашка с числом дел на сегодня на кнопке Kermach в панели задач. Выключено — кнопка показывает только точку «агент ждёт»'))}"><span>${esc(t('cfgBadge', 'Число дел на значке программы'))}</span><span class="tog${P().badge ? ' on' : ''}" style="margin-left:auto"></span></div>`;
     }
@@ -1071,7 +1071,7 @@
 
   // ---- Горячие клавиши (t1164), как у Todoist; по коду клавиши — работают и в русской раскладке. ----
   const KEYS = () => [['Q, A', t('kAdd', 'новое дело')], ['/', t('kSearch', 'поиск')], ['G I', t('kInbox', 'Входящие')], ['G T', t('kToday', 'Сегодня')],
-    ['G U', t('kUpcoming', 'Предстоящее')], ['G A', t('kAll', 'Все дела')], ['G V', t('kFilters', 'Фильтры и метки')], ['G C', t('kDone', 'Выполненные')], ['Z', t('kUndo', 'отменить последнее')], ['Ctrl+K', t('kCmdk', 'быстрый переход')], ['.', t('kMenu', 'меню дела под мышью')], [t('kMultiKey', 'Ctrl/Shift + клик'), t('kMulti', 'выбрать несколько дел')],
+    ['G U', t('kUpcoming', 'Предстоящее')], ['G A', t('kAll', 'Все дела')], ['G V', t('kFilters', 'Фильтры и метки')], ['G C', t('kDone', 'Выполненные')], ['Z', t('kUndo', 'отменить последнее')], ['⌘K', t('kCmdk', 'быстрый переход')], ['.', t('kMenu', 'меню дела под мышью')], [t('kMultiKey', '⌘/Shift + клик'), t('kMulti', 'выбрать несколько дел')],
     ['Enter', t('kEnter', 'добавить или сохранить поле')], ['Esc', t('kEsc', 'закрыть окно, отменить правку')], ['?', t('kHelp', 'эта справка')]];
   function helpOpen() {
     $('help').innerHTML = `<h2>${esc(t('keysTitle', 'Горячие клавиши'))}</h2>${KEYS().map(([k, v]) => `<div class="k"><kbd>${esc(k)}</kbd><span>${esc(v)}</span></div>`).join('')}`;
@@ -1393,7 +1393,7 @@
       return;
     }
     if (e.key !== 'Enter' || !cur || !el.dataset || !el.dataset.f) return;
-    if (el.dataset.f === 'desc' && !e.ctrlKey) return;
+    if (el.dataset.f === 'desc' && !(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
     const f = el.dataset.f, v = el.value.trim();
     if (f === 'sub' && v) { const r = await save(T.sub(cur.p, cur.id, v)); if (r && !r.error) { const n = /** @type {HTMLInputElement | null} */ ($('dlg').querySelector('[data-f="sub"]')); if (n) { n.value = ''; n.focus(); } } return; }

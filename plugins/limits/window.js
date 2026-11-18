@@ -164,7 +164,8 @@ const limitsText = (p) => (p.used === null && p.note ? I18n.t('limits.note', '{l
 function limitsSetup(host) {
   const bar = document.createElement('span');
   bar.id = 'plugin-limits';
-  bar.style.cssText = 'display:flex;gap:24px;white-space:nowrap';
+  // Mac-версия: узкое окно — полоса лимитов сжимается с «…», счётчик вкладок справа остаётся виден.
+  bar.style.cssText = 'display:flex;gap:24px;white-space:nowrap;min-width:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis';
   host.bottom.appendChild(bar);
   host.bottom.hidden = false;
   const api = { get: () => host.call('get') };

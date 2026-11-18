@@ -128,7 +128,7 @@ async function tabCmd(t) {
 
 /** Доска «Роадмапа» (t684, t804): номер выдаёт программа, а не агент — два агента разом не возьмут один номер. */
 const ROADMAP_HELP = `kermach roadmap — доска «Роадмапа» проекта: завести карту или запись с номером от программы, найти старые записи по тексту ошибки.
-Доска — папка .kermach\\roadmap в папке проекта; ищется от текущей папки вверх. Окно Kermach для этого не нужно.
+Доска — папка .kermach/roadmap в папке проекта; ищется от текущей папки вверх. Окно Kermach для этого не нужно.
 
   kermach roadmap new t "Заголовок" [--phase fN] [--files a,b] [--text "что сделать"] [--why "зачем"] [--check "как проверить"]
                                  [--bug-phase fM --bug-by кто]
@@ -1151,7 +1151,7 @@ function humanLines(b, all) {
 async function roadmap(o) {
   const path = require('path');
   const project = boardProject();
-  if (!project) die(`доски «Роадмапа» нет: ни в ${process.cwd()}, ни выше нет папки .kermach\\roadmap. Откройте в Kermach окно проекта → «Роадмап» → «Составить роадмап»`, 3);
+  if (!project) die(`доски «Роадмапа» нет: ни в ${process.cwd()}, ни выше нет папки .kermach/roadmap. Откройте в Kermach окно проекта → «Роадмап» → «Составить роадмап»`, 3);
   // Скрипт лежит в bin\lib, доска — в plugins\roadmap того же дерева: и в src, и в собранной программе.
   const board = require(path.join(__dirname, '..', '..', 'plugins', 'roadmap', 'board.js'));
   // t1423: start и wave — в окне проекта, тем же каналом, что run.
@@ -1484,7 +1484,7 @@ async function roadmapRun(ref, bg, one, credits) {
     die('нет доступа: roadmap run работает только в терминале Kermach. Терминал открыт до обновления программы — откройте новую вкладку.', 2);
   }
   const board = boardProject();
-  if (!board) die(`нет доступа: ни в ${process.cwd()}, ни выше нет доски .kermach\\roadmap — roadmap run запускают из папки проекта`, 2);
+  if (!board) die(`нет доступа: ни в ${process.cwd()}, ни выше нет доски .kermach/roadmap — roadmap run запускают из папки проекта`, 2);
   // t703: пачка — тот же запрос с refs или phase и one: true; ответ — карты пачки и пропущенные.
   // from (t1126) — вкладка, из которой позвали (KERMACH_TAB_KEY демона): ей программа напишет «ждёт ответа» и «готово».
   const from = ENV('TAB_KEY') || '';
@@ -1613,7 +1613,7 @@ const COMPANION_HELP = `kermach companion — сопутствующая сес�
   kermach companion "тема" [--agent claude|codex|имя]
       открыть вкладку: заголовок — тема, первое сообщение — правила сопутствующей сессии (companion.md, на языке доски).
       Без --agent — агент главной сессии (настройка «главная:» в панели «Роадмапа»). Вкладка помнит, что она сопутствующая,
-      и после перезапуска окна. Команда работает в терминале Kermach любого проекта, доска .kermach\\roadmap не нужна и не создаётся.
+      и после перезапуска окна. Команда работает в терминале Kermach любого проекта, доска .kermach/roadmap не нужна и не создаётся.
       Без доски правила не говорят о картах и о kermach main tell. Доска другого проекта в текущей папке — отказ.
   kermach companion list
       открытые сопутствующие: вкладка, агент, тема, когда писала в главную последний раз. Список хранит программа.
@@ -1674,7 +1674,7 @@ const AGENT_HELP = `kermach agent — другие агенты программ
   kermach agent open <имя> [--new] -
       задание из потока ввода: для длинного текста и текста с кавычками и переводами строк.
 Разрешения у вкладки те же, что у вкладки из меню «+». Задание передаётся как есть, правил от программы к нему не добавляется.
-Задание длиннее 16000 знаков ложится файлом в .kermach\\prompts проекта, первое сообщение — ссылка на файл. Предел команды — 60000 байт.
+Задание длиннее 16000 знаков ложится файлом в .kermach/prompts проекта, первое сообщение — ссылка на файл. Предел команды — 60000 байт.
 Агент не берёт сообщение при запуске (amp, hermes, devin, kimi, muse, zcode) — задание вводится во вкладку после старта, вывод об этом говорит.
 В открытую вкладку задание идёт так же, как ввод после старта: многострочное и длиннее 1000 знаков — файлом и ссылкой.
 Вкладки из меню «+», агентов карт, главной сессии и вкладку, из которой позвали, команда не трогает. После перезапуска демона терминалов прежние вкладки она не узнаёт.
@@ -1732,7 +1732,7 @@ async function mainCmd(a) {
   if (tell && !text) die('main: нужен текст — kermach main tell "текст"', 1);
   if (!ENV('BROWSER_PIPE') || !ENV('BROWSER_AUTH')) die('нет доступа: kermach main работает только в терминале Kermach. Терминал открыт до обновления Kermach — откройте вкладку заново', 2);
   const board = boardProject();
-  if (!board) die(`нет доступа: ни в ${process.cwd()}, ни выше нет доски .kermach\\roadmap — kermach main запускают из папки проекта`, 2);
+  if (!board) die(`нет доступа: ни в ${process.cwd()}, ни выше нет доски .kermach/roadmap — kermach main запускают из папки проекта`, 2);
   const from = ENV('TAB_KEY') || '';
   const r = await ask({ v: 1, auth: ENV('BROWSER_AUTH'), cmd: 'roadmap-cli', sub: tell ? 'main-tell' : 'main', board, a: tell ? { text, pid: String(process.pid) } : { pid: String(process.pid) }, ...(from ? { from } : {}) });
   if (!r || !r.ok) die(r && r.error ? `main: ${r.error}` : 'ответ не той формы', r && Number.isInteger(r.code) ? r.code : 3);

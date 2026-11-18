@@ -264,7 +264,7 @@
     + `<p>${I18n.t('projects.firstWhat', 'Проект — это папка на диске. В его окне терминалы и агенты (Claude Code, Codex) работают в этой папке, а вкладки сохраняются до следующего раза.')}</p>`
     + `<div class="btns"><button id="emptyAdd" class="bbtn">${I18n.t('projects.dobavitPapku', 'Добавить папку')}</button>`
     + (orcaHas ? `<button id="emptyOrca" class="bbtn">${I18n.t('projects.orcaImport', 'Перенести проекты из Орки')}</button>` : '') + `</div>`
-    + `<p class="guide">${I18n.t('projects.firstGuide', 'Подробнее — в руководстве, глава «Проекты». Руководство лежит рядом с установщиком Kermach.')}</p></div>`;
+    + `<p class="guide">${I18n.t('projects.firstGuide', 'Подробнее — в руководстве, глава «Проекты». Руководство — файл FUNCTIONS.md в репозитории Kermach.')}</p></div>`;
   async function fromOrca() {
     showError('');
     const r = await t.projects.orcaImport();
@@ -467,12 +467,12 @@
     if (document.querySelector('.dlg')) return;
     const r = await t.projects.presets();
     if (!r || r.error) return showError((r && r.error) || I18n.t('projects.noPresets', 'нет вариантов'));
-    /** @type {{ name: string, desc: string, icon: string, color: string, git: boolean, files: number }[]} */
+    /** @type {{ name: string, label?: string, desc: string, icon: string, color: string, git: boolean, files: number }[]} */
     const list = r.presets;
     const sep = /^[a-zA-Z]:\\|\\\\/.test(r.base) ? '\\' : '/';
     let sel = list[0];
     let dirTouched = false;
-    const tl = (/** @type {typeof sel} */ p, /** @type {number} */ i) => `<div class="tl${p === sel ? ' on' : ''}" data-i="${i}"><div class="ti" style="background:${esc(p.color)}">${svg(p.icon, '#FFFFFF', 17)}</div><div><b>${esc(p.name)}</b><span class="d">${esc(p.desc)}</span></div></div>`;
+    const tl = (/** @type {typeof sel} */ p, /** @type {number} */ i) => `<div class="tl${p === sel ? ' on' : ''}" data-i="${i}"><div class="ti" style="background:${esc(p.color)}">${svg(p.icon, '#FFFFFF', 17)}</div><div><b>${esc(p.label || p.name)}</b><span class="d">${esc(p.desc)}</span></div></div>`;
     const back = document.createElement('div');
     back.className = 'dlg-back';
     back.innerHTML = `<div class="dlg np" tabindex="-1" style="--w:640px"><div class="dlg-title"><div class="t">${esc(I18n.t('projects.newProject', 'Новый проект'))}</div><div class="x" title="${esc(I18n.t('common.close', 'Закрыть'))}">${svg('close', tc('text', '#C9D0DC'), 12)}</div></div>

@@ -290,7 +290,7 @@ function register(c) {
       const r = await worktree.remove(p.path, { force: !!force });
       if ('error' in r) {
         c.log(`удаление копии ${p.path}: ${r.error}`);
-        if (r.busy) return { error: i18n.t('projects.removeCopyHeld', 'Папку копии держит другая программа (редактор, сервер разработки, проводник). Вкладки копии уже остановлены. Закройте программу и повторите удаление.') };
+        if (r.busy) return { error: i18n.t('projects.removeCopyHeld', 'Папку копии держит другая программа (редактор, сервер разработки, Finder). Вкладки копии уже остановлены. Закройте программу и повторите удаление.') };
         if (!r.leftover) return r;
         // Папка уже переименована и отвязана от git (t1084): запись с несуществующей папкой не оставляем, остаток называем.
         projects.remove(c.dataDir, /** @type {any} */ (data), p.id);
@@ -335,7 +335,10 @@ function register(c) {
   ipcMain.handle('projects:presets', (e) => {
     if (!sender.allowed(e, 'projects:presets')) return sender.refused();
     const l = newProject.list();
-    return { presets: l.presets.map((p) => ({ name: p.name, desc: p.desc, icon: p.icon, color: p.color, git: p.git, files: p.files.length })), fromFile: l.fromFile, base: newProject.defaultBase() };
+    // Mac-версия: без project-setup.md имена и описания четырёх вариантов — на языке программы (label — только для показа, name — ключ).
+    const KEY = /** @type {Record<string, string>} */ ({ 'Сайт': 'site', 'Интернет-магазин': 'shop', 'Исследование': 'research', 'Программа': 'app' });
+    const tr = (/** @type {any} */ p) => (!l.fromFile && KEY[p.name] ? { label: i18n.t(`newproj.${KEY[p.name]}`, p.name), desc: i18n.t(`newproj.${KEY[p.name]}Desc`, p.desc) } : { label: p.name, desc: p.desc });
+    return { presets: l.presets.map((p) => ({ name: p.name, ...tr(p), icon: p.icon, color: p.color, git: p.git, files: p.files.length })), fromFile: l.fromFile, base: newProject.defaultBase() };
   });
   // Порядок: название и папка → файлы заготовки → история (галочка: git init, .gitignore, точка «История включена» — enable.js, гит в потоке запуска)
   // → проект в списке → окно проекта. Ошибка названия или папки — { error, field }: страница пишет её под полем.

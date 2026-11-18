@@ -2,8 +2,8 @@
 # Зведення помилок Kermach на macOS: errors.log, помилкові рядки main.log/daemon.log, креш-дампи Crashpad, звіти macOS про падіння.
 # Використання: tools/mac-errors.sh [кількість днів, типово 7]
 DAYS=${1:-7}
-D="$HOME/Library/Application Support/Kermach"
-[[ -d "$D/logs" ]] || D="$HOME/Library/Application Support/TERMINALUS"
+D="${KERMACH_DATA:-$HOME/Library/Application Support/Kermach}"
+[[ -n "${KERMACH_DATA:-}" || -d "$D/logs" ]] || D="$HOME/Library/Application Support/TERMINALUS"
 L="$D/logs"
 echo "Папка даних: $D"
 

@@ -905,7 +905,7 @@
       ['[data-bp="on"]', 'dialogs.bpOn', 'Без запросов', 'textContent'], ['[data-bp="off"]', 'dialogs.bpOff', 'Спрашивать', 'textContent'],
       ['.cbn', 'dialogs.bpNote', 'Для новых и перезапущенных вкладок Claude.', 'textContent'],
       ['.cap.zoom', 'dialogs.razmerShriftaOkon', 'Размер шрифта окон', 'textContent'], ['.cap.font', 'dialogs.razmerShriftaTerminala', 'Размер шрифта терминала', 'textContent'],
-      ['.cpst', 'dialogs.copySelect', 'Копировать выделенный текст сразу, без Ctrl+C', 'textContent'],
+      ['.cpst', 'dialogs.copySelect', 'Копировать выделенный текст сразу, без ⌘C', 'textContent'],
       ['.slpc', 'dialogs.sleepCap', 'Усыплять вкладку Claude, когда она в «готово» дольше', 'textContent'], ['.slpu', 'dialogs.sleepUnit', 'мин', 'textContent'],
       ['.slpt', 'dialogs.sleepOff', 'Не усыплять', 'textContent'],
       ['.slpr', 'dialogs.sleepRestart', 'Заработает после перезапуска демона: нынешний демон этот срок не знает', 'textContent'],

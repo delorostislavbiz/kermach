@@ -30,7 +30,7 @@ function register(c, sessions) {
       try {
         const all = await sessions();
         return { tabs: all.map((s) => ({ sid: s.sid, state: String(s.state || ''), claudeSessionId: s.meta && s.meta.claudeSessionId, codexSessionId: s.meta && s.meta.codexSessionId,
-          pid: s.pid, resumeId: require('../../main/terminals').resumeIdOf(s.meta) || undefined })) }; // t1194: grok и agy
+          pid: s.pid, asleep: !!s.asleep, resumeId: require('../../main/terminals').resumeIdOf(s.meta) || undefined })) }; // t1194: grok и agy
       } catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
     },
   };

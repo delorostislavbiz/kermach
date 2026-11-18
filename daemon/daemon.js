@@ -1280,7 +1280,7 @@ class Session {
     // Ряды сдвинулись: прежнее «interrupted» может встать ниже старого ряда строки хода (t648).
     this.busyRow = -1;
     // Процесс уже вышел, а exit ещё не пришёл — resize у pty бросает ошибку, и attach обрывался без снимка (t88).
-    if (!this.ptyExited) {
+    if (!this.ptyExited && this.sleep !== 'asleep') {
       try { this.pty.resize(cols, rows); } catch (e) { log(`терминал ${this.sid}: resize не прошёл: ${/** @type {any} */ (e).message || e}`); }
     }
     keepCursor(this.term, () => this.term.resize(cols, rows), () => ({ cols, rows }));

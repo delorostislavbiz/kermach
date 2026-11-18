@@ -757,13 +757,13 @@ function roadmapSetup(host) {
 
   const labels = () => {
     /** @type {HTMLElement} */ (row.lastElementChild).textContent = I18n.t('plugin.roadmap', 'Роадмап');
-    row.title = T('sideTitle', 'Роадмап проекта: фазы и карты из папки .kermach\\roadmap');
+    row.title = T('sideTitle', 'Роадмап проекта: фазы и карты из папки .kermach/roadmap');
     $('.rh .t b').textContent = I18n.t('plugin.roadmap', 'Роадмап');
     $('.rh .t span').textContent = ` · ${host.project.name || ''}`;
     $('.rh .t').title = host.project.path;
     $('.hd span').textContent = T('hideDone', 'скрыть сделанное');
     findBox.placeholder = T('find.ph', 'Поиск: номер или слова');
-    findBox.title = T('find.title', 'Карты и записи — по номеру, заголовку и тексту. Ctrl+F — сюда, Esc — очистить');
+    findBox.title = T('find.title', 'Карты и записи — по номеру, заголовку и тексту. ⌘F — сюда, Esc — очистить');
     if (!foundEl.hidden) paintFound();
     $('[data-act="newcard"]').title = T('newcardTip', 'Новая карта — откроется вкладка Claude: агент спросит, что сделать, изучит проект и предложит карту');
     orchBtn.title = T('orchTip', 'Новая главная сессия — откроется вкладка Claude: она прочитает журнал и доску, скажет, где мы и что дальше');
@@ -874,7 +874,7 @@ function roadmapSetup(host) {
       `<button type="button" data-wave="${mode}" data-ph="${esc(f.id)}" title="${esc(title)}"${off ? ' disabled' : ''}>${esc(text)}</button>`;
     return `<span class="wbtns"><span class="wlabel">${esc(T('wave.label', 'Волна:'))}</span>${b('free', T('wave.free', 'Независимые'), T('wave.freeTitle', 'Запустить независимые: карты «в очереди», у которых все зависимости готовы'))}`
       + b('all', T('wave.all', 'Все'), T('wave.allTitle', 'Запустить все карты фазы «в очереди»: у кого зависимости не готовы — ждут и стартуют сами'))
-      + b('sel', nsel ? T('wave.selN', 'Выделенные · {n}', { n: nsel }) : T('wave.sel', 'Выделенные'), T('wave.selTitle', 'Запустить выделенные карты. Выделить: Ctrl+щелчок, Shift+щелчок, рамка мышью; снять — Esc'), !nsel)
+      + b('sel', nsel ? T('wave.selN', 'Выделенные · {n}', { n: nsel }) : T('wave.sel', 'Выделенные'), T('wave.selTitle', 'Запустить выделенные карты. Выделить: ⌘+щелчок, Shift+щелчок, рамка мышью; снять — Esc'), !nsel)
       // t703: пачка одним агентом — выделенные карты, а без выделения — карты фазы «в очереди», до 5.
       + b('one', T('wave.one', 'Одним агентом'), T('wave.oneTitle', 'Выполнить одним агентом: один промпт и одна вкладка на до 5 карт «в очереди» по порядку — выделенные, а без выделения карты фазы. Карта, которую агент не взял, после закрытия вкладки вернётся в очередь'))
       // t1522: плагин «Кредиты» есть — карты фазы заданиями по порядку depends.

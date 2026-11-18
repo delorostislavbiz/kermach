@@ -88,8 +88,11 @@ const KEY_FILE = path.join(DATA_DIR, 'daemon.key');
  */
 function lineReader(onMessage) {
   let buf = '';
+  // Буквы UTF-8 (кириллица — два байта) режутся на границе кусков сокета: buf += Buffer портил такую букву в «��».
+  // StringDecoder держит неполную букву до следующего куска.
+  const dec = new (require('string_decoder').StringDecoder)('utf8');
   return (/** @type {Buffer|string} */ chunk) => {
-    buf += chunk;
+    buf += typeof chunk === 'string' ? chunk : dec.write(chunk);
     let i;
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i);

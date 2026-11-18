@@ -234,7 +234,8 @@ function historySetup(host) {
   /** Разговор этого окна: проект тот же или папка внутри папки проекта. @param {any} it */
   const mine = (it) => (it.projectId ? it.projectId === host.project.id : inside(it.cwd, host.project.path));
   /** Слово для PowerShell (оболочка вкладки «терминал») и bash: простое — как есть, иначе в одинарных кавычках — в них $(…) не подставляется (t793). @param {string} s */
-  const word = (s) => (/^\w[\w.:\\/-]*$/.test(s) ? s : `'${String(s).replace(/'/g, "''")}'`);
+  // Mac-версия: оболочка вкладки — zsh/bash, там кавычка внутри '…' пишется '\'' (удвоение '' работает только в PowerShell).
+  const word = (s) => (/^\w[\w.:\\/-]*$/.test(s) ? s : `'${String(s).replace(/'/g, navigator.platform.startsWith('Mac') ? "'\\''" : "''")}'`);
   /** Команда продолжения для терминала. Папка, номер и имя агента — из журнала на диске, поэтому через word. @param {any} it */
   const command = (it) => {
     const cd = it.cwd ? `cd ${word(it.cwd)}; ` : '';
@@ -733,7 +734,8 @@ function historySetup(host) {
     /** @type {any[]} */
     const targets = Array.isArray(info.targets) ? info.targets : [];
     const live = info.live;
-    const warn = !live ? '' : I18n.t('history.handoffLive', '{agent} ещё работает {where}. Два агента будут править одни и те же файлы — остановите его или дождитесь, пока он закончит.',
+    // Спящая вкладка (t1751): процесса нет — править файлы некому, предупреждать не о чем.
+    const warn = !live || live.asleep ? '' : I18n.t('history.handoffLive', '{agent} ещё работает {where}. Два агента будут править одни и те же файлы — остановите его или дождитесь, пока он закончит.',
       { agent: info.fromName, where: live.where === 'tab' ? I18n.t('history.handoffInTab', 'во вкладке') : I18n.t('history.handoffOutside', 'вне Kermach') });
     box.innerHTML = `<div class="q">${esc(I18n.t('history.handoffTitle', 'Передать другому агенту'))}</div>`
       + `<div class="w">${esc(I18n.t('history.handoffFrom', 'Разговор {agent}: «{title}». Он не изменится и не удалится.', { agent: info.fromName, title: info.title || info.id }))}</div>`

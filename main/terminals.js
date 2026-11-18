@@ -726,7 +726,7 @@ function checkExtra(kind, o, p) {
     const found = agents.named(p.path).find((a) => a.name === o.agent);
     // При продолжении имя агента приходит из журнала разговора, а файл агента могли удалить: разговор продолжается без --agent (строка в main.log).
     if (!found && resume) agentSkipped = o.agent;
-    else if (!found) return { error: i18n.t('term.noAgent', 'агента Claude {name} нет ни в ~/.claude/agents, ни в .claude\\agents проекта', { name: o.agent }) };
+    else if (!found) return { error: i18n.t('term.noAgent', 'агента Claude {name} нет ни в ~/.claude/agents, ни в .claude/agents проекта', { name: o.agent }) };
     else ag = { name: found.name, mode: found.mode };
   }
   return { x: Object.keys(x).length ? x : null, prompt, title, ag, resume, agentSkipped, mcpArgs };

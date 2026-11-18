@@ -253,13 +253,13 @@ function grokRunning(grokHome, getStartTimes = startTimes) {
  * @returns {Map<string, { sid: string, state: string, pid: number }>}
  */
 function tabsRunning(r) {
-  /** @type {Map<string, { sid: string, state: string, pid: number, at?: number }>} */
+  /** @type {Map<string, { sid: string, state: string, pid: number, at?: number, asleep?: boolean }>} */
   const out = new Map();
   for (const t of (r && Array.isArray(r.tabs) ? r.tabs : [])) {
     const sid = t && (t.claudeSessionId || t.codexSessionId || t.resumeId); // resumeId — grok и agy (t1194), app.js resumeIdOf
     const id = typeof sid === 'string' ? sid.toLowerCase() : '';
     const pid = Number(t && t.pid) > 0 ? Number(t.pid) : 0;
-    if (id) out.set(id, { sid: String(t.sid), state: String(t.state || ''), pid });
+    if (id) out.set(id, { sid: String(t.sid), state: String(t.state || ''), pid, ...(t.asleep ? { asleep: true } : {}) });
     else if (pid && t && t.sid) out.set(`pid:${pid}`, { sid: String(t.sid), state: String(t.state || ''), pid }); // вкладка без номера разговора — по pid
     // Свежая вкладка agy без номера (t1673, d398): пару ищет agyTabOf по времени запуска вкладки и созданию замка.
     if (!id && t && t.sid && /^(agent:)?(antigravity|agy)$/.test(String(t.kind || ''))) {
@@ -279,7 +279,7 @@ function tabsRunning(r) {
  */
 function liveOf(rec, tabs, outside, where) {
   const t = tabs.get(rec.id);
-  if (t) return { where: 'tab', sid: t.sid, state: t.state };
+  if (t) return { where: 'tab', sid: t.sid, state: t.state, ...(t.asleep ? { asleep: true } : {}) };
   const o = outside.get(rec.id);
   // t1194: вкладка grok без номера в аргументах — тот же процесс, что в active_sessions.json. У agy pid в замке нет.
   if (o && o.pid > 0) { const p = tabs.get(`pid:${o.pid}`); if (p) return { where: 'tab', sid: p.sid, state: p.state }; }

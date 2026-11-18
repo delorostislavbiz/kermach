@@ -2295,7 +2295,7 @@ function setLang(project, lang) {
   const to = String(lang || '').trim().toLowerCase();
   if (!LANGS.includes(to)) throw new Error(`язык доски «${lang}»: допустимы ${LANGS.join(', ')}`);
   const dir = root(project);
-  if (!fs.existsSync(dir)) throw new Error('доски нет: папка .kermach\\roadmap не заведена');
+  if (!fs.existsSync(dir)) throw new Error('доски нет: папка .kermach/roadmap не заведена');
   ownRoot(project, dir);
   const from = boardLang(project);
   const { byId } = scan(dir);

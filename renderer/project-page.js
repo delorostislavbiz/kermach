@@ -668,7 +668,7 @@
     $('termCount').textContent = String(terms); // заголовок «Терминалы» — то же число, что внизу (t1708)
     const need = list.filter((x) => !x.page && stateOf(x) === 'waiting').length;
     let cnt = $('tabCount');
-    if (!cnt) { cnt = document.createElement('div'); cnt.id = 'tabCount'; cnt.style.marginLeft = 'auto'; $('bottom').append(cnt); }
+    if (!cnt) { cnt = document.createElement('div'); cnt.id = 'tabCount'; cnt.style.marginLeft = 'auto'; cnt.style.flexShrink = '0'; $('bottom').append(cnt); }
     const ten = terms % 100, one = ten % 10;
     const form = ten >= 11 && ten <= 14 ? 'many' : one === 1 ? 'one' : one >= 2 && one <= 4 ? 'few' : 'many';
     const word = I18n.t(`page.tabCount.${form}`, { one: '{n} терминал', few: '{n} терминала', many: '{n} терминалов' }[form]).replace('{n}', String(terms));
