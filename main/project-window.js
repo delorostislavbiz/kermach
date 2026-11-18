@@ -170,7 +170,24 @@ function windowFor(id) {
   return w && !w.isDestroyed() ? w : null;
 }
 
+/**
+ * Проект убрали из списка (t1678, d679): его значки `<id>-….png` удаляются из папки значков, иначе файл лежит вечно.
+ * Возвращает число удалённых файлов; папки нет — 0.
+ * @param {string} dataDir @param {string} id
+ */
+function forgetIcons(dataDir, id) {
+  const dir = path.join(dataDir, 'icons');
+  let n = 0;
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return 0; }
+  for (const f of names) {
+    if (!f.startsWith(`${id}-`) || !f.endsWith('.png')) continue;
+    try { fs.rmSync(path.join(dir, f), { force: true }); n++; } catch { /* файл занят — останется до следующего удаления */ }
+  }
+  return n;
+}
+
 /** Номера проектов с открытыми окнами — в порядке открытия (порт для macOS: открыть их снова после обновления). */
 const openIds = () => [...windows].filter(([, w]) => !w.isDestroyed()).map(([id]) => id);
 
-module.exports = { open, projectOf, windowFor, showTab, openIds };
+module.exports = { open, projectOf, windowFor, showTab, forgetIcons, openIds };

@@ -29,8 +29,11 @@ const FALLBACK = [
  * @typedef {{ name: string, desc: string, icon: string, color: string, git: boolean, files: PresetFile[] }} Preset
  */
 
-/** Файл заготовок агента project-setup. @returns {string} */
-function presetFile() { return path.join(os.homedir(), '.claude', 'agents', 'project-setup.md'); }
+/** Файл заготовок агента project-setup: CLAUDE_CONFIG_DIR/agents, если задана (как agents.js named, t1193, d386). @returns {string} */
+function presetFile() {
+  const home = process.env.CLAUDE_CONFIG_DIR ? path.resolve(process.env.CLAUDE_CONFIG_DIR) : path.join(os.homedir(), '.claude');
+  return path.join(home, 'agents', 'project-setup.md');
+}
 
 /**
  * Разбор project-setup.md. Чистая функция. Содержимое файла — строки между ~~~~ без самих ~~~~, в конце перевод строки.

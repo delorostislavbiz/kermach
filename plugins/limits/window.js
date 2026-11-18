@@ -61,7 +61,8 @@ function limitsClock(ts, now) {
  * Claude — «Claude: использовано 38 % · сброс через 2 ч 14 мин» и «Неделя: использовано 60 %»; Codex — «Codex: использовано 15 % · неделя 30 %».
  * Окно, у которого время сброса прошло, — «сброс был в 12:40» (t409): прежний процент уже неверен, а новых цифр ещё нет.
  * Подсказка тогда говорит, откуда придут новые: у Claude — после ответа во вкладке программы, у Codex — при следующем опросе.
- * @param {{ claude?: LimitsSource, codex?: LimitsSource } | null | undefined} data
+ * Другие агенты (t1734, data.agents) — тем же видом, что Codex: «Grok: использовано 12 % · неделя 40 %» или «Grok: нет данных».
+ * @param {{ claude?: LimitsSource, codex?: LimitsSource, agents?: Record<string, LimitsSource & { label?: string }> } | null | undefined} data
  * @param {number} now
  * @returns {LimitsPart[]}
  */
@@ -75,20 +76,27 @@ function limitsParts(data, now) {
   /** @param {LimitsWindow | undefined} w */
   const resetText = (w) => (!w || !w.resets_at ? I18n.t('limits.vremyaSbrosaNeizvestno', 'время сброса неизвестно')
     : I18n.t('limits.v', '{v1} в {v2}', { v1: w.resets_at * 1000 <= now ? I18n.t('limits.sbrosByl', 'сброс был') : I18n.t('limits.sbros', 'сброс'), v2: limitsClock(w.resets_at * 1000, now) }));
-  for (const [key, label] of [['claude', 'Claude'], ['codex', 'Codex']]) {
-    const d = data && /** @type {any} */ (data)[key];
+  // t1734: другие агенты (main\agent-limits) — после Claude и Codex, тем же видом, что Codex. Главная часть отдаёт только агентов
+  // с живой вкладкой в проекте; ключ — id поставщика ('grok'), подпись — label.
+  const agents = (data && /** @type {any} */ (data).agents) || {};
+  /** @type {[string, string, any][]} */
+  const rows = [['claude', 'Claude', data && data.claude], ['codex', 'Codex', data && data.codex],
+    ...Object.keys(agents).map((id) => /** @type {[string, string, any]} */ ([id, String((agents[id] && agents[id].label) || id), agents[id]]))];
+  for (const [key, label, d] of rows) {
+    const agent = key !== 'claude' && key !== 'codex';
     const rl = d && d.rate_limits;
     const five = rl && rl.five_hour;
     const week = rl && rl.seven_day;
     const mon = rl && rl.month;
-    if (!five && !week && !mon) {
+    const day = agent ? rl && rl.one_day : null;
+    if (!five && !week && !mon && !day) {
       out.push({ key, label, used: null, tail: '', title: (d && d.message && reasonText(key, d)) || I18n.t('limits.dannyhOLimitahNet', '{label}: данных о лимитах нет', { label: label }) });
       continue;
     }
     const old = !(d.status === 'ok' && typeof d.ts === 'number' && now - d.ts <= LIMITS_STALE_MS);
     const at = typeof d.ts === 'number' ? I18n.t('limits.na', ' (на {v1})', { v1: limitsClock(d.ts, now) }) : I18n.t('limits.vremyaNeizvestno', ' (время неизвестно)');
     const stale = old ? at : '';
-    const why = old && d.status !== 'ok' && d.message ? I18n.t('limits.posledniyOprosNeUdalsya', '\nпоследний опрос не удался: {message}', { message: d.message }) : '';
+    const why = old && d.status !== 'ok' && d.message ? I18n.t('limits.posledniyOprosNeUdalsya', '\nпоследний опрос не удался: {message}', { message: agent ? reasonText(key, d) : d.message }) : '';
     const f = live(five);
     const w = live(week);
     const m = live(mon);
@@ -99,7 +107,8 @@ function limitsParts(data, now) {
     // в отдельном терминале — строка состояния пользователя (t410). Codex опрашивается раз в 5 минут (t43).
     const where = key === 'claude'
       ? I18n.t('limits.otkudaClaude', '\nновые цифры придут после следующего ответа Claude')
-      : I18n.t('limits.otkudaCodex', '\nновые цифры придут при следующем опросе Codex');
+      : !agent ? I18n.t('limits.otkudaCodex', '\nновые цифры придут при следующем опросе Codex')
+        : I18n.t('limits.otkudaAgent', '\nновые цифры придут при следующем опросе {label}', { label: label });
     const titleOf = (/** @type {string} */ name, /** @type {LimitsWindow | undefined} */ win) =>
       `${label}, ${name}: ${!win ? I18n.t('limits.netDannyh', 'нет данных')
         : gone(win) ? I18n.t('limits.doSbrosa', '{v1}, до него израсходовано {v2} %', { v1: gone(win), v2: Math.round(win.used_percentage) })
@@ -111,6 +120,17 @@ function limitsParts(data, now) {
           + (gone(five) ? I18n.t('limits.cifryPosleOtveta', ' · цифры после ответа Claude') : stale),
         title: titleOf(I18n.t('limits.5Chasov', '5 часов'), five) + (old || gone(five) ? where : '') });
       out.push({ key: 'claude-week', label: I18n.t('limits.nedelya', 'Неделя'), used: w ? limitsUsed(w) : null, note: gone(week), tail: stale,
+        title: titleOf(I18n.t('limits.nedelya2', 'неделя'), week) + (old || gone(week) ? where : '') });
+    } else if (agent && day && !five && !week && !mon) {
+      // t1735: агент с суточным окном (у Gemini дневные квоты главной модели): процент суток — главное число.
+      const dd = live(day);
+      out.push({ key, label, used: dd ? limitsUsed(dd) : null, note: gone(day),
+        tail: (dd ? I18n.t('limits.zaSutki', ' за сутки') + (dd.resets_at ? I18n.t('limits.sbrosCherez', ' · сброс через {v1}', { v1: limitsIn(dd.resets_at * 1000 - now) }) : '') : '') + stale,
+        title: titleOf(I18n.t('limits.sutki', 'сутки'), day) + (old || gone(day) ? where : '') });
+    } else if (agent && !five && !mon) {
+      // Агент с одним недельным окном (у Grok — общий недельный пул): процент недели — главное число, окна 5 часов нет.
+      out.push({ key, label, used: w ? limitsUsed(w) : null, note: gone(week),
+        tail: (w ? I18n.t('limits.zaNedelyu', ' за неделю') + (w.resets_at ? I18n.t('limits.sbrosCherez', ' · сброс через {v1}', { v1: limitsIn(w.resets_at * 1000 - now) }) : '') : '') + stale,
         title: titleOf(I18n.t('limits.nedelya2', 'неделя'), week) + (old || gone(week) ? where : '') });
     } else {
       out.push({ key, label, used: f ? limitsUsed(f) : m && !five ? limitsUsed(m) : null, note: gone(five) || (!five ? gone(mon) : ''),
@@ -150,6 +170,299 @@ function limitsSetup(host) {
   const api = { get: () => host.call('get') };
   /** @type {any} */
   let data = null;
+  // «Продолжать после сброса лимита» (t1727). Отдельный элемент рядом со строкой: строка «Лимиты» остаётся только про цифры.
+  // Ответа без поля continue (проверки с подставным мостом) — элемента нет.
+  /** @type {HTMLElement | null} */
+  let cbar = null;
+  /** @type {{ ov: HTMLElement, close: () => void, draw: () => void } | null} */
+  let dlg = null;
+  /** @param {any} c */
+  const caseText = (c) => (c.at ? I18n.t('limits.continueCase', '{tab}: сообщение в {time}', { tab: c.title, time: limitsClock(c.at, Date.now()) })
+    : I18n.t('limits.continueNoTime', '{tab}: лимит, время сброса неизвестно, сообщение само не уйдёт', { tab: c.title }));
+  /** @param {any} c */
+  const cancelBtn = (c) => {
+    const b = document.createElement('button');
+    b.className = 'lcancel';
+    b.dataset.key = c.key;
+    b.textContent = I18n.t('limits.continueCancel', 'Отменить');
+    b.style.cssText = 'margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:4px;background:transparent;color:inherit;font:inherit;cursor:pointer';
+    b.onclick = (ev) => { ev.stopPropagation(); host.call('continueCancel', c.key).then(setCont).catch(() => {}); };
+    return b;
+  };
+  /** @param {any} v */
+  const setCont = (v) => {
+    if (!v || v.error) return;
+    if (data) data.continue = v;
+    drawCont();
+    if (dlg) dlg.draw();
+  };
+  const openDlg = () => {
+    if (dlg) return;
+    const ov = document.createElement('div');
+    ov.id = 'plugin-limits-dlg';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:1000;background:var(--overlay);display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--text)';
+    const box = document.createElement('div');
+    box.setAttribute('role', 'dialog');
+    box.style.cssText = 'width:520px;max-width:calc(100vw - 32px);box-sizing:border-box;background:var(--menu);border:1px solid var(--line);border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.35);padding:18px 20px';
+    ov.appendChild(box);
+    const h = document.createElement('h2');
+    h.style.cssText = 'margin:0 0 6px;font-size:16px';
+    const p = document.createElement('p');
+    p.style.cssText = 'margin:4px 0 12px;color:var(--muted);line-height:1.5';
+    const lab = document.createElement('label');
+    lab.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:12px;font-weight:600';
+    const on = document.createElement('input');
+    on.type = 'checkbox';
+    on.id = 'limitsContinueOn';
+    const onText = document.createElement('span');
+    lab.append(on, onText);
+    const tl = document.createElement('label');
+    tl.style.cssText = 'display:block;margin-bottom:4px;font-weight:600';
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.id = 'limitsContinueText';
+    inp.maxLength = 1000;
+    inp.style.cssText = 'width:100%;box-sizing:border-box;background:var(--input);color:var(--text);border:1px solid var(--line);border-radius:6px;font:inherit;padding:5px 8px';
+    const list = document.createElement('div');
+    list.id = 'limitsContinueCases';
+    list.style.cssText = 'margin-top:12px;line-height:1.8;max-height:40vh;overflow:auto';
+    const acts = document.createElement('div');
+    acts.style.cssText = 'display:flex;justify-content:flex-end;margin-top:14px';
+    const close = document.createElement('button');
+    close.id = 'limitsContinueClose';
+    close.style.cssText = 'border:1px solid var(--line);border-radius:6px;padding:5px 12px;color:var(--text);background:var(--raised);font:inherit;cursor:pointer';
+    acts.appendChild(close);
+    // t1730: у Claude включено своё автопродолжение — во вкладки Claude программа не пишет.
+    const self = document.createElement('p');
+    self.id = 'limitsContinueClaudeSelf';
+    self.style.cssText = 'margin:0 0 12px;line-height:1.5';
+    // t1880: своя настройка у каждой вкладки Claude и Codex. «Как общая» — включатель сверху, пустой текст — общий текст.
+    const th = document.createElement('div');
+    th.style.cssText = 'margin-top:14px;font-weight:600';
+    const tp = document.createElement('p');
+    tp.style.cssText = 'margin:2px 0 6px;color:var(--muted);line-height:1.5';
+    const tabsBox = document.createElement('div');
+    tabsBox.id = 'limitsContinueTabs';
+    tabsBox.style.cssText = 'display:grid;grid-template-columns:minmax(80px,auto) auto 1fr;gap:6px 8px;align-items:center;max-height:30vh;overflow:auto';
+    let tabsDrawn = '';
+    // t1881: предупреждение о таймере вкладок — одной строкой над списком вкладок.
+    const tw = document.createElement('p');
+    tw.id = 'limitsTimerWarn';
+    tw.style.cssText = 'margin:0 0 6px;line-height:1.5;color:var(--warn, var(--text))';
+    box.append(h, p, self, lab, tl, inp, th, tp, tw, tabsBox, list, acts);
+    /** @param {any} t вкладка из view().tabs @param {string} common общий текст или текст по умолчанию */
+    const tabRow = (t, common) => {
+      const name = document.createElement('span');
+      name.textContent = t.title || t.sid;
+      name.title = t.kind;
+      name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px';
+      const sel = document.createElement('select');
+      sel.dataset.sid = t.sid;
+      sel.className = 'lctab-on';
+      sel.style.cssText = 'background:var(--input);color:var(--text);border:1px solid var(--line);border-radius:6px;font:inherit;padding:3px 4px';
+      for (const [v, k, ru] of [['', 'limits.continueTabCommon', 'Как общая'], ['on', 'limits.continueTabOn', 'Вкл'], ['off', 'limits.continueTabOff', 'Выкл']]) {
+        const o = document.createElement('option');
+        o.value = v;
+        o.textContent = I18n.t(k, ru);
+        sel.appendChild(o);
+      }
+      sel.value = t.on === true ? 'on' : t.on === false ? 'off' : '';
+      sel.onchange = () => { host.call('continueTabSet', { sid: t.sid, on: sel.value === 'on' ? true : sel.value === 'off' ? false : null }).then(setCont).catch(() => {}); };
+      const ti = document.createElement('input');
+      ti.type = 'text';
+      ti.dataset.sid = t.sid;
+      ti.className = 'lctab-text';
+      ti.maxLength = 1000;
+      ti.value = t.text || '';
+      ti.placeholder = common;
+      ti.style.cssText = inp.style.cssText;
+      const saveTab = () => host.call('continueTabSet', { sid: t.sid, text: ti.value }).then(setCont).catch(() => {});
+      ti.onchange = saveTab;
+      ti.dataset.saved = ti.value;
+      tabsBox.append(name, sel, ti);
+      // t1881: таймер вкладки — включатель, период часами и минутами, свой текст. Строка во всю ширину под строкой вкладки.
+      const tr = document.createElement('div');
+      tr.className = 'lctimer';
+      tr.dataset.sid = t.sid;
+      tr.style.cssText = 'grid-column:1/-1;display:flex;gap:6px;align-items:center;margin:-2px 0 4px 12px;color:var(--muted)';
+      const tOnL = document.createElement('label');
+      tOnL.style.cssText = 'display:flex;gap:4px;align-items:center;white-space:nowrap';
+      const tOn = document.createElement('input');
+      tOn.type = 'checkbox';
+      tOn.className = 'lctimer-on';
+      tOn.dataset.sid = t.sid;
+      const tOnT = document.createElement('span');
+      tOnL.append(tOn, tOnT);
+      const num = (/** @type {string} */ cls, /** @type {number} */ max) => {
+        const n = document.createElement('input');
+        n.type = 'number';
+        n.className = cls;
+        n.dataset.sid = t.sid;
+        n.min = '0';
+        n.max = String(max);
+        n.style.cssText = 'width:52px;box-sizing:border-box;background:var(--input);color:var(--text);border:1px solid var(--line);border-radius:6px;font:inherit;padding:3px 4px';
+        return n;
+      };
+      const tH = num('lctimer-h', 99);
+      const tHT = document.createElement('span');
+      const tM = num('lctimer-m', 59);
+      const tMT = document.createElement('span');
+      const tT = document.createElement('input');
+      tT.type = 'text';
+      tT.className = 'lctimer-text';
+      tT.dataset.sid = t.sid;
+      tT.maxLength = 1000;
+      tT.style.cssText = `${inp.style.cssText};flex:1;min-width:80px`;
+      const tNext = document.createElement('span');
+      tNext.className = 'lctimer-next';
+      tNext.style.cssText = 'white-space:nowrap';
+      tr.append(tOnL, tH, tHT, tM, tMT, tT, tNext);
+      tabsBox.append(tr);
+      const saveTimer = () => {
+        const min = (Math.max(0, Number(tH.value) || 0)) * 60 + Math.max(0, Number(tM.value) || 0);
+        return host.call('timerSet', { sid: t.sid, on: tOn.checked, min, text: tT.value }).then(setCont).catch(() => {});
+      };
+      tOn.onchange = saveTimer;
+      tH.onchange = saveTimer;
+      tM.onchange = saveTimer;
+      tT.onchange = saveTimer;
+      /** @param {any} x вкладка из view().tabs @param {string} def текст таймера по умолчанию */
+      const fillTimer = (x, def) => {
+        const tm = x.timer || { on: false, min: 60, text: '' };
+        tOnT.textContent = I18n.t('limits.timerOn', 'Таймер: каждые');
+        tHT.textContent = I18n.t('limits.timerHours', 'ч');
+        tMT.textContent = I18n.t('limits.timerMinutes', 'мин');
+        tT.placeholder = def;
+        tOn.checked = !!tm.on;
+        if (document.activeElement !== tH) tH.value = String(Math.floor(tm.min / 60));
+        if (document.activeElement !== tM) tM.value = String(tm.min % 60);
+        if (document.activeElement !== tT) { tT.value = tm.text || ''; tT.dataset.saved = tT.value; }
+        tNext.textContent = tm.on && tm.next ? I18n.t('limits.timerNext', 'следующее в {time}', { time: limitsClock(tm.next, Date.now()) }) : '';
+      };
+      return { sel, ti, saveTab, tT, saveTimer, fillTimer };
+    };
+    /** @type {Map<string, { sel: HTMLSelectElement, ti: HTMLInputElement, saveTab: () => any, tT: HTMLInputElement, saveTimer: () => any, fillTimer: (x: any, def: string) => void }>} */
+    const rows = new Map();
+    const draw = () => {
+      const c = (data && data.continue) || {};
+      h.textContent = I18n.t('limits.continueDialog', 'Продолжать после сброса лимита');
+      p.textContent = I18n.t('limits.continueHint', 'Агент упёрся в лимит подписки — через 15 секунд после сброса программа сама напишет ему это сообщение, один раз. Работает во вкладках Claude и Codex, пока окно проекта открыто. Ничего не отправит, если агент работает, ждёт ответа или в поле ввода есть текст.');
+      self.hidden = !c.claudeSelf;
+      self.textContent = I18n.t('limits.continueClaudeSelf', 'Claude продолжит сам: в его настройках включено продолжение после лимита. Программа пишет только во вкладки Codex.');
+      onText.textContent = I18n.t('limits.continueOnLabel', 'Включить');
+      tl.textContent = I18n.t('limits.continueTextLabel', 'Текст сообщения');
+      close.textContent = I18n.t('limits.continueClose', 'Закрыть');
+      on.checked = !!c.on;
+      if (document.activeElement !== inp) inp.value = c.text || '';
+      inp.placeholder = c.defaultText || '';
+      list.textContent = '';
+      th.textContent = I18n.t('limits.continueTabsTitle', 'Вкладки');
+      tp.textContent = I18n.t('limits.continueTabsHint', 'У каждой вкладки можно задать своё: включить, выключить или оставить как общая. Пустой текст — общий текст сверху.');
+      const tabs = Array.isArray(c.tabs) ? c.tabs : [];
+      th.hidden = tp.hidden = !tabs.length;
+      const common = (c.text || '') || c.defaultText || '';
+      // Строки пересоздаются только при смене состава вкладок: иначе ответ на ввод в одной строке сбросил бы фокус и набранный текст.
+      const sig = tabs.map((/** @type {any} */ t) => `${t.sid}|${t.title}|${I18n.t('limits.continueTabCommon', 'Как общая')}`).join(',');
+      if (sig !== tabsDrawn) {
+        for (const r of rows.values()) { if (r.ti.value !== r.ti.dataset.saved) r.saveTab(); if (r.tT.value !== r.tT.dataset.saved) r.saveTimer(); }
+        tabsDrawn = sig;
+        tabsBox.textContent = '';
+        rows.clear();
+        for (const t of tabs) rows.set(t.sid, tabRow(t, common));
+      } else for (const t of tabs) {
+        const r = rows.get(t.sid);
+        if (!r) continue;
+        r.sel.value = t.on === true ? 'on' : t.on === false ? 'off' : '';
+        r.ti.placeholder = common;
+        if (document.activeElement !== r.ti) { r.ti.value = t.text || ''; r.ti.dataset.saved = r.ti.value; }
+      }
+      for (const t of tabs) { const r = rows.get(t.sid); if (r) r.fillTimer(t, c.timerDefault || ''); }
+      tw.hidden = !tabs.length;
+      tw.textContent = I18n.t('limits.timerWarn', 'Таймер пишет агенту свой текст через заданный период, не чаще раза в 5 минут. Каждое сообщение тратит лимит подписки. Работает, пока окно проекта открыто; пропускает раз, если агент работает, ждёт ответа, в поле есть текст, вкладка спит или стоит флаг нагрузки.');
+      for (const x of c.cases || []) {
+        const row = document.createElement('div');
+        row.append(caseText(x));
+        if (x.at) row.appendChild(cancelBtn(x));
+        list.appendChild(row);
+      }
+    };
+    on.onchange = () => { host.call('continueSet', { on: on.checked }).then(setCont).catch(() => {}); };
+    // Многострочная вставка в однострочное поле уже без переводов строк; главная часть всё равно чистит текст сама.
+    const saveText = () => host.call('continueSet', { text: inp.value }).then(setCont).catch(() => {});
+    inp.onchange = saveText;
+    const key = (/** @type {KeyboardEvent} */ e) => { if (e.key === 'Escape') { e.stopPropagation(); shut(); } };
+    const shut = () => {
+      document.removeEventListener('keydown', key, true);
+      // Enter и закрытие без ухода из поля: change ещё не сработал, а текст человек уже набрал.
+      if (inp.value !== String(((data && data.continue) || {}).text || '')) saveText();
+      for (const r of rows.values()) { if (r.ti.value !== r.ti.dataset.saved) r.saveTab(); if (r.tT.value !== r.tT.dataset.saved) r.saveTimer(); }
+      ov.remove();
+      dlg = null;
+    };
+    close.onclick = shut;
+    ov.onclick = (e) => { if (e.target === ov) shut(); };
+    document.addEventListener('keydown', key, true);
+    document.body.appendChild(ov);
+    dlg = { ov, close: shut, draw };
+    draw();
+    // Строка внизу обновляется раз в 30 с. Язык могли сменить только что: текст по умолчанию и случаи берём свежими.
+    api.get().then((/** @type {any} */ d) => setCont(d && d.continue)).catch(() => {});
+  };
+  /** Рядом со строкой «Лимиты»: включена ли настройка и у каких вкладок стоит сообщение. */
+  const drawCont = () => {
+    const c = data && data.continue;
+    if (!c) return;
+    if (!cbar) {
+      cbar = document.createElement('span');
+      cbar.id = 'plugin-limits-continue';
+      cbar.style.cssText = 'display:flex;gap:12px;white-space:nowrap;margin-left:24px;align-items:center';
+      bar.after(cbar);
+    }
+    cbar.textContent = '';
+    const b = document.createElement('button');
+    b.id = 'limitsContinueOpen';
+    b.style.cssText = 'padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;text-decoration:underline dotted';
+    b.textContent = c.on ? I18n.t('limits.continueOn', 'Продолжать после сброса: вкл')
+      : c.onTabs > 0 ? I18n.t('limits.continueSome', 'Продолжать после сброса: вкл во вкладках: {n}', { n: c.onTabs }) : I18n.t('limits.continueOff', 'Продолжать после сброса: выкл');
+    b.title = I18n.t('limits.continueDialog', 'Продолжать после сброса лимита');
+    b.onclick = openDlg;
+    cbar.appendChild(b);
+    // t1881: у скольких вкладок включён таймер; нажатие открывает то же окно настройки.
+    if (c.timerTabs > 0) {
+      const tb = document.createElement('button');
+      tb.id = 'limitsTimerBar';
+      tb.style.cssText = b.style.cssText;
+      tb.textContent = I18n.t('limits.timerBar', 'Таймер во вкладках: {n}', { n: c.timerTabs });
+      tb.onclick = openDlg;
+      cbar.appendChild(tb);
+    }
+    if ((c.on || c.onTabs > 0) && c.claudeSelf) {
+      const s = document.createElement('span');
+      s.id = 'limitsContinueClaudeSelfBar';
+      s.title = I18n.t('limits.continueClaudeSelf', 'Claude продолжит сам: в его настройках включено продолжение после лимита. Программа пишет только во вкладки Codex.');
+      s.textContent = I18n.t('limits.continueClaudeSelfShort', 'Claude продолжит сам');
+      cbar.appendChild(s);
+    }
+    // t1880: случаи выключенных вкладок главная часть уже не отдаёт, поэтому без проверки общего включателя.
+    const list = c.cases || [];
+    // Лимит обычно настигает все вкладки сразу: длинный список ушёл бы за край окна. Две и больше — счётчик, вкладки и отмена в окне настройки.
+    if (list.length > 1) {
+      const many = document.createElement('button');
+      many.id = 'limitsContinueMany';
+      many.style.cssText = b.style.cssText;
+      many.textContent = I18n.t('limits.continueMany', 'Вкладок ждут сброса: {n}', { n: list.length });
+      many.onclick = openDlg;
+      cbar.appendChild(many);
+    } else for (const x of list) {
+      const s = document.createElement('span');
+      s.dataset.case = x.key;
+      s.title = x.line || '';
+      s.append(caseText(x));
+      if (x.at) s.appendChild(cancelBtn(x));
+      cbar.appendChild(s);
+    }
+  };
+  const offCont = host.on ? host.on('continue', setCont) : null;
   /** @param {LimitsPart[]} parts */
   const draw = (parts) => {
     bar.textContent = '';
@@ -192,6 +505,8 @@ function limitsSetup(host) {
     // Поле ввода «Разговора» (renderer\chat.js) показывает лимиты своего агента под собой — те же данные, без второго опроса.
     /** @type {any} */ (window).KermachLimits = d;
     window.dispatchEvent(new Event('kermach:limits'));
+    drawCont();
+    if (dlg) dlg.draw();
   }).catch((/** @type {any} */ e) => {
     // Одна строка в журнал на одну и ту же ошибку, а не каждые 30 с.
     const m = String((e && e.message) || e);
@@ -204,8 +519,8 @@ function limitsSetup(host) {
   // Сменили схему (t185) — цифры в её цветах сразу, а не через 30 с.
   const offTheme = /** @type {any} */ (window).Theme ? /** @type {any} */ (window).Theme.onChange(() => draw(limitsParts(data, Date.now()))) : null;
   // Сменился язык (t184) — строка заново, а не через 30 с.
-  const offLang = /** @type {any} */ (window).I18n ? /** @type {any} */ (window).I18n.onChange(() => draw(limitsParts(data, Date.now()))) : null;
-  return () => { clearInterval(timer); if (offTheme) offTheme(); if (offLang) offLang(); bar.remove(); };
+  const offLang = /** @type {any} */ (window).I18n ? /** @type {any} */ (window).I18n.onChange(() => { draw(limitsParts(data, Date.now())); drawCont(); if (dlg) dlg.draw(); }) : null;
+  return () => { clearInterval(timer); if (offTheme) offTheme(); if (offLang) offLang(); if (typeof offCont === 'function') offCont(); if (dlg) dlg.close(); if (cbar) cbar.remove(); bar.remove(); };
 }
 
 if (typeof module === 'object' && module.exports) module.exports = { limitsParts, limitsText, limitsIn, limitsClock, limitsColor, limitsUsd, LIMITS_STALE_MS, LIMITS_CONSOLE };

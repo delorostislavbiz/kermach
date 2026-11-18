@@ -23,6 +23,8 @@ const HEALTH = ['зелёный', 'жёлтый', 'красный'];
 const HUMAN = ['без человека', 'нужен человек'];
 /** Кто нашёл ошибку в уже принятом (t1637): поле bug_by карты. */
 const BUG_BY = ['человек', 'живой прогон', 'ревью'];
+/** Вид проверки (t1642): поле tested карты, на чём проверена работа. Настоящая — то, с чем будет работать человек; смысл сверяет проверяющий, программа смотрит лишь поле. */
+const TESTED = ['настоящая', 'подставная', 'только человек'];
 const KINDS = ['сделать', 'ревью', 'разведка'];
 /** Виды записей d<N>. «заметка» (t1046) — находка сбоку, которая не мешает сейчас: агентам не подаётся, в паттерны не идёт, живёт на доске для человека. */
 const DTYPES = ['решение', 'тупик', 'договорённость', 'паттерн', 'заметка'];
@@ -68,6 +70,7 @@ const WORDS = {
   'паттерн': ['патерн', 'pattern', 'Muster'], 'заметка': ['нотатка', 'note', 'Notiz'],
   'проверено': ['перевірено', 'verified', 'geprüft'], 'догадка': ['здогадка', 'guess', 'Vermutung'],
   'агент': ['агент', 'agent', 'Agent'], 'программа': ['програма', 'program', 'Programm'],
+  'настоящая': ['справжня', 'real', 'echt'], 'подставная': ['підставна', 'fake', 'simuliert'], 'только человек': ['лише людина', 'human only', 'nur Mensch'],
   'человек': ['людина', 'human', 'Mensch'], 'живой прогон': ['живий прогін', 'live run', 'Live-Lauf'],
   'Что сделать': ['Що зробити', 'What to do', 'Was tun'], 'Зачем': ['Навіщо', 'Why', 'Wozu'], 'Файлы': ['Файли', 'Files', 'Dateien'],
   'Как проверить': ['Як перевірити', 'How to check', 'Wie prüfen'], 'Особые указания': ['Особливі вказівки', 'Special notes', 'Besondere Hinweise'],
@@ -96,20 +99,132 @@ const ALIASES = {
 const langCode = (v) => { const s = String(v || '').trim().toLowerCase(); return LANGS.includes(s) && s !== 'ru' ? s : ''; };
 /** Слово формата на языке доски: русское слово из WORDS → перевод; нет перевода или русская доска — как есть. @param {string} v @param {string} [lang] */
 const say = (v, lang = '') => { const i = LANGS.indexOf(lang); return (i > 0 && WORDS[v] && WORDS[v][i - 1]) || v; };
+/**
+ * Замечания доски, которые собирает read() (t1709): шаблон по-русски → [uk, en, de]; {имя} — подстановки. Русская доска — шаблон как есть.
+ * Свои слова, не из WORDS: это предложения. @type {Record<string, string[]>}
+ */
+const WARN_TEXT = {
+  // t1812: ошибка разбора файла
+  'нет шапки: файл начинается со строки ---': ['немає шапки: файл починається з рядка ---', 'no header: the file starts with a --- line', 'kein Kopf: die Datei beginnt mit einer Zeile ---'],
+  // t1812: ошибка разбора файла
+  'id «{v}» — нужно {p}<номер>': ['id «{v}» — потрібно {p}<номер>', 'id «{v}» — needs {p}<number>', 'id «{v}» — nötig ist {p}<Nummer>'],
+  // t1812: ошибка разбора файла
+  'в шапке нет id': ['у шапці немає id', 'the header has no id', 'im Kopf fehlt id'],
+  // t1812: ошибка разбора файла
+  'id {v} не совпадает с именем файла {name}': ['id {v} не збігається з іменем файлу {name}', 'id {v} does not match the file name {name}', 'id {v} passt nicht zum Dateinamen {name}'],
+  // t1812: ошибка разбора файла
+  'статус «{v}» неизвестен: допустимы {list}': ['статус «{v}» невідомий: допустимі {list}', 'status «{v}» is unknown: allowed are {list}', 'Status «{v}» ist unbekannt: erlaubt sind {list}'],
+  // t1812: ошибка разбора файла
+  'вид работы «{v}» неизвестен: допустимы {list}': ['вид роботи «{v}» невідомий: допустимі {list}', 'work kind «{v}» is unknown: allowed are {list}', 'Arbeitsart «{v}» ist unbekannt: erlaubt sind {list}'],
+  // t1812: ошибка разбора файла
+  'human «{v}»: допустимы {list}': ['human «{v}»: допустимі {list}', 'human «{v}»: allowed are {list}', 'human «{v}»: erlaubt sind {list}'],
+  // t1812: ошибка разбора файла
+  'phase «{v}» — нужно f<номер> или пусто': ['phase «{v}» — потрібно f<номер> або порожньо', 'phase «{v}» — needs f<number> or empty', 'phase «{v}» — nötig ist f<Nummer> oder leer'],
+  // t1812: ошибка разбора файла
+  '{key}: «{v}» — нужно {p}<номер>': ['{key}: «{v}» — потрібно {p}<номер>', '{key}: «{v}» — needs {p}<number>', '{key}: «{v}» — nötig ist {p}<Nummer>'],
+  // t1812: ошибка разбора файла
+  'статус фазы «{v}» неизвестен: допустимы {list}': ['статус фази «{v}» невідомий: допустимі {list}', 'phase status «{v}» is unknown: allowed are {list}', 'Phasenstatus «{v}» ist unbekannt: erlaubt sind {list}'],
+  // t1812: ошибка разбора файла
+  'здоровье «{v}»: допустимы {list} или пусто': ['здоров\'я «{v}»: допустимі {list} або порожньо', 'health «{v}»: allowed are {list} or empty', 'Zustand «{v}»: erlaubt sind {list} oder leer'],
+  // t1812: ошибка разбора файла
+  'type «{v}»: допустимы {list}': ['type «{v}»: допустимі {list}', 'type «{v}»: allowed are {list}', 'type «{v}»: erlaubt sind {list}'],
+  // t1812: ошибка разбора файла
+  'how «{v}»: допустимы {list} или пусто': ['how «{v}»: допустимі {list} або порожньо', 'how «{v}»: allowed are {list} or empty', 'how «{v}»: erlaubt sind {list} oder leer'],
+  // t1812: ошибка разбора файла
+  'until «{v}» — нужна дата ГГГГ-ММ-ДД или пусто': ['until «{v}» — потрібна дата РРРР-ММ-ДД або порожньо', 'until «{v}» — needs a date YYYY-MM-DD or empty', 'until «{v}» — nötig ist ein Datum JJJJ-MM-TT oder leer'],
+  // t1812: ошибка разбора файла
+  'cancelled «{v}» — нужна дата отмены ГГГГ-ММ-ДД или пусто': ['cancelled «{v}» — потрібна дата скасування РРРР-ММ-ДД або порожньо', 'cancelled «{v}» — needs the cancel date YYYY-MM-DD or empty', 'cancelled «{v}» — nötig ist das Absagedatum JJJJ-MM-TT oder leer'],
+  // t1812: ошибка разбора файла
+  'stack: «{v}» — имя темы, плагина или библиотеки: a-z, цифры, . - _ /, версия через @': ['stack: «{v}» — ім\'я теми, плагіна або бібліотеки: a-z, цифри, . - _ /, версія через @', 'stack: «{v}» — a topic, plugin or library name: a-z, digits, . - _ /, version after @', 'stack: «{v}» — Name eines Themas, Plugins oder einer Bibliothek: a-z, Ziffern, . - _ /, Version nach @'],
+  // t1812: ошибка разбора файла
+  'approved «{v}» — нужна дата утверждения ГГГГ-ММ-ДД или пусто': ['approved «{v}» — потрібна дата затвердження РРРР-ММ-ДД або порожньо', 'approved «{v}» — needs the approval date YYYY-MM-DD or empty', 'approved «{v}» — nötig ist das Freigabedatum JJJJ-MM-TT oder leer'],
+  // t1812: ошибка разбора файла
+  'pattern «{v}»: допустимо нет или пусто': ['pattern «{v}»: допустимо нет або порожньо', 'pattern «{v}»: allowed is нет or empty', 'pattern «{v}»: erlaubt ist нет oder leer'],
+  // t1812: ошибка разбора файла
+  'global «{v}»: допустимо да или пусто': ['global «{v}»: допустимо да або порожньо', 'global «{v}»: allowed is да or empty', 'global «{v}»: erlaubt ist да oder leer'],
+  // t1812: ошибка разбора файла
+  'for «{v}»: допустимы {list} или пусто': ['for «{v}»: допустимі {list} або порожньо', 'for «{v}»: allowed are {list} or empty', 'for «{v}»: erlaubt sind {list} oder leer'],
+  // t1812: ошибка разбора файла
+  'taken «{v}» — нужно t<номер> или пусто': ['taken «{v}» — потрібно t<номер> або порожньо', 'taken «{v}» — needs t<number> or empty', 'taken «{v}» — nötig ist t<Nummer> oder leer'],
+  // t1812: ошибка разбора файла
+  'сломанная шапка: нет закрывающей строки ---': ['зламана шапка: немає закривального рядка ---', 'broken header: no closing --- line', 'kaputter Kopf: keine schließende Zeile ---'],
+  // t1812: ошибка разбора файла
+  'сломанная шапка, строка {n}: «{l}» — нужно «ключ: значение», ключ латиницей': ['зламана шапка, рядок {n}: «{l}» — потрібно «ключ: значення», ключ латиницею', 'broken header, line {n}: «{l}» — needs «key: value», key in Latin letters', 'kaputter Kopf, Zeile {n}: «{l}» — nötig ist «Schlüssel: Wert», Schlüssel in lateinischen Buchstaben'],
+  // t1812: ошибка разбора файла
+  'сломанная шапка, строка {n}: «{l}» — внутри строки одиночный \\r (возврат каретки): редактор показывает его как перенос строки, уберите его': ['зламана шапка, рядок {n}: «{l}» — усередині рядка одиночний \\r (повернення каретки): редактор показує його як перенесення рядка, приберіть його', 'broken header, line {n}: «{l}» — a lone \\r (carriage return) inside the line: the editor shows it as a line break, remove it', 'kaputter Kopf, Zeile {n}: «{l}» — einzelnes \\r (Wagenrücklauf) in der Zeile: der Editor zeigt es als Zeilenumbruch, entfernen Sie es'],
+  // t1812: ошибка разбора файла
+  'сломанная шапка: ключ {k} дважды': ['зламана шапка: ключ {k} двічі', 'broken header: key {k} twice', 'kaputter Kopf: Schlüssel {k} doppelt'],
+  'этот раздел': ['цей розділ', 'this section', 'dieser Abschnitt'], 'это поле': ['це поле', 'this field', 'dieses Feld'],
+  '«{t}» внутри блока кода: выше в файле ``` без пары. Окно {what} не показывает, «Сохранить» его не запишет — закройте блок в файле': [
+    '«{t}» усередині блоку коду: вище у файлі ``` без пари. Вікно {what} не показує, «Зберегти» його не запише — закрийте блок у файлі',
+    '"{t}" is inside a code block: there is an unpaired ``` above it in the file. The window does not show {what}, "Save" will not write it — close the block in the file',
+    '„{t}“ steht in einem Codeblock: weiter oben in der Datei ist ein ``` ohne Gegenstück. Das Fenster zeigt {what} nicht, „Speichern“ schreibt es nicht — den Block in der Datei schließen'],
+  '«{t}» есть только внутри блока кода ```. Окно {what} не показывает, «Сохранить» его не запишет — если это не образец, уберите ``` вокруг в файле': [
+    '«{t}» є лише всередині блоку коду ```. Вікно {what} не показує, «Зберегти» його не запише — якщо це не зразок, приберіть ``` навколо у файлі',
+    '"{t}" exists only inside a ``` code block. The window does not show {what}, "Save" will not write it — if it is not a sample, remove the ``` around it in the file',
+    '„{t}“ steht nur in einem ```-Codeblock. Das Fenster zeigt {what} nicht, „Speichern“ schreibt es nicht — wenn es kein Muster ist, die ``` darum in der Datei entfernen'],
+  'файл фазы {f} с ошибкой — карта показана во «Входящих», фаза в её файле не меняется': [
+    'файл фази {f} з помилкою — картку показано у «Вхідних», фаза в її файлі не змінюється',
+    'the file of phase {f} has an error — the card is shown in "Inbox", the phase in its file is not changed',
+    'Die Datei der Phase {f} hat einen Fehler — die Karte steht im „Eingang“, die Phase in ihrer Datei bleibt unverändert'],
+  'фазы {f} нет — карта показана во «Входящих»': [
+    'фази {f} немає — картку показано у «Вхідних»', 'phase {f} does not exist — the card is shown in "Inbox"', 'Phase {f} gibt es nicht — die Karte steht im „Eingang“'],
+  'зависит от {d}, а карты {d} нет': ['залежить від {d}, а картки {d} немає', 'depends on {d}, but card {d} does not exist', 'hängt von {d} ab, aber die Karte {d} gibt es nicht'],
+  'used: «{s}» — нужно d<номер> и {v}': ['used: «{s}» — потрібно d<номер> і {v}', 'used: "{s}" — need d<number> and {v}', 'used: „{s}“ — nötig sind d<Nummer> und {v}'],
+  'served: «{s}» — нужно d<номер>': ['served: «{s}» — потрібно d<номер>', 'served: "{s}" — need d<number>', 'served: „{s}“ — nötig ist d<Nummer>'],
+  'from: «{s}» — нужно k<номер> дела': ['from: «{s}» — потрібно k<номер> справи', 'from: "{s}" — need k<number> of the case', 'from: „{s}“ — nötig ist k<Nummer> des Falls'],
+  'bug_phase: «{s}» — нужно f<номер> или пусто': ['bug_phase: «{s}» — потрібно f<номер> або порожньо', 'bug_phase: "{s}" — need f<number> or empty', 'bug_phase: „{s}“ — nötig ist f<Nummer> oder leer'],
+  'bug_by: «{s}» — допустимы {v}': ['bug_by: «{s}» — припустимі {v}', 'bug_by: "{s}" — allowed: {v}', 'bug_by: „{s}“ — erlaubt: {v}'],
+  'tested: «{s}» — допустимы {v}': ['tested: «{s}» — припустимі {v}', 'tested: "{s}" — allowed: {v}', 'tested: „{s}“ — erlaubt: {v}'],
+  'card_mcp «{s}»: нужно «все», «никаких» или до 16 имён MCP-серверов через запятую{bad} — ключ не действует': [
+    'card_mcp «{s}»: потрібно «все», «ніяких» або до 16 імен MCP-серверів через кому{bad} — ключ не діє',
+    'card_mcp "{s}": need "all", "none" or up to 16 MCP server names separated by commas{bad} — the key has no effect',
+    'card_mcp „{s}“: nötig sind „alle“, „keine“ oder bis zu 16 MCP-Servernamen mit Komma{bad} — der Schlüssel wirkt nicht'],
+  ', неверно: {v}': [', неправильно: {v}', ', invalid: {v}', ', ungültig: {v}'],
+  'card_skills «{s}»: нужно «да» или «нет» — ключ не действует': ['card_skills «{s}»: потрібно «так» або «ні» — ключ не діє', 'card_skills "{s}": need "yes" or "no" — the key has no effect', 'card_skills „{s}“: nötig sind „ja“ oder „nein“ — der Schlüssel wirkt nicht'],
+  'card_check «{s}»: нужно «да» или «нет» — ключ не действует': ['card_check «{s}»: потрібно «так» або «ні» — ключ не діє', 'card_check "{s}": need "yes" or "no" — the key has no effect', 'card_check „{s}“: nötig sind „ja“ oder „nein“ — der Schlüssel wirkt nicht'],
+  'паспорт проекта пуст: нет ни одного заполненного раздела из {n} — агенты карт получат пустую часть 2 промпта; заполните разделы в окне «Паспорт»': [
+    'паспорт проєкту порожній: немає жодного заповненого розділу з {n} — агенти карток отримають порожню частину 2 промпту; заповніть розділи у вікні «Паспорт»',
+    'the project passport is empty: none of the {n} sections is filled in — card agents will get an empty part 2 of the prompt; fill in the sections in the "Passport" window',
+    'Der Projektpass ist leer: keiner der {n} Abschnitte ist ausgefüllt — Kartenagenten bekommen einen leeren Teil 2 des Prompts; die Abschnitte im Fenster „Pass“ ausfüllen'],
+  'wrong: {t} без строки «Неверно ({t}): почему» — отметка не действует': [
+    'wrong: {t} без рядка «Неверно ({t}): почему» — позначка не діє', 'wrong: {t} without a line "Неверно ({t}): почему" — the mark has no effect',
+    'wrong: {t} ohne Zeile „Неверно ({t}): почему“ — die Markierung wirkt nicht'],
+  'паттерн без from — не видно, из каких записей он собран': ['патерн без from — не видно, з яких записів його зібрано', 'pattern without from — it is unclear which entries it was built from', 'Muster ohne from — es ist unklar, aus welchen Einträgen es entstand'],
+  '{k} у записи «{type}» не действует — только у паттерна': ['{k} у запису «{type}» не діє — лише у патерна', '{k} on an entry of type "{type}" has no effect — only on a pattern', '{k} bei einem Eintrag „{type}“ wirkt nicht — nur bei einem Muster'],
+  'for у записи «{type}» не действует — только у договорённости': ['for у запису «{type}» не діє — лише у домовленості', 'for on an entry of type "{type}" has no effect — only on an agreement', 'for bei einem Eintrag „{type}“ wirkt nicht — nur bei einer Vereinbarung'],
+  'taken у записи «{type}» не действует — только у заметки': ['taken у запису «{type}» не діє — лише у нотатки', 'taken on an entry of type "{type}" has no effect — only on a note', 'taken bei einem Eintrag „{type}“ wirkt nicht — nur bei einer Notiz'],
+  'заметка и взята в карту, и снята: считается снятой': ['нотатка і взята в картку, і знята: вважається знятою', 'the note is both taken into a card and dropped: counted as dropped', 'Die Notiz ist sowohl in eine Karte übernommen als auch verworfen: gilt als verworfen'],
+  'from: {r} — записи {r} нет или её файл с ошибкой': [
+    'from: {r} — запису {r} немає або її файл з помилкою', 'from: {r} — entry {r} does not exist or its file has an error', 'from: {r} — den Eintrag {r} gibt es nicht oder seine Datei hat einen Fehler'],
+};
+/** Слова вердикта used на языке доски — только для текста замечания: читается по-прежнему русское слово (WORDS их не знает). @type {Record<string, string[]>} */
+const VERDICT_SAY = { 'помогла': ['допомогла', 'helped', 'hat geholfen'], 'не пригодилась': ['не стала в пригоді', 'not useful', 'nicht nützlich'], 'неверна': ['хибна', 'wrong', 'falsch'], 'не открывал': ['не відкривав', 'did not open', 'nicht geöffnet'] };
+/** @param {string} w @param {string} lang */
+const verdictSay = (w, lang) => { const i = LANGS.indexOf(lang); return (i > 0 && VERDICT_SAY[w] && VERDICT_SAY[w][i - 1]) || w; };
+/** Замечание доски на языке доски: шаблон из WARN_TEXT, подстановки {имя}. @param {string} k русский шаблон @param {string} lang @param {Record<string, string>} [vars] */
+const warnSay = (k, lang, vars = {}) => {
+  const i = LANGS.indexOf(lang);
+  const t = (i > 0 && WARN_TEXT[k] && WARN_TEXT[k][i - 1]) || k;
+  return t.replace(/\{(\w+)\}/g, (m, n) => (n in vars ? vars[n] : m));
+};
 /** Ключи шапки, которые правит программа; остальные ключи файла — чужие, их сохраняем и не трогаем. */
+/** Причина в тексте снятой заметки (t1628), слова этой строки русские на доске любого языка, как «Неверно (tN):». */
+const NOTE_DROP = /^Снята \(\d{4}-\d{2}-\d{2}\):[ \t]*(\S.*)$/m;
 const HEAD_KEYS = {
-  t: ['phase', 'status', 'kind', 'agent', 'model', 'effort', 'depends', 'human', 'created', 'closed', 'source', 'used', 'served', 'from', 'bug_phase', 'bug_by'],
+  t: ['phase', 'status', 'kind', 'agent', 'model', 'effort', 'depends', 'human', 'created', 'closed', 'source', 'used', 'served', 'from', 'bug_phase', 'bug_by', 'tested'],
   f: ['status', 'health', 'health_why', 'health_by', 'health_at'],
-  d: ['type', 'card', 'files', 'date', 'agent', 'how', 'until', 'repeats', 'cancelled', 'differs', 'wrong', 'stack', 'from', 'approved', 'pattern', 'global', 'for'],
+  d: ['type', 'card', 'files', 'date', 'agent', 'how', 'until', 'repeats', 'cancelled', 'differs', 'wrong', 'stack', 'from', 'approved', 'pattern', 'global', 'for', 'taken'],
   passport: [],
 };
 /** Свои ключи шапки карты из FORMAT.md (t830): update их пишет, а читаются они, как и прочие чужие ключи, в extra. */
-const OWN_HEAD = { t: ['pick', 'advisor', 'agent_why', 'checked', 'tries'], f: [], d: [], passport: ['lang'] };
+// t1753: mcp — серверы MCP, которые просит карта (agents.cardMcp).
+const OWN_HEAD = { t: ['pick', 'advisor', 'agent_why', 'checked', 'tries', 'mcp'], f: [], d: [], passport: ['lang'] };
 
 /**
  * @typedef {{ file: string, reason: string }} Problem
  * @typedef {{ key: string, value: string, line: number }} HeadLine
- * @typedef {{ bom: string, eol: string, lines: string[], ends: string[], head: HeadLine[] | null, headEnd: number, error: string }} Parsed
+ * @typedef {{ bom: string, eol: string, lines: string[], ends: string[], head: HeadLine[] | null, headEnd: number, error: string, errT?: [string, Record<string, string>] }} Parsed
  * ends[i] — конец строки i, как в файле (\r\n или \n): у файла со смешанными концами нетронутая строка пишется со своим концом (t638). eol — конец новых строк.
  * headEnd — номер строки сразу после шапки (0, если шапки нет).
  * @typedef {{ key: string, start: number, end: number, value: string }} Span
@@ -117,9 +232,10 @@ const OWN_HEAD = { t: ['pick', 'advisor', 'agent_why', 'checked', 'tries'], f: [
  * @typedef {{ text: string, done: boolean }} Criterion
  * @typedef {{ id: string, num: number, file: string, title: string, phase: string, status: string, kind: string, agent: string, model: string,
  *   effort: string, depends: string[], human: string, created: string, closed: string, source: string, used: Record<string, string>, served: string[], fields: Record<string, string>,
- *   body?: string, from: string, bug_phase: string, bug_by: string, extra: Record<string, string> }} Card
+ *   body?: string, from: string, bug_phase: string, bug_by: string, tested: string[], extra: Record<string, string> }} Card
  * from — дело «Дел», из которого карта (t1163): k<N> в .kermach\tasks того же проекта.
  * bug_phase, bug_by — карта чинит уже принятое (t1637): в какой фазе ошибка была принята и кто её нашёл (BUG_BY).
+ * tested — вид проверки (t1642): русские слова из TESTED; нет поля — пустой список, такая карта старая или закрыта мимо close.
  * used — отзыв агента о поданных записях (t836): d<N> → «помогла», «не пригодилась», «неверна» или «не открывал» (t1336: запись не открыта — в долю «помогла» не входит).
  * served — какие d<N> программа подала агенту в задании (t1008), пишет addServed.
  * @typedef {{ id: string, num: number, file: string, title: string, status: string, health: string, healthWhy: string, healthBy: string, healthAt: string,
@@ -127,7 +243,7 @@ const OWN_HEAD = { t: ['pick', 'advisor', 'agent_why', 'checked', 'tries'], f: [
  * ready — отмечены все признаки готовности (и они есть).
  * @typedef {{ id: string, num: number, file: string, title: string, type: string, card: string, files: string[], date: string, agent: string, text: string,
  *   how: string, until: string, repeats: string[], cancelled: string, differs: string[], wrong: string[], wrongBare: string[],
- *   stack: string[], portable: string, from: string[], approved: string, pattern: string, global: boolean, for: string, extra: Record<string, string> }} Decision
+ *   stack: string[], portable: string, from: string[], approved: string, pattern: string, global: boolean, for: string, taken: string, takenGone?: string, extra: Record<string, string> }} Decision
  * global — «global: да» (t698): человек пометил запись «для всех проектов», в общую базу она идёт и без «## Переносимый вывод».
  * for — у договорённости (t1433): «агент», «программа» или пусто — агенту; договорённость программы агенту карты не подаётся.
  * how — «проверено», «догадка» или пусто; until — срок годности ГГГГ-ММ-ДД, в этот день запись ещё действует; repeats — карты, где ту же причину нашли заново;
@@ -157,6 +273,15 @@ const canon = (list, v) => list.find((x) => norm(x) === norm(v))
   || list.find((x) => [...(WORDS[x] || []), ...(ALIASES[x] || [])].some((w) => norm(w) === norm(v))) || '';
 /** Кто нашёл ошибку (t1637), слово любого языка доски → русское слово из BUG_BY или ''. Значение флага --bug-by проверяется им. @param {string} v */
 const bugByWord = (v) => canon(BUG_BY, v);
+/**
+ * Разбор значения tested (t1642): слова через запятую, на любом языке доски. Значение флага --tested проверяется им, чтение карты — им же.
+ * @param {string} v @returns {{ words: string[], bad: string[] }} words — русские слова без повторов, в порядке TESTED
+ */
+function testedWords(v) {
+  const parts = list(String(v || ''));
+  const known = parts.map((s) => canon(TESTED, s));
+  return { words: TESTED.filter((x) => known.includes(x)), bad: parts.filter((_, i) => !known[i]) };
+}
 /** Прочерк и пустое — пустое значение. @param {string} v */
 const blank = (v) => (/^[—–-]?$/.test(v.trim()) ? '' : v.trim());
 /** Настоящая дата ГГГГ-ММ-ДД: 2026-13-45 — нет. @param {string} v */
@@ -255,11 +380,27 @@ function root(project) {
 
 /** Путь внутри папки доски; иначе — ошибка. @param {string} dir @param {string} name */
 function inside(dir, name) {
+  // t1871: ответ зависит только от двух строк — путь, уже признанный своим, не проверяем заново: path.relative на 2000 файлах
+  // настоящей доски стоил ~100 мс каждого чтения доски. Чужой путь в память не идёт и каждый раз даёт ошибку.
+  // t1997: память по папкам — склейка «папка\nимя» на каждый файл стоила ~10 мс на доске в 10 000 файлов, и общий предел на все окна чистил всё сразу.
+  let m = INSIDE.get(dir);
+  const was = m && m.get(name);
+  if (was !== undefined) return was;
   const file = path.join(dir, name);
   const rel = path.relative(dir, file);
   if (!rel || up(rel) || path.isAbsolute(rel) || rel.includes(path.sep)) throw new Error(`путь вне папки доски: ${name}`);
+  if (!m) {
+    // Папок досок больше 64 — давняя прочь. Предел здесь, а не константой рядом: проба t1871 запускает текст этой функции отдельно.
+    for (const old of INSIDE.keys()) { if (INSIDE.size < 64) break; INSIDE.delete(old); }
+    m = new Map();
+    INSIDE.set(dir, m);
+  }
+  if (m.size >= 20000) m.clear();
+  m.set(name, file);
   return file;
 }
+/** Признанные своими пути inside (t1871): папка → имя → полный путь. @type {Map<string, Map<string, string>>} */
+const INSIDE = new Map();
 
 /** Папка доски не ведёт за пределы проекта (ссылка или junction). @param {string} project @param {string} dir */
 function ownRoot(project, dir) {
@@ -297,7 +438,7 @@ function parse(text) {
   const p = { bom, eol, lines, ends, head: null, headEnd: 0, error: '' };
   if (lines[0].trim() !== '---') return p;
   const close = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
-  if (close < 0) { p.error = 'сломанная шапка: нет закрывающей строки ---'; return p; }
+  if (close < 0) { p.error = 'сломанная шапка: нет закрывающей строки ---'; p.errT = [p.error, {}]; return p; }
   /** @type {HeadLine[]} */
   const head = [];
   for (let i = 1; i < close; i++) {
@@ -308,10 +449,12 @@ function parse(text) {
     const cr = /\r/.test(l.trim());
     if (!m || cr) {
       const why = cr ? 'внутри строки одиночный \\r (возврат каретки): редактор показывает его как перенос строки, уберите его' : 'нужно «ключ: значение», ключ латиницей';
-      p.error = `сломанная шапка, строка ${i + 1}: «${l.slice(0, 60).replace(/\r/g, '\\r')}» — ${why}`;
+      const vars = { n: String(i + 1), l: l.slice(0, 60).replace(/\r/g, '\\r') };
+      p.error = `сломанная шапка, строка ${vars.n}: «${vars.l}» — ${why}`;
+      p.errT = [cr ? 'сломанная шапка, строка {n}: «{l}» — внутри строки одиночный \\r (возврат каретки): редактор показывает его как перенос строки, уберите его' : 'сломанная шапка, строка {n}: «{l}» — нужно «ключ: значение», ключ латиницей', vars];
       return p;
     }
-    if (head.some((h) => h.key === m[1])) { p.error = `сломанная шапка: ключ ${m[1]} дважды`; return p; }
+    if (head.some((h) => h.key === m[1])) { p.error = `сломанная шапка: ключ ${m[1]} дважды`; p.errT = ['сломанная шапка: ключ {k} дважды', { k: m[1] }]; return p; }
     head.push({ key: m[1], value: m[2].trim(), line: i });
   }
   p.head = head;
@@ -523,35 +666,38 @@ const MCP_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const low = (s) => s.trim().toLowerCase().replace(/ё/g, 'е');
 /**
  * Лёгкий старт агента карты (t1322): ключи шапки паспорта. card_mcp: все | никаких | имя, имя — MCP-серверы агента;
- * card_skills: да | нет — скиллы и команды «/». Ключа нет — «все» и «да», как до t1322. Неверное значение — warn, ключ не действует.
+ * card_skills: да | нет — скиллы и команды «/». Ключа нет — «да», как до t1322. Неверное значение — warn, ключ не действует.
+ * card_mcp без ключа (t1753) — «никаких»: серверы MCP карте даёт её поле mcp (agents.cardMcp), «все» — только словом в паспорте.
+ * mcpSet — ключ card_mcp задан и действует.
  * @param {Record<string, string>} h шапка паспорта
- * @returns {{ mcp: 'все' | 'никаких' | string[], skills: boolean, warn: string[] }}
+ * @returns {{ mcp: 'все' | 'никаких' | string[], mcpSet: boolean, skills: boolean, check: boolean, warn: string[] }}
  */
-function startOf(h) {
-  /** @type {{ mcp: 'все' | 'никаких' | string[], skills: boolean, check: boolean, warn: string[] }} */
-  const out = { mcp: 'все', skills: true, check: true, warn: [] };
+function startOf(h, lang = '') {
+  /** @type {{ mcp: 'все' | 'никаких' | string[], mcpSet: boolean, skills: boolean, check: boolean, warn: string[] }} */
+  const out = { mcp: 'никаких', mcpSet: false, skills: true, check: true, warn: [] };
   const m = low(h.card_mcp || '');
-  if (m === 'никаких') out.mcp = 'никаких';
-  else if (m && m !== 'все') {
+  if (m === 'никаких') out.mcpSet = true;
+  else if (m === 'все') { out.mcp = 'все'; out.mcpSet = true; }
+  else if (m) {
     const names = String(h.card_mcp).split(',').map((x) => x.trim()).filter(Boolean);
     const bad = names.filter((n) => !MCP_NAME.test(n));
-    if (bad.length || names.length > 16) out.warn.push(`card_mcp «${h.card_mcp}»: нужно «все», «никаких» или до 16 имён MCP-серверов через запятую${bad.length ? `, неверно: ${bad.join(', ')}` : ''} — ключ не действует`);
-    else out.mcp = [...new Set(names)];
+    if (bad.length || names.length > 16) out.warn.push(warnSay('card_mcp «{s}»: нужно «все», «никаких» или до 16 имён MCP-серверов через запятую{bad} — ключ не действует', lang, { s: h.card_mcp, bad: bad.length ? warnSay(', неверно: {v}', lang, { v: bad.join(', ') }) : '' }));
+    else { out.mcp = [...new Set(names)]; out.mcpSet = true; }
   }
   const k = low(h.card_skills || '');
   if (k === 'нет') out.skills = false;
-  else if (k && k !== 'да') out.warn.push(`card_skills «${h.card_skills}»: нужно «да» или «нет» — ключ не действует`);
+  else if (k && k !== 'да') out.warn.push(warnSay('card_skills «{s}»: нужно «да» или «нет» — ключ не действует', lang, { s: h.card_skills }));
   // Проверяющий карты (t1330): card_check «нет» — закрытую карту не проверяем.
   const g = low(h.card_check || '');
   if (g === 'нет') out.check = false;
-  else if (g && g !== 'да') out.warn.push(`card_check «${h.card_check}»: нужно «да» или «нет» — ключ не действует`);
+  else if (g && g !== 'да') out.warn.push(warnSay('card_check «{s}»: нужно «да» или «нет» — ключ не действует', lang, { s: h.card_check }));
   return out;
 }
 
 /** Паспорт без единого заполненного раздела (t1397): текст замечания или ''. @param {Record<string, { text: string }>} secs */
-function passportGap(secs) {
+function passportGap(secs, lang = '') {
   return Object.keys(PASSPORT).some((k) => secs[k] && secs[k].text) ? ''
-    : `паспорт проекта пуст: нет ни одного заполненного раздела из ${Object.keys(PASSPORT).length} — агенты карт получат пустую часть 2 промпта; заполните разделы в окне «Паспорт»`;
+    : warnSay('паспорт проекта пуст: нет ни одного заполненного раздела из {n} — агенты карт получат пустую часть 2 промпта; заполните разделы в окне «Паспорт»', lang, { n: String(Object.keys(PASSPORT).length) });
 }
 
 /**
@@ -607,6 +753,8 @@ const HEAD_LISTS = { t: { status: CARD_STATUS, kind: KINDS, human: HUMAN, bug_by
  * @param {string} kind @param {string} key @param {unknown} v @param {string} lang
  */
 function headWord(kind, key, v, lang) {
+  // t1642: tested — список слов. Каждое пишется на языке доски, незнакомое остаётся как есть.
+  if (kind === 't' && key === 'tested' && typeof v === 'string') return list(v).map((s) => { const c = canon(TESTED, s); return c ? say(c, lang) : s; }).join(', ');
   const of = HEAD_LISTS[kind] && HEAD_LISTS[kind][key];
   if (!of || typeof v !== 'string') return v;
   const c = canon(of, v);
@@ -710,8 +858,10 @@ function humanParts(id, p) {
  */
 function item(kind, num, file, text, lang = '') {
   const p = parse(text);
-  if (p.error) return { error: p.error };
+  if (p.error) return { error: p.errT ? warnSay(p.errT[0], lang, p.errT[1]) : p.error };
   const name = path.basename(file);
+  /** t1812: текст ошибки на языке доски, как замечания (WARN_TEXT); русская доска — шаблон как есть. */
+  const E = (/** @type {string} */ k, /** @type {Record<string, string>} */ v = {}) => ({ error: warnSay(k, lang, v) });
   const h = headObj(p);
   if (kind === 'passport') {
     const secs = sections(p, lang);
@@ -719,47 +869,50 @@ function item(kind, num, file, text, lang = '') {
     const out = {};
     for (const [k, s] of Object.entries(secs)) out[k] = { title: s.title, text: s.value, empty: !s.value };
     const hidden = hiddenKeys(kind, p, lang);
-    const st = startOf(h);
+    const st = startOf(h, lang);
     // t1397: паспорт из одной шапки (card_mcp, card_skills) — агенты карт идут с пустой частью 2, замечание на доске.
-    const gap = passportGap(out);
+    const gap = passportGap(out, lang);
     const warn = gap ? [...st.warn, gap] : st.warn;
     return { item: { file, sections: out, missing: Object.keys(PASSPORT).filter((k) => !secs[k]), hidden, hiddenBy: hidden.length ? (looseFence(p) ? 'loose' : 'pair') : '' }, ...(warn.length ? { warn } : {}) };
   }
-  if (!p.head) return { error: 'нет шапки: файл начинается со строки ---' };
+  if (!p.head) return E('нет шапки: файл начинается со строки ---');
   const id = `${kind}${num}`;
   const m = /^([tfd])(\d{1,6})$/.exec(h.id || '');
-  if (!m) return { error: h.id ? `id «${h.id}» — нужно ${kind}<номер>` : 'в шапке нет id' };
-  if (m[1] !== kind || Number(m[2]) !== num) return { error: `id ${h.id} не совпадает с именем файла ${name}` };
+  if (!m) return h.id ? E('id «{v}» — нужно {p}<номер>', { v: h.id, p: kind }) : E('в шапке нет id');
+  if (m[1] !== kind || Number(m[2]) !== num) return E('id {v} не совпадает с именем файла {name}', { v: h.id, name });
   const extra = Object.fromEntries(Object.entries(h).filter(([k]) => k !== 'id' && !HEAD_KEYS[kind].includes(k)));
   const tl = titleLine(p);
   const title = tl < 0 ? '' : p.lines[tl].replace(/^#\s+/, '').trim();
   if (kind === 't') {
     const status = canon(CARD_STATUS, h.status || '');
-    if (!status) return { error: `статус «${h.status || ''}» неизвестен: допустимы ${CARD_STATUS.join(', ')}` };
+    if (!status) return E('статус «{v}» неизвестен: допустимы {list}', { v: h.status || '', list: CARD_STATUS.map((w) => say(w, lang)).join(', ') });
     const kindOf = h.kind ? canon(KINDS, h.kind) : 'сделать';
-    if (!kindOf) return { error: `вид работы «${h.kind}» неизвестен: допустимы ${KINDS.join(', ')}` };
+    if (!kindOf) return E('вид работы «{v}» неизвестен: допустимы {list}', { v: h.kind, list: KINDS.map((w) => say(w, lang)).join(', ') });
     const human = h.human ? canon(HUMAN, h.human) : '';
-    if (h.human && !human) return { error: `human «${h.human}»: допустимы ${HUMAN.join(', ')}` };
+    if (h.human && !human) return E('human «{v}»: допустимы {list}', { v: h.human, list: HUMAN.map((w) => say(w, lang)).join(', ') });
     const phase = blank(h.phase || '');
-    if (phase && !/^f\d{1,6}$/.test(phase)) return { error: `phase «${phase}» — нужно f<номер> или пусто` };
+    if (phase && !/^f\d{1,6}$/.test(phase)) return E('phase «{v}» — нужно f<номер> или пусто', { v: phase });
     const depends = list(blank(h.depends || ''));
     const bad = depends.find((d) => !/^t\d{1,6}$/.test(d));
-    if (bad) return { error: `depends: «${bad}» — нужно t<номер>` };
+    if (bad) return E('{key}: «{v}» — нужно {p}<номер>', { key: 'depends', v: bad, p: 't' });
     // t836: отзыв о записях — опечатка агента не прячет закрытую карту, а даёт замечание.
     /** @type {Record<string, string>} */
     const used = {};
     const warn = [];
-    for (const s of usedWarn(blank(h.used || ''), used, true)) warn.push(`used: «${s}» — нужно d<номер> и ${VERDICTS.join(', ')}`);
+    for (const s of usedWarn(blank(h.used || ''), used, true)) warn.push(warnSay('used: «{s}» — нужно d<номер> и {v}', lang, { s, v: VERDICTS.map((w) => verdictSay(w, lang)).join(', ') }));
     const served = [];
-    for (const s of list(blank(h.served || ''))) { if (/^d\d{1,6}$/.test(s)) served.push(s); else warn.push(`served: «${s}» — нужно d<номер>`); }
+    for (const s of list(blank(h.served || ''))) { if (/^d\d{1,6}$/.test(s)) served.push(s); else warn.push(warnSay('served: «{s}» — нужно d<номер>', lang, { s })); }
     const from = blank(h.from || '');
-    if (from && !/^k\d{1,6}$/.test(from)) warn.push(`from: «${from}» — нужно k<номер> дела`);
+    if (from && !/^k\d{1,6}$/.test(from)) warn.push(warnSay('from: «{s}» — нужно k<номер> дела', lang, { s: from }));
     // t1637: отметка для счёта ошибок, как и used (t836): опечатка не прячет карту с доски и из волны, а даёт замечание; его печатает stats.
     const bugPhase = blank(h.bug_phase || '');
-    if (bugPhase && !/^f\d{1,6}$/.test(bugPhase)) warn.push(`bug_phase: «${bugPhase}» — нужно f<номер> или пусто`);
+    if (bugPhase && !/^f\d{1,6}$/.test(bugPhase)) warn.push(warnSay('bug_phase: «{s}» — нужно f<номер> или пусто', lang, { s: bugPhase }));
     const bugWord = blank(h.bug_by || '');
     const bugBy = bugWord ? canon(BUG_BY, bugWord) : '';
-    if (bugWord && !bugBy) warn.push(`bug_by: «${bugWord}» — допустимы ${BUG_BY.join(', ')}`);
+    if (bugWord && !bugBy) warn.push(warnSay('bug_by: «{s}» — допустимы {v}', lang, { s: bugWord, v: BUG_BY.map((w) => say(w, lang)).join(', ') }));
+    // t1642: как bug_by: опечатка в файле не прячет карту, а даёт замечание. Отказ — только у close.
+    const tst = testedWords(blank(h.tested || ''));
+    for (const s of tst.bad) warn.push(warnSay('tested: «{s}» — допустимы {v}', lang, { s, v: TESTED.map((w) => say(w, lang)).join(', ') }));
     const sp = spans(p, CARD_FIELDS, lang);
     /** @type {Record<string, string>} */
     const fields = {};
@@ -767,14 +920,14 @@ function item(kind, num, file, text, lang = '') {
     // body (t1105) — весь текст после заголовка по порядку файла: поля, свободные строки, разделы «## Ответ оркестратора». Его подаёт часть 4 промпта.
     const body = (tl < 0 ? [] : p.lines.slice(tl + 1)).map((l) => l.replace(/\s+$/, '')).join('\n').trim();
     return { item: { id, num, file, title, phase, status, kind: kindOf, agent: blank(h.agent || ''), model: blank(h.model || ''), effort: blank(h.effort || ''),
-      depends, human, created: h.created || '', closed: blank(h.closed || ''), source: blank(h.source || ''), used, served, fields, body, from: /^k\d{1,6}$/.test(from) ? from : '', bug_phase: /^f\d{1,6}$/.test(bugPhase) ? bugPhase : '', bug_by: bugBy, extra }, warn };
+      depends, human, created: h.created || '', closed: blank(h.closed || ''), source: blank(h.source || ''), used, served, fields, body, from: /^k\d{1,6}$/.test(from) ? from : '', bug_phase: /^f\d{1,6}$/.test(bugPhase) ? bugPhase : '', bug_by: bugBy, tested: tst.words, extra }, warn };
   }
   if (kind === 'f') {
     const status = canon(PHASE_STATUS, h.status || '');
-    if (!status) return { error: `статус фазы «${h.status || ''}» неизвестен: допустимы ${PHASE_STATUS.join(', ')}` };
+    if (!status) return E('статус фазы «{v}» неизвестен: допустимы {list}', { v: h.status || '', list: PHASE_STATUS.map((w) => say(w, lang)).join(', ') });
     const hv = blank(h.health || '');
     const health = hv ? canon(HEALTH, hv.replace(/ая$/, 'ый').replace(/яя$/, 'ий')) : '';
-    if (hv && !health) return { error: `здоровье «${hv}»: допустимы ${HEALTH.join(', ')} или пусто` };
+    if (hv && !health) return E('здоровье «{v}»: допустимы {list} или пусто', { v: hv, list: HEALTH.map((w) => say(w, lang)).join(', ') });
     const sp = spans(p, PHASE_FIELDS, lang);
     const crit = sp.criteria ? criteria(p, sp.criteria) : [];
     return { item: { id, num, file, title, status, health, healthWhy: h.health_why || '', healthBy: h.health_by || '', healthAt: h.health_at || '',
@@ -782,40 +935,43 @@ function item(kind, num, file, text, lang = '') {
       human: humanParts(id, p).map(({ at: _a, end: _e, ...x }) => x) } };
   }
   const type = canon(DTYPES, h.type || '');
-  if (!type) return { error: `type «${h.type || ''}»: допустимы ${DTYPES.join(', ')}` };
+  if (!type) return E('type «{v}»: допустимы {list}', { v: h.type || '', list: DTYPES.map((w) => say(w, lang)).join(', ') });
   const howV = blank(h.how || '');
   const how = howV ? canon(HOW, howV) : '';
-  if (howV && !how) return { error: `how «${howV}»: допустимы ${HOW.join(', ')} или пусто` };
+  if (howV && !how) return E('how «{v}»: допустимы {list} или пусто', { v: howV, list: HOW.map((w) => say(w, lang)).join(', ') });
   const until = blank(h.until || ''), cancelled = blank(h.cancelled || '');
-  if (until && !isDay(until)) return { error: `until «${until}» — нужна дата ГГГГ-ММ-ДД или пусто` };
-  if (cancelled && !isDay(cancelled)) return { error: `cancelled «${cancelled}» — нужна дата отмены ГГГГ-ММ-ДД или пусто` };
+  if (until && !isDay(until)) return E('until «{v}» — нужна дата ГГГГ-ММ-ДД или пусто', { v: until });
+  if (cancelled && !isDay(cancelled)) return E('cancelled «{v}» — нужна дата отмены ГГГГ-ММ-ДД или пусто', { v: cancelled });
   const repeats = list(blank(h.repeats || ''));
   const badRep = repeats.find((r) => !/^t\d{1,6}$/.test(r));
-  if (badRep) return { error: `repeats: «${badRep}» — нужно t<номер>` };
+  if (badRep) return E('{key}: «{v}» — нужно {p}<номер>', { key: 'repeats', v: badRep, p: 't' });
   const differs = list(blank(h.differs || ''));
   const badDif = differs.find((r) => !/^d\d{1,6}$/.test(r));
-  if (badDif) return { error: `differs: «${badDif}» — нужно d<номер>` };
+  if (badDif) return E('{key}: «{v}» — нужно {p}<номер>', { key: 'differs', v: badDif, p: 'd' });
   const marks = list(blank(h.wrong || ''));
   const badWrong = marks.find((r) => !/^t\d{1,6}$/.test(r));
-  if (badWrong) return { error: `wrong: «${badWrong}» — нужно t<номер>` };
+  if (badWrong) return E('{key}: «{v}» — нужно {p}<номер>', { key: 'wrong', v: badWrong, p: 't' });
   const stack = list(blank(h.stack || ''));
   const badStack = stack.find((s) => !STACK.test(s));
-  if (badStack) return { error: `stack: «${badStack}» — имя темы, плагина или библиотеки: a-z, цифры, . - _ /, версия через @` };
+  if (badStack) return E('stack: «{v}» — имя темы, плагина или библиотеки: a-z, цифры, . - _ /, версия через @', { v: badStack });
   // t1002: паттерн — обобщение записей из from; approved — день утверждения человеком; pattern: нет — человек сказал «не паттерн» про центр кандидата (t845).
   const from = list(blank(h.from || ''));
   const badFrom = from.find((r) => !/^d\d{1,6}$/.test(r));
-  if (badFrom) return { error: `from: «${badFrom}» — нужно d<номер>` };
+  if (badFrom) return E('{key}: «{v}» — нужно {p}<номер>', { key: 'from', v: badFrom, p: 'd' });
   const approved = blank(h.approved || '');
-  if (approved && !isDay(approved)) return { error: `approved «${approved}» — нужна дата утверждения ГГГГ-ММ-ДД или пусто` };
+  if (approved && !isDay(approved)) return E('approved «{v}» — нужна дата утверждения ГГГГ-ММ-ДД или пусто', { v: approved });
   const patV = blank(h.pattern || '');
   const pattern = patV.toLowerCase() === 'нет' ? 'нет' : '';
-  if (patV && !pattern) return { error: `pattern «${patV}»: допустимо нет или пусто` };
+  if (patV && !pattern) return E('pattern «{v}»: допустимо нет или пусто', { v: patV });
   const globV = blank(h.global || '');
-  if (globV && globV.toLowerCase() !== 'да') return { error: `global «${globV}»: допустимо да или пусто` };
+  if (globV && globV.toLowerCase() !== 'да') return E('global «{v}»: допустимо да или пусто', { v: globV });
   // t1433: кому договорённость — агенту карты или программе; пусто — агенту.
   const forV = blank(h.for || '');
   const forW = forV ? canon(FOR, forV) : '';
-  if (forV && !forW) return { error: `for «${forV}»: допустимы ${FOR.join(', ')} или пусто` };
+  if (forV && !forW) return E('for «{v}»: допустимы {list} или пусто', { v: forV, list: FOR.map((w) => say(w, lang)).join(', ') });
+  // t1628: заметку взяли в карту — её номер в taken.
+  const taken = blank(h.taken || '');
+  if (taken && !/^t\d{1,6}$/.test(taken)) return E('taken «{v}» — нужно t<номер> или пусто', { v: taken });
   // t988: «## Переносимый вывод» — не в text: обрезка подбора (t959), похожесть (t835) и section() видят только свою часть записи.
   const port = tl < 0 ? [] : portSpans(p.lines, tl + 1);
   const text0 = tl < 0 ? '' : p.lines.slice(tl + 1).filter((_, i) => !port.some((s) => i + tl + 1 >= s.start && i + tl + 1 < s.end)).join('\n').trim();
@@ -824,12 +980,16 @@ function item(kind, num, file, text, lang = '') {
   const why = (/** @type {string} */ t) => new RegExp(`^Неверно \\(${t}\\):\\s*\\S`, 'm').test(text0);
   const wrong = marks.filter(why);
   const wrongBare = marks.filter((t) => !why(t));
-  const warn = wrongBare.map((t) => `wrong: ${t} без строки «Неверно (${t}): почему» — отметка не действует`);
-  if (type === 'паттерн' && !from.length) warn.push('паттерн без from — не видно, из каких записей он собран');
-  if (type !== 'паттерн' && (from.length || approved)) warn.push(`${from.length ? 'from' : 'approved'} у записи «${type}» не действует — только у паттерна`);
-  if (forW && type !== 'договорённость') warn.push(`for у записи «${type}» не действует — только у договорённости`);
+  const warn = wrongBare.map((t) => warnSay('wrong: {t} без строки «Неверно ({t}): почему» — отметка не действует', lang, { t }));
+  const tw = say(type, lang);
+  if (type === 'паттерн' && !from.length) warn.push(warnSay('паттерн без from — не видно, из каких записей он собран', lang));
+  if (type !== 'паттерн' && (from.length || approved)) warn.push(warnSay('{k} у записи «{type}» не действует — только у паттерна', lang, { k: from.length ? 'from' : 'approved', type: tw }));
+  if (forW && type !== 'договорённость') warn.push(warnSay('for у записи «{type}» не действует — только у договорённости', lang, { type: tw }));
+  if (taken && type !== 'заметка') warn.push(warnSay('taken у записи «{type}» не действует — только у заметки', lang, { type: tw }));
+  if (taken && cancelled && type === 'заметка') warn.push(warnSay('заметка и взята в карту, и снята: считается снятой', lang));
+  const dropLine = type === 'заметка' && cancelled ? NOTE_DROP.exec(text0) : null;
   return { item: { id, num, file, title, type, card: blank(h.card || ''), files: list(blank(h.files || '')), date: h.date || '', agent: blank(h.agent || ''), text: text0,
-    stack, portable, how, until, repeats, cancelled, differs, wrong, wrongBare, from, approved, pattern, global: !!globV, for: forW, extra }, warn };
+    stack, portable, how, until, repeats, cancelled, differs, wrong, wrongBare, from, approved, pattern, global: !!globV, for: forW, taken, dropWhy: dropLine ? dropLine[1].trim() : '', extra }, warn };
 }
 
 /** Безопасное чтение файла доски: не ссылка, не больше предела. @param {string} file */
@@ -845,24 +1005,193 @@ function readSmall(file) {
  * Тексты файлов доски по пути (t1197): файл не менялся (mtime, ctime, размер те же) — открывать и читать его заново не нужно.
  * Открытие файла в Electron стоит ~5 мс на файл, пока антивирус его не знает, — на доске в 950 файлов это секунды.
  * Только для чтения доски: перед записью файла читаем набело через readSmall.
- * @type {Map<string, { key: string, text: string }>}
+ * t1997: ключ и отметка прогрева v — у каждого файла доски, всегда; текст — только у TEXTS_MAX последних файлов доски (HELD).
+ * Текст старого файла выброшен — ключ остаётся, и read() берёт готовый разбор из PARSED, не открывая файл. Раньше переполнение
+ * чистило память всех окон целиком, и доска больше 5000 файлов на каждой сверке читалась вся синхронно: 5–9 с главного процесса (t1994).
+ * @type {Map<string, { key: string, text?: string, v?: number }>}
  */
 const TEXTS = new Map();
+/** Сколько текстов держать на одну доску (t1997); раньше — на все окна вместе. */
 const TEXTS_MAX = 5000;
+/** Сколько досок держать в памяти (t1997): сигнала «окно закрыто» здесь нет. Больше — доска, которую дольше всех не читали, уходит из памяти целиком. */
+const BOARDS_MAX = 16;
+/**
+ * Папка доски → файлы, чей текст в памяти, давние первыми (t1997). Порядок самих досок — порядок чтения: давно читанная — первой.
+ * @type {Map<string, Set<string>>}
+ */
+const HELD = new Map();
+
+/** Журнал программы (t1997): у board.js своего нет — его даёт setLog или opts.log слежения. @type {((s: string) => void) | null} */
+let LOG = null;
+/** Доски, где текстов больше предела (t1997): папка → строка уже в журнале. Журнала ещё нет — строка ждёт его. @type {Map<string, boolean>} */
+const FULL = new Map();
+
+/** Журнал для строк board.js (t1997). @param {((s: string) => void) | null} f */
+function setLog(f) {
+  LOG = typeof f === 'function' ? f : null;
+  sayFull();
+}
+
+/** Строка о переполнении — одна на доску за жизнь процесса (t1997). */
+function sayFull() {
+  if (!LOG) return;
+  for (const [dir, said] of FULL) {
+    if (said) continue;
+    FULL.set(dir, true);
+    try { LOG(`доска ${dir}: файлов больше ${TEXTS_MAX} — тексты давних файлов в памяти не держу; файл читается заново, только когда сменилось его время или размер`); } catch { /* журнал не принял строку */ }
+  }
+}
+
+/**
+ * Файлы доски, чьи тексты в памяти (t1997); touch — доска только что читалась, в конец очереди досок.
+ * Досок больше BOARDS_MAX — самая давняя уходит целиком. @param {string} dir @param {boolean} touch
+ */
+function heldOf(dir, touch) {
+  let s = HELD.get(dir);
+  if (s && !touch) return s;
+  if (s) HELD.delete(dir); else s = new Set();
+  HELD.set(dir, s);
+  for (const old of HELD.keys()) {
+    if (HELD.size <= BOARDS_MAX) break;
+    forget(old);
+  }
+  return s;
+}
+
+/** Доска уходит из памяти целиком (t1997): тексты, ключи, разбор, «похожие». Следующее чтение начнёт с файлов. @param {string} dir */
+function forget(dir) {
+  HELD.delete(dir);
+  ALIKE_LAST.delete(dir);
+  for (const f of TEXTS.keys()) if (path.dirname(f) === dir) TEXTS.delete(f);
+  for (const f of PARSED.keys()) if (path.dirname(f) === dir) PARSED.delete(f);
+}
+
+/**
+ * Запись в TEXTS (t1997): текст — в конец очереди доски. Текстов больше TEXTS_MAX — у самого давнего файла текст выбрасываем,
+ * ключ и отметку прогрева оставляем: прогрев и read() видят, что файл не менялся, и берут разбор из PARSED.
+ * @param {string} file @param {{ key: string, text?: string, v?: number }} hit
+ */
+function hold(file, hit) {
+  TEXTS.set(file, hit);
+  const dir = path.dirname(file);
+  const s = heldOf(dir, false);
+  s.delete(file);
+  s.add(file);
+  if (s.size <= TEXTS_MAX) return;
+  let old = /** @type {string} */ (s.values().next().value);
+  // Паспорт — не выбрасываем: его текст нужен каждому чтению (язык доски), иначе первое чтение после прогрева большой доски открывало бы его.
+  if (path.basename(old) === 'passport.md') { s.delete(old); s.add(old); old = /** @type {string} */ (s.values().next().value); }
+  s.delete(old);
+  const e = TEXTS.get(old);
+  if (e) e.text = undefined;
+  if (!FULL.has(dir)) { FULL.set(dir, false); sayFull(); }
+}
+
+/** Файл ушёл с доски (t1997): ключ и текст прочь. @param {string} file */
+function drop(file) {
+  TEXTS.delete(file);
+  const s = HELD.get(path.dirname(file));
+  if (s) s.delete(file);
+}
 
 /** Как readSmall, но неизменённый файл отдаёт из памяти. @param {string} file */
-function readCached(file) {
+function readCached(file) { return /** @type {string} */ (readKeyed(file, 0).text); }
+
+/** mtime файла из ключа TEXTS (t1701): без lstat; файла в памяти нет — undefined. @param {string} file @returns {number | undefined} */
+function mtimeOf(file) {
+  const w = TEXTS.get(file);
+  return w ? Number(w.key.split(':')[0]) : undefined;
+}
+
+/**
+ * Номер прогрева, который проверил запись TEXTS (t1711). read(project, { primed: true }) сразу после await prime() не делает lstatSync
+ * по файлам, проверенным этим прогревом: 2000 синхронных lstat стоили ~200 мс главного процесса. Файл, сменённый между прогревом и чтением,
+ * снова даст выстрел слежения — и новый прогрев. @type {Map<string, number>}
+ */
+const PRIMED = new Map();
+let primeGen = 0;
+
+/**
+ * Текст и ключ файла (mtime, ctime, размер). trust — номер прогрева: запись, проверенная им, отдаётся без lstat.
+ * need = false (t1997) — нужен только ключ: текст, выброшенный из памяти, не читается. Его прочитает parsedOf, если разбора нет.
+ * @param {string} file @param {number} trust @param {boolean} [need] @returns {{ key: string, text?: string, v?: number }}
+ */
+function readKeyed(file, trust, need = true) {
+  const was = TEXTS.get(file);
+  if (trust && was && was.v === trust && (!need || was.text !== undefined)) return was;
   const st = fs.lstatSync(file);
   if (st.isSymbolicLink()) throw new Error('ссылка на другой файл — не читаем');
   if (!st.isFile()) throw new Error('не файл');
   if (st.size > MAX_SIZE) throw new Error(`слишком большой: ${st.size} байт, предел ${MAX_SIZE}`);
   const key = `${st.mtimeMs}:${st.ctimeMs}:${st.size}`;
-  const hit = TEXTS.get(file);
-  if (hit && hit.key === key) return hit.text;
+  const same = !!was && was.key === key;
+  if (same && !need) return /** @type {{ key: string, text?: string, v?: number }} */ (was);
+  if (same && was && was.text !== undefined) {
+    // Текст нужен (паспорт для языка доски на каждом чтении) — файл в конец очереди, чтобы его текст не выбросили первым.
+    const s = HELD.get(path.dirname(file));
+    if (s && s.has(file)) { s.delete(file); s.add(file); }
+    return was;
+  }
   const text = fs.readFileSync(file, 'utf8');
-  if (TEXTS.size >= TEXTS_MAX) TEXTS.clear();
-  TEXTS.set(file, { key, text });
-  return text;
+  // Тот же ключ, текст был выброшен: текст — только этому вызову (разбор на новом языке), в память не возвращаем.
+  // Иначе он вытеснил бы текст следующего давнего файла, тому тоже понадобилось бы чтение — и смена языка читала бы всю доску.
+  if (same && was) return was.v ? { key, text, v: was.v } : { key, text };
+  const hit = { key, text };
+  hold(file, hit);
+  return hit;
+}
+
+/**
+ * Разобранные файлы доски (t1711): файл не менялся (тот же ключ) и язык доски тот же — item() и поиск полей в блоках кода не повторяются.
+ * Разбор 2000 файлов стоил ~250 мс главного процесса на каждое чтение доски. Наружу — копия предмета: вызывающие меняют предметы доски.
+ * @type {Map<string, { key: string, lang: string, r: any, hidden: Array<{ file: string, reason: string }> }>}
+ */
+const PARSED = new Map();
+
+/**
+ * Разбор файла доски из PARSED или заново (t1711); заново — кладётся в PARSED. Предмет — общий с кэшем: наружу отдавать копию.
+ * @param {string} kind @param {number} num @param {string} name @param {string} file @param {{ key: string, text?: string }} got @param {string} lang
+ * @returns {{ r: any, hidden: Array<{ file: string, reason: string }> }}
+ */
+function parsedOf(kind, num, name, file, got, lang) {
+  const was = PARSED.get(file);
+  if (was && was.key === got.key && was.lang === lang) return was;
+  // t1997: разбора нет, а текст выброшен из памяти (доска больше предела) — читаем файл; ключ — от этого чтения.
+  if (got.text === undefined) got = readKeyed(file, 0);
+  const text = /** @type {string} */ (got.text);
+  const r = item(kind, num, name, text, lang);
+  /** @type {Array<{ file: string, reason: string }>} */
+  const hidden = [];
+  // Раздел или поле только внутри блока кода (t614, t622) — замечание к файлу: иначе они пропадают из окна молча.
+  const pp = !('error' in r) && text.includes('```') ? parse(text) : null;
+  for (const k of pp ? hiddenKeys(kind, pp, lang) : []) {
+    const t = say(kind === 'passport' ? PASSPORT[/** @type {keyof PASSPORT} */ (k)] : (kind === 't' ? CARD_FIELDS : PHASE_FIELDS)[k], lang);
+    const what = warnSay(kind === 'passport' ? 'этот раздел' : 'это поле', lang);
+    hidden.push({ file: name, reason: warnSay(looseFence(/** @type {Parsed} */ (pp))
+      ? '«{t}» внутри блока кода: выше в файле ``` без пары. Окно {what} не показывает, «Сохранить» его не запишет — закройте блок в файле'
+      : '«{t}» есть только внутри блока кода ```. Окно {what} не показывает, «Сохранить» его не запишет — если это не образец, уберите ``` вокруг в файле', lang, { t, what }) });
+  }
+  const out = { key: got.key, lang, r, hidden };
+  PARSED.set(file, out);
+  return out;
+}
+
+/**
+ * Копия предмета доски для read() (t1711, t1701): поля — строки, числа, массивы строк или простых объектов, объекты строк (fields, used, extra, sections).
+ * Копируем на два уровня — этого хватает, чтобы правка результата не попала в PARSED; structuredClone стоил ~45 мс на 2000 предметов.
+ * @param {any} it
+ */
+function copyItem(it) {
+  // t1997: копия целиком одним шагом, потом — только поля-массивы и поля-объекты. Сборка по полю стоила ~5 мкс на предмет: 50 мс на доске в 10 000 файлов.
+  /** @type {any} */
+  const out = { ...it };
+  for (const k in out) {
+    const v = out[k];
+    if (!v || typeof v !== 'object') continue;
+    if (Array.isArray(v)) out[k] = v.map((x) => (x && typeof x === 'object' ? (Array.isArray(x) ? [...x] : { ...x }) : x));
+    else { const o = /** @type {any} */ ({ ...v }); for (const j in o) { const w = o[j]; if (w && typeof w === 'object') o[j] = Array.isArray(w) ? [...w] : { ...w }; } out[k] = o; }
+  }
+  return out;
 }
 
 /** Служебные файлы редакторов и наши временные — пропускаем молча. @param {string} name */
@@ -870,41 +1199,82 @@ const ignored = (name) => name.startsWith('.') || name.endsWith('~');
 
 /** Идущий прогрев по папке доски: второй вызов ждёт тот же, а не читает второй раз. @type {Map<string, Promise<void>>} */
 const PRIMING = new Map();
+/** Прогрев, заказанный с fresh, пока шёл другой (t1701): один на папку, общий для всех ждущих. @type {Map<string, Promise<void>>} */
+const PRIME_NEXT = new Map();
 
 /**
  * Тексты файлов доски в память readCached асинхронно, 16 потоками (t1293): после него read() не открывает ни одного файла.
  * Синхронное чтение новых для антивируса файлов стоит ~5 мс на файл, и на доске в 1000 файлов главный процесс стоял 5 с —
  * окно проекта не получало терминал. Здесь те же секунды уходят в потоки. Ссылки, не файлы и слишком большие пропускаем — их ошибку скажет read().
- * Сбой чтения не бросает: read() прочитает файл сам. @param {string} project @returns {Promise<void>}
+ * Сбой чтения не бросает: read() прочитает файл сам. @param {string} project @param {{ fresh?: boolean }} [opts] @returns {Promise<void>}
  */
-function prime(project) {
+function prime(project, opts = {}) {
   const dir = root(project);
   const was = PRIMING.get(dir);
+  // t1701: fresh — прогрев, начатый после вызова. Идущий мог прочитать файл до правки и отметить старый текст проверенным: read({ primed: true }) отдал бы его.
+  if (was && opts.fresh) {
+    let next = PRIME_NEXT.get(dir);
+    if (!next) {
+      next = was.then(() => { PRIME_NEXT.delete(dir); return prime(project); });
+      PRIME_NEXT.set(dir, next);
+    }
+    return next;
+  }
   if (was) return was;
+  const gen = ++primeGen;
   const p = (async () => {
     /** @type {string[]} */
     let names = [];
     try { names = (await fs.promises.readdir(dir, { withFileTypes: true })).filter((e) => e.isFile() && !ignored(e.name) && e.name.endsWith('.md')).map((e) => e.name); } catch { return; }
+    heldOf(dir, true);
+    let lang = '';
+    try { lang = boardLang(project); } catch { /* паспорта нет — язык по умолчанию, как у read() */ }
     let i = 0;
     const worker = async () => {
       while (i < names.length) {
-        const file = path.join(dir, names[i++]);
+        const n = i++;
+        const file = path.join(dir, names[n]);
         try {
           const st = await fs.promises.lstat(file);
           if (!st.isFile() || st.size > MAX_SIZE) continue;
           const key = `${st.mtimeMs}:${st.ctimeMs}:${st.size}`;
           const hit = TEXTS.get(file);
-          if (hit && hit.key === key) continue;
+          const m = NAME_RE.exec(names[n]);
+          // t1997: текст выброшен из памяти, а разбор того же файла на том же языке есть — файл не читаем. Паспорту текст нужен всегда (язык доски).
+          const pp = hit && hit.text === undefined && m ? PARSED.get(file) : undefined;
+          if (hit && hit.key === key && (hit.text !== undefined || (pp && pp.key === key && pp.lang === lang))) {
+            hit.v = gen;
+            if (m) warmOf(dir, names[n], m[1], parsedOf(m[1], Number(m[2]), names[n], file, hit, lang));
+            continue;
+          }
           const text = await fs.promises.readFile(file, 'utf8');
-          if (TEXTS.size >= TEXTS_MAX) TEXTS.clear();
-          TEXTS.set(file, { key, text });
+          // Файл сменился, пока читали: ключ уже не его — без отметки прогрева, read() проверит сам.
+          const st2 = await fs.promises.lstat(file);
+          const got = `${st2.mtimeMs}:${st2.ctimeMs}:${st2.size}` === key ? { key, text, v: gen } : { key, text };
+          // t1997: файл не менялся, его текст был выброшен, а разбор нужен заново (язык доски сменился) — текст только разбору, в память не кладём:
+          // иначе он вытеснит текст файла, до которого прогрев ещё не дошёл, и прогрев прочитает всю доску.
+          if (hit && hit.key === key && hit.text === undefined && m && got.v) { hit.v = gen; warmOf(dir, names[n], m[1], parsedOf(m[1], Number(m[2]), names[n], file, got, lang)); continue; }
+          hold(file, got);
+          // t1711: разбор здесь, по файлу между чтениями, — read() после прогрева берёт готовое, а не разбирает 2000 файлов одним куском.
+          if (m) warmOf(dir, names[n], m[1], parsedOf(m[1], Number(m[2]), names[n], file, got, lang));
         } catch { /* файл пропал или не читается — read() скажет */ }
       }
     };
     await Promise.all(Array.from({ length: 16 }, worker));
+    PRIMED.set(dir, gen);
   })().finally(() => PRIMING.delete(dir));
   PRIMING.set(dir, p);
   return p;
+}
+
+/**
+ * Прогрев памяти read() по разобранному файлу (t1871): путь (inside) и слова заголовка карты (titleOf для alike) — здесь, между чтениями прогрева,
+ * а не в read() одним куском: на настоящей доске (2000 файлов) это ~100 мс первого чтения. Сбой — молча: read() сделает сам и скажет ошибку.
+ * @param {string} dir @param {string} name @param {string} kind @param {{ r: any }} p
+ */
+function warmOf(dir, name, kind, p) {
+  try { inside(dir, name); } catch { return; }
+  if (kind === 't' && p && p.r && p.r.item && typeof p.r.item.title === 'string') titleOf(p.r.item.title);
 }
 
 /** Файлы доски по видам: номер → имена; заодно неверные имена. @param {string} dir */
@@ -919,7 +1289,9 @@ function scan(dir) {
     const m = NAME_RE.exec(e.name);
     if (!m || !e.isFile()) { wrong.push(e.name); continue; }
     const id = `${m[1]}${Number(m[2])}`;
-    byId.set(id, [...(byId.get(id) || []), e.name]);
+    // t1997: в тот же массив, а не новый на каждый файл: на доске в 10 000 файлов это заметная часть чтения.
+    const had = byId.get(id);
+    if (had) had.push(e.name); else byId.set(id, [e.name]);
   }
   return { byId, wrong };
 }
@@ -943,14 +1315,20 @@ function maxNum(byId, kind) {
   return n;
 }
 
-/** Вся доска проекта. Ошибки файлов — в errors, остальное читается. @param {string} project @returns {Board} */
-function read(project) {
+/**
+ * Вся доска проекта. Ошибки файлов — в errors, остальное читается.
+ * opts.primed (t1711) — чтение сразу после await prime(): файлы, проверенные этим прогревом, без lstat.
+ * @param {string} project @param {{ primed?: boolean }} [opts] @returns {Board}
+ */
+function read(project, opts = {}) {
   const dir = root(project);
+  const trust = opts.primed ? PRIMED.get(dir) || 0 : 0;
   /** @type {Board} */
   const b = { root: dir, lang: '', exists: false, passport: null, phases: [], cards: [], inbox: [], decisions: [], counter: { t: 0, d: 0 }, alike: {}, lost: {}, errors: [], warnings: [] };
   if (!alive.ok(path.resolve(project)) || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return b;
   try { ownRoot(project, dir); } catch (e) { b.errors.push({ file: DIR, reason: e instanceof Error ? e.message : String(e) }); return b; }
   b.exists = true;
+  heldOf(dir, true);
   const { byId, wrong } = scan(dir);
   for (const n of wrong) b.errors.push({ file: n, reason: 'неверное имя: допустимы passport.md, counter.json, f<N>.md, t<N>.md, d<N>.md' });
   /** @type {Array<[string, number, string]>} */
@@ -962,25 +1340,32 @@ function read(project) {
   if (fs.existsSync(path.join(dir, 'passport.md'))) todo.push(['passport', 0, 'passport.md']);
   // Язык доски (t1429) — до чтения карт: подписи полей на нём — поля. Ошибку чтения паспорта скажет его разбор ниже.
   const lang = b.lang = boardLang(project);
+  const seen = new Set();
   for (const [kind, num, name] of todo) {
-    let r, text = '';
-    try { text = readCached(inside(dir, name)); r = item(kind, num, name, text, lang); } catch (e) { r = { error: e instanceof Error ? e.message : String(e) }; }
+    let r;
+    const file = inside(dir, name);
+    seen.add(file);
+    /** @type {Array<{ file: string, reason: string }>} */
+    let hidden = [];
+    try {
+      // t1997: текст не нужен, когда разбор того же ключа есть: файл, чей текст выброшен из памяти, не читается.
+      const got = readKeyed(file, trust, false);
+      ({ r, hidden } = parsedOf(kind, num, name, file, got, lang));
+      if (!('error' in r)) r = { ...r, item: copyItem(r.item) };
+    } catch (e) { r = { error: e instanceof Error ? e.message : String(e) }; }
     if ('error' in r) { b.errors.push({ file: name, reason: r.error }); continue; }
     for (const w of ('warn' in r && r.warn) || []) b.warnings.push({ file: name, reason: w });
-    // Раздел или поле только внутри блока кода (t614, t622) — замечание к файлу: иначе они пропадают из окна молча.
-    const pp = text.includes('```') ? parse(text) : null;
-    for (const k of pp ? hiddenKeys(kind, pp, lang) : []) {
-      const t = say(kind === 'passport' ? PASSPORT[/** @type {keyof PASSPORT} */ (k)] : (kind === 't' ? CARD_FIELDS : PHASE_FIELDS)[k], lang);
-      const what = kind === 'passport' ? 'этот раздел' : 'это поле';
-      b.warnings.push({ file: name, reason: looseFence(/** @type {Parsed} */ (pp))
-        ? `«${t}» внутри блока кода: выше в файле \`\`\` без пары. Окно ${what} не показывает, «Сохранить» его не запишет — закройте блок в файле`
-        : `«${t}» есть только внутри блока кода \`\`\`. Окно ${what} не показывает, «Сохранить» его не запишет — если это не образец, уберите \`\`\` вокруг в файле` });
-    }
+    for (const w of hidden) b.warnings.push({ ...w });
     if (kind === 't') b.cards.push(/** @type {Card} */ (r.item));
     else if (kind === 'f') b.phases.push(/** @type {Phase} */ (r.item));
     else if (kind === 'd') b.decisions.push(/** @type {Decision} */ (r.item));
     else b.passport = /** @type {Passport} */ (r.item);
   }
+  // Файлы, которых на доске больше нет, — прочь из разбора (t1711) и из TEXTS (t1997: её больше не чистит переполнение): память не растёт от удалённых карт.
+  for (const f of PARSED.keys()) if (!seen.has(f) && path.dirname(f) === dir) PARSED.delete(f);
+  // Из TEXTS — только файлы, которых нет на диске: ключ файла с неверным именем или парного номера нужен первому кругу слежения (seed), иначе он даст лишнее событие.
+  const onDisk = (/** @type {string} */ n) => { const m = NAME_RE.exec(n); return m ? (byId.get(`${m[1]}${Number(m[2])}`) || []).includes(n) : wrong.includes(n); };
+  for (const f of TEXTS.keys()) if (!seen.has(f) && path.dirname(f) === dir && !onDisk(path.basename(f))) drop(f);
   const c = readCounter(dir);
   if (c.error) b.errors.push({ file: 'counter.json', reason: c.error });
   b.counter = { t: Math.max(c.obj.t || 0, maxNum(byId, 't')), d: Math.max(c.obj.d || 0, maxNum(byId, 'd')) };
@@ -994,15 +1379,18 @@ function read(project) {
     const f = t.phase ? phases.get(t.phase) : undefined;
     if (t.phase && !f && badF.has(t.phase)) {
       b.lost[t.id] = t.phase;
-      b.warnings.push({ file: t.file, reason: `файл фазы ${t.phase} с ошибкой — карта показана во «Входящих», фаза в её файле не меняется` });
-    } else if (t.phase && !f) b.warnings.push({ file: t.file, reason: `фазы ${t.phase} нет — карта показана во «Входящих»` });
+      b.warnings.push({ file: t.file, reason: warnSay('файл фазы {f} с ошибкой — карта показана во «Входящих», фаза в её файле не меняется', lang, { f: t.phase }) });
+    } else if (t.phase && !f) b.warnings.push({ file: t.file, reason: warnSay('фазы {f} нет — карта показана во «Входящих»', lang, { f: t.phase }) });
     if (f) f.cards.push(t.id); else b.inbox.push(t.id);
-    for (const d of t.depends) if (!cards.has(d)) b.warnings.push({ file: t.file, reason: `зависит от ${d}, а карты ${d} нет` });
+    for (const d of t.depends) if (!cards.has(d)) b.warnings.push({ file: t.file, reason: warnSay('зависит от {d}, а карты {d} нет', lang, { d }) });
   }
   // t1002: from со ссылкой на запись, которой нет, — замечание: паттерн собран из неё, а прочитать её нельзя (файла нет или в нём ошибка).
   const decs = new Set(b.decisions.map((d) => d.id));
-  for (const d of b.decisions) for (const r of d.from) if (!decs.has(r)) b.warnings.push({ file: d.file, reason: `from: ${r} — записи ${r} нет или её файл с ошибкой` });
-  b.alike = alike(b.cards, b.inbox);
+  for (const d of b.decisions) for (const r of d.from) if (!decs.has(r)) b.warnings.push({ file: d.file, reason: warnSay('from: {r} — записи {r} нет или её файл с ошибкой', lang, { r }) });
+  // t1691: заметку взяли в карту, а файл карты удалили (отмена — в Корзину) — заметка снова новая: take и drop работают, список её показывает.
+  // Файл карты есть, но с ошибкой, — карта жива: заметка остаётся взятой. Номер удалённой карты — в takenGone.
+  for (const d of b.decisions) if (d.type === 'заметка' && d.taken && !byId.has(d.taken)) { d.takenGone = d.taken; d.taken = ''; }
+  b.alike = alike(b.cards, b.inbox, dir);
   return b;
 }
 
@@ -1016,15 +1404,28 @@ const words = (s) => new Set((norm(s).match(/[\p{L}\p{N}]+/gu) || []).filter((w)
  * «Тест корзины падает при пустом городе» и «Тест корзины падает при пустом адресе» — 5 из 7, похожи; одно общее слово из трёх-четырёх — нет.
  */
 const ALIKE = 0.6;
+/** Слова и norm заголовка по тексту заголовка (t1701): alike на каждом чтении доски разбирал 1000+ заголовков заново (~30 мс). @type {Map<string, { ws: Set<string>, nt: string }>} */
+const TITLES = new Map();
+/** @param {string} t */
+function titleOf(t) {
+  let v = TITLES.get(t);
+  if (!v) { if (TITLES.size >= TEXTS_MAX) TITLES.clear(); v = { ws: words(t), nt: norm(t) }; TITLES.set(t, v); }
+  return v;
+}
 /**
  * Для карт ids — самая похожая другая карта доски: в фазе, во «Входящих», готовая — все (дубль готовой карты тоже дубль).
- * Одинаковая доля — меньший номер: карты отсортированы по номеру. @param {Card[]} cards @param {string[]} ids @returns {Record<string, string>}
+ * Одинаковая доля — меньший номер: карты отсортированы по номеру. slot (t1997) — папка доски: у каждой доски свой последний ответ.
+ * @param {Card[]} cards @param {string[]} ids @param {string} [slot] @returns {Record<string, string>}
  */
-function alike(cards, ids) {
+function alike(cards, ids, slot = '') {
+  // t1701: те же заголовки и те же карты для сравнения — тот же ответ: правка «Что сделано» заголовков не меняет.
+  const key = `${ids.join(',')}\n${cards.map((c) => `${c.id}\t${c.title}`).join('\n')}`;
+  const last = ALIKE_LAST.get(slot);
+  if (last && last.key === key) return { ...last.out };
   /** @type {Record<string, string>} */
   const out = {};
-  const ws = new Map(cards.map((c) => [c.id, words(c.title)]));
-  const nt = new Map(cards.map((c) => [c.id, norm(c.title)]));
+  const ws = new Map(cards.map((c) => [c.id, titleOf(c.title).ws]));
+  const nt = new Map(cards.map((c) => [c.id, titleOf(c.title).nt]));
   for (const id of ids) {
     const a = ws.get(id) || new Set();
     let best = 0;
@@ -1038,8 +1439,20 @@ function alike(cards, ids) {
       if (r >= ALIKE && r > best) { best = r; out[id] = c.id; }
     }
   }
-  return out;
+  ALIKE_LAST.delete(slot);
+  ALIKE_LAST.set(slot, { key, out });
+  for (const old of ALIKE_LAST.keys()) {
+    if (ALIKE_LAST.size <= BOARDS_MAX + 1) break;
+    ALIKE_LAST.delete(old);
+  }
+  return { ...out };
 }
+/**
+ * Последний ответ alike (t1701): ключ — список ids, номера и заголовки карт. t1997: по доскам — один общий ответ на все окна
+ * сбрасывался, когда сверялись два окна по очереди, и каждое чтение сравнивало карты заново: ~50 мс на двух досках по 3000 файлов.
+ * @type {Map<string, { key: string, out: Record<string, string> }>}
+ */
+const ALIKE_LAST = new Map();
 
 /** Файл по ссылке t12, f1, d3, passport: имя на диске (t09.md для t9) или новое. @param {string} project @param {string} ref */
 function locate(project, ref) {
@@ -1054,6 +1467,19 @@ function locate(project, ref) {
   return { dir, kind: ref[0], num: Number(ref.slice(1)), file: inside(dir, names[0] || `${id}.md`) };
 }
 
+/**
+ * t1711: свой записанный файл — в память прогрева с новым ключом и тем же номером прогрева: read({ primed }) видит записанное,
+ * а первый круг слежения (seed) не принимает свою запись за чужую правку. Не вышло — запись прочь, read() проверит файл сам.
+ * @param {string} file @param {string} text
+ */
+function remember(file, text) {
+  const was = TEXTS.get(file);
+  try {
+    const st = fs.lstatSync(file);
+    hold(file, { key: `${st.mtimeMs}:${st.ctimeMs}:${st.size}`, text, ...(was && was.v ? { v: was.v } : {}) });
+  } catch { drop(file); }
+}
+
 const SAVE_TRIES = 3;
 const SAVE_PAUSE_MS = 150;
 /**
@@ -1061,9 +1487,13 @@ const SAVE_PAUSE_MS = 150;
  * не уведёт запись наружу, чужой файл не затрётся. Rename — до 3 раз с паузой (на Windows редактор или антивирус держат файл долю секунды).
  * Прямой записи в файл карты нет: при падении в эти миллисекунды остались бы полфайла, а жёсткая ссылка на карту унесла бы запись наружу.
  * Не вышло — ошибка (окно оставляет введённое на месте), временный файл убран.
- * @param {string} file @param {string} text
+ * t2000: old — текст файла, из которого собран text. Файл был занят — его в этот миг мог писать агент. Перед каждым повтором файл
+ * сверяется с old: другой или пропал — не пишем, бросаем «файл поменяли во время записи», вызвавший перечитает файл. Не прочитался
+ * (занят) — попытка уходит без rename: вслепую не пишем. Сверка и rename — одним синхронным куском после паузы, как в grader.js (t1889).
+ * Первая попытка без сверки: обычная запись без гонки — как раньше. Без old — сверки нет.
+ * @param {string} file @param {string} text @param {string} [old]
  */
-function save(file, text) {
+function save(file, text, old) {
   const dir = path.dirname(file);
   let tmp = '';
   for (let i = 0; ; i++) {
@@ -1072,11 +1502,23 @@ function save(file, text) {
       if (!e || /** @type {any} */ (e).code !== 'EEXIST' || i >= 9) throw e;
     }
   }
+  const pause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, SAVE_PAUSE_MS);
   let last;
   for (let i = 0; i < SAVE_TRIES; i++) {
-    try { fs.renameSync(tmp, file); return; } catch (e) {
+    if (i > 0 && old !== undefined) {
+      /** @type {string | null} */
+      let now = null;
+      try { now = readSmall(file); } catch (e) {
+        if (e && ['EBUSY', 'EPERM', 'EACCES'].includes(/** @type {any} */ (e).code)) { last = e; if (i < SAVE_TRIES - 1) pause(); continue; }
+      }
+      if (now !== old) {
+        try { fs.unlinkSync(tmp); } catch { /* временного файла уже нет */ }
+        throw new Error(`файл поменяли во время записи (${path.basename(file)}): правка не записана — перечитайте файл и повторите`);
+      }
+    }
+    try { fs.renameSync(tmp, file); remember(file, text); return; } catch (e) {
       last = e;
-      if (i < SAVE_TRIES - 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, SAVE_PAUSE_MS);
+      if (i < SAVE_TRIES - 1) pause();
     }
   }
   try { fs.unlinkSync(tmp); } catch { /* временного файла уже нет */ }
@@ -1282,7 +1724,8 @@ function update(project, ref, changes) {
   const off = Object.keys(want).filter((k) => (got[k] ? (kind === 'passport' ? got[k].value : fieldValue(got[k].value)) : '') !== want[k]);
   if (off.length) throw refuse({ hidden: off });
   const wrote = text !== old;
-  if (wrote) save(file, text);
+  // t2000: old — сверка перед повтором rename: агент записал карту, пока она была занята, — его правку не затираем, бросаем.
+  if (wrote) save(file, text, old);
   // t1163: карту из дела закрыли — дело «Дел» отмечается сделанным само (ДЕЛА-устройство.md, пункт д). Сбой «Дел» правку карты не отменяет.
   if (kind === 't' && 'from' in after.item && after.item.from && after.item.status === 'готово' && 'status' in changes) {
     try { require('../tasks/store').syncCards(project); } catch { /* дело поправится при следующем чтении окна «Дела» */ }
@@ -1384,7 +1827,8 @@ function merge(project, from, into, retitle, remove = fs.unlinkSync) {
   const text = joined(p);
   const after = item('d', dst.d.num, path.basename(dst.file), text);
   if ('error' in after) throw new Error(`объединение не принято: ${after.error}`);
-  save(dst.file, text);
+  // t2011: dst.text — сверка перед повтором rename (как update, t2000): старую запись правили, пока она была занята, — не затираем.
+  save(dst.file, text, dst.text);
   // t1014: повтор стоял в from других паттернов — его причина теперь в старой, ссылку переводим на неё. Утверждение этих паттернов снимается само:
   // отпечаток sha1 учитывает from. Делаем до удаления повтора: сбой здесь оставляет его файл, и повторное «объединить» доделает.
   /** @type {string[]} */
@@ -1392,14 +1836,15 @@ function merge(project, from, into, retitle, remove = fs.unlinkSync) {
   for (const d of read(project).decisions) {
     if (!isP(d) || d.id === src.d.id || d.id === dst.d.id || !d.from.includes(src.d.id)) continue;
     const at = locate(project, d.id);
-    const q = parse(readSmall(at.file));
+    const was = readSmall(at.file);
+    const q = parse(was);
     const h = (q.head || []).find((x) => x.key === 'from');
     if (!h) continue;
     q.lines[h.line] = `from: ${headValue(relink(d.from, d.id))}`;
     const t = joined(q);
     const r = item('d', d.num, path.basename(at.file), t);
     if ('error' in r) throw new Error(`${into} дописана, from паттерна ${d.id} не поправлен: ${r.error}`);
-    save(at.file, t);
+    save(at.file, t, was);
     repointed.push(d.id);
   }
   try { remove(src.file); } catch (e) {
@@ -1462,7 +1907,7 @@ function reviewed(project, ref, card) {
   const text = joined(p);
   const after = item('d', num, path.basename(file), text);
   if ('error' in after) throw new Error(`правка не принята: ${after.error}`);
-  save(file, text);
+  save(file, text, old);
   return was;
 }
 
@@ -1497,7 +1942,7 @@ function humanMark(project, ref, action, why = '', expect = '') {
   const text = joined(p);
   const after = item('f', num, path.basename(file), text, lang);
   if ('error' in after) throw new Error(`правка не принята: ${after.error}`);
-  save(file, text);
+  save(file, text, old);
   return { id: ref, text: part.text, state: action, date, why: action === 'skip' ? reason : '', was, file: path.basename(file) };
 }
 
@@ -1553,6 +1998,244 @@ function create(project, what, data) {
   }
   if (kind === 'f' && Array.isArray(data.criteria)) update(project, id, { criteria: data.criteria });
   return id;
+}
+
+/** Состояние заметки (t1628): снята, взята или новая; у записи другого вида — пусто. @param {any} d @returns {'' | 'новая' | 'взята' | 'снята'} */
+const noteState = (d) => (d.type !== 'заметка' ? '' : d.cancelled ? 'снята' : d.taken ? 'взята' : 'новая');
+
+/**
+ * Текст заметки как поле карты: без пустой строки «Текст ошибки: —». Строка, которая прочиталась бы новым полем или заголовком
+ * (а у незакрытого ``` — блоком до конца файла), получает «— » впереди: иначе одна такая строка в заметке запрещала бы завести карту.
+ * @param {string} text @param {string} lang @returns {string}
+ */
+function noteBody(text, lang) {
+  const ls = bodyLs(text).filter((l) => !/^[ \t]*Текст ошибки:[ \t]*[—-]?[ \t]*$/.test(l));
+  // bodyText не смотрит первую строку: она идёт за подписью поля. А в карте эта строка может встать не первой: перед ней текст команды или другая заметка.
+  for (let i = 0; i <= ls.length; i++) {
+    const r = bodyText(['—', ...ls].join('\n'), CARD_FIELDS, lang);
+    if (!r.code) break;
+    const at = ls.indexOf(r.line);
+    if (at < 0) break;
+    ls[at] = `— ${ls[at].trim()}`;
+  }
+  return ls.join('\n').trim();
+}
+
+/** Замок заметок доски (t1693): файл с точкой — scan его не видит. Старше LOCK_STALE_MS или от мёртвого процесса — снимается. */
+const NOTE_LOCK = '.notes.lock';
+const LOCK_STALE_MS = 30000;
+const LOCK_WAIT_MS = 5000;
+
+/** Жив ли процесс с этим номером. @param {number} pid */
+function pidAlive(pid) {
+  if (!(pid > 0)) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return /** @type {any} */ (e).code === 'EPERM'; }
+}
+
+// t1992: шаг опроса чужого замка. Команда kermach — 25 мс, как было. Главный процесс — 100 мс: каждый круг (wx, чтение замка, проверка процесса)
+// стоит около 1,4 мс потока, при шаге 25 мс ожидание 5 с занимало ~290 мс (spikes/t1992-note-lock); человек лишних 0,1 с у кнопки не заметит.
+const LOCK_STEP_MS = 25;
+const LOCK_STEP_ASYNC_MS = 100;
+/**
+ * t1992: шаги с паузами — генератор: в месте паузы он отдаёт число миллисекунд, а ждёт водитель (как grader.answer, t1987).
+ * runSync ждёт Atomics.wait — команда kermach, свой процесс. runAsync ждёт setTimeout — главный процесс программы:
+ * Atomics.wait там держал все окна и демон, пока замок заметок у другой сессии, — до 5 с.
+ * @template T @param {Generator<number, T, void>} g @returns {T}
+ */
+function runSync(g) {
+  try {
+    for (let s = g.next(); ; s = g.next()) { if (s.done) return s.value; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, s.value); }
+  } finally { g.return(/** @type {any} */ (undefined)); }
+}
+/** Асинхронный водитель (t1992): паузы — setTimeout, поток свободен. @template T @param {Generator<number, T, void>} g @returns {Promise<T>} */
+async function runAsync(g) {
+  try {
+    for (let s = g.next(); ; s = g.next()) { if (s.done) return s.value; await new Promise((r) => setTimeout(r, s.value)); }
+  } finally { g.return(/** @type {any} */ (undefined)); }
+}
+
+/**
+ * Выполнить fn под замком заметок доски: две сессии разом не заведут две карты на одну заметку и не дадут ей и taken, и cancelled.
+ * Замок — файл .notes.lock (wx) с номером процесса и временем; после сбоя процесса он не висит: мёртвый номер или возраст — и его снимают.
+ * Синхронно — для команды kermach (свой процесс). В главном процессе программы — withNoteLockAsync (t1992).
+ * @template T @param {string} project @param {() => T} fn @returns {T}
+ */
+function withNoteLock(project, fn) { return runSync(noteLockSteps(project, fn, LOCK_STEP_MS)); }
+/**
+ * withNoteLock для главного процесса программы (t1992): ожидание чужого замка не держит поток; fn — та же, синхронная.
+ * @template T @param {string} project @param {() => T} fn @returns {Promise<T>}
+ */
+function withNoteLockAsync(project, fn) { return runAsync(noteLockSteps(project, fn, LOCK_STEP_ASYNC_MS)); }
+/**
+ * Шаги withNoteLock (t1992): yield — пауза перед новой попыткой взять замок.
+ * Взятие замка, fn и снятие замка идут одним синхронным куском, после последней паузы: под замком пауз нет, как прежде.
+ * @template T @param {string} project @param {() => T} fn @param {number} step пауза между попытками, мс @returns {Generator<number, T, void>}
+ */
+function* noteLockSteps(project, fn, step) {
+  const dir = ensureRoot(project);
+  const file = inside(dir, NOTE_LOCK);
+  const mine = JSON.stringify({ pid: process.pid, at: Date.now(), r: Math.random().toString(36).slice(2) });
+  const until = Date.now() + LOCK_WAIT_MS;
+  for (let round = 0; ; round++) {
+    // t2004: предел и пауза — в начале каждого круга, кроме первого. Ветки ниже уходят на новый круг через continue: замок не прочитать
+    // (папка на его месте, файл в удалении на Windows), statSync упал, брошенный замок не переименовать (файл держат без права удаления).
+    // Когда предел и пауза стояли в конце круга, такой замок крутил цикл без конца и без паузы: 20 000 кругов за 6,5 с, процессор 6,6 с,
+    // а в главном процессе окна (withNoteLockAsync) — ещё и поток без единого yield (spikes/t2004-notelock/probe-cpu-before.txt).
+    // Снятый брошенный замок тоже ждёт один шаг перед новой попыткой — 25 мс в команде, 100 мс в окне.
+    if (round > 0) {
+      if (Date.now() > until) throw new Error('заметки сейчас правит другая сессия — повторите команду через несколько секунд');
+      yield step;
+    }
+    try { fs.writeFileSync(file, mine, { flag: 'wx' }); break; } catch (e) {
+      if (/** @type {any} */ (e).code !== 'EEXIST' && /** @type {any} */ (e).code !== 'EPERM') throw e;
+    }
+    let seen = '';
+    try { seen = fs.readFileSync(file, 'utf8'); } catch { continue; }
+    /** @type {any} */
+    let h = {};
+    try { h = JSON.parse(seen); } catch { h = {}; }
+    let age = 0;
+    try { age = Date.now() - (Number(h.at) || fs.statSync(file).mtimeMs); } catch { continue; }
+    // Пустой или недописанный файл моложе секунды — сосед как раз пишет его; иначе по номеру процесса и возрасту.
+    const stale = age > LOCK_STALE_MS || (h.pid ? !pidAlive(Number(h.pid)) : age > 1000);
+    if (stale) {
+      // Снимаем переименованием: удастся одному. Унесли не тот файл (сосед успел снять и поставить свой) — возвращаем его.
+      const moved = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}`;
+      try { fs.renameSync(file, moved); } catch { continue; }
+      let got = '';
+      try { got = fs.readFileSync(moved, 'utf8'); } catch { /* нет */ }
+      if (got !== seen) { try { fs.linkSync(moved, file); } catch { /* уже новый */ } }
+      try { fs.unlinkSync(moved); } catch { /* нет */ }
+      continue;
+    }
+  }
+  try { return fn(); } finally {
+    try { if (fs.readFileSync(file, 'utf8') === mine) fs.unlinkSync(file); } catch { /* уже снят */ }
+  }
+}
+
+/**
+ * Завести одну карту из заметок (t1628): карта во «Входящих» (или в data.phase) с заголовком и текстом заметок, её номер — в taken каждой заметки.
+ * Это и окно, и kermach roadmap note take, и new t --from-note: карта, заведённая так, закрывает заметку сама.
+ * Все заметки уже взяты в одну карту (второй щелчок, вторая вкладка) — та же карта, а не вторая: again: true.
+ * Заголовок по умолчанию — у одной заметки её заголовок, у нескольких с номерами; остальные поля карты — из data как у create.
+ * @param {string} project @param {string[]} refs d<N> @param {Record<string, any>} [data]
+ * @returns {{ card: string, notes: string[], again: boolean }}
+ */
+function noteCard(project, refs, data = {}) { return withNoteLock(project, () => noteCardNow(project, refs, data)); }
+/** noteCard для главного процесса программы (t1992): чужой замок заметок ждётся без остановки потока. @param {string} project @param {string[]} refs @param {Record<string, any>} [data] @returns {Promise<{ card: string, notes: string[], again: boolean }>} */
+function noteCardAsync(project, refs, data = {}) { return withNoteLockAsync(project, () => noteCardNow(project, refs, data)); }
+/** @param {string} project @param {string[]} refs @param {Record<string, any>} data */
+function noteCardNow(project, refs, data) {
+  const ids = [...new Set((refs || []).map(String))];
+  if (!ids.length) throw new Error('нужен номер заметки d<N>');
+  const bad = ids.find((r) => !/^d\d{1,6}$/.test(r));
+  if (bad) throw new Error(`«${bad}» — нужно d<номер> заметки`);
+  const b = read(project);
+  const notes = ids.map((ref) => {
+    const d = b.decisions.find((x) => x.id === ref);
+    if (!d) throw new Error(`нет записи ${ref}`);
+    if (d.type !== 'заметка') throw new Error(`${ref} — не заметка, а «${d.type}»`);
+    if (d.cancelled) throw new Error(`${ref} снята ${d.cancelled}: в карту не берётся`);
+    return d;
+  });
+  const had = [...new Set(notes.map((d) => d.taken).filter(Boolean))];
+  if (had.length === 1 && notes.every((d) => d.taken === had[0])) return { card: had[0], notes: ids, again: true };
+  if (had.length) throw new Error(`часть заметок уже взята: ${notes.filter((d) => d.taken).map((d) => `${d.id} в ${d.taken}`).join(', ')}`);
+  const lang = boardLang(project);
+  const one = notes.length === 1;
+  const texts = notes.map((d) => {
+    const t = noteBody(d.text, lang);
+    return one ? (t || d.title) : [`${d.id} · ${d.title}`, t].filter(Boolean).join('\n');
+  });
+  const given = String(data.what || '').trim();
+  const files = [...new Set(notes.flatMap((d) => d.files))];
+  const { what: _w, title: _t, ...rest } = data;
+  const card = create(project, 'card', {
+    ...(files.length ? { files: files.map((f) => '`' + f + '`').join(', ') } : {}),
+    source: ids.join(', '),
+    ...rest,
+    title: String(data.title || '').trim() || (one ? notes[0].title : `${ids.join(', ')}: ${notes[0].title}`),
+    what: [given, ...texts].filter(Boolean).join('\n'),
+  });
+  for (const ref of ids) update(project, ref, { taken: card });
+  return { card, notes: ids, again: false };
+}
+
+/**
+ * Снять заметку (t1628): cancelled сегодняшним днём и строка «Снята (дата): причина» в тексте, файл остаётся. Причина обязательна.
+ * Строка встаёт перед «## Переносимый вывод»: иначе ушла бы в чужой раздел. @param {string} project @param {string} ref d<N> @param {string} why
+ * @returns {{ id: string, date: string, why: string, file: string }}
+ */
+function noteDrop(project, ref, why) { return withNoteLock(project, () => noteDropNow(project, ref, why)); }
+/** noteDrop для главного процесса программы (t1992). @param {string} project @param {string} ref @param {string} why @returns {Promise<{ id: string, date: string, why: string, file: string }>} */
+function noteDropAsync(project, ref, why) { return withNoteLockAsync(project, () => noteDropNow(project, ref, why)); }
+/** @param {string} project @param {string} ref @param {string} why */
+function noteDropNow(project, ref, why) {
+  const reason = String(why || '').replace(/\s+/g, ' ').trim();
+  if (!reason) throw new Error('нужна причина: почему заметка снята');
+  if (!/^d\d{1,6}$/.test(String(ref))) throw new Error(`«${ref}» — нужно d<номер> заметки`);
+  const { num, file } = locate(project, ref);
+  if (!fs.existsSync(file)) throw new Error(`нет файла ${path.basename(file)}`);
+  const lang = boardLang(project);
+  const old = readSmall(file);
+  const before = item('d', num, path.basename(file), old, lang);
+  if ('error' in before) throw new Error(`файл с ошибкой не правим: ${before.error}`);
+  const d = /** @type {any} */ (before.item);
+  if (d.type !== 'заметка') throw new Error(`${ref} — не заметка, а «${d.type}»`);
+  if (d.cancelled) throw new Error(`${ref} уже снята ${d.cancelled}`);
+  // t1691: карты, в которую взяли заметку, нет (файл удалён) — заметку можно снять.
+  if (d.taken && (scan(root(project)).byId.get(d.taken) || []).length) throw new Error(`${ref} уже взята в карту ${d.taken}: снимать нечего`);
+  const date = stamp().slice(0, 10);
+  const p = parse(old);
+  const tl = titleLine(p);
+  const port = tl < 0 ? [] : portSpans(p.lines, tl + 1);
+  let at = port.length ? port[0].start : p.lines.length;
+  while (at > p.headEnd && !p.lines[at - 1].trim()) at--;
+  put(p, at, 0, [`Снята (${date}): ${reason}`]);
+  // Файл кончался концом строки: хвостовая пустая строка осталась после вставки. Не кончался — новая строка уже последняя, как и была.
+  // t1691: заметка была взята в удалённую карту — taken пустеет, иначе доска замечала бы «и взята, и снята».
+  const tk = d.taken ? (p.head || []).find((x) => x.key === 'taken') : null;
+  if (tk) p.lines[tk.line] = 'taken:';
+  const h = (p.head || []).find((x) => x.key === 'cancelled');
+  if (h) p.lines[h.line] = `cancelled: ${date}`;
+  else put(p, p.headEnd - 1, 0, [`cancelled: ${date}`]);
+  const text = joined(p);
+  const after = item('d', num, path.basename(file), text, lang);
+  if ('error' in after) throw new Error(`правка не принята: ${after.error}`);
+  save(file, text, old);
+  return { id: String(ref), date, why: reason, file };
+}
+
+/**
+ * Вернуть снятую заметку (t1692): строка cancelled уходит из шапки, строки «Снята (дата): причина» — из текста. Файл в остальном прежний.
+ * @param {string} project @param {string} ref d<N> @returns {{ id: string, was: string, file: string }}
+ */
+function noteRestore(project, ref) { return withNoteLock(project, () => noteRestoreNow(project, ref)); }
+/** @param {string} project @param {string} ref */
+function noteRestoreNow(project, ref) {
+  if (!/^d\d{1,6}$/.test(String(ref))) throw new Error(`«${ref}» — нужно d<номер> заметки`);
+  const { num, file } = locate(project, ref);
+  if (!fs.existsSync(file)) throw new Error(`заметки ${ref} нет: нет файла ${path.basename(file)}`);
+  const lang = boardLang(project);
+  const old = readSmall(file);
+  const before = item('d', num, path.basename(file), old, lang);
+  if ('error' in before) throw new Error(`файл с ошибкой не правим: ${before.error}`);
+  const d = /** @type {any} */ (before.item);
+  if (d.type !== 'заметка') throw new Error(`${ref} — не заметка, а «${d.type}»`);
+  if (!d.cancelled) throw new Error(`${ref} не снята: возвращать нечего`);
+  const p = parse(old);
+  const drop = new Set();
+  const h = (p.head || []).find((x) => x.key === 'cancelled');
+  if (h) drop.add(h.line);
+  for (let i = p.headEnd; i < p.lines.length; i++) if (/^Снята \(\d{4}-\d{2}-\d{2}\):/.test(p.lines[i])) drop.add(i);
+  for (const i of [...drop].sort((a, b) => b - a)) put(p, i, 1, []);
+  const text = joined(p);
+  const after = item('d', num, path.basename(file), text, lang);
+  if ('error' in after) throw new Error(`правка не принята: ${after.error}`);
+  if (/** @type {any} */ (after.item).cancelled) throw new Error('правка не принята: cancelled осталась');
+  save(file, text, old);
+  return { id: String(ref), was: d.cancelled, file };
 }
 
 /** Что из файла прочитано, без слов формата: так сверяем файл до и после смены языка (t1429). @param {any} it */
@@ -1648,9 +2331,10 @@ function setLang(project, lang) {
   const changed = [];
   for (const x of plan) {
     // Файл правили, пока шёл перевод (агент закрыл карту) — его не затираем: он в skipped, его слова поправит повторная смена языка.
+    // t2011: x.text и в save — сверка ещё и перед повтором rename: файл был занят, агент его в этот миг дописал — тоже в skipped.
     try {
       if (readSmall(x.file) !== x.text) { skipped.push({ file: x.name, reason: 'файл изменился во время смены языка — не тронут' }); continue; }
-      save(x.file, x.out);
+      save(x.file, x.out, x.text);
       changed.push(x.name);
     } catch (e) { skipped.push({ file: x.name, reason: e instanceof Error ? e.message : String(e) }); }
   }
@@ -1677,6 +2361,8 @@ function watch(project, onChange, opts = {}) {
   const delay = opts.delay ?? 250, maxWait = opts.maxWait ?? 800, poll = opts.poll ?? 500, fast = opts.fast ?? 200, slice = opts.slice ?? 50;
   const HOT = 10, HOT_MS = 10 * 60 * 1000;
   const log = opts.log || (() => {});
+  // t1997: журнал программы для строки о переполнении памяти доски — окно даёт его слежению; setLog, если звали, не перекрываем.
+  if (opts.log && !LOG) setLog(opts.log);
   /** @type {NodeJS.Timeout | null} */
   let timer = null;
   /** @type {NodeJS.Timeout | null} */
@@ -1688,6 +2374,17 @@ function watch(project, onChange, opts = {}) {
   let files = new Map();
   /** Файл → когда видели его правку. @type {Map<string, number>} */
   const hot = new Map();
+  /**
+   * t1711: «mtime размер» файлов, какими их видел последний прогрев (prime). Доску прочитали по прогреву без lstat —
+   * первый круг сравнивает с ним, и правка, сделанная после прогрева, но до слежения, даёт событие, а не теряется.
+   * @type {Map<string, string>}
+   */
+  const seed = new Map();
+  // Берётся в первом круге, а не здесь: окно включает слежение до своих записей (phaseRun), а remember() кладёт их ключи в TEXTS.
+  const seedNow = () => {
+    const gen = PRIMED.get(dir) || 0;
+    for (const [f, e] of TEXTS) if (gen && /** @type {any} */ (e).v === gen && path.dirname(f) === dir) { const k = e.key.split(':'); seed.set(path.basename(f), `${k[0]} ${k[2]}`); }
+  };
   const fire = () => {
     timer = null; first = 0;
     if (closed) return;
@@ -1723,11 +2420,14 @@ function watch(project, onChange, opts = {}) {
     const names = await list();
     if (closed) return;
     const start = has === null;
+    if (start) seedNow();
     let changed = (names !== null) !== has && !start;
     has = names !== null;
     /** @type {Map<string, string>} */
     const now = new Map();
-    for (const n of names || []) now.set(n, files.has(n) ? /** @type {string} */ (files.get(n)) : '');
+    for (const n of names || []) now.set(n, files.has(n) ? /** @type {string} */ (files.get(n)) : (start && seed.has(n) ? /** @type {string} */ (seed.get(n)) : ''));
+    // Первый круг по прогреву: файл карты появился или пропал после прогрева — тоже правка.
+    let seedHit = start && seed.size > 0 && ([...seed.keys()].some((n) => !now.has(n)) || [...now.keys()].some((n) => n.endsWith('.md') && !seed.has(n)));
     if (!changed && (now.size !== files.size || [...now.keys()].some((n) => !files.has(n)))) changed = true;
     const t = Date.now();
     // Новый файл — тоже «с правкой»: его обычно дописывают следом, и склейка должна его видеть.
@@ -1738,6 +2438,7 @@ function watch(project, onChange, opts = {}) {
     if (opts.pin) for (const n of opts.pin()) if (now.has(n)) look.add(n);
     const keys = [...now.keys()];
     for (const n of keys) if (!now.get(n)) look.add(n);
+    if (start && seed.size) for (const n of keys) look.add(n);
     if (!quick) {
       if (keys.length <= slice) for (const n of keys) look.add(n);
       else { for (let i = 0; i < slice; i++) look.add(keys[(pos + i) % keys.length]); pos = (pos + slice) % keys.length; }
@@ -1747,11 +2448,11 @@ function watch(project, onChange, opts = {}) {
     for (const [n, v] of got) {
       const was = now.get(n);
       now.set(n, v);
-      if (was && v !== was) { changed = true; hot.set(n, t); }
+      if (was && v !== was) { changed = true; hot.set(n, t); if (start) seedHit = true; }
     }
     if (hot.size > HOT) for (const [n] of [...hot].sort((x, y) => x[1] - y[1]).slice(0, hot.size - HOT)) hot.delete(n);
     files = now;
-    if (changed && !start) later();
+    if ((changed && !start) || seedHit) later();
   };
   const loop = async () => {
     next = null;
@@ -1856,4 +2557,502 @@ async function ownRootAsync(project, dir) {
   if (up(rel) || path.isAbsolute(rel)) throw new Error(`папка доски ведёт за пределы проекта: ${real}`);
 }
 
-module.exports = { DIR, MAX_SIZE, ERROR_LINE, LANGS, WORDS, stamp, humanMark, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, BUG_BY, bugByWord, KINDS, DTYPES, HOW, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, boardLang, setLang, say, cardStart, passportEmpty, prime, update, addServed, merge, reviewed, differ, section, nextId, create, watch, codeMask, edges, sameField, alike, usedWarn, checkBoard };
+/** Одна карта с диска, без чтения всей доски (t1638: close зовётся из вкладки агента на доске в тысячу карт). Нет файла или он с ошибкой — null. @param {string} project @param {string} ref */
+function oneCard(project, ref) {
+  const { kind, num, file } = locate(project, ref);
+  if (kind !== 't' || !fs.existsSync(file)) return null;
+  const got = item(kind, num, path.basename(file), readSmall(file), boardLang(project));
+  return 'error' in got ? null : got.item;
+}
+
+/** Сколько слов подряд пробовать как один путь с пробелами в --proof (t1638). */
+const PROOF_SPAN = 8;
+/** Сколько слов --proof разбирать: длиннее — пересказ, а пути называют в начале. */
+const PROOF_WORDS = 4000;
+/** Сколько файлов смотреть в папке, названной в --proof: папка доказательств мала, а чужая большая не должна задерживать close. */
+const PROOF_DIR_MAX = 2000;
+
+/**
+ * Куски текста --proof, которые могут быть путём (t1638): слово целиком, слова подряд (путь с пробелами), части слова до «;», «,», «:».
+ * Обрезаются кавычки, знаки препинания и хвост «:строка». Адреса сайтов и сетевые пути не берём: обращение к недоступному серверу подвесило бы close.
+ * @param {string} text @returns {string[]}
+ */
+function proofCandidates(text) {
+  const words = String(text || '').split(/\s+/).filter(Boolean).slice(0, PROOF_WORDS);
+  /** @type {Set<string>} */
+  const out = new Set();
+  /** @param {string} raw */
+  const add = (raw) => {
+    const s = raw.replace(/^[\s([{<«"'`“„‘]+/, '').replace(/[\s)\]}>»"'`”’.,;:!?]+$/, '');
+    if (!s || /^[a-z][a-z0-9+.-]+:\/\//i.test(s) || /^[\\/]{2}/.test(s)) return;
+    out.add(s);
+    const tail = s.replace(/(?::\d+(?:[-–—,]\d+)*)+$/, '');
+    if (tail && tail !== s) out.add(tail);
+  };
+  words.forEach((w, i) => {
+    add(w);
+    // «файл:ИТОГ…», «a.txt;b.txt», «файл=…»: двоеточие диска (D:\) — не разделитель.
+    const parts = w.replace(/^([a-zA-Z]):(?=[\\/])/, '$1\u0000').split(/[;,=:]/);
+    if (parts.length > 1) for (const p of parts) add(p.replace('\u0000', ':'));
+    // Путь с пробелами: последнее слово куска похоже на файл или папку, иначе перебор всех пар слов ничего не даёт.
+    for (let n = 2; n <= PROOF_SPAN && i + n <= words.length; n++) {
+      const last = words[i + n - 1];
+      if (/[.\\/]/.test(last)) add(words.slice(i, i + n).join(' '));
+    }
+  });
+  return [...out];
+}
+
+/**
+ * Папки, от которых искать относительный путь: сами bases и папки из поля «Файлы» карты (голое «daemon.js:28» при файле src/daemon/daemon.js).
+ * @param {string[]} bases @param {any} card @returns {string[]}
+ */
+function proofBases(bases, card) {
+  /** @type {string[]} */
+  const dirs = [];
+  const listed = String((card && card.fields && card.fields.files) || '');
+  for (const m of listed.matchAll(/`([^`\n]+)`|([^\s,;]+[\\/.][^\s,;]*)/g)) {
+    const f = String(m[1] || m[2]).replace(/[\\/]+$/, '');
+    if (!path.isAbsolute(f)) for (const b of bases) { dirs.push(path.join(b, f)); dirs.push(path.dirname(path.join(b, f))); }
+  }
+  return [...new Set([...bases.map((b) => path.resolve(b)), ...dirs])];
+}
+
+/** Файл — список карты `.kermach/proofs/tN/checklist.md` (t1831), а не файл с тем же именем в другой папке. @param {string} f */
+function isCardList(f) {
+  const parts = path.resolve(f).split(/[\\/]/).map((x) => x.toLowerCase());
+  const n = parts.length;
+  return n >= 4 && parts[n - 1] === 'checklist.md' && /^[a-z]+\d+$/.test(parts[n - 2]) && parts[n - 3] === 'proofs' && parts[n - 4] === '.kermach';
+}
+
+/**
+ * Файлы, названные в --proof и существующие на диске (t1638). Путь — абсолютный или от любой из bases, с кириллицей, пробелами, обеими косыми;
+ * «/d/папка» из Git Bash и %ПЕРЕМЕННАЯ% раскрываются. Папка со слешем в имени считается: берутся файлы прямо в ней.
+ * @param {string} text @param {string[]} bases @param {any} [card] @returns {{ file: string, mtime: number }[]}
+ */
+function proofFiles(text, bases, card) {
+  // Папка доказательств карты — всегда база: «only-result.txt» без пути там и лежит.
+  const roots = proofBases(bases, card);
+  if (card && card.id) for (const b of bases) roots.push(path.join(b, '.kermach', 'proofs', card.id));
+  // Папка проекта и корень диска — не доказательство: «/» в тексте или путь к проекту пропустили бы карту по любому файлу в них.
+  const notDirs = new Set(bases.map((b) => path.resolve(b).toLowerCase()));
+  /** @type {Map<string, { file: string, mtime: number }>} */
+  const found = new Map();
+  /** @param {string} f @param {fs.Stats} st */
+  // t1802: файл-список агента — его слова, а не доказательство: свежий он у любой карты.
+  // t1831: файл с тем же именем в папке пробы — обычное доказательство.
+  const keep = (f, st) => { if (!isCardList(f)) found.set(f.toLowerCase(), { file: f, mtime: st.mtimeMs }); };
+  /** @param {string} f @param {boolean} dirOk */
+  const look = (f, dirOk) => {
+    /** @type {fs.Stats} */
+    let st;
+    try { st = fs.statSync(f); } catch { return; }
+    if (st.isFile()) { keep(f, st); return; }
+    if (!dirOk || !st.isDirectory()) return;
+    const whole = path.resolve(f);
+    if (whole === path.parse(whole).root || notDirs.has(whole.toLowerCase())) return;
+    /** @type {string[]} */
+    let names = [];
+    try { names = fs.readdirSync(f).slice(0, PROOF_DIR_MAX); } catch { return; }
+    for (const n of names) {
+      const sub = path.join(f, n);
+      try { const s2 = fs.statSync(sub); if (s2.isFile()) keep(sub, s2); } catch { /* файл пропал — не наш */ }
+    }
+  };
+  const cands = proofCandidates(text);
+  for (const raw of cands) {
+    let s = raw.replace(/%([^%\s]+)%/g, (all, v) => process.env[v] || all);
+    if (process.platform === 'win32') s = s.replace(/^\/([a-zA-Z])(?=\/)/, '$1:');
+    // Маска «папка/*.txt» — файлы папки: что совпало по маске, close не разбирает.
+    const star = s.indexOf('*');
+    if (star >= 0) s = path.dirname(s.slice(0, star) + 'x');
+    const dirOk = star >= 0 || /[\\/]/.test(s);
+    if (path.isAbsolute(s)) look(path.normalize(s), dirOk);
+    else for (const b of roots) look(path.join(b, s), dirOk);
+  }
+  // «папка/real.txt; probe-old.txt, only-result.txt» — голое имя рядом с уже названным файлом.
+  const near = [...new Set([...found.values()].map((f) => path.dirname(f.file)))];
+  for (const s of cands) if (!/[\\/*]/.test(s)) for (const d of near) look(path.join(d, s), false);
+  return [...found.values()];
+}
+
+/** Журналы сессии и записи оркестратора: свежие у любой карты, о проверке ничего не говорят (t1680). */
+const PROOF_JOURNALS = /^(session(-[^\\/]*)?\.md|решения\.md)$/i;
+
+/**
+ * Файл из --proof не доказательство у карты «сделать» (t1680): лежит в папке доски, журнал сессии или назван в поле «Файлы» (правленый код).
+ * Папка доказательств и папки проб из «Файлы» (`spikes/tNN/`) не задеты: исключён только сам названный файл.
+ * @param {string} file @param {string[]} bases @param {any} card
+ */
+function proofNotEvidence(file, bases, card) {
+  const f = path.resolve(file).toLowerCase();
+  if (PROOF_JOURNALS.test(path.basename(f))) return true;
+  const inside = (/** @type {string} */ d) => { const rel = path.relative(path.resolve(d).toLowerCase(), f); return !!rel && !up(rel) && !path.isAbsolute(rel); };
+  for (const b of bases) if (inside(path.join(b, DIR))) return true;
+  const listed = String((card && card.fields && card.fields.files) || '');
+  for (const m of listed.matchAll(/`([^`\n]+)`|([^\s,;`]+[\\/.][^\s,;`]*)/g)) {
+    const name = String(m[1] || m[2]).replace(/(?::\d+(?:[-–—,]\d+)*)+$/, '');
+    if (/[\\/]$/.test(name)) continue;
+    const cands = path.isAbsolute(name) ? [name] : bases.map((b) => path.join(b, name));
+    if (cands.some((c) => path.resolve(c).toLowerCase() === f)) return true;
+  }
+  return false;
+}
+
+/**
+ * «Как проверить» велит прогнать проверки гейта --only (t1638, t1681: ложный отказ дороже пропуска).
+ * Нужно: команда run.js с --only; или голое --only на проекте, где есть spikes/gate/run.js.
+ * Не считается: --only под отрицанием («без --only», «не нужен --only», without, ohne) и --only чужой команды (npm, pnpm, yarn, pip…).
+ * @param {any} card @param {string[]} [bases] папки проекта: голое --only — только если в одной из них есть гейт
+ */
+function proofNeedsOnly(card, bases = []) {
+  const text = String((card && card.fields && card.fields.check) || '');
+  const word = /(^|[\s`"'«(])--only(?=[\s=`"'»).,;:]|$)/g;
+  const gate = (bases || []).some((b) => { try { return fs.existsSync(path.join(b, 'spikes', 'gate', 'run.js')); } catch { return false; } });
+  for (let m; (m = word.exec(text));) {
+    const at = m.index + m[1].length;
+    // Команда, в которой стоит слово: от начала строки или разделителя (`, ;, «, », «→») до слова.
+    const head = text.slice(0, at).split(/[\n`;«»→]|&&|\|\|/).pop() || '';
+    const before = text.slice(Math.max(0, at - 24), at).toLowerCase();
+    if (/(^|[^\p{L}])(без|не|нет|ні|без|without|no|not|ohne|kein|keine)[\s«"'`]*(нужен|нужно|надо|требуется|потрібен|треба|needed|required|nötig|флага|ключа|слова|flag|option)?[\s«"'`]*$/u.test(before)) continue;
+    if (/run\.js\b/.test(head)) return true;
+    if (/(^|[\s/\\])(npm|npx|pnpm|yarn|pip3?|bun|cargo|apt(-get)?|brew|composer|dotnet)(\.cmd|\.exe)?\s/i.test(head)) continue;
+    if (gate) return true;
+  }
+  return false;
+}
+
+/** Время строки created:/closed: карты — местное, с точностью до минуты; нет или не разобрать — 0. @param {unknown} s */
+function stampMs(s) {
+  const t = Date.parse(String(s || '').trim().replace(' ', 'T'));
+  return Number.isFinite(t) ? t : 0;
+}
+
+/**
+ * Начало работы карты для close (t1638): самое позднее из created:, начала запуска и, когда карту вернули из «готово», прошлого closed:
+ * и последнего разбора проверяющего — так во втором круге старый файл не проходит. Карта ещё «готово» (правят текст закрытия) — круг тот же.
+ * @param {any} card @param {number} started начало запуска из записи запуска, 0 — записи нет @param {number} graded время последнего файла разбора, 0 — нет
+ * @returns {{ at: number, from: string }}
+ */
+function proofStart(card, started, graded) {
+  const list = [{ at: stampMs(card.created), from: 'created карты' }, { at: Number(started) || 0, from: 'последний запуск карты' }];
+  if (card.status !== 'готово') list.push({ at: stampMs(card.closed), from: 'прошлое закрытие карты' }, { at: Number(graded) || 0, from: 'разбор проверяющего: начало следующего круга' });
+  return list.reduce((a, b) => (b.at > a.at ? b : a));
+}
+
+/**
+ * Время файла для свежести (t1669, d688): start.stale(file) — файл не доказывает свежесть (в копии проекта под git и не менялся
+ * с создания копии: время ему поставил git) — 0.
+ * @param {{ file: string, mtime: number }} f @param {{ stale?: (file: string) => boolean }} start
+ */
+function evidenceTime(f, start) {
+  return start && typeof start.stale === 'function' && start.stale(f.file) ? 0 : f.mtime;
+}
+
+/**
+ * Решение close по --proof (t1638). Сухой прогон зовёт его же с fresh: false — только «есть ли файл».
+ * Ревью и разведка — файл должен быть, свежесть не нужна: их доказательство — чужой файл и строка. only-result.txt по слову --only — только карте с прогоном.
+ * @param {any} card @param {string} proof @param {string[]} bases @param {{ at: number, from?: string, stale?: (file: string) => boolean }} start
+ * @param {{ fresh?: boolean, say?: (t: string, v?: Record<string, string | number>) => string }} [o] say — перевод текста красной проверки (t1831)
+ * @returns {{ ok: boolean, code: string, why: string, found: { file: string, mtime: number }[] }}
+ */
+function proofCheck(card, proof, bases, start, o = {}) {
+  const say = o.say || sayRu;
+  const dir = `.kermach/proofs/${card.id}/`;
+  const found = proofFiles(proof, bases, card);
+  const when = (/** @type {number} */ ms) => { const d = new Date(ms), p = (/** @type {number} */ n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+  const said = String(proof).replace(/\s+/g, ' ').trim();
+  if (!found.length) return { ok: false, code: 'нет файла', found, why: `в --proof нет файла, который есть на диске. В --proof написано: «${said.length > 120 ? `${said.slice(0, 120)}…` : said}». Искал от папок: ${bases.join(', ')}. Что сделать: сохраните вывод проверки или снимок файлом в ${dir} и назовите его путь в --proof` };
+  if (['ревью', 'разведка'].includes(card.kind)) return { ok: true, code: '', why: '', found };
+  // t1680: файл доски, журнал и правленый файл из «Файлы» ничего не доказывают: свежие они у любой карты.
+  const real = found.filter((f) => !proofNotEvidence(f.file, bases, card));
+  if (!real.length) return { ok: false, code: 'не доказательство', found, why: `в --proof только файлы, которые ничего не доказывают: ${found.slice(0, 5).map((f) => f.file).join('; ')}. Файлы доски, журналы сессии и правленые файлы из поля «Файлы» не доказательство. Что сделать: сохраните вывод проверки или снимок файлом в ${dir} и назовите его путь в --proof` };
+  const needOnly = proofNeedsOnly(card, bases);
+  const fresh = o.fresh === false ? real : real.filter((f) => evidenceTime(f, start) >= start.at);
+  const list = (/** @type {{ file: string, mtime: number }[]} */ a) => a.slice(0, 5).map((f) => `${f.file} — ${start && typeof start.stale === 'function' && start.stale(f.file) ? say(CLOSE_SAY['close.copyStale']) : when(f.mtime)}`).join('; ');
+  const since = `начало работы карты ${when(start.at)} (${start.from || ''})`;
+  if (!fresh.length) return { ok: false, code: 'старый файл', found, why: `все файлы из --proof старше, чем ${since}: ${list(found)}. Что сделать: прогоните проверку заново, сохраните её вывод свежим файлом в ${dir} и назовите его в --proof` };
+  // Сверх only-result.txt: повторы only-result-2.txt и only-credits.txt, итог самого гейта result-partial-*.txt (сухой прогон: иначе ложные отказы t1558, t1581, t1592).
+  const isOnly = (/** @type {{ file: string }} */ f) => /^(only[-_.]|result-partial).*\.txt$/i.test(path.basename(f.file));
+  // t1681: пустой итог — не итог, иначе ложный отказ учит заводить пустой файл.
+  const filled = (/** @type {{ file: string }} */ f) => { try { return fs.readFileSync(f.file, 'utf8').trim().length > 0; } catch { return false; } };
+  if (needOnly && !fresh.some((f) => isOnly(f) && filled(f))) {
+    const old = found.filter(isOnly);
+    const empty = fresh.filter(isOnly);
+    return { ok: false, code: 'нет only-result', found, why: empty.length
+      ? `«Как проверить» велит прогнать --only, а only-result.txt пустой: ${list(empty)}. Что сделать: прогоните --only, скопируйте его итог в only-result.txt и назовите его в --proof`
+      : old.length
+      ? `«Как проверить» велит прогнать --only, а only-result.txt старше, чем ${since}: ${list(old)}. Что сделать: прогоните --only заново, скопируйте итог в only-result.txt и назовите его в --proof`
+      : `«Как проверить» велит прогнать --only, а в --proof нет файла only-result.txt. Что сделать: прогоните --only, скопируйте итог в ${dir}only-result.txt и назовите этот путь в --proof` };
+  }
+  // t1803: свежий итог --only с проваленной проверкой — отказ. Сухой прогон (fresh: false) правило не берёт: там старые карты.
+  if (needOnly && o.fresh !== false) {
+    const red = proofRed(fresh.filter((f) => isOnly(f) && filled(f)));
+    if (red) return { ok: false, code: 'красная проверка', found, why: red.names.length ? say(CLOSE_SAY['close.redNames'], { names: red.names.join(', '), files: red.files.join('; ') }) : say(CLOSE_SAY['close.redVerdict'], { verdict: red.verdict, files: red.files.join('; ') }) };
+  }
+  return { ok: true, code: '', why: '', found };
+}
+
+/**
+ * Проваленные проверки в итогах --only (t1803). Формат — spikes/gate/run.js: строка «НЕТ  имя  …» с начала строки — проваленная проверка
+ * (строки с отступом — подробности внутри проверки, не имена), «ИТОГ: …» — вердикт. По каждому имени решает самый новый файл: красная в старом
+ * only-result.txt и зелёная в новом only-result-2.txt — починено. «ИТОГ: НЕТ» без имён (гейт оборвался) — красный, если это самый новый итог.
+ * Файл без строки «ИТОГ:» — не итог гейта, правило его не касается. Файл больше 1 МБ не читается.
+ * @param {{ file: string, mtime: number }[]} files @returns {{ names: string[], verdict: string, files: string[] } | null}
+ */
+function proofRed(files) {
+  /** @type {Map<string, { ok: boolean, file: string }>} */
+  const state = new Map();
+  /** @type {{ verdict: string, file: string } | null} */
+  let lastVerdict = null;
+  for (const f of [...files].sort((a, b) => a.mtime - b.mtime)) {
+    let text = '';
+    try { if (fs.statSync(f.file).size > MAX_SIZE_PROOF) continue; text = fs.readFileSync(f.file, 'utf8'); } catch { continue; }
+    const verdict = (/^ИТОГ:.*$/m.exec(text) || [''])[0].trim();
+    if (!verdict) continue;
+    for (const m of text.matchAll(/^(да|НЕТ) {2,}(\S+)/gm)) state.set(m[2], { ok: m[1] === 'да', file: f.file });
+    lastVerdict = { verdict, file: f.file };
+  }
+  const bad = [...state].filter(([, s]) => !s.ok);
+  if (bad.length) return { names: bad.map(([n]) => n), verdict: '', files: [...new Set(bad.map(([, s]) => s.file))] };
+  // t1831: гейт оборвался после зелёной — строки «да» есть, а итог «НЕТ»: красный.
+  if (lastVerdict && /^ИТОГ: НЕТ/.test(lastVerdict.verdict)) return { names: [], verdict: lastVerdict.verdict, files: [lastVerdict.file] };
+  return null;
+}
+
+/** Файл доказательства больше этого целиком в память не читается (t1803, t1804). */
+const MAX_SIZE_PROOF = 1024 * 1024;
+
+/** Доменные «расширения»: «example.com:8080» — адрес, а не файл (t1804). */
+const LINK_DOMAINS = /^(com|org|net|io|ru|ua|de|dev|app|local|localhost)$/i;
+
+/**
+ * Ссылки «файл:строка» в тексте (t1804): «a.js:12», «src/a.js:10-20», «a.js:12,40-50», «D:\x\y.js:5»; путь с пробелами — в `…`, «…» или "…"
+ * («`папка с пробелом/файл.md`:12» и «`папка с пробелом/файл.md:12`»). У файла должно быть расширение с буквой: «12:30», «node:fs», «d12:» — не ссылки.
+ * Адреса «http://host:3000», «example.com:8080», «user@host.com:22» — не ссылки.
+ * @param {string} text @returns {{ ref: string, file: string, line: number, at: number }[]}
+ */
+function linkRefs(text) {
+  const s = String(text || '');
+  const LINES = String.raw`(\d+(?:[-–—]\d+)?(?:,\s?\d+(?:[-–—]\d+)?)*)`;
+  const EXT = String.raw`\.[A-Za-z\p{L}][\p{L}\w]{0,7}`;
+  /** @type {{ ref: string, file: string, line: number, at: number }[]} */
+  const out = [];
+  /** @type {[number, number][]} */
+  const taken = [];
+  const add = (/** @type {string} */ ref, /** @type {string} */ file, /** @type {string} */ lines, /** @type {number} */ at) => {
+    if (taken.some(([a, b]) => at >= a && at < b)) return;
+    taken.push([at, at + ref.length]);
+    const f = file.trim();
+    if (/:\/\//.test(f) || /^[\w.-]*@/.test(f)) return;
+    const ext = (/\.([^.\\/]+)$/.exec(f) || ['', ''])[1];
+    if (!/[\\/]/.test(f) && LINK_DOMAINS.test(ext)) return;
+    const line = Math.max(...lines.split(/[-–—,\s]+/).filter(Boolean).map(Number));
+    out.push({ ref, file: f, line, at });
+  };
+  const quoted = [
+    new RegExp(String.raw`[\x60«"]([^\x60«»"\n]+?${EXT}):${LINES}[\x60»"]`, 'gu'),
+    new RegExp(String.raw`[\x60«"]([^\x60«»"\n]+?${EXT})[\x60»"]:${LINES}`, 'gu'),
+  ];
+  for (const re of quoted) for (const m of s.matchAll(re)) add(m[0], m[1], m[2], m.index || 0);
+  const bare = new RegExp(String.raw`(?<![\p{L}\w./\\:@-])((?:[A-Za-z]:[\\/])?[\p{L}\w.\\/-]*${EXT}):${LINES}(?![\p{L}\w:/\\])`, 'gu');
+  for (const m of s.matchAll(bare)) {
+    if (/:\/\/\S*$/.test(s.slice(Math.max(0, (m.index || 0) - 200), m.index))) continue;
+    add(m[0], m[1], m[2], m.index || 0);
+  }
+  return out;
+}
+
+/** Строк в файле: чтение кусками, без файла в памяти; дальше нужной строки не читает. @param {string} file @param {number} need */
+function linesAtLeast(file, need) {
+  let fd;
+  try { fd = fs.openSync(file, 'r'); } catch { return false; }
+  try {
+    const buf = Buffer.alloc(64 * 1024);
+    let lines = 0, last = 10, n;
+    while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) {
+      for (let i = 0; i < n; i++) if (buf[i] === 10) lines++;
+      last = buf[n - 1];
+      if (lines >= need) return true;
+    }
+    if (last !== 10) lines++;
+    return lines >= need;
+  } finally { fs.closeSync(fd); }
+}
+
+/**
+ * Неверные ссылки «файл:строка» (t1804): файла нет или в нём меньше строк, чем названо. Путь — абсолютный, от папок проекта,
+ * от папок из поля «Файлы» карты и от папки доказательств; «/d/папка» из Git Bash раскрывается. Голое имя и путь, начала которого нет ни от одной
+ * из этих папок, не найдены — пропускаются: где файл, не понять. Цифры кодом не проверяются.
+ * @param {string} text @param {string[]} bases @param {any} [card] @returns {{ ref: string, why: 'нет файла' | 'нет строки' }[]}
+ */
+/** Слова перед ссылкой: дальше — чужие слова или файл, которого уже нет (t1830). До конца фразы, на всех языках доски.
+ * Конец фразы (t1837) — «;» или «.», «!», «?» с пробелом и заглавной буквой: точка в пути, имени функции, «см.» фразу не обрывает. */
+const LINK_CITE = /(?<![\p{L}])(текст ошибки|ошибка|проверяющ\p{L}*|замечани\p{L}*|пишет|написал\p{L}*|написано|указал\p{L}*|ссылается|было|удал\p{L}*|убра\p{L}*|помилк\p{L}*|перевіряюч\p{L}*|пише|написав|було|видал\p{L}*|прибра\p{L}*|error|reviewer|grader|wrote|says|was|deleted|removed|fehler|prüfer|schreibt|schrieb|war|gelöscht|entfernt)(?![\p{L}])[^;\n]*$/iu;
+/** Конец фразы для LINK_CITE без флага i: с i \p{Lu} ловит и строчные буквы (t1837). */
+const PHRASE_END = /[.!?]\s+(?=\p{Lu})/gu;
+/** Метка в последней фразе перед ссылкой. @param {string} before */
+function citeBefore(before) {
+  let cut = 0;
+  for (const m of before.matchAll(PHRASE_END)) cut = m.index + m[0].length;
+  return LINK_CITE.test(before.slice(cut));
+}
+
+/**
+ * Ссылка внутри цитаты или рядом со словами «удалил», «было» (t1830): сверять её нечего — это чужой текст или файл, которого уже нет.
+ * Цитата — «…» или "…", в которой кроме ссылки есть другие слова; кавычки только вокруг ссылки — это путь с пробелом, его сверяем.
+ * Слова-метки — LINK_CITE в той же фразе перед ссылкой (до «;», до точки с пробелом и заглавной буквой или до конца строки).
+ * @param {string} text @param {number} at @param {string} ref
+ */
+function linkCited(text, at, ref) {
+  const line0 = text.lastIndexOf('\n', at - 1) + 1;
+  const end0 = text.indexOf('\n', at);
+  const line = text.slice(line0, end0 < 0 ? text.length : end0);
+  const pos = at - line0;
+  const bare = ref.replace(/^[«"`]|[»"`]$/g, '');
+  const inside = (/** @type {string} */ open, /** @type {string} */ close) => {
+    let o = -1;
+    if (open === close) { if (line.slice(0, pos).split(open).length % 2 === 0) o = line.lastIndexOf(open, pos - 1); }
+    else { o = line.lastIndexOf(open, pos - 1); if (line.lastIndexOf(close, pos - 1) > o) o = -1; }
+    if (o < 0) return false;
+    const c = line.indexOf(close, pos + 1);
+    if (c < 0) return false;
+    return line.slice(o + 1, c).replace(bare, '').replace(/[`«»"\s]/g, '').length > 0;
+  };
+  // Ссылка сама в кавычках («путь с пробелом:4») — путь, а не цитата.
+  if (/^[«"]/.test(ref)) return citeBefore(line.slice(0, pos));
+  // „…" и „…“ — немецкие кавычки: задание на немецкой доске велит брать цитату в них (t1831).
+  if (inside('«', '»') || inside('"', '"') || inside('„', '"') || inside('„', '“')) return true;
+  return citeBefore(line.slice(0, pos));
+}
+
+function proofLinks(text, bases, card) {
+  const roots = proofBases(bases, card);
+  if (card && card.id) for (const b of bases) roots.push(path.join(b, '.kermach', 'proofs', card.id));
+  /** @type {{ ref: string, why: 'нет файла' | 'нет строки' }[]} */
+  const bad = [];
+  for (const r of linkRefs(text)) {
+    let f = r.file;
+    if (process.platform === 'win32') f = f.replace(/^\/([a-zA-Z])(?=\/)/, '$1:');
+    const cands = path.isAbsolute(f) ? [path.normalize(f)] : roots.map((b) => path.join(b, f));
+    const hit = cands.find((c) => { try { return fs.statSync(c).isFile(); } catch { return false; } });
+    // Голое «board.js:12» и неполное «roadmap/main.js:5» — где файл, по тексту не понять: ложный отказ дороже пропуска (t1681).
+    // Отказ — только когда начало пути есть: «src/нет.js» при папке src, абсолютный путь.
+    const head = f.split(/[\\/]/)[0];
+    const anchored = path.isAbsolute(f) || (f.split(/[\\/]/).length > 1 && roots.some((b) => fs.existsSync(path.join(b, head))));
+    if (!hit && !anchored) continue;
+    // t1830: цитата ошибки, слова проверяющего, удалённый файл — сверять нечего.
+    if (linkCited(String(text || ''), r.at, r.ref)) continue;
+    // t1830: абсолютный путь вне папок проекта, которого нет на диске, — чужая машина (стек ошибки из CI): где файл, не понять.
+    if (!hit && path.isAbsolute(f) && !bases.some((b) => { const rel = path.relative(path.resolve(b), path.resolve(f)); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel); })) continue;
+    if (!hit) bad.push({ ref: r.ref, why: 'нет файла' });
+    else if (!linesAtLeast(hit, r.line)) bad.push({ ref: r.ref, why: 'нет строки' });
+  }
+  return bad;
+}
+
+/** Файл-список «пункт — файл доказательства» в папке доказательств карты (t1802). Имя одно на всех языках доски. */
+const CHECKLIST = 'checklist.md';
+
+/**
+ * Русские шаблоны новых отказов close (t1831): kermach.js берёт их ключами словаря translate/LL.json и переводит на язык доски.
+ * {переменные} подставляет say. Ключ — имя в словаре.
+ */
+const CLOSE_SAY = /** @type {Record<string, string>} */ ({
+  'close.listHowNew': 'Что сделать: положите файл {rel} — по строке на каждый пункт полей «Что сделать» и «Как проверить»: «- пункт — файл доказательства[:строка]», несколько файлов — через «;», например «- отказ без файла — {example}». Файл — вывод проверки, снимок или место в правленом коде; слова без файла не доказательство',
+  'close.listHowFix': 'Что сделать: поправьте {rel}: по строке на каждый пункт полей «Что сделать» и «Как проверить»: «- пункт — файл доказательства[:строка]», несколько файлов — через «;», например «- отказ без файла — {example}». Файл — вывод проверки, снимок или место в правленом коде; слова без файла не доказательство',
+  'close.listNone': 'нет файла-списка {rel}. {how}',
+  'close.listEmpty': 'в {rel} нет ни одного пункта. {how}',
+  'close.listBad': 'в {rel}: {bad}. {how}',
+  'close.listMore': ' и ещё {n}',
+  'close.listNoName': '«{item}» — не назван файл',
+  'close.listNoFile': '«{item}» — нет файла {file}',
+  'close.listOld': 'в {rel} все файлы старше начала работы карты {since}: самый новый — {newest}. Что сделать: перегоните проверку, сохраните её вывод заново файлом в {dir} и назовите его в списке у пункта, который он доказывает. Остальные пункты могут ссылаться на старые файлы',
+  'close.redNames': 'в итоге --only не прошли проверки: {names} ({files}). Красную проверку не закрывают: почините и прогоните --only заново. Провал не из-за вашей работы — карту не закрывайте, поставьте status: ждёт ответа и спросите человека',
+  'close.copyStale': 'не менялся с создания копии',
+  'close.redVerdict': 'в итоге --only гейт не дал итога: «{verdict}» ({files}). Красную проверку не закрывают: почините и прогоните --only заново. Провал не из-за вашей работы — карту не закрывайте, поставьте status: ждёт ответа и спросите человека',
+  'close.redMain': '. Человек велел закрыть, хотя проверка красная, — сперва kermach roadmap answer {ref} "слова человека", потом закройте с --no-file "причина" вместо --proof; --no-file доступен только главной сессии',
+  'close.links': 'неверные ссылки файл:строка {where}. Что сделать: откройте каждую ссылку, поправьте путь (от папки проекта; путь с пробелом — в обратных кавычках) или номер строки и закройте снова. Ссылка из цитаты (текст чужой ошибки, слова проверяющего) или на удалённый файл — возьмите цитату в «…» вместе со словами вокруг или напишите перед ссылкой «удалил», «было», «Текст ошибки:» — такие ссылки не сверяются',
+  'close.linksDone': 'в --done — {list}',
+  'close.linksList': 'в {rel} — {list}',
+  'close.linkNoFile': 'такого файла нет',
+  'close.linkNoLine': 'в файле меньше строк',
+});
+
+/** Шаблон с {переменными} без перевода — русский текст по умолчанию. @param {string} t @param {Record<string, string | number>} [v] */
+function sayRu(t, v = {}) { return t.replace(/\{(\w+)\}/g, (m, n) => (n in v ? String(v[n]) : m)); }
+
+/**
+ * Файлы одной части строки списка, если все они есть на диске; иначе null (t1831: «пункт — файл:строка — что видно»).
+ * @param {string} part @param {string[]} bases @param {any} card
+ */
+function listPart(part, bases, card) {
+  const pieces = part.split(/\s*;\s*/).filter(Boolean);
+  if (!pieces.length) return null;
+  const all = pieces.map((one) => ({ one, found: proofFiles(one, bases, card) }));
+  return all.every((x) => x.found.length) ? all : null;
+}
+
+/**
+ * Файл-список карты (t1802): `.kermach/proofs/tN/checklist.md`, строки «- пункт — файл[:строка]», несколько файлов — через «;».
+ * Пункт — текст до « — », файлы — часть после него, в которой все названные файлы есть (t1831: хвост « — что видно» — пояснение);
+ * нет такой части — файлами считается последняя. Строка-пункт с отступом под другим пунктом — примечание к нему, не пункт (t1831).
+ * Каждый названный файл есть; кроме ревью и разведки, хотя бы один файл списка
+ * не старше начала работы карты (t1828): остальные — старые файлы пунктов, которые в этом круге не дорабатывали.
+ * Ревью и разведка без списка закрываются как раньше; список есть — файлы из него должны быть.
+ * say — перевод шаблона CLOSE_SAY на язык доски (t1831); по умолчанию русский.
+ * @param {any} card @param {string[]} bases @param {{ at: number, from?: string }} start @param {(t: string, v?: Record<string, string | number>) => string} [say]
+ * @returns {{ ok: boolean, why: string, text: string }}
+ */
+function proofChecklist(card, bases, start, say = sayRu) {
+  const S = (/** @type {string} */ k, /** @type {Record<string, string | number>} */ v = {}) => say(CLOSE_SAY[k], v);
+  const free = ['ревью', 'разведка'].includes(card.kind);
+  const rel = `.kermach/proofs/${card.id}/${CHECKLIST}`;
+  const example = `.kermach/proofs/${card.id}/probe-result.txt:12`;
+  let text = null;
+  for (const b of bases) { try { text = fs.readFileSync(path.join(b, rel), 'utf8'); break; } catch { /* нет в этой папке */ } }
+  if (text === null) return free ? { ok: true, why: '', text: '' } : { ok: false, why: S('close.listNone', { rel, how: S('close.listHowNew', { rel, example }) }), text: '' };
+  // t1828: список уже лежит — совет «положите файл» сбивает; формат строки тот же.
+  const how = S('close.listHowFix', { rel, example });
+  /** @type {string[]} */
+  const items = [];
+  let top = false;
+  for (const l of text.split(/\r?\n/)) {
+    const m = /^(\s*)(?:[-*]|\d+[.)])\s+(.+)$/.exec(l);
+    if (!m) continue;
+    // t1831: «  - примечание» под пунктом — пояснение к нему, а не новый пункт.
+    if (m[1].replace(/\t/g, '  ').length >= 2 && top) continue;
+    top = true;
+    items.push(m[2]);
+  }
+  if (!items.length) return { ok: false, why: S('close.listEmpty', { rel, how }), text };
+  const p = (/** @type {number} */ n) => String(n).padStart(2, '0');
+  const when = (/** @type {number} */ ms) => { const d = new Date(ms); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+  /** @type {string[]} */
+  const bad = [];
+  // t1828: свежесть — на весь список, как у --proof: хватит одного файла новее начала работы. Остальные файлы должны только быть:
+  // во втором круге пункты, которые не дорабатывали, и в первом — место в коде, которое карта не меняла, ссылаются на старые файлы.
+  let newest = 0;
+  for (const s0 of items) {
+    const parts = s0.split(' — ');
+    let item = s0, files = '', hit = null;
+    for (let i = 1; i < parts.length && !hit; i++) {
+      hit = listPart(parts[i], bases, card);
+      if (hit) { item = parts.slice(0, i).join(' — ').trim(); files = parts[i].trim(); }
+    }
+    if (!hit && parts.length > 1) { item = parts.slice(0, -1).join(' — ').trim(); files = parts[parts.length - 1].trim(); }
+    const short = item.length > 80 ? `${item.slice(0, 80)}…` : item;
+    if (!files) { bad.push(S('close.listNoName', { item: short })); continue; }
+    if (hit) { for (const x of hit) for (const f of x.found) newest = Math.max(newest, evidenceTime(f, start)); continue; }
+    for (const one of files.split(/\s*;\s*/).filter(Boolean)) {
+      const found = proofFiles(one, bases, card);
+      if (!found.length) bad.push(S('close.listNoFile', { item: short, file: one }));
+      for (const f of found) newest = Math.max(newest, evidenceTime(f, start));
+    }
+  }
+  if (bad.length) return { ok: false, why: S('close.listBad', { rel, bad: `${bad.slice(0, 6).join('; ')}${bad.length > 6 ? S('close.listMore', { n: bad.length - 6 }) : ''}`, how }), text };
+  if (!free && newest < start.at) return { ok: false, why: S('close.listOld', { rel, since: say === sayRu ? `${when(start.at)} (${start.from || ''})` : when(start.at), newest: when(newest), dir: `.kermach/proofs/${card.id}/` }), text };
+  return { ok: true, why: '', text };
+}
+
+module.exports = { DIR, MAX_SIZE, mtimeOf, setLog, ERROR_LINE, LANGS, WORDS, stamp, humanMark, noteState, noteCard, noteCardAsync, noteDrop, noteDropAsync, noteRestore, withNoteLock, withNoteLockAsync, CARD_STATUS, PHASE_STATUS, HEALTH, HUMAN, BUG_BY, bugByWord, TESTED, testedWords, KINDS, DTYPES, HOW, CARD_FIELDS, PHASE_FIELDS, PASSPORT, root, ownRoot, read, oneCard, boardLang, setLang, say, cardStart, passportEmpty, prime, update, addServed, merge, reviewed, differ, section, nextId, create, watch, codeMask, edges, sameField, alike, usedWarn, checkBoard, proofCandidates, proofFiles, proofNeedsOnly, proofStart, proofCheck, proofRed, linkRefs, linkCited, proofLinks, CHECKLIST, CLOSE_SAY, sayRu, proofChecklist };

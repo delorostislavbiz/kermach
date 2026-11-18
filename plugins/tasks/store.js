@@ -742,7 +742,10 @@ function cardStatus(project, card) {
   try { text = fs.readFileSync(path.join(project, '.kermach', 'roadmap', `${card}.md`), 'utf8').slice(0, 4096); } catch { return ''; }
   const head = /^﻿?---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   const m = head ? /^status:[ \t]*(.*?)[ \t]*$/m.exec(head[1]) : null;
-  return m ? m[1] : '?';
+  if (!m) return '?';
+  // t1888: на доске uk, en, de статус пишется словом её языка (done, fertig) — русское слово даёт разбор карты в board.js; карта не разобралась — слово как есть.
+  try { const c = require('../roadmap/board').oneCard(project, card); if (c && c.status) return c.status; } catch { /* слово как есть */ }
+  return m[1];
 }
 
 /**

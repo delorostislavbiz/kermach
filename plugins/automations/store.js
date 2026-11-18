@@ -201,8 +201,14 @@ const same = (/** @type {string} */ a, /** @type {string} */ b) => path.resolve(
 function writeAtomic(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, text);
-  fs.renameSync(tmp, file);
+  // t1675: нет места или файл занят — частично записанный .tmp не остаётся рядом с итогом и реестром.
+  try {
+    fs.writeFileSync(tmp, text);
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* не создан */ }
+    throw e;
+  }
 }
 
 /** Код ошибки «слишком большой» у readSmall. */
@@ -218,8 +224,19 @@ function readJson(file) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-/** Файл описания текстом; больше MAX_SIZE — ошибка «слишком большой», файл в память не берётся. @param {string} file */
+/**
+ * Файл — символическая ссылка или ведёт не в свою папку (t1684): такой файл не читается, иначе окно покажет чужой файл
+ * за пределами проекта. Папки-ссылки (junction) выше проверяют outside() и readRun. @param {string} file
+ */
+function linkOut(file) {
+  if (fs.lstatSync(file).isSymbolicLink()) return true;
+  const rel = path.relative(fs.realpathSync(path.dirname(file)), fs.realpathSync(file));
+  return !rel || rel.includes(path.sep) || rel === '..' || path.isAbsolute(rel);
+}
+
+/** Файл описания текстом; больше MAX_SIZE — ошибка «слишком большой», файл в память не берётся. Ссылка — отказ (t1684). @param {string} file */
 function readSmall(file) {
+  if (linkOut(file)) throw new Error(`файл — ссылка, не читаю: ${file}`);
   const size = fs.statSync(file).size;
   if (size > MAX_SIZE) throw Object.assign(new Error(`слишком большой: ${size} байт, предел ${MAX_SIZE}`), { code: TOO_BIG });
   return fs.readFileSync(file, 'utf8');
@@ -251,7 +268,14 @@ function regWritable(dataDir) {
 }
 
 /** @param {string} dataDir @param {Record<string, RegEntry>} reg */
-function saveRegistry(dataDir, reg) { regWritable(dataDir); writeAtomic(regFile(dataDir), JSON.stringify(reg, null, 2)); }
+function saveRegistry(dataDir, reg) {
+  regWritable(dataDir);
+  const text = JSON.stringify(reg, null, 2);
+  // Новый реестр больше предела не пишется (t1684): следующее чтение сочло бы его пустым, а запись — запретила.
+  const size = Buffer.byteLength(text);
+  if (size > MAX_SIZE) throw new Error(`реестр вышел бы ${size} байт, предел ${MAX_SIZE} — автоматизации не меняю`);
+  writeAtomic(regFile(dataDir), text);
+}
 
 /** Описание из папки. @param {string} dir @param {string} project @param {Record<string, RegEntry>} reg @returns {Item} */
 function readItem(dir, project, reg) {
@@ -396,7 +420,10 @@ const FILES_MAX = 200;
 /** Начало текстового файла не длиннее max байт: { text, size }. Нет файла — пустой текст. @param {string} file @param {number} max */
 function readHead(file, max) {
   let fd;
-  try { fd = fs.openSync(file, 'r'); } catch { return { text: '', size: 0 }; }
+  try {
+    if (linkOut(file)) return { text: '', size: 0 }; // ссылка — не читаю (t1684)
+    fd = fs.openSync(file, 'r');
+  } catch { return { text: '', size: 0 }; }
   try {
     const size = fs.fstatSync(fd).size;
     const buf = Buffer.alloc(Math.min(size, max));
@@ -412,11 +439,20 @@ function readHead(file, max) {
  * ответ — первые ANSWER_MAX байт и пометка «обрезано», файлы — первые FILES_MAX путей. @param {string} dir папка прогона
  */
 function readRun(dir) {
+  // Папка прогона — ссылка (junction) наружу: ничего из неё не читается (t1684).
+  let away = true;
+  try { const rel = path.relative(fs.realpathSync(path.dirname(dir)), fs.realpathSync(dir)); away = !rel || rel.includes(path.sep) || rel === '..' || path.isAbsolute(rel); } catch {}
+  if (away) return { result: { status: 'error', error: `папка прогона — ссылка или её нет: ${dir}` }, md: '', files: [], more: 0 };
   const result = readResult(dir);
   const a = readHead(path.join(dir, 'ответ.md'), ANSWER_MAX);
   const md = a.size > ANSWER_MAX ? `${a.text}\n\n… обрезано: показано ${Math.round(ANSWER_MAX / 1024)} КБ из ${Math.round(a.size / 1024)} КБ, весь ответ — ответ.md в папке прогона` : a.text;
   const list = Array.isArray(result.files) ? result.files.filter((/** @type {any} */ f) => typeof f === 'string') : [];
-  const files = list.slice(0, FILES_MAX).map((/** @type {string} */ f) => { let size = -1; try { size = fs.statSync(f).size; } catch {} return { path: f, size }; });
+  const files = list.slice(0, FILES_MAX).map((/** @type {string} */ f) => {
+    // Сетевой путь не трогается (t1684): stat «\\server\share» уводит Windows к чужому серверу и держит главный процесс.
+    let size = -1;
+    if (!/^[\\/]{2}/.test(f)) try { size = fs.statSync(f).size; } catch {}
+    return { path: f, size };
+  });
   return { result, md, files, more: Math.max(0, list.length - FILES_MAX) };
 }
 

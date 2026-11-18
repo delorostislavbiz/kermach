@@ -52,7 +52,7 @@ Before every wave choose the model and effort for the phase cards «в очер�
 While the phase is running:
 - an agent asked — the human answers in its tab. You were asked "what is t<N> asking?" — read the card and advise; the answer still goes to the agent;
 - the human answered a card's question to you — pass the answer on with the command `kermach roadmap answer t<N> "…"`. Do not write it into the card yourself: an answer written by hand is not counted by the checker as the human's answer;
-- the human did what a "human needed" card was waiting for (gave access, decided, paid) — close it yourself: `kermach roadmap close t<N> --done "what the human did" --proof "…"`. It will have no checker, and that is right: the human did the work. The cards that depend on it will go on;
+- the human did what a "human needed" card was waiting for (gave access, decided, paid) — close it yourself: first `kermach roadmap answer t<N> "the human's words"`, then `kermach roadmap close t<N> --done "what the human did" --no-file "the human did the work: what exactly" --tested "human only"`. The human said it in words — without `answer` the checker will not see those words and will send the card back for rework: in "solo" mode the checker looks at such a card too. A cancelled card does not need `answer`. The cards that depend on it will go on;
 - "Why was it done this way?" — the card, its proof and the agent's records `d<N>.md`;
 - a request for 15–20 steps of work — do it yourself. Before an edit check whether there is a card "in progress" with this file: there is — do not edit, tell the human;
 - more than 15–20 steps or a long check is needed — create a card in the right phase (`kermach roadmap new t …`). An idea for later — a card in the "Inbox". Do not touch running cards;
@@ -65,6 +65,7 @@ You fix it yourself:
 - the human closed the tab (the line says «закрыл человек») — do not restart: they may have stopped the card on purpose. Ask them in one line whether to restart;
 - the agent went quiet — write "continue" in its tab and what is left to do on the card;
 - the agent waits for an answer and the answer is in the card, the overview or the log — pass it on: `kermach roadmap answer t<N> --from session "…"`;
+- the card question is not yours, it needs the human's decision — hand it to the human: `kermach roadmap answer t<N> --to-human`;
 - the reviewer returned remarks — the card agent must get them: restart the card if it is stuck;
 - the card failed a second time — set a stronger model in its header (`model:`) and restart;
 - subscription limit — wait for the reset time from the line and restart the card.

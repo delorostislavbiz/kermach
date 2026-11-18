@@ -137,6 +137,8 @@ function ruleOf(repeat) {
     const m = s.match(r);
     if (m) { const rule = p.rule(m); if (rule) return rule; }
   }
+  // «каждый день!» (t1672): знак после всей фразы — тот же повтор от даты выполнения.
+  if (s.endsWith('!') && !s.endsWith('!!')) { const rule = ruleOf(s.slice(0, -1)); if (rule) return { ...rule, bang: true }; }
   return null;
 }
 
@@ -198,6 +200,8 @@ function parse(text, opts = {}) {
     if (st.rule) return false;
     const rule = p.rule(m);
     if (!rule) return false;
+    // «каждый день!» — знак после всей фразы повтора значит то же, что «каждый! день» (t1672); take() берёт m[0] вместе со знаком.
+    if (src[m.index + m[0].length] === '!') { m[0] += '!'; rule.bang = true; }
     st.rule = rule; st.repeat = m[0].trim(); return true;
   } });
   // «через 3 дня», «in 2 weeks», «через 2 часа», «in 30 min»

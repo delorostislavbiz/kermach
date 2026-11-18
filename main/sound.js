@@ -10,6 +10,7 @@
 // Тот же повод зажигает сигнал на панели задач или точку на значке у часов (attention.js, t108).
 // Звук — системный (shell.beep: «Стандартный звук» Windows), без файлов, окон и процессов.
 // KERMACH_SOUND=0 — выключатель для проверок: событие пишется в журнал, но не звучит.
+// Своя папка данных (KERMACH_DATA) без KERMACH_SOUND=1 — тоже не звучит, строка «играю» в журнале остаётся (t1770).
 // Настройка «звук» (settings.js, t181) читается на каждое событие: выключили — не звучит, мигание остаётся.
 // Тот же повод показывает уведомление Windows (notify.js, t151) — после мигания и до проверок звука: у него своя настройка.
 
@@ -31,6 +32,15 @@ const ENV = (n) => require('../daemon/platform').envOf(process.env, n);
 const LOUD_STATES = new Map([['done', 'закончил'], ['waiting', 'ждёт ответа'], ['error', 'оборвался']]);
 /** Откуда должно прийти событие, чтобы прозвучать. */
 const LOUD_BY = new Set(['hook', 'osc9']);
+
+/**
+ * Вкладки, вопрос которых сейчас у главной сессии (t2019): «Роадмап» отмечает вкладку агента карты, пока вопрос карты идёт только главной.
+ * Такая вкладка не звучит, не мигает и не показывает уведомление. Отметку ставит и снимает плагин (hush), здесь — только пропуск.
+ * @type {Set<string>}
+ */
+const hushed = new Set();
+/** Отметить вкладку (on) или снять отметку. @param {string} sid @param {boolean} on */
+function hush(sid, on) { if (!sid) return; if (on) hushed.add(sid); else hushed.delete(sid); }
 
 /** Клиенты, к которым уже подключён звук: повторный attach того же клиента не удваивает звук. @type {WeakSet<object>} */
 const attached = new WeakSet();
@@ -65,12 +75,16 @@ function attach(client, c) {
   if (attached.has(client)) return;
   attached.add(client);
   const off = ENV('SOUND') === '0';
+  // Проба со своей папкой данных без явного KERMACH_SOUND=1 — shell.beep не зовётся, журнал как обычно (t1770):
+  // пробы удаляли выключатель и грузили настоящий main.js — Ростислав слышал их сигналы. Правило — как у уведомлений (notify.js testing()).
+  const quiet = !off && !!ENV('DATA') && ENV('SOUND') !== '1';
   if (off) c.log('звук: выключен переменной KERMACH_SOUND=0');
-  client.on('exit', (/** @type {any} */ m) => { if (m && m.sid) notify.forget(m.sid); });
+  client.on('exit', (/** @type {any} */ m) => { if (m && m.sid) { notify.forget(m.sid); hushed.delete(m.sid); } });
   client.on('state', (/** @type {any} */ m) => {
     if (!LOUD_STATES.has(m.state)) return;
     const what = `${m.sid} ${LOUD_STATES.get(m.state)} (${m.by})`;
     if (!LOUD_BY.has(m.by) && !m.loud) { c.log(`звук: ${what} — не звучит, не от агента`); return; }
+    if (hushed.has(m.sid)) { c.log(`звук: ${what} — молчу, вопрос карты у главной сессии`); return; }
     // Проект терминала — из списка демона: в событии state только номер терминала.
     client.request('list').then((/** @type {any} */ r) => {
       const s = (r.sessions || []).find((/** @type {any} */ x) => x.sid === m.sid);
@@ -84,7 +98,7 @@ function attach(client, c) {
       catch (e) { c.log(`уведомление: ${what} — не показано: ${e instanceof Error ? e.message : e}`); }
       if (off) { c.log(`звук: ${what} — выключен для проверки`); return; }
       if (!settings.get().sound) { c.log(`звук: ${what} — выключен настройкой`); return; }
-      electron.shell.beep();
+      if (!quiet) electron.shell.beep();
       c.log(`звук: ${what} — играю`);
     }).catch((/** @type {any} */ e) => c.log(`звук: ${what} — проект не узнан, звук пропущен: ${e}`));
   });
@@ -95,4 +109,4 @@ function test() {
   electron.shell.beep();
 }
 
-module.exports = { attach, test };
+module.exports = { attach, test, hush };

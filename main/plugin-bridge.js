@@ -11,7 +11,8 @@
 //   и новым кодом не заменяется: иначе его таймеры остались бы вдвоём.
 // ctx: id, project { id, name, path }, dataDir — %APPDATA%\Kermach\plugins-data\<id> (создана), log(текст) — строка в main.log,
 //   settings.get() / settings.set(obj) — свой мешок pluginSettings[id] (main\settings.js). set заменяет весь мешок, не сливает:
-//   дописать поле — set({ ...settings.get(), поле }), null — мешок удалить (t502). send(event, payload) — событие окну проекта,
+//   дописать поле — set({ ...settings.get(), поле }), null — мешок удалить (t502). Ответ set — записанный мешок; отклонён по пределу —
+//   прежний мешок с неперечисляемым полем refused (причина, t1989). send(event, payload) — событие окну проекта,
 //   readTab(sid, format) — вывод вкладки проекта (команда read демона),
 //   writeTab(sid, data) — записать байты во вкладку проекта, Enter — '\r' (t276); terminals() — живые вкладки проекта со state (t276)
 //   и номером разговора: claudeSessionId у Claude, codexSessionId у продолженного Codex (t768);
@@ -33,6 +34,8 @@ const { ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const sender = require('./sender');
+/** t1811: текст ошибки на языке программы; без главного процесса — русский. */
+const tr = (/** @type {string} */ k, /** @type {string} */ ru, /** @type {any} */ v) => { try { return require('./i18n').t(k, ru, v); } catch { return ru.replace(/\{(\w+)\}/g, (m, n) => (v && n in v ? String(v[n]) : m)); } };
 const settings = require('./settings');
 const plugins = require('./plugins');
 
@@ -120,9 +123,18 @@ function instOf(pl, p) {
     dataDir,
     log,
     settings: Object.freeze({
-      get: () => { const s = settings.get().pluginSettings[pl.id]; return s ? s : {}; },
-      /** @param {any} v */
-      set: (v) => settings.set({ pluginSettings: { [pl.id]: v } }).pluginSettings[pl.id] || {},
+      get: () => { const s = settings.pluginSettingsOf(pl.id); return s ? s : {}; },
+      /**
+       * Ответ — то, что записалось (мешок). Запись отклонена по пределу (settings.js cleanBags, t1989) — в ответе прежний мешок
+       * и поле refused с причиной: неперечисляемое — не уходит в JSON и окну, не возвращается в мешок через set({ ...ответ }).
+       * @param {any} v
+       */
+      set: (v) => {
+        const bag = settings.set({ pluginSettings: { [pl.id]: v } }).pluginSettings[pl.id] || {};
+        const why = settings.refusalOf(pl.id);
+        if (why) Object.defineProperty(bag, 'refused', { value: why });
+        return bag;
+      },
     }),
     /** @param {string} event @param {any} [payload] */
     send: (event, payload) => {
@@ -259,7 +271,7 @@ function mainOff(id, p) {
     mainRefused.add(key);
     /** @type {any} */ (ctx).log(`плагин ${id}: главная часть не загружена — свой плагин, галочки «главная часть» в «Настройках» нет (${p.path || 'вне окна проекта'})`);
   }
-  return { error: `главная часть плагина ${id} не включена: галочка «главная часть» в «Настройках»`, mainOff: true };
+  return { error: tr('bridge.err1', 'главная часть плагина {id} не включена: галочка «главная часть» в «Настройках»', { id }), mainOff: true };
 }
 
 /** Вызов главной части плагина для проекта: тот же путь у окна (plugin:call) и у терминала (callFor). @param {Project} p @param {unknown} id @param {unknown} cmd @param {unknown} args */

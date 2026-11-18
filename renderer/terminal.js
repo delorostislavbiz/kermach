@@ -226,17 +226,20 @@ function measureTerminal(host, fontSize) {
   host.appendChild(pane);
   if (!pane.clientWidth || !pane.clientHeight) { pane.remove(); return null; }
   const term = new Terminal(termOptions(fontSize));
+  /** @type {WebGL2RenderingContext | null} */
+  let ctx = null;
   try {
     const fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     term.open(pane);
-    try { term.loadAddon(new WebglAddon.WebglAddon()); } catch (e) { /* как у вкладки: остаётся DOM */ }
+    try { const gl = new WebglAddon.WebglAddon(); term.loadAddon(gl); ctx = glContext(gl); } catch (e) { /* как у вкладки: остаётся DOM */ }
     const d = fitAddon.proposeDimensions();
     return d && Number.isFinite(d.cols) && Number.isFinite(d.rows) ? { cols: d.cols, rows: d.rows } : null;
   } catch (e) {
     return null;
   } finally {
     term.dispose();
+    glLose(ctx);
     pane.remove();
   }
 }
@@ -258,18 +261,44 @@ function rowCells(b, y, cols) {
  * от области прокрутки — там не трогаем. Проба — spikes\t451-cursor\probe.js. Такая же функция — в экране демона (daemon.js).
  * Всё — в колбэке пустой записи (t465): xterm разбирает write не сразу, и курсор, снятый до разбора пришедшего вывода,
  * ставился туда, где он был до этого вывода. Проба — spikes\t465-cursor\probe-race.js.
- * Смена одной высоты на Windows — keepBottom (t1181).
- * @param {any} term @param {() => void} resize @param {() => number} [rowsTo] новая высота, если меняется только она, иначе 0
+ * Смена высоты на Windows — keepBottom (t1181). Смена ширины, одной или вместе с высотой (угол окна, t1851): ConPTY строки видимого экрана
+ * по новой ширине не переносит и сразу рисует экран заново, а xterm переносил длинные ряды (линии, строку состояния) — лишние ряды
+ * выталкивали верх экрана в историю, и после перерисовки строки ответа Claude Code стояли дважды. Поэтому видимые ряды
+ * обрезаются по новой ширине и теряют признак переноса (их всё равно перерисуют), история переносится как обычно, высота — keepBottom.
+ * Только когда под курсором есть нарисованные ряды, как в keepBottom; иначе прежний путь. Проба — spikes\t1851-both.
+ * @param {any} term @param {() => void} resize @param {() => ({ cols: number, rows: number } | null)} [to] новый размер
  */
-function keepCursor(term, resize, rowsTo) {
-  term.write('', () => keepCursorNow(term, resize, rowsTo));
+function keepCursor(term, resize, to) {
+  term.write('', () => keepCursorNow(term, resize, to));
 }
 
-/** @param {any} term @param {() => void} resize @param {() => number} [rowsTo] */
-function keepCursorNow(term, resize, rowsTo) {
+/** @param {any} term @param {() => void} resize @param {() => ({ cols: number, rows: number } | null)} [to] */
+function keepCursorNow(term, resize, to) {
   const before = term.buffer.active;
   if (before.type !== 'normal' || term.modes.originMode) return resize();
-  if (WIN && rowsTo && rowsTo() && rowsTo() !== term.rows) return keepBottom(term, resize);
+  const t = WIN && to ? to() : null;
+  if (t && t.cols !== term.cols) {
+    const buf = term._core._bufferService.buffer;
+    let low = term.rows - 1;
+    while (low > buf.y && !buf.lines.get(buf.ybase + low).translateToString(true)) low--;
+    if (low > buf.y) {
+      const fill = buf.getNullCell();
+      for (let y = 0; y < term.rows; y++) {
+        const ln = buf.lines.get(buf.ybase + y);
+        if (!ln) continue;
+        ln.isWrapped = false;
+        if (t.cols < term.cols) ln.replaceCells(t.cols, term.cols, fill);
+      }
+      keepBottom(term, resize);
+      // ConPTY после смены ширины прижимает текст к низу: внизу один пустой ряд, сверху — ряды из истории (t1851, шаг 100→120).
+      let empty = 0;
+      while (empty < term.rows - 1 && !buf.lines.get(buf.ybase + term.rows - 1 - empty).translateToString(true)) empty++;
+      const k = Math.min(empty - 1, buf.ybase, term.rows - 2 - buf.y);
+      if (k > 0) { buf.lines.splice(buf.ybase + term.rows - k, k); buf.ybase -= k; buf.ydisp = buf.ybase; buf.y += k; }
+      return;
+    }
+  }
+  if (t && t.rows !== term.rows && t.cols === term.cols) return keepBottom(term, resize);
   const cols0 = term.cols;
   let y = before.baseY + before.cursorY;
   let offset = before.cursorX;
@@ -309,10 +338,66 @@ function keepBottom(term, resize) {
   buf.y = Math.max(0, Math.min(term.rows - 1, line - buf.ybase));
 }
 
+/**
+ * Замер переключения вкладки по шагам (t1687). Дольше SLOW мс — строка в журнал: только так видно настоящие числа в окне человека.
+ * Шаги до кадра меряются вокруг своего кода, «отрисовка» — от начала кадра до конца рисования xterm (в ней текстура букв),
+ * «кадр» — от конца рисования до следующего кадра. Свёрнутое окно кадров не рисует: такое переключение не считается.
+ */
+const KermachSwitch = (() => {
+  const SLOW = 300;
+  /** @type {{ t0: number, steps: Record<string, number>, frame: number, drawn: number } | null} */
+  let cur = null;
+  /** @type {(line: string) => void} */
+  let log = () => {};
+  const api = {
+    /** Последний законченный замер: мс и шаги. Читает проба. @type {{ ms: number, drawnMs: number, steps: Record<string, number> } | null} */
+    last: null,
+    /** @param {(line: string) => void} fn */
+    setLog(fn) { log = fn; },
+    begin() {
+      if (document.visibilityState === 'hidden') { cur = null; return; }
+      const c = { t0: performance.now(), steps: {}, frame: 0, drawn: 0 };
+      cur = c;
+      requestAnimationFrame(() => {
+        if (cur !== c) return;
+        c.frame = performance.now();
+        requestAnimationFrame(() => { if (cur === c) api.end(c); });
+      });
+    },
+    /** Шаг с замером; замера нет — просто выполнить. @template T @param {string} name @param {() => T} fn @returns {T} */
+    step(name, fn) {
+      const c = cur;
+      if (!c || c.frame) return fn();
+      const t = performance.now();
+      try { return fn(); } finally { c.steps[name] = (c.steps[name] || 0) + performance.now() - t; }
+    },
+    /** xterm закончил рисовать видимые строки. */
+    drawn() { if (cur && cur.frame) cur.drawn = performance.now(); },
+    /** @param {{ t0: number, steps: Record<string, number>, frame: number, drawn: number }} c */
+    end(c) {
+      cur = null;
+      const now = performance.now();
+      if (document.visibilityState === 'hidden') return;
+      const known = Object.values(c.steps).reduce((a, b) => a + b, 0);
+      const steps = { ...c.steps, 'до кадра': c.frame - c.t0 - known };
+      const drawnAt = c.drawn || c.frame;
+      steps['отрисовка'] = drawnAt - c.frame;
+      steps['кадр'] = now - drawnAt;
+      const ms = now - c.t0;
+      api.last = { ms, drawnMs: drawnAt - c.t0, steps };
+      if (ms > SLOW) log(`переключение вкладки: ${Math.round(ms)} мс (${Object.entries(steps).map(([k, v]) => `${k} ${Math.round(v)}`).join(', ')})`);
+    },
+  };
+  return api;
+})();
+/** @type {any} */ (window).KermachSwitch = KermachSwitch;
+
 /** Панели, у которых сейчас свой контекст WebGL (t1074); закрытые вкладки вычищаются при следующем createTerminal. @type {Set<HTMLElement>} */
 const glLive = new Set();
 /** Сколько новых вкладок без класса on получают WebGL сразу: запас до предела Chromium в 16 контекстов. */
 const GL_START = 8;
+/** Через сколько мс ушедшая в фон вкладка отдаёт WebGL (t1687). До предела в 16 контекстов так не дойти: это больше 50 переключений в секунду. */
+const GL_RELEASE_MS = 300;
 /** Клетка WebGL по размеру шрифта: { [px]: { width, height } }. По ней считает размер и вкладка на DOM-рендере (t1074). */
 const glCell = {};
 /**
@@ -322,6 +407,21 @@ const glCell = {};
  * @type {Map<HTMLElement, () => void>}
  */
 const glClears = new Map();
+/**
+ * Контекст WebGL аддона (addon-webgl 0.19: _renderer._gl). Нужен до dispose: потом отрисовщика уже нет.
+ * @param {any} gl @returns {WebGL2RenderingContext | null}
+ */
+function glContext(gl) {
+  try { return (gl && gl._renderer && gl._renderer._gl) || null; } catch (e) { return null; }
+}
+/**
+ * Отдать контекст браузеру сразу (t1732). dispose аддона снимает холст, но контекст живёт до сборки мусора — при переключении
+ * двух десятков вкладок их копится больше 16, и Chromium отбирает контекст у видимых («Too many active WebGL contexts»).
+ * @param {WebGL2RenderingContext | null} ctx
+ */
+function glLose(ctx) {
+  try { const ext = ctx && !ctx.isContextLost() && ctx.getExtension('WEBGL_lose_context'); if (ext) ext.loseContext(); } catch (e) { /* уже потерян */ }
+}
 let glClearQueued = false;
 /**
  * Один сброс на такт: тему и шрифт получают все вкладки окна по очереди, каждая зовёт сброс — текстура рисуется заново один раз.
@@ -332,8 +432,23 @@ const glClearAll = (why) => {
   glClearQueued = true;
   queueMicrotask(() => {
     glClearQueued = false;
-    for (const [p, clear] of glClears) { if (!p.isConnected) { glClears.delete(p); continue; } try { clear(); } catch (e) { /* контекст потерян — DOM */ } }
+    KermachSwitch.step('текстура', () => {
+      for (const [p, clear] of glClears) { if (!p.isConnected) { glClears.delete(p); continue; } try { clear(); } catch (e) { /* контекст потерян — DOM */ } }
+    });
   });
+};
+/** @type {ReturnType<typeof setTimeout> | null} */
+let glShowTimer = null;
+let glShowCleared = -Infinity;
+/** Сброс при показе вкладки — не чаще раза в минуту (t1687): сброс выбрасывает буквы всех вкладок, и следующая рисует свои заново. */
+const GL_SHOW_CLEAR_MS = 60000;
+/**
+ * Сброс после показа вкладки (t1687): на экране большого объёма каждый сброс — 130–270 мс отрисовки следующего переключения.
+ * Порчу после сна и смены DPI чистят сбросы при фокусе, видимости и DPI, они без ограничения; Ctrl+Shift+R — тоже.
+ */
+const glClearAfterShow = () => {
+  if (glShowTimer || performance.now() - glShowCleared < GL_SHOW_CLEAR_MS) return;
+  glShowTimer = setTimeout(() => { glShowTimer = null; glShowCleared = performance.now(); glClearAll('show'); }, GL_RELEASE_MS + 50);
 };
 // После сна, смены видеокарты или DPI текстура могла испортиться без «потери контекста»: клетка пробела рисовала «─» во всех
 // окнах (t1225, xterm добавил clearTextureAtlas ровно для порчи после сна). Как у Орки: сброс при возврате окна и смене DPI.
@@ -380,6 +495,8 @@ function createTerminal(pane, io, fontSize = 17) {
   let webgl = null;
   let renderer = 'dom';
   let glFailed = false;
+  /** Вкладку уже показывали: новая без on отдаёт стартовый WebGL сразу, как раньше. */
+  let shown = pane.classList.contains('on');
   const glOn = () => {
     if (webgl) return;
     try {
@@ -403,7 +520,9 @@ function createTerminal(pane, io, fontSize = 17) {
     renderer = 'dom';
     glLive.delete(pane);
     glClears.delete(pane);
+    const ctx = glContext(gl);
     try { gl.dispose(); } catch (e) { /* контекст уже потерян */ }
+    glLose(ctx);
   };
   /**
    * Подгонка как у FitAddon (fit, proposeDimensions), но клетка — WebGL того же шрифта, даже если вкладка сейчас на DOM-рендере.
@@ -439,17 +558,37 @@ function createTerminal(pane, io, fontSize = 17) {
     /** @type {any} */ (term)._core._renderService.clear();
     term.resize(d.cols, d.rows);
   };
-  const rowsTo = () => { const d = proposed(); return d && d.cols === term.cols ? d.rows : 0; };
+  const rowsTo = () => proposed();
   const refit = () => { if (!pane.isConnected) return; keepCursor(term, fit, rowsTo); term.refresh(0, term.rows - 1); };
   /** Рендер по видимости панели; сменился — подгонка (обычно без смены размера, клетка та же) и перерисовка (t465, t1070). */
+  /** Отложенная отдача WebGL ушедшей в фон вкладки (t1687). @type {ReturnType<typeof setTimeout> | null} */
+  let glRelease = null;
   const glSync = () => {
     const want = pane.isConnected && pane.classList.contains('on');
+    // Вернулись, пока контекст ещё не отдан: вкладка почти не была в фоне, он цел — ни создавать, ни сбрасывать нечего.
+    if (want && glRelease) { clearTimeout(glRelease); glRelease = null; }
     if (want === !!webgl) return;
-    if (want) glOn(); else glOff();
-    // Показали вкладку — общая текстура могла испортиться, пока она была в фоне (t1225).
-    if (want && webgl) glClearAll('show');
-    refit();
+    if (!want) {
+      // Закрытую вкладку и новую, ещё без on, — сразу. Показанную раньше — после кадра новой: отдача на большом экране занимает
+      // 150–290 мс (t1687, больше всех шагов), а человек ждёт только новую вкладку.
+      if (!pane.isConnected || !shown) { glOff(); refit(); return; }
+      if (glRelease) return;
+      glRelease = setTimeout(() => {
+        glRelease = null;
+        if (!pane.isConnected || pane.classList.contains('on')) { if (!pane.isConnected) glOff(); return; }
+        KermachSwitch.step('webgl отдать', glOff);
+        refit();
+      }, GL_RELEASE_MS);
+      return;
+    }
+    shown = true;
+    KermachSwitch.step('webgl создать', glOn);
+    // Показали вкладку — общая текстура могла испортиться, пока она была в фоне (t1225). Сброс — после показа и редко: новая вкладка
+    // сразу рисуется из живой текстуры (её ещё держит ушедшая), а сброс перед кадром занимал 150 мс и больше на каждом показе (t1687).
+    if (webgl) glClearAfterShow();
+    KermachSwitch.step('подгонка', refit);
   };
+  term.onRender(() => KermachSwitch.drawn());
   /**
    * «Перерисовать терминал» (Ctrl+Shift+R, t1225, t1230): WebGL этой вкладки — заново, текстура букв — у всех, и экран —
    * заново из снимка демона (io.reattach): окно, разошедшееся с демоном («─» вместо пробелов у пользователя 21.10), снова

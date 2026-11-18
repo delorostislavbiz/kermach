@@ -7,6 +7,8 @@ const { ipcMain, dialog, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const sender = require('../../main/sender');
+/** t1811: текст ошибки на языке программы; без главного процесса — русский. */
+const tr = (/** @type {string} */ k, /** @type {string} */ ru, /** @type {any} */ v) => { try { return require('../../main/i18n').t(k, ru, v); } catch { return ru.replace(/\{(\w+)\}/g, (m, n) => (v && n in v ? String(v[n]) : m)); } };
 const settings = require('../../main/settings');
 const { parseTarget } = require('./paths');
 
@@ -72,29 +74,56 @@ function inside(root, full) {
 }
 
 /**
+ * Путь внутри папки проекта окна, а настоящий путь на диске (realpath) — за её пределами: символическая ссылка или junction наружу (t1684, d163).
+ * Так же, как resolveIn в files/tree.js. Путь вне проекта по строке (полный путь из терминала) — не ссылка проекта, его не трогаем.
+ * Файла ещё нет (новый документ, удалён снаружи до Ctrl+S) — смотрится ближайшая существующая папка пути: запись пойдёт в неё.
+ * Не прочитать настоящий путь — тоже отказ. @param {Electron.WebContents} wc @param {string} file
+ */
+async function linkedOut(wc, file) {
+  const p = projectOf(wc);
+  if (!p) return false;
+  let d = path.resolve(file);
+  if (!inside(p.path, d)) return false;
+  try {
+    // По очереди, не Promise.all: зависший корень не займёт два потока пула (как в files/tree.js).
+    const realRoot = await fs.promises.realpath(p.path);
+    for (;;) {
+      let real;
+      try { real = await fs.promises.realpath(d); } catch (e) {
+        if (/** @type {any} */ (e).code !== 'ENOENT' || path.dirname(d) === d) return true;
+        d = path.dirname(d); // до корня проекта дойдёт: он есть (его realpath выше прошёл)
+        continue;
+      }
+      return keyOf(real) !== keyOf(realRoot) && !inside(realRoot, real);
+    }
+  } catch { return true; }
+}
+
+/**
  * Что щёлкнули в терминале или в документе → полный путь к .md. Правила те же, что у link:open (main.js): хвост :строка[:столбец] отбрасывается,
  * путь — полный или от папки проекта окна (за её пределы нет), «:» дальше диска и точка или пробел в конце — отказ. Файл должен быть.
  * @param {Electron.WebContents} wc @param {unknown} target
  * @returns {Promise<{ ok: true, path: string } | { ok: false, error: string }>}
  */
 async function resolveTarget(wc, target) {
-  if (typeof target !== 'string' || !target || target.length > 1024) return { ok: false, error: 'не путь' };
+  if (typeof target !== 'string' || !target || target.length > 1024) return { ok: false, error: tr('markdown.err1', 'не путь') };
   let { t, full, bad } = parseTarget(target);
-  if (bad) return { ok: false, error: `не открываю: ${t}` };
-  if (!TEXT.test(t)) return { ok: false, error: `не документ .md: ${t}` };
+  if (bad) return { ok: false, error: tr('markdown.err2', 'не открываю: {t}', { t }) };
+  if (!TEXT.test(t)) return { ok: false, error: tr('markdown.err3', 'не документ .md: {t}', { t }) };
   if (full) t = path.resolve(t);
   else {
     const p = projectOf(wc);
-    if (!p) return { ok: false, error: `не открываю: ${t} — окно без проекта` };
+    if (!p) return { ok: false, error: tr('markdown.err4', 'не открываю: {t} — окно без проекта', { t }) };
     const abs = path.resolve(p.path, t);
-    if (!inside(p.path, abs)) return { ok: false, error: `вне папки проекта: ${t}` };
+    if (!inside(p.path, abs)) return { ok: false, error: tr('markdown.err5', 'вне папки проекта: {t}', { t }) };
     t = abs;
   }
   try {
     const st = await fs.promises.stat(t);
-    if (!st.isFile()) return { ok: false, error: `не файл: ${t}` };
-    if (st.size > MAX_BYTES) return { ok: false, error: `файл больше ${MAX_BYTES / 1024 / 1024} МБ: ${t}` };
-  } catch { return { ok: false, error: `нет такого файла: ${t}` }; }
+    if (!st.isFile()) return { ok: false, error: tr('markdown.err6', 'не файл: {t}', { t }) };
+    if (st.size > MAX_BYTES) return { ok: false, error: tr('markdown.err7', 'файл больше {v0} МБ: {t}', { v0: MAX_BYTES / 1024 / 1024, t }) };
+  } catch { return { ok: false, error: tr('markdown.err8', 'нет такого файла: {t}', { t }) }; }
+  if (await linkedOut(wc, t)) return { ok: false, error: tr('markdown.err9', 'ссылка ведёт за пределы папки проекта: {t}', { t }) };
   allow(wc, t);
   return { ok: true, path: t };
 }
@@ -123,16 +152,16 @@ async function listDocs(root) {
 
 /** Имя нового документа → путь внутри проекта; нет расширения — .md. @param {string} root @param {unknown} name */
 function newPath(root, name) {
-  if (typeof name !== 'string') return { error: 'нужно имя' };
+  if (typeof name !== 'string') return { error: tr('markdown.err10', 'нужно имя') };
   let n = name.trim().replace(/\\/g, '/');
-  if (!n || n.length > 200) return { error: 'нужно имя до 200 знаков' };
-  if (/^[a-zA-Z]:|^\//.test(n)) return { error: 'имя — от папки проекта, без диска и начальной косой' };
+  if (!n || n.length > 200) return { error: tr('markdown.err11', 'нужно имя до 200 знаков') };
+  if (/^[a-zA-Z]:|^\//.test(n)) return { error: tr('markdown.err12', 'имя — от папки проекта, без диска и начальной косой') };
   const parts = n.split('/').filter(Boolean);
-  if (!parts.length || parts.some((x) => x === '.' || x === '..' || /[<>:"|?*\x00-\x1f]/.test(x) || /[.\s]$/.test(x) || x.startsWith('.'))) return { error: 'в имени нельзя «..», скрытые имена и знаки < > : " | ? *' };
+  if (!parts.length || parts.some((x) => x === '.' || x === '..' || /[<>:"|?*\x00-\x1f]/.test(x) || /[.\s]$/.test(x) || x.startsWith('.'))) return { error: tr('markdown.err13', 'в имени нельзя «..», скрытые имена и знаки < > : " | ? *') };
   if (!DOC.test(parts[parts.length - 1])) parts[parts.length - 1] += '.md';
   n = parts.join(path.sep);
   const abs = path.resolve(root, n);
-  if (!inside(root, abs)) return { error: 'вне папки проекта' };
+  if (!inside(root, abs)) return { error: tr('markdown.err14', 'вне папки проекта') };
   return { path: abs };
 }
 
@@ -199,12 +228,13 @@ function register(c, projOf) {
   }, true); // и у выключенного: голое имя — ссылка и тогда, щелчок спросит окошком (t348)
 
   handle('markdown:read', async (e, file) => {
-    if (!isAllowed(e.sender, file)) return { ok: false, error: 'файл не открывался из окна' };
+    if (!isAllowed(e.sender, file)) return { ok: false, error: tr('markdown.err15', 'файл не открывался из окна') };
+    if (await linkedOut(e.sender, file)) return { ok: false, error: tr('markdown.err16', 'ссылка ведёт за пределы папки проекта') };
     const buf = await fs.promises.readFile(file);
-    if (buf.length > MAX_BYTES) return { ok: false, error: 'файл слишком большой' };
+    if (buf.length > MAX_BYTES) return { ok: false, error: tr('markdown.err17', 'файл слишком большой') };
     const bom = buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf;
     let raw;
-    try { raw = new TextDecoder('utf-8', { fatal: true }).decode(bom ? buf.subarray(3) : buf); } catch { return { ok: false, error: 'файл не в кодировке UTF-8' }; }
+    try { raw = new TextDecoder('utf-8', { fatal: true }).decode(bom ? buf.subarray(3) : buf); } catch { return { ok: false, error: tr('markdown.err18', 'файл не в кодировке UTF-8') }; }
     const crlf = (raw.match(/\r\n/g) || []).length;
     const lf = (raw.match(/\n/g) || []).length - crlf;
     const st = await fs.promises.stat(file);
@@ -212,8 +242,9 @@ function register(c, projOf) {
   });
 
   handle('markdown:save', async (e, file, text, eol, bom) => {
-    if (!isAllowed(e.sender, file)) return { ok: false, error: 'файл не открывался из окна' };
-    if (typeof text !== 'string' || text.length > MAX_BYTES) return { ok: false, error: 'текст не тот или слишком большой' };
+    if (!isAllowed(e.sender, file)) return { ok: false, error: tr('markdown.err19', 'файл не открывался из окна') };
+    if (await linkedOut(e.sender, file)) return { ok: false, error: tr('markdown.err20', 'ссылка ведёт за пределы папки проекта') };
+    if (typeof text !== 'string' || text.length > MAX_BYTES) return { ok: false, error: tr('markdown.err21', 'текст не тот или слишком большой') };
     const body = Buffer.from(eol === '\r\n' ? text.replace(/\n/g, '\r\n') : text, 'utf8');
     await writeSafe(file, bom ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), body]) : body);
     const st = await fs.promises.stat(file);
@@ -239,15 +270,17 @@ function register(c, projOf) {
 
   handle('markdown:list', async (e) => {
     const p = projectOf(e.sender);
-    if (!p) return { ok: false, error: 'окно без проекта' };
+    if (!p) return { ok: false, error: tr('markdown.err22', 'окно без проекта') };
     return { ok: true, root: p.path, files: await listDocs(p.path) };
   });
 
   handle('markdown:create', async (e, name) => {
     const p = projectOf(e.sender);
-    if (!p) return { ok: false, error: 'окно без проекта' };
+    if (!p) return { ok: false, error: tr('markdown.err23', 'окно без проекта') };
     const r = newPath(p.path, name);
     if (r.error || !r.path) return { ok: false, error: r.error || 'нет пути' };
+    // Папка нового документа — ссылка наружу: не создавать в ней ни папок, ни файла (t1684).
+    if (await linkedOut(e.sender, r.path)) return { ok: false, error: tr('markdown.err24', 'ссылка ведёт за пределы папки проекта') };
     await fs.promises.mkdir(path.dirname(r.path), { recursive: true });
     // wx: существующий файл не затирается — открывается как есть.
     let existed = false;
@@ -271,16 +304,16 @@ function register(c, projOf) {
 
   // Картинка документа — байтами в data: (окно с file:// не работает: img-src 'self' data:). Только относительный путь, только картинки.
   handle('markdown:image', async (e, file, src) => {
-    if (!isAllowed(e.sender, file)) return { ok: false, error: 'файл не открывался из окна' };
-    if (typeof src !== 'string' || !src || src.length > 1024 || /^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith('//')) return { ok: false, error: 'не относительный путь' };
+    if (!isAllowed(e.sender, file)) return { ok: false, error: tr('markdown.err25', 'файл не открывался из окна') };
+    if (typeof src !== 'string' || !src || src.length > 1024 || /^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith('//')) return { ok: false, error: tr('markdown.err26', 'не относительный путь') };
     let rel = src.split(/[?#]/)[0];
     try { rel = decodeURIComponent(rel); } catch {}
     const mime = /** @type {Record<string, string>} */ (IMAGES)[path.extname(rel).toLowerCase()];
-    if (!mime) return { ok: false, error: 'не картинка' };
+    if (!mime) return { ok: false, error: tr('markdown.err27', 'не картинка') };
     const abs = await imageFile(file, rel);
-    if (!abs) return { ok: false, error: 'картинка вне папки документа' };
+    if (!abs) return { ok: false, error: tr('markdown.err28', 'картинка вне папки документа') };
     const st = await fs.promises.stat(abs);
-    if (!st.isFile() || st.size > MAX_IMAGE) return { ok: false, error: 'нет файла или он слишком большой' };
+    if (!st.isFile() || st.size > MAX_IMAGE) return { ok: false, error: tr('markdown.err29', 'нет файла или он слишком большой') };
     return { ok: true, url: `data:${mime};base64,${(await fs.promises.readFile(abs)).toString('base64')}` };
   });
 

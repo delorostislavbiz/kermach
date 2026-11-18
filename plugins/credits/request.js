@@ -12,6 +12,8 @@ const path = require('path');
 
 /** Псевдонимы моделей задания → имена API. Остальное (claude-…) идёт как есть. */
 const MODEL_ID = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' };
+/** Усилие задания по-русски → output_config.effort. */
+const EFFORT_EN = { низкое: 'low', среднее: 'medium', высокое: 'high' };
 /**
  * Цены, $ за миллион токенов: вход, выход, чтение кэша, запись кэша (5 мин). Выведены из modelUsage.costUSD итогов Claude Code
  * (spikes\t1355-credits, spikes\t1518-job): Haiku 5.5 — точно по двум строкам, Sonnet 5.5 — решением по трём строкам.
@@ -29,7 +31,25 @@ const FILE_MAX = 200 * 1024;
 const FILES_MAX = 600 * 1024;
 const WAIT_STEP = 60 * 1000;
 
-const api = () => (process.env.KERMACH_CREDITS_API || 'https://api.anthropic.com').replace(/\/+$/, '');
+const API_REAL = 'https://api.anthropic.com';
+/** Местный адрес пробы: только http://127.0.0.1[:порт][/путь] — иначе ключ API ушёл бы на чужой сервер (t1805, как t1746). */
+const LOCAL = /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/;
+const api = () => {
+  const own = String(process.env.KERMACH_CREDITS_API || '').trim();
+  return (LOCAL.test(own) ? own : API_REAL).replace(/\/+$/, '');
+};
+
+/**
+ * Полный адрес (results_url пакета хранится на диске) — только на тот же сервер, что и остальные запросы:
+ * https://api.anthropic.com или местный адрес пробы. Чужой — отказ до отправки ключа (t1805). @param {string} p @returns {string}
+ */
+function fullUrl(p) {
+  let u;
+  try { u = new URL(p); } catch { throw new Error('адрес API не разобран — ключ не отправлен'); }
+  const b = new URL(api());
+  if (u.protocol !== b.protocol || u.host !== b.host || u.username || u.password) throw new Error(`адрес ${u.protocol}//${u.host} — не сервер API ${b.host}, ключ не отправлен`);
+  return u.href;
+}
 
 /** @param {string} m */
 const modelId = (m) => MODEL_ID[/** @type {'haiku'} */ (String(m || 'haiku').toLowerCase())] || String(m || 'haiku');
@@ -71,7 +91,7 @@ function apiKey(dataDir) {
  * @returns {Promise<any>}
  */
 async function call(key, method, p, body, raw) {
-  const url = p.startsWith('http') ? p : `${api()}${p}`;
+  const url = /^[a-z][a-z0-9+.-]*:/i.test(p) ? fullUrl(p) : `${api()}${p.startsWith('/') ? p : `/${p}`}`;
   const r = await fetch(url, {
     method,
     headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', ...(body ? { 'content-type': 'application/json' } : {}) },
@@ -193,10 +213,21 @@ function lock(store, dir, id) {
       let age = Infinity;
       try { age = Date.now() - fs.statSync(file).mtimeMs; } catch { continue; }
       if (age < 10000) throw busy('');
-    } else if (o.pid === process.pid || store.sameProc(o.pid, o.at)) throw busy(o.pid);
+    } else if (o.pid === process.pid || store.procState(o.pid, o.at) !== 'no') throw busy(o.pid); // t1876: время запуска не узнать — замок занят, второй платный запрос не уходит
     try { fs.unlinkSync(file); } catch { /* снял кто-то другой */ }
   }
   throw busy('');
+}
+
+/**
+ * Усилие «запроса» (t1675) — output_config.effort, как у пачек (t1563). Не задано — low: у Sonnet 5.5 без поля high, размышления
+ * входят в MAX_TOKENS и стоят как выход. Haiku без явного усилия — без поля, как раньше: живой прогон поля у Haiku не проверял.
+ * @param {string} model @param {any} effort @returns {{ output_config?: { effort: string } }}
+ */
+function effortParam(model, effort) {
+  const e = EFFORT_EN[/** @type {'низкое'} */ (String(effort || '').trim())] || '';
+  if (!e && /haiku/i.test(model)) return {};
+  return { output_config: { effort: e || 'low' } };
 }
 
 /** ask под замком: шапка перечитана — пакет мог уйти, пока ждали. @param {any} store @param {string} dir @param {string} id @param {any} opt */
@@ -206,7 +237,7 @@ async function askLocked(store, dir, id, opt) {
   if (h.batch_id) return fetchLocked(store, dir, id, opt);
   const batch = h.batch === 'да';
   const model = modelId(h.model);
-  const params = { model, max_tokens: MAX_TOKENS, messages: [{ role: 'user', content: userText(dir, j, store.list) }] };
+  const params = { model, max_tokens: MAX_TOKENS, ...effortParam(model, h.effort), messages: [{ role: 'user', content: userText(dir, j, store.list) }] };
   const key = await apiKey(opt.dataDir);
   store.patchHead(j.file, { status: 'идёт', result: '', closed: '' });
   try {
@@ -277,4 +308,4 @@ async function fetchAll(store, dir, opt) {
 }
 
 // call и apiKey — для пачек (batch.js, t1367): тот же ключ и тот же клиент API, второго нет.
-module.exports = { ask, fetchOne, fetchAll, price, modelId, PRICE, MODEL_ID, call, apiKey };
+module.exports = { ask, fetchOne, fetchAll, price, modelId, effortParam, PRICE, MODEL_ID, call, apiKey };

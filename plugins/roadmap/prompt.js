@@ -93,13 +93,9 @@ const SAY = {
   'Записей нет.': ['Записів немає.', 'No entries.', 'Keine Einträge.'],
   'Паттерн {id} (утвердил человек {v}): {title}': ['Патерн {id} (затвердила людина {v}): {title}', 'Pattern {id} (approved by a human {v}): {title}', 'Muster {id} (vom Menschen bestätigt {v}): {title}'],
   'Ещё {n} паттернов: grep "type: паттерн" по {v}': ['Ще {n} патернів: grep "type: {w}" по {v}', '{n} more patterns: grep "type: {w}" in {v}', 'Noch {n} Muster: grep "type: {w}" in {v}'],
-  'паттерн из другого проекта, утвердил человек': ['патерн з іншого проєкту, затвердила людина', 'pattern from another project, approved by a human', 'Muster aus einem anderen Projekt, vom Menschen bestätigt'],
-  'тупик из другого проекта': ['глухий кут з іншого проєкту', 'dead end from another project', 'Sackgasse aus einem anderen Projekt'],
-  'решение из другого проекта': ['рішення з іншого проєкту', 'decision from another project', 'Entscheidung aus einem anderen Projekt'],
-  'Общая база {id} ({v}) [{s}]: {title}': ['Спільна база {id} ({v}) [{s}]: {title}', 'Shared base {id} ({v}) [{s}]: {title}', 'Gemeinsame Basis {id} ({v}) [{s}]: {title}'],
-  'Общая база: показано {n} из {m}. Остальные — grep по {v}.': ['Спільна база: показано {n} із {m}. Решта — grep по {v}.', 'Shared base: shown {n} of {m}. The rest — grep {v}.', 'Gemeinsame Basis: gezeigt {n} von {m}. Der Rest — grep in {v}.'],
   'Ориентир в коде: проект большой ({n} файлов в карте кода) — места не подбирал. Ищи сам: kermach code words "слова".': ['Орієнтир у коді: проєкт великий ({n} файлів у карті коду) — місць не підбирав. Шукай сам: kermach code words "слова".', 'Code pointers: the project is large ({n} files in the code map) — no places picked. Search yourself: kermach code words "words".', 'Wegweiser im Code: das Projekt ist groß ({n} Dateien in der Code-Karte) — keine Stellen ausgewählt. Selbst suchen: kermach code words "Wörter".'],
   'Ориентир в коде: проект большой ({n} файлов в карте кода) — места по словам не подбирал; лучшие места в файлах из поля «Файлы», проверь сам, это подсказка:': ['Орієнтир у коді: проєкт великий ({n} файлів у карті коду) — місць за словами не підбирав; найкращі місця у файлах з поля «{f}», перевір сам, це підказка:', 'Code pointers: the project is large ({n} files in the code map) — no places picked by words; best places in the files from the «{f}» field, check yourself, this is a hint:', 'Wegweiser im Code: das Projekt ist groß ({n} Dateien in der Code-Karte) — keine Stellen nach Wörtern ausgewählt; beste Stellen in den Dateien aus dem Feld «{f}», selbst prüfen, das ist ein Hinweis:'],
+  'Ориентир в коде: карта кода обновляется — места не подбирал. Ищи сам: kermach code words "слова".': ['Орієнтир у коді: карта коду оновлюється — місць не підбирав. Шукай сам: kermach code words "слова".', 'Code pointers: the code map is being updated — no places picked. Search yourself: kermach code words "words".', 'Wegweiser im Code: die Code-Karte wird aktualisiert — keine Stellen ausgewählt. Selbst suchen: kermach code words "Wörter".'],
   'Ориентир в коде: по словам заголовка карты надёжных мест нет{v} — ищи сам: kermach code words "слова".': ['Орієнтир у коді: за словами заголовка картки надійних місць немає{v} — шукай сам: kermach code words "слова".', 'Code pointers: no reliable places for the card title words{v} — search yourself: kermach code words "words".', 'Wegweiser im Code: keine verlässlichen Stellen für die Wörter des Kartentitels{v} — selbst suchen: kermach code words "Wörter".'],
   ' (в коде нет «{v}»)': [' (у коді немає «{v}»)', ' (not in the code: «{v}»)', ' (nicht im Code: «{v}»)'],
   'Ориентир в коде — сначала файлы из поля «Файлы», потом места по словам заголовка карты (kermach code words){v}, проверь сам, это подсказка:': ['Орієнтир у коді — спершу файли з поля «{f}», потім місця за словами заголовка картки (kermach code words){v}, перевір сам, це підказка:', 'Code pointers — first the files from the «{f}» field, then places by the card title words (kermach code words){v}, check yourself, this is a hint:', 'Wegweiser im Code — zuerst die Dateien aus dem Feld «{f}», dann Stellen nach den Wörtern des Kartentitels (kermach code words){v}, selbst prüfen, das ist ein Hinweis:'],
@@ -310,6 +306,12 @@ function staleAll(dataDir) {
  * «@» внутри слова (e-mail, user@host) Claude Code не трогает — и мы не трогаем. @param {string} s
  */
 const defuseAt = (s) => String(s).replace(/(^|[\s"'`([{<«„])@(?=[^\s@])/gm, '$1＠');
+/**
+ * Отказ с причиной для окна (t1610): error — по-русски, как раньше (журнал, cli.js); why — ключ и значения, окно переводит причину на свой язык.
+ * Ключ — из словаря WHY в window.js; ru — русский образец с {имя}, значения подставляются.
+ * @param {string} k @param {string} ru @param {Record<string, string>} [v] @returns {{ error: string, why: { k: string, v: Record<string, string> } }}
+ */
+const fail = (k, ru, v = {}) => ({ error: ru.replace(/\{(\w+)\}/g, (all, n) => (Object.hasOwn(v, n) ? String(v[n]) : all)), why: { k, v } });
 const subst = (text, vars) => text.replace(/\{([^{}\n]{1,60})\}/g, (all, k) => (Object.hasOwn(vars, k) ? vars[k] : all));
 /**
  * Слова формата доски для шаблонов (t1429): {доска:готово}, {доска:Как проверить} → слово на языке доски («готово», «done»…). Русская доска — русское слово.
@@ -322,13 +324,16 @@ const boardWords = (lang) => Object.fromEntries(Object.keys(board.WORDS).map((w)
  * При кавычках вне них берутся и слова, похожие на путь (t982): «a.js, `b\c.js`» — оба; проза («см.», «(главное)», «1.2») — нет.
  * Для сравнения: / вместо \, без ./ в начале, без регистра. @param {string | string[]} v
  */
+/** Слова поля «Файлы», которые значат «файлов нет» (t1887): русская, украинская и английская доска. */
+const NO_FILES = /^(нет|немає|нема|none|no|n\/a)(\s+(файлов|файлів|files))?$/;
 function paths(v) {
   const s = Array.isArray(v) ? v.join(',') : String(v || '');
   const ticks = [...s.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
   const loose = ticks.length ? s.replace(/`[^`]+`/g, ' ').split(/[\s,;]+/).map((w) => w.replace(/[.;,:]+$/, ''))
     .filter((w) => /^[\p{L}\p{N}_.\-/\\]+$/u.test(w) && (/[/\\]/.test(w) || /\.[A-Za-z][A-Za-z0-9]{0,7}$/.test(w))) : [];
   const raw = ticks.length ? [...ticks, ...loose] : s.split(/[,;\n]/);
-  const out = raw.map((p) => p.trim().replace(/[.;,]+$/, '').replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()).filter((p) => p && !/^[—–-]$/.test(p));
+  // t1887 (d693): «нет», «none», «—» — файлов нет, а не путь: иначе волна видит общий файл «нет» и пускает такие карты по одной.
+  const out = raw.map((p) => p.trim().replace(/[.;,]+$/, '').replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()).filter((p) => p && !/^[—–-]$/.test(p) && !NO_FILES.test(p));
   return [...new Set(out)];
 }
 
@@ -627,14 +632,48 @@ let alikeLast = { key: '', out: /** @type {Record<string, string>} */ ({}) };
  * @param {import('./board').Decision[]} decisions @returns {Record<string, string>}
  */
 function alikeNotes(decisions) {
+  const g = alikeSteps(decisions);
+  let r = g.next();
+  while (!r.done) r = g.next();
+  return r.value;
+}
+/**
+ * Как alikeNotes, но кусками не дольше sliceMs с уступкой циклу событий между ними (t1871): на настоящей доске (839 записей)
+ * подсчёт целиком держал главный процесс ~230 мс при первом открытии доски. Ответ тот же и кладётся в тот же кэш (alikeLast).
+ * @param {import('./board').Decision[]} decisions @param {number} [sliceMs] @param {() => boolean} [stop] — true: бросить подсчёт
+ * @returns {Promise<Record<string, string> | null>} null — подсчёт брошен по stop
+ */
+async function alikeNotesSliced(decisions, sliceMs = 30, stop = () => false) {
+  const g = alikeSteps(decisions);
+  let t = Date.now();
+  let r = g.next();
+  while (!r.done) {
+    if (Date.now() - t >= sliceMs) { await new Promise((res) => setImmediate(res)); if (stop()) return null; t = Date.now(); }
+    r = g.next();
+  }
+  return r.value;
+}
+/**
+ * Подсчёт alikeNotes шагами (t1871): yield — место, где можно уступить циклу событий. decisions между шагами не меняются — это снимок доски.
+ * @param {import('./board').Decision[]} decisions @returns {Generator<void, Record<string, string>, void>}
+ */
+function* alikeSteps(decisions) {
   const live = decisions.filter((d) => !d.cancelled && !board.section(d));
   const key = live.map((d) => `${d.id}${d.type}${d.title}${d.text}${d.differs || ''}`).join('');
   if (key === alikeLast.key) return { ...alikeLast.out };
-  const docs = live.map((d) => ({ d, s: stems(`${d.title}
-${String(d.text || '').replace(new RegExp(`^${board.ERROR_LINE}`, 'gm'), '')}`) }));
+  yield;
+  /** @type {{ d: import('./board').Decision, s: Set<string> }[]} */
+  const docs = [];
+  for (const d of live) {
+    docs.push({ d, s: stems(`${d.title}
+${String(d.text || '').replace(new RegExp(`^${board.ERROR_LINE}`, 'gm'), '')}`) });
+    if (docs.length % 50 === 0) yield;
+  }
   /** Слово → номера записей в docs, где оно есть. @type {Map<string, number[]>} */
   const has = new Map();
-  docs.forEach((x, i) => { for (const w of x.s) has.set(w, [...(has.get(w) || []), i]); });
+  // t1871: push вместо копии списка на каждое слово — порядок номеров тот же.
+  docs.forEach((x, i) => { for (const w of x.s) { const l = has.get(w); if (l) l.push(i); else has.set(w, [i]); } });
+  yield;
   const idf = (/** @type {string} */ w) => Math.log(docs.length / ((has.get(w) || []).length || 1));
   const weight = docs.map((x) => [...x.s].reduce((a, w) => a + idf(w), 0));
   // Для второго прохода: имена из кода в `…` без путей и основы строк «Причина:».
@@ -654,7 +693,10 @@ ${String(d.text || '').replace(new RegExp(`^${board.ERROR_LINE}`, 'gm'), '')}`) 
   };
   /** @type {Record<string, string>} */
   const out = {};
-  docs.forEach((x, i) => {
+  yield;
+  for (let i = 0; i < docs.length; i++) {
+    const x = docs[i];
+    if (i && i % 20 === 0) yield;
     // Общий вес слов с каждой более старой записью — по спискам слова, без перебора всех пар.
     const both = new Float64Array(docs.length);
     for (const w of x.s) { const v = idf(w); for (const j of has.get(w) || []) if (docs[j].d.num < x.d.num) both[j] += v; }
@@ -668,7 +710,7 @@ ${String(d.text || '').replace(new RegExp(`^${board.ERROR_LINE}`, 'gm'), '')}`) 
     // t970: «Причина» есть у обеих — решает она, общее имя не в счёт: на t881 d238 → d234 (общие `.cmd`, `safe`) — разные причины.
     if (best < 0) both.forEach((v, j) => { const s = v ? v / (weight[i] + weight[j] - v) : 0; if (s >= ALIKE_LOW && s > top && (whySim(i, j) >= ALIKE_WHY || (rareCode(i, j) && !(why[i].size && why[j].size)))) { top = s; best = j; } });
     if (best >= 0) out[x.d.id] = docs[best].d.id;
-  });
+  }
   alikeLast = { key, out };
   return { ...out };
 }
@@ -743,29 +785,6 @@ function patternNotes(dataDir, project, b, warnings) {
   return { lines, n: r.shown.length, ids: r.shown.map((d) => d.id), hide: r.hide, skipped: r.skipped };
 }
 
-/**
- * Общая база (t844, known.js) в части 5 — после своих записей: сначала свести записи проекта с базой, потом до 3 чужих по «Стек:» паспорта
- * или тексту ошибки в карте. Сбой базы промпт не ломает — предупреждение. @param {string} dataDir @param {string} project
- * @param {import('./board').Board} b @param {import('./board').Card} card @param {string[]} warnings
- */
-function knownNotes(dataDir, project, b, card, warnings) {
-  const known = require('./known');
-  /** @type {string[]} */
-  const lines = [];
-  try { known.sync(dataDir, project, b); } catch (e) { warnings.push(`общая база не обновлена: ${e instanceof Error ? e.message : e}`); }
-  { const w = known.warnOf(project); if (w) warnings.push(`общая база: ${w}`); }
-  let r;
-  try { r = known.pick(dataDir, project, b, cardText(b, card)); } catch (e) { warnings.push(`общая база не прочитана: ${e instanceof Error ? e.message : e}`); return { lines, n: 0, m: 0 }; }
-  if (r.cut) warnings.push(`общая база: ${r.cut} старых записей не прочитано, читаются последние ${known.MAX_FILES} файлов s<N>.md`);
-  for (const x of r.shown) {
-    const t = decText(x.text);
-    const text = t.length > PICK_TEXT ? `${cutText(x.text)}${tr(b.lang, ' (целиком — {v})', { v: x.file })}` : t;
-    const kind = tr(b.lang, x.type === 'паттерн' ? 'паттерн из другого проекта, утвердил человек' : x.type === 'тупик' ? 'тупик из другого проекта' : 'решение из другого проекта');
-    lines.push(`${tr(b.lang, 'Общая база {id} ({v}) [{s}]: {title}', { id: x.id, v: kind, s: x.stack.join(', '), title: x.title })}${text ? ` — ${text}` : ''}`);
-  }
-  if (r.shown.length && r.shown.length < r.total) lines.push(tr(b.lang, 'Общая база: показано {n} из {m}. Остальные — grep по {v}.', { n: r.shown.length, m: r.total, v: path.join(dataDir, known.KNOWN, 'known.md') }));
-  return { lines, n: r.shown.length, m: r.total };
-}
 
 // Ориентир в коде (t843, И14) — до 5 мест карты кода (.kermach\codemap\map.jsonl) под записями части 5: агент начинает с места, а не с grep.
 // Запрос — только заголовок карты: длинный текст карты топит его общими словами («агент», «файл», «прогон»). Замер на 10 закрытых картах
@@ -781,11 +800,275 @@ const ORIENT_MAX_FILES = 400;
 // eslint-disable-next-line no-control-regex
 const ORIENT_UNSAFE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g;
 
+/**
+ * Карта кода больше — orient не читает её синхронно (t1670, d390): map.jsonl TERMINALUS 55 МБ, cm.readMap держал главный процесс ~1 с
+ * на каждый запуск карты (чтение 330 мс, разбор 8 тыс. строк JSON). Меньше порога — как раньше: 400 файлов карты — около 3 МБ.
+ */
+const ORIENT_SYNC_BYTES = 4 * 1048576;
+/**
+ * Указателя нет ни в памяти, ни в файле рядом с картой (t1825): карта не больше этого — указатель строится сразу, синхронно, поиском байт.
+ * Замер (spikes\t1825-orient-first\bench2.js): 55 МБ — чтение ~30 мс, разбор 12–23 мс, около 1 мс на МБ; первая загрузка codemap/index.js — ещё 16 мс. Карта 16 МБ в новом процессе — 49–53 мс, 12 МБ — 43; порог 13 МБ: карта проверки t843-orient (1564 файла) — 12,1 МБ, меньше нельзя (probe-result.txt, D).
+ * Больше — указатель строится в фоне, orient отвечает строкой без мест (t1823): так бывает, только если карту переписали, пока программа была закрыта.
+ */
+const IX_SYNC_BYTES = 13 * 1048576;
+/**
+ * Указатель большой карты кода (t1670): по ключу файла (mtime:size) — шапка и место каждой строки файла в map.jsonl, без самих строк.
+ * orient читает с диска только строки файлов из поля «Файлы» карты. ready: null — строится в фоне.
+ * @type {Map<string, { key: string, ready: { head: any, ix: Array<{ file: string, start: number, len: number }> } | null }>}
+ */
+const MAP_IX = new Map();
+/** Начало строки, которого хватает на путь файла; шапке (первая строка) — до 1 МБ. */
+const IX_PREFIX = 2048;
+/** Начало строки файла в map.jsonl: перевод строки и `{"file":"`. */
+const IX_MARK = Buffer.from('\n{"file":"');
+/** Строк за один шаг фонового разбора: около 2 мс главного процесса (t1825). */
+const IX_STEP = 400;
+/** Файл указателя рядом с картой (t1825): после перезапуска программы первый orient берёт указатель из него, если карта не менялась. */
+const IX_FILE_MAX = 16 * 1048576;
+/** @param {string} file */
+const ixFile = (file) => `${file}.ix`;
+/** Длиннее строка файла в карте не бывает: число из указателя больше — указатель подменён или испорчен (t1677). */
+const IX_LINE_MAX = 64 * 1048576;
+/**
+ * Записи файла указателя (t1677, d277): путь внутри проекта, место строки — целые числа в пределах. Указатель лежит рядом с картой
+ * и подменяется вместе с ней (закоммиченная карта в чужом репозитории): «..\чужой» ушёл бы в чтение файла и в промпт,
+ * а len NaN или 2^31 ронял Buffer.alloc в orient. Хоть одна запись не такая — указателя нет, его построит ixScanner по самой карте.
+ * @param {any} files @returns {Array<{ file: string, start: number, len: number }> | null}
+ */
+function ixEntries(files) {
+  if (!Array.isArray(files)) return null;
+  const cm = require('./codemap/index.js');
+  const out = [];
+  for (const x of files) {
+    if (!Array.isArray(x) || typeof x[0] !== 'string' || !cm.inside(x[0])) return null;
+    const start = x[1]; const len = x[2];
+    if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(len) || len <= 0 || len > IX_LINE_MAX) return null;
+    out.push({ file: x[0], start, len });
+  }
+  return out;
+}
+/**
+ * Разбор map.jsonl в буфере (t1825) — один на синхронную и фоновую постройку. Шапка — первая строка до 1 МБ;
+ * строка файла — `{"file":"путь",…`, путь в первых IX_PREFIX байтах. Шапка чужого формата или карта отменена — head null, ix пустой.
+ * Возвращает разборщик: step(n) разбирает до n строк и отвечает true, когда дошёл до конца.
+ * @param {Buffer} buf
+ */
+function ixScanner(buf) {
+  const cm = require('./codemap/index.js');
+  const size = buf.length;
+  const s = { head: /** @type {any} */ (null), ix: /** @type {Array<{ file: string, start: number, len: number }>} */ ([]), bad: false, at: -1 };
+  const end0 = buf.indexOf(10);
+  try { s.head = JSON.parse(buf.toString('utf8', 0, Math.min(end0 < 0 ? size : end0, 1048576))); } catch { s.bad = true; }
+  if (!s.head || s.head.codemap !== cm.FORMAT || s.head.extract !== cm.EXTRACT || s.head.cancelled) s.bad = true;
+  s.at = s.bad || end0 < 0 ? -1 : buf.indexOf(IX_MARK, end0);
+  const step = (/** @type {number} */ n) => {
+    for (let k = 0; k < n && s.at >= 0; k++) {
+      const start = s.at + 1;
+      const nl = buf.indexOf(10, start);
+      const end = nl < 0 ? size : nl;
+      const q = buf.indexOf('","', start + 9);
+      if (q > 0 && q < end && q + 3 <= start + IX_PREFIX) {
+        let f = '';
+        try { f = JSON.parse(buf.toString('utf8', start + 8, q + 1)); } catch { f = ''; }
+        if (f && cm.inside(f)) s.ix.push({ file: f, start, len: end - start });
+      }
+      s.at = nl < 0 ? -1 : buf.indexOf(IX_MARK, nl);
+    }
+    return s.at < 0;
+  };
+  return { s, step };
+}
+/**
+ * Указатель готов: в память и файлом рядом с картой (в фоне; не записался — следующий запуск построит заново).
+ * @param {string} file @param {{ key: string, ready: any }} slot @param {any} head @param {Array<{ file: string, start: number, len: number }>} ix
+ */
+function ixReady(file, slot, head, ix) {
+  if (MAP_IX.get(file) !== slot) return;
+  slot.ready = { head, ix };
+  if (!head) return;
+  const tmp = `${ixFile(file)}.${process.pid}.tmp`;
+  const text = JSON.stringify({ ix: 1, key: slot.key, head, files: ix.map((x) => [x.file, x.start, x.len]) });
+  fs.writeFile(tmp, text, (err) => {
+    if (err) { fs.rm(tmp, { force: true }, () => {}); return; }
+    fs.rename(tmp, ixFile(file), (e) => { if (e) fs.rm(tmp, { force: true }, () => {}); });
+  });
+}
+/**
+ * Указатель из файла рядом с картой (t1825), если он того же ключа (mtime:size карты). Нет, чужой или битый — null.
+ * @param {string} file @param {string} key
+ */
+function ixLoad(file, key) {
+  try {
+    const st = fs.statSync(ixFile(file));
+    if (!st.isFile() || st.size > IX_FILE_MAX) return null;
+    const j = JSON.parse(fs.readFileSync(ixFile(file), 'utf8'));
+    if (!j || j.ix !== 1 || j.key !== key || !j.head) return null;
+    const ix = ixEntries(j.files);
+    return ix ? { head: j.head, ix } : null;
+  } catch { return null; }
+}
+/**
+ * Строит указатель map.jsonl. sync (t1825) — сейчас же, в этом вызове; иначе в фоне: чтение — в потоке ввода-вывода,
+ * разбор — шагами по IX_STEP строк. Сбой чтения или чужой формат — указатель пустой (ix: []) и head null: orient скажет, что ориентира нет.
+ * @param {string} file @param {string} key @param {boolean} [sync]
+ */
+function mapIndexBuild(file, key, sync) {
+  const slot = { key, ready: /** @type {any} */ (null) };
+  MAP_IX.set(file, slot);
+  mapIndexWatch(file);
+  if (sync) {
+    let buf;
+    try { buf = fs.readFileSync(file); } catch { ixReady(file, slot, null, []); return; }
+    const sc = ixScanner(buf);
+    sc.step(Infinity);
+    ixReady(file, slot, sc.s.bad ? null : sc.s.head, sc.s.bad ? [] : sc.s.ix);
+    return;
+  }
+  fs.readFile(file, (err, buf) => {
+    if (err || MAP_IX.get(file) !== slot) { if (err) ixReady(file, slot, null, []); return; }
+    const sc = ixScanner(buf);
+    const go = () => {
+      if (MAP_IX.get(file) !== slot) return;
+      if (!sc.step(IX_STEP)) { setImmediate(go); return; }
+      ixReady(file, slot, sc.s.bad ? null : sc.s.head, sc.s.bad ? [] : sc.s.ix);
+    };
+    go();
+  });
+}
+/**
+ * Указатель заранее, в фоне (t1825, круг 1): окно зовёт при открытии проекта и на событие worker «map».
+ * Первый orient после старта программы тогда находит готовый указатель, даже если worker переписал карту до первого запуска карты.
+ * Файл указателя рядом с картой того же ключа — берётся он, иначе фоновая постройка. Главный процесс не стоит: stat, чтение и разбор — асинхронно или шагами.
+ * @param {string} file map.jsonl
+ */
+function warmMap(file) {
+  fs.stat(file, (err, st) => {
+    if (err || !st.isFile() || st.size <= ORIENT_SYNC_BYTES) return;
+    mapIndexWatch(file);
+    const key = `${st.mtimeMs}:${st.size}`;
+    const was = MAP_IX.get(file);
+    if (was && was.key === key) return;
+    const slot = { key, ready: /** @type {any} */ (null) };
+    MAP_IX.set(file, slot);
+    fs.readFile(ixFile(file), 'utf8', (e, text) => {
+      if (MAP_IX.get(file) !== slot) return;
+      /** @type {any} */
+      let j = null;
+      if (!e && text.length <= IX_FILE_MAX) try { j = JSON.parse(text); } catch { j = null; }
+      const ix = j && j.ix === 1 && j.key === key && j.head ? ixEntries(j.files) : null;
+      if (ix) { slot.ready = { head: j.head, ix }; return; }
+      MAP_IX.delete(file);
+      mapIndexBuild(file, key);
+    });
+  });
+}
+/** Слежка за папкой карты кода по файлу map.jsonl (t1823). @type {Map<string, fs.FSWatcher>} */
+const MAP_WATCH = new Map();
+/** Пауза после последнего события папки: worker пишет tmp и переименовывает, событий несколько. */
+const MAP_WATCH_MS = 300;
+/**
+ * Указатель строится сразу после записи карты кода (t1823), а не при следующем orient: worker переписывает map.jsonl после правок
+ * файлов проекта, и без этого первый запуск карты после каждой правки шёл бы без указателя. Слежка не держит процесс (persistent: false).
+ * @param {string} file
+ */
+function mapIndexWatch(file) {
+  if (MAP_WATCH.has(file)) return;
+  const name = path.basename(file);
+  /** @type {NodeJS.Timeout | null} */
+  let timer = null;
+  const check = () => {
+    timer = null;
+    fs.stat(file, (err, st) => {
+      if (err || st.size <= ORIENT_SYNC_BYTES) return;
+      const key = `${st.mtimeMs}:${st.size}`;
+      const was = MAP_IX.get(file);
+      if (!was || was.key !== key) mapIndexBuild(file, key);
+    });
+  };
+  try {
+    const w = fs.watch(path.dirname(file), { persistent: false }, (_ev, f) => {
+      if (f && String(f) !== name) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(check, MAP_WATCH_MS);
+      timer.unref();
+    });
+    w.on('error', () => { w.close(); MAP_WATCH.delete(file); });
+    MAP_WATCH.set(file, w);
+  } catch { /* папки нет или слежка недоступна — указатель построит следующий orient */ }
+}
+/**
+ * Большая карта кода для orient (t1670): { head, count, entries(fits) } по указателю или null, пока он строится (стройку начинаем здесь).
+ * entries — записи только подходящих файлов: строки читаются из map.jsonl по месту (fs.readSync, единицы строк).
+ * @param {string} file @param {fs.Stats} st
+ */
+function mapLite(file, st) {
+  const key = `${st.mtimeMs}:${st.size}`;
+  const was = MAP_IX.get(file);
+  if (!was || was.key !== key) {
+    // t1825: первый вызов после старта программы — указатель из файла рядом с картой; его нет, а карта не больше IX_SYNC_BYTES — строим сейчас.
+    const got = ixLoad(file, key);
+    if (got) { MAP_IX.set(file, { key, ready: got }); mapIndexWatch(file); } else mapIndexBuild(file, key, st.size <= IX_SYNC_BYTES);
+  }
+  const now = MAP_IX.get(file);
+  if (!now || !now.ready) return null;
+  const { head, ix } = now.ready;
+  if (!head) return { head: null, count: 0, entries: () => [] };
+  return {
+    head,
+    count: ix.length,
+    entries: (/** @type {(f: string) => boolean} */ fits) => {
+      const want = ix.filter((x) => fits(x.file));
+      if (!want.length) return [];
+      const cm = require('./codemap/index.js');
+      /** @type {any[]} */
+      const out = [];
+      const fd = fs.openSync(file, 'r');
+      try {
+        for (const x of want) {
+          const buf = Buffer.alloc(x.len);
+          fs.readSync(fd, buf, 0, x.len, x.start);
+          // Путь строки — тот же, что в указателе, и внутри проекта (t1677): указатель из памяти строил ixScanner, но строку на месте могли переписать.
+          try { const r = JSON.parse(buf.toString('utf8')); if (r && r.file === x.file && cm.inside(r.file)) out.push(r); } catch { /* строку переписали — пропуск */ }
+        }
+      } finally { fs.closeSync(fd); }
+      return out;
+    },
+  };
+}
+
+/**
+ * Ориентир по большой карте кода (t1670): то же, что ветка «проект большой» в orient, но строки файлов — по указателю mapLite.
+ * Указатель ещё строится — orient отвечает строкой без мест и карту не читает (t1823); строится он сразу после записи карты (mapIndexWatch).
+ * @param {string} project @param {import('./board').Card} card @param {string} lang @param {string} f @param {NonNullable<ReturnType<typeof mapLite>>} lite
+ */
+function orientBig(project, card, lang, f, lite) {
+  const { byWords } = require('./codemap/cli.js');
+  const own = paths(card.fields && card.fields.files);
+  const fits = (/** @type {string} */ file) => { const x = file.toLowerCase(); return own.some((p) => x === p || x.endsWith(`/${p}`) || p.endsWith(`/${x}`) || (!p.includes('/') && x.slice(x.lastIndexOf('/') + 1) === p)); };
+  const files = own.length ? lite.entries(fits) : [];
+  const seen = new Set();
+  const got = files.length ? byWords({ head: lite.head, files }, project, card.title || '').hits.filter((h) => !seen.has(h.file) && seen.add(h.file)).slice(0, ORIENT_LIMIT) : [];
+  if (!got.length) return tr(lang, 'Ориентир в коде: проект большой ({n} файлов в карте кода) — места не подбирал. Ищи сам: kermach code words "слова".', { n: lite.count });
+  const lines = got.map((h) => `${h.file}:${h.at || h.s.start}${h.s.kind === 'строки' ? '' : ` ${h.s.kind} ${h.s.q}`}${h.text ? ` — ${h.text}` : ''}`.replace(ORIENT_UNSAFE, ''));
+  return [tr(lang, 'Ориентир в коде: проект большой ({n} файлов в карте кода) — места по словам не подбирал; лучшие места в файлах из поля «Файлы», проверь сам, это подсказка:', { n: lite.count, f }), ...lines].join('\n');
+}
+
 /** Строки ориентира для карты; '' — карты кода нет. lang (t1428) — язык доски. @param {string} project @param {import('./board').Card} card @param {string} [lang] */
 function orient(project, card, lang = '') {
   const f = board.say(board.CARD_FIELDS.files, lang);
   const cm = require('./codemap/index.js');
-  const map = cm.readMap(path.join(project, '.kermach', 'codemap', 'map.jsonl'));
+  const mapFile = path.join(project, '.kermach', 'codemap', 'map.jsonl');
+  let st;
+  try { st = fs.statSync(mapFile); } catch { return ''; }
+  // Большая карта: готов указатель и файлов больше порога — только нужные строки (t1670).
+  // Указатель строится в фоне — карту целиком не читаем (t1823: прежний путь держал главный процесс ~1 с), ориентир без мест.
+  // t1825: в фоне — только карта больше IX_SYNC_BYTES (13 МБ) без файла указателя; меньшую mapLite строит сразу.
+  const big = st.size > ORIENT_SYNC_BYTES;
+  const lite = big ? mapLite(mapFile, st) : null;
+  if (big && !lite) return tr(lang, 'Ориентир в коде: карта кода обновляется — места не подбирал. Ищи сам: kermach code words "слова".');
+  if (lite && lite.count > ORIENT_MAX_FILES) return orientBig(project, card, lang, f, lite);
+  // Указатель готов, файлов не больше порога — строки берём по нему, без повторного чтения карты целиком (t1823).
+  const map = lite ? (lite.head ? { head: lite.head, files: lite.entries(() => true) } : null) : cm.readMap(mapFile);
   if (!map) return '';
   const { byWords, weakOf } = require('./codemap/cli.js');
   // Сначала файлы из поля «Файлы» (t954): их назвал человек, это точнее слов. Лучшее место каждого — даже ниже порога, хоть одно слово заголовка.
@@ -918,8 +1201,6 @@ function build(project, ref, opts = {}) {
   fr.skipped.push(...pt.skipped);
   const nt = notes(bb, card, fr.shown);
   nt.text = [...fr.pacts, ...pt.lines, nt.text, ...fr.lines].join('\n');
-  const sh = opts.dataDir ? knownNotes(opts.dataDir, project, b, card, warnings) : { lines: [], n: 0, m: 0 };
-  if (sh.lines.length) nt.text += `\n${sh.lines.join('\n')}`;
   let code = '';
   try { code = orient(project, card, b.lang); } catch (e) { warnings.push(`ориентир в коде не собран: ${e instanceof Error ? e.message : e}`); }
   if (code) nt.text += `\n\n${code}`;
@@ -930,8 +1211,8 @@ function build(project, ref, opts = {}) {
     { n: 3, key: 'kind', title: tr(b.lang, 'Шаблон вида работы'), note: `шаблон «${card.kind}»`, v: { kind: card.kind }, text: subst(kindText || '', vars) || tr(b.lang, '(шаблона нет)') },
     { n: 4, key: 'card', title: tr(b.lang, 'Карта'), note: `${card.id} · ${phase ? phase.title || phase.id : 'Входящие'}`, v: { id: card.id, phase: phase ? phase.title || phase.id : '' }, text: cardText(b, card, opts.model, t.error ? null : t) },
     { n: 5, key: 'notes', title: tr(b.lang, 'Заметки к задаче'),
-      note: `${fr.pacts.length ? `договорённостей ${fr.pacts.length}; ` : ''}${pt.n ? `паттернов ${pt.n}; ` : ''}показано ${nt.n} из ${nt.m}, подбор по словам карты${sh.m ? `; общая база ${sh.n} из ${sh.m}` : ''}`,
-      v: { n: String(nt.n), m: String(nt.m), sn: String(sh.n), sm: String(sh.m), pn: String(pt.n), an: String(fr.pacts.length) }, text: nt.text },
+      note: `${fr.pacts.length ? `договорённостей ${fr.pacts.length}; ` : ''}${pt.n ? `паттернов ${pt.n}; ` : ''}показано ${nt.n} из ${nt.m}, подбор по словам карты`,
+      v: { n: String(nt.n), m: String(nt.m), pn: String(pt.n), an: String(fr.pacts.length) }, text: nt.text },
   ];
   // t1128: «@путь» из карты, записей и шаблонов не должен стать вложением файла у Claude Code.
   for (const p of parts) p.text = defuseAt(p.text);
@@ -963,21 +1244,21 @@ function task(project, name, opts) {
   // Первый «## » вне блока кода ``` (t612): пример с «## » в пояснении выше задания его не обрезает.
   const read = (/** @type {string} */ f) => { const s = unstamp(readSmall(f, MAX_TEMPLATES)); const h = heads(s); return h.length ? s.split('\n').slice(h[0].at + 1).join('\n').trim() : null; };
   const lack = (/** @type {string | null} */ t) => t === null ? 'нет заголовка «## »' : 'после заголовка «## » пусто';
-  try { text = read(tf.file); } catch (e) { if (!tf.own) return { error: `задание не прочитано: ${e instanceof Error ? e.message : e}` }; warnings.push(`своя копия ${tf.file}: ${e instanceof Error ? e.message : e} — взят встроенный текст`); }
+  try { text = read(tf.file); } catch (e) { if (!tf.own) return fail('tplRead', 'задание не прочитано: {e}', { e: String(e instanceof Error ? e.message : e) }); warnings.push(`своя копия ${tf.file}: ${e instanceof Error ? e.message : e} — взят встроенный текст`); }
   // Своя копия не читается, в ней нет «## » или после него пусто — встроенный текст и предупреждение, как у шаблонов карты.
   if (!text && tf.own) {
     if (!warnings.length) warnings.push(`в своей копии ${tf.file} ${lack(text)} — взят встроенный текст`);
     tf.file = builtinIn(name, lang); tf.own = false;
-    try { text = read(tf.file); } catch (e) { return { error: `задание не прочитано: ${e instanceof Error ? e.message : e}` }; }
+    try { text = read(tf.file); } catch (e) { return fail('tplRead', 'задание не прочитано: {e}', { e: String(e instanceof Error ? e.message : e) }); }
   }
-  if (!text) return { error: `в ${path.basename(tf.file)} ${lack(text)}: задание пустое` };
+  if (!text) return text === null ? fail('tplNoHead', 'в {file} нет заголовка «## »: задание пустое', { file: path.basename(tf.file) }) : fail('tplBlank', 'в {file} после заголовка «## » пусто: задание пустое', { file: path.basename(tf.file) });
   /** @type {Record<string, string>} */
   const vars = { ...boardWords(lang), 'проект': project, 'папка': board.root(project) + path.sep, 'формат': builtinIn('FORMAT.md', lang), 'образцы': builtinIn(SAMPLES, lang) + path.sep, 'язык': langName(lang) };
   if (name === ADOPT) {
     // Выбранный файл: относительный путь — от папки проекта; файла нет — отказ, а не задание с неверным путём.
     const file = String(opts.file || '').replace(/[\r\n]+/g, ' ').trim();
     vars['файл'] = file ? path.resolve(project, file) : '';
-    if (file) { let ok = false; try { ok = fs.statSync(vars['файл']).isFile(); } catch { /* нет файла */ } if (!ok) return { error: `файл плана не найден: ${vars['файл']}` }; }
+    if (file) { let ok = false; try { ok = fs.statSync(vars['файл']).isFile(); } catch { /* нет файла */ } if (!ok) return fail('planMissing', 'файл плана не найден: {file}', { file: vars['файл'] }); }
     text = adoptBody(text, !!file, opts.dataDir, lang, warnings);
   }
   // {перенос} в compose.md (t1602): куда идти, если человек согласился использовать найденный план.
@@ -1092,4 +1373,4 @@ const adopt = (project, opts = {}) => task(project, ADOPT, opts);
 const ADVISOR_LINE = lineOf('advisor', {});
 const ADVISOR_ONCE = lineOf('advisorOnce', {});
 
-module.exports = { TEMPLATES, defuseAt, langOf, langName, nameIn, builtinIn, tr, SAY, LINES, ADVISOR_LINE, ADVISOR_ONCE, line, templates, templateFile, stale, staleAll, paths, shared, fresh, pick, search, wrongNotes, noteLine, listLine, alikeNotes, alikePattern, mergeTitle, notes, build, compose, newcard, adopt };
+module.exports = { orient, warmMap, fail, TEMPLATES, defuseAt, langOf, langName, nameIn, builtinIn, tr, SAY, LINES, ADVISOR_LINE, ADVISOR_ONCE, line, templates, templateFile, stale, staleAll, paths, shared, fresh, pick, search, wrongNotes, noteLine, listLine, alikeNotes, alikeNotesSliced, alikePattern, mergeTitle, notes, build, compose, newcard, adopt };

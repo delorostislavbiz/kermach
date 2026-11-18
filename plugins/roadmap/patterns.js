@@ -189,7 +189,7 @@ function served(dataDir, project, b, now = Date.now()) {
   }
   for (const p of ok) for (const id of field(p, 'from')) if (!why.has(id) && !ok.some((x) => x.id === id)) why.set(id, `в паттерне ${p.id}`);
   for (const p of ok) why.set(p.id, 'утверждённый паттерн — строкой «Паттерн» в начале части 6');
-  // all — все утверждённые, без среза: их берёт общая база (known.sync, t1006).
+  // all — все утверждённые, без среза (брала общая база t1006, её убрали в t1685).
   return { all: ok, shown: ok.slice(0, PATTERN_LIMIT), more: Math.max(0, ok.length - PATTERN_LIMIT), hide: new Set(why.keys()),
     skipped: [...why].map(([id, w]) => ({ id, why: w })), error };
 }

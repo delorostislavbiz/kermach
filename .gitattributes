@@ -1,0 +1,20 @@
+# Переносы строк: в репозитории и в рабочей папке всегда LF, на любой системе.
+* text=auto eol=lf
+
+# Скрипты .sh .yml .yaml .ps1 .nsi: в индексе все LF — фиксируем LF.
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.ps1 text eol=lf
+*.nsi text eol=lf
+
+# .cmd и .bat: тоже LF. cmd.exe читает их без меток goto, в индексе они уже LF.
+*.cmd text eol=lf
+*.bat text eol=lf
+
+# Двоичные: не трогать.
+*.ttf binary
+*.png binary
+*.wasm binary
+*.ico binary
+*.icns binary

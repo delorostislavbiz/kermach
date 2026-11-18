@@ -10,9 +10,10 @@ const MAX_FILES = 200;
 /**
  * Разбор вывода `status --porcelain=v1 -z -b`. Чистая функция — её же гоняет проверка.
  * @param {string} out
+ * @param {string} [prefix] папка проекта от корня репозитория («sub/dir/», t1673): только её файлы, пути — от неё
  * @returns {{ branch: string, detached: boolean, upstream: string, ahead: number, behind: number, files: { x: string, y: string, path: string }[], total: number }}
  */
-function parse(out) {
+function parse(out, prefix = '') {
   const recs = out.split('\0');
   if (recs.length && recs[recs.length - 1] === '') recs.pop();
   let branch = '';
@@ -43,7 +44,9 @@ function parse(out) {
     if (r.length < 4) continue;
     const x = r[0];
     const y = r[1];
-    all.push({ x, y, path: r.slice(3) });
+    const p = r.slice(3);
+    if (!prefix) all.push({ x, y, path: p });
+    else if (p.startsWith(prefix) && p.length > prefix.length) all.push({ x, y, path: p.slice(prefix.length) });
     if (x === 'R' || x === 'C') i++; // следующая запись — прежнее имя
   }
   return { branch, detached, upstream, ahead, behind, files: all.slice(0, MAX_FILES), total: all.length };
@@ -65,7 +68,18 @@ async function readStatus(dir, run = here) {
   const { err, stdout } = await run('git', ['--no-optional-locks', '-C', dir, 'status', '--porcelain=v1', '-z', '-b', '-uall'],
     { timeout: TIMEOUT_MS, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' } });
   if (err) return { repo: false };
-  return { repo: true, ...parse(stdout) };
+  // t1673 (d131): папка проекта внутри чужого репозитория. porcelain даёт пути от корня репозитория и файлы всего репозитория:
+  // панель показывала чужие файлы, а щелчок по своему открывал «изменений нет» (путь от корня под -C папки проекта не находится).
+  // Оставляем файлы своей папки, пути — от неё. Ветка — того репозитория, в котором папка лежит: это правда.
+  const pre = await run('git', ['--no-optional-locks', '-C', dir, 'rev-parse', '--show-prefix', '--show-toplevel'],
+    { timeout: TIMEOUT_MS, windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' } });
+  // Вывод: первая строка — папка от корня («sub/» или пустая), вторая — корень репозитория.
+  const rows = pre.err ? [] : pre.stdout.split(/\r?\n/);
+  const prefix = (rows[0] || '').trim();
+  if (!prefix) return { repo: true, ...parse(stdout) };
+  // outer — имя папки внешнего репозитория: окно пишет «папка внутри репозитория <имя>» рядом с веткой.
+  const top = (rows[1] || '').trim().replace(/[\\/]+$/, '');
+  return { repo: true, ...parse(stdout, prefix), inside: prefix.replace(/\/$/, ''), outer: top.slice(Math.max(top.lastIndexOf('/'), top.lastIndexOf('\\')) + 1) };
 }
 
 // Изменения файла (t1166, ГИТ-устройство.md, раздел (а)): рабочая папка против последнего коммита, подряд по кускам.
@@ -155,7 +169,7 @@ function parseDiff(out, { maxLines = Infinity } = {}) {
 }
 
 const gitEnv = () => ({ ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' });
-/** @param {string} dir @param {string[]} args @param {Run} run @param {number} [buf] */
+/** @param {string} dir @param {string[]} args @param {Run} run @param {number} [buf] @param {Record<string, string>} [env] */
 const git = (dir, args, run, buf = 8 * 1024 * 1024, env = {}) => run('git', ['--no-optional-locks', '-c', 'core.quotepath=false', '-C', dir, ...args],
   { timeout: TIMEOUT_MS, windowsHide: true, maxBuffer: buf, env: { ...gitEnv(), ...env } });
 /** `diff --no-index` выходит с кодом 1, когда отличия есть, — это не ошибка. @param {any} err */
@@ -172,12 +186,25 @@ async function baseOf(dir, run) {
  * @param {string} dir @param {Run} [run]
  */
 async function readNumstat(dir, run = here) {
+  const base = await baseOf(dir, run);
+  // --relative (t1673, d131): папка проекта внутри чужого репозитория — только её файлы, пути от неё, как у readStatus.
+  return withIndexCopy(dir, run, async (env) => {
+    const { err, stdout } = await git(dir, ['diff', '--numstat', '-z', '-M', '--ignore-cr-at-eol', '--relative', base], run, undefined, env);
+    if (err) return { repo: false };
+    return { repo: true, files: parseNumstat(stdout) };
+  });
+}
+
+/**
+ * t1180: diff против HEAD обновляет время файлов в индексе и переписывает .git/index даже с --no-optional-locks.
+ * Считаем по копии индекса во временной папке, настоящий не трогаем. Так и опрос (readNumstat), и щелчок по файлу (diffFile, t1673 d373).
+ * @template T @param {string} dir @param {Run} run @param {(env: Record<string, string>) => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+async function withIndexCopy(dir, run, fn) {
   const path = require('path');
   const fs = require('fs');
   const os = require('os');
-  const base = await baseOf(dir, run);
-  // t1180: diff против HEAD обновляет время файлов в индексе и переписывает .git/index даже с --no-optional-locks.
-  // Опрос по таймеру — считаем по копии индекса во временной папке, настоящий не трогаем.
   const where = await git(dir, ['rev-parse', '--path-format=absolute', '--git-path', 'index'], run);
   const real = where.err ? '' : where.stdout.trim();
   let tmp = '';
@@ -191,9 +218,7 @@ async function readNumstat(dir, run = here) {
     } catch { /* копия не вышла — считаем по настоящему, как раньше */ }
   }
   try {
-    const { err, stdout } = await git(dir, ['diff', '--numstat', '-z', '-M', '--ignore-cr-at-eol', base], run, undefined, env);
-    if (err) return { repo: false };
-    return { repo: true, files: parseNumstat(stdout) };
+    return await fn(env);
   } finally {
     if (tmp) try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* временная папка — не важно */ }
   }
@@ -208,21 +233,35 @@ async function readNumstat(dir, run = here) {
  * @param {Run} [run]
  */
 async function diffFile(dir, file, opts = {}, run = here) {
-  const path = require('path');
-  const fs = require('fs');
+  // t1673 (d430): «папка/» из status — вложенный репозиторий; сравнения по файлу у неё нет. Окно такую строку не открывает (window.js fileRow).
+  if (/\/$/.test(file)) return { repo: true, path: file, error: 'folder' };
   const paths = opts.oldPath ? [opts.oldPath, file] : [file];
   const base = await baseOf(dir, run);
   const tracked = await git(dir, ['ls-files', '-z', '--', ...paths], run);
   if (tracked.err) return { repo: false };
   const untracked = !tracked.stdout && !opts.oldPath;
   const diffArgs = ['-M', '--ignore-cr-at-eol', '--no-color', '--no-ext-diff', `-U${opts.whole ? 1000000 : 3}`];
-  const tail = untracked ? ['--no-index', '--', '/dev/null', file] : [base, '--', ...paths];
-  const num = await git(dir, ['diff', '--numstat', '-z', ...diffArgs, ...tail], run, DIFF_BUF);
+  // --relative (t1673, d131): пути от папки проекта, когда она внутри чужого репозитория. С --no-index не нужен.
+  const tail = untracked ? ['--no-index', '--', '/dev/null', file] : ['--relative', base, '--', ...paths];
+  // d373: diff против HEAD переписывает .git/index — по копии индекса, как опрос.
+  return withIndexCopy(dir, run, (env) => diffBody(dir, file, opts, run, { base, untracked, diffArgs, tail, env }));
+}
+
+/**
+ * Вторая половина diffFile: сам diff по копии индекса.
+ * @param {string} dir @param {string} file @param {{ oldPath?: string, all?: boolean, whole?: boolean }} opts @param {Run} run
+ * @param {{ base: string, untracked: boolean, diffArgs: string[], tail: string[], env: Record<string, string> }} o
+ */
+async function diffBody(dir, file, opts, run, { base, untracked, diffArgs, tail, env }) {
+  const path = require('path');
+  const fs = require('fs');
+  const num = await git(dir, ['diff', '--numstat', '-z', ...diffArgs, ...tail], run, DIFF_BUF, env);
   if (failed(num.err)) return { repo: true, path: file, error: num.err.message };
   const ns = parseNumstat(num.stdout)[0];
   let newSize = -1;
   try { newSize = (await fs.promises.stat(path.join(dir, file))).size; } catch {}
-  const old = untracked ? { err: true, stdout: '' } : await git(dir, ['cat-file', '-s', `${base}:${opts.oldPath || file}`], run);
+  // «./» — путь от папки проекта, а не от корня репозитория (t1673, d131)
+  const old = untracked ? { err: true, stdout: '' } : await git(dir, ['cat-file', '-s', `${base}:./${opts.oldPath || file}`], run);
   const oldSize = old.err ? -1 : Number(old.stdout.trim());
   const common = { repo: true, path: file, oldPath: opts.oldPath || '', untracked, oldSize, newSize };
   if (!ns) return { ...common, binary: false, isNew: false, deleted: false, renamed: false, add: 0, del: 0, lines: 0, big: false, truncated: false, hunks: [] };
@@ -231,7 +270,7 @@ async function diffFile(dir, file, opts = {}, run = here) {
       add: 0, del: 0, lines: 0, big: false, truncated: false, hunks: [] };
   }
   const big = Math.max(oldSize, newSize) > BIG_BYTES || ns.add + ns.del > BIG_LINES;
-  const txt = await git(dir, ['diff', ...diffArgs, ...tail], run, DIFF_BUF);
+  const txt = await git(dir, ['diff', ...diffArgs, ...tail], run, DIFF_BUF, env);
   if (failed(txt.err)) return { ...common, error: txt.err.message };
   const d = parseDiff(txt.stdout, { maxLines: big && !opts.all ? SHOW_LINES : Infinity });
   return { ...common, ...d, isNew: d.isNew || untracked, big };

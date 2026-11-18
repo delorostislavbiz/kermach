@@ -87,6 +87,31 @@ function inWindow(at) {
  * Строка тела засчитывается самому вложенному объявлению: слово в методе — методу, а не всему классу.
  * @param {{ head: any, files: any[] }} map @param {string} root @param {string} q
  */
+/**
+ * Текст файлов проекта между вызовами byWords (t1677, t1788, d769): ориентир строится на каждый промпт карты, и каждый раз
+ * перечитывал все файлы карты — 400 файлов src, 4,7 МБ, около 430 мс из 660. Ключ — полный путь, годность — время и размер файла (stat).
+ * Предел — TEXT_CACHE_MAX байт: больше — кэш очищается целиком и набирается заново.
+ * @type {Map<string, { mtime: number, size: number, lines: string[], text: string }>}
+ */
+const TEXT_CACHE = new Map();
+const TEXT_CACHE_MAX = 64 * 1048576;
+let textCacheBytes = 0;
+/** Строки файла: из кэша, если время и размер те же; файла нет — null. @param {string} file */
+function linesOf(file) {
+  let st;
+  try { st = fs.statSync(file); } catch { TEXT_CACHE.delete(file); return null; }
+  const was = TEXT_CACHE.get(file);
+  if (was && was.mtime === st.mtimeMs && was.size === st.size) return was;
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
+  if (was) textCacheBytes -= was.size;
+  if (textCacheBytes + st.size > TEXT_CACHE_MAX) { TEXT_CACHE.clear(); textCacheBytes = 0; }
+  const got = { mtime: st.mtimeMs, size: st.size, lines: text.split('\n'), text };
+  TEXT_CACHE.set(file, got);
+  textCacheBytes += st.size;
+  return got;
+}
+
 function byWords(map, root, q) {
   const words = wordsOf(q);
   // Слово из кода — целиком, по границам имени (token не находит blockTokens); русская основа — началом слова.
@@ -99,7 +124,10 @@ function byWords(map, root, q) {
   for (const rec of map.files) {
     /** @type {string[] | null} */
     let lines = null;
-    try { lines = fs.readFileSync(path.join(root, rec.file), 'utf8').split('\n'); } catch { /* файла нет — только имена */ }
+    const got0 = linesOf(path.join(root, rec.file)); // файла нет — только имена
+    if (got0) lines = got0.lines;
+    // Слова, что есть в файле хоть где-то (t1677): строки проверяются только ими. Ни одного — строки не перебираются вовсе.
+    const inFile = got0 ? res.map((re, k) => [re, k]).filter(([re]) => /** @type {RegExp} */ (re).test(got0.text)) : [];
     // Самое вложенное объявление каждой строки: у вложенного начало позже, конец раньше. Строка вне объявлений — «вне функций» файла.
     // Константа и переменная (t929) строк не берут: их находят по имени и подписи, текст строк остаётся «вне функций», как до t929 (t843: t834).
     /** @type {any[]} */
@@ -126,10 +154,10 @@ function byWords(map, root, q) {
     }
     /** @type {[number, number][]} строка «вне функций» → номер слова, по возрастанию строк (t1124) */
     const topAt = [];
-    for (let i = 0; lines && i < lines.length; i++) {
+    for (let i = 0; lines && inFile.length && i < lines.length; i++) {
       const s = owner[i + 1] || top;
       let n = 0;
-      res.forEach((re, k) => { if (re.test(/** @type {string[]} */ (lines)[i])) { add(s, k, 1); n++; if (s === top) topAt.push([i, k]); } });
+      inFile.forEach(([re, k]) => { if (re.test(/** @type {string[]} */ (lines)[i])) { add(s, k, 1); n++; if (s === top) topAt.push([i, k]); } });
       // При равном числе слов строка кода лучше комментария: место, а не рассказ о нём.
       const k = n && n + (/^\s*(?:\/\/|\/?\*|#)/.test(/** @type {string[]} */ (lines)[i]) ? 0 : 0.5);
       if (k % 1) named.add(s);

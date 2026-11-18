@@ -52,7 +52,7 @@ Vor jeder Welle wähle Modell und Aufwand für die Phasenkarten «в очере�
 Während die Phase läuft:
 - ein Agent hat gefragt — der Mensch antwortet in dessen Tab. Man fragt dich „was fragt t<N>?" — lies die Karte und rate; die Antwort geht trotzdem an den Agenten;
 - der Mensch hat dir auf die Frage einer Karte geantwortet — gib die Antwort mit dem Befehl `kermach roadmap answer t<N> "…"` weiter. Schreib sie nicht selbst in die Karte: eine von Hand eingetragene Antwort zählt der Prüfer nicht als Antwort des Menschen;
-- der Mensch hat getan, worauf eine Karte „Mensch nötig" wartete (Zugang gegeben, entschieden, bezahlt) — schließe sie selbst: `kermach roadmap close t<N> --done "was der Mensch getan hat" --proof "…"`. Sie hat keinen Prüfer, und das ist richtig so: die Arbeit hat der Mensch gemacht. Die Karten, die von ihr abhängen, gehen weiter;
+- der Mensch hat getan, worauf eine Karte „Mensch nötig" wartete (Zugang gegeben, entschieden, bezahlt) — schließe sie selbst: zuerst `kermach roadmap answer t<N> "die Worte des Menschen"`, dann `kermach roadmap close t<N> --done "was der Mensch getan hat" --no-file "der Mensch hat die Arbeit gemacht: was genau" --tested "nur Mensch"`. Der Mensch hat es mit Worten gesagt — ohne `answer` sieht der Prüfer diese Worte nicht und schickt die Karte zur Nacharbeit zurück: im Modus „selbst" prüft der Prüfer auch so eine Karte. Eine abgebrochene Karte braucht kein `answer`. Die Karten, die von ihr abhängen, gehen weiter;
 - „Warum wurde es so gemacht?" — die Karte, ihr Nachweis und die Einträge `d<N>.md` des Agenten;
 - eine Bitte um 15–20 Arbeitsschritte — mach es selbst. Prüfe vor einer Änderung, ob es eine Karte „in Arbeit" mit dieser Datei gibt: gibt es — nicht ändern, sag es dem Menschen;
 - mehr als 15–20 Schritte oder eine lange Prüfung nötig — lege eine Karte in der passenden Phase an (`kermach roadmap new t …`). Eine Idee für später — eine Karte in den „Eingang". Laufende Karten nicht anfassen;
@@ -65,6 +65,7 @@ Selbst beheben:
 - der Mensch hat den Tab geschlossen (die Zeile sagt «закрыл человек») — nicht neu starten: er hat die Karte vielleicht absichtlich angehalten. Frag ihn in einer Zeile, ob neu starten;
 - der Agent ist verstummt — schreib in seinen Tab „weiter" und was auf der Karte noch zu tun ist;
 - der Agent wartet auf eine Antwort, und sie steht in der Karte, der Übersicht oder dem Journal — gib sie weiter: `kermach roadmap answer t<N> --from session "…"`;
+- die Frage der Karte ist nicht deine, sie braucht die Entscheidung des Menschen — gib sie an ihn weiter: `kermach roadmap answer t<N> --to-human`;
 - der Prüfer hat Anmerkungen zurückgegeben — der Kartenagent muss sie bekommen: starte die Karte neu, wenn sie hängt;
 - zweiter Fehlschlag der Karte — setz im Kopf ein stärkeres Modell (`model:`) und starte neu;
 - Abo-Limit — warte die Rücksetzzeit aus der Zeile ab und starte die Karte neu.

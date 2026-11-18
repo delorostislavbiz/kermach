@@ -31,6 +31,10 @@ const RM_STATUS = {
   'пауза': { icon: '‖', tone: 'muted', key: 'pause' },
   'готово': { icon: '✓', tone: 'ok', key: 'done' },
 };
+/** Карта «готово», которую ещё проверяет проверяющий (t1633, c.grading от main.js): файл не меняется, окно показывает «проверяется». */
+const RM_GRADING = { icon: '◐', tone: 'info' };
+/** Карта сделана для окна: «готово» и проверка кончилась — так же считает волна. @param {any} c */
+const rmDone = (c) => c.status === 'готово' && !c.grading;
 /** Статусы карты, при которых по ней идёт работа: фаза с такой картой раскрыта. */
 const RM_ACTIVE = new Set(['в работе', 'ждёт ответа', 'на проверке', 'на ревью', 'пауза']);
 /** Поля тела карты (ключи board.js): подпись; mono — моноширинным, там пути и команды. */
@@ -196,11 +200,6 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .errs .cap { font-weight: 600; color: var(--rm-bad); padding: 2px 0 4px; }
     #plugin-roadmap-panel .errs .e { padding: 2px 0; line-height: 17px; overflow-wrap: anywhere; }
     #plugin-roadmap-panel .errs .e b { font-weight: 600; }
-    #plugin-roadmap-panel .warns { padding: 4px 12px; color: var(--muted); }
-    #plugin-roadmap-panel .warns .cap { cursor: pointer; padding: 2px 0; user-select: none; }
-    #plugin-roadmap-panel .warns .cap .tw { display: inline-block; width: 14px; }
-    #plugin-roadmap-panel .warns .e { padding: 2px 0; line-height: 17px; overflow-wrap: anywhere; }
-    #plugin-roadmap-panel .warns .e b { font-weight: 600; }
     #plugin-roadmap-panel .ph { min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 12px; white-space: nowrap; }
     #plugin-roadmap-panel .ph .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
     #plugin-roadmap-panel .ph .s { color: var(--muted); flex-shrink: 0; }
@@ -243,8 +242,10 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .sess { border-color: var(--accent, #21B568); }  /* t1631: рамка ярче соседних, цвет из темы */
     #plugin-roadmap-panel .sess .lim, #plugin-roadmap-panel .sess .bgl { padding: 0; }
     #plugin-roadmap-panel .sess .lim + .bgl { border-top: 1px solid var(--line, rgba(141,145,165,.14)); padding-top: 6px; }
-    #plugin-roadmap-panel .lim { display: flex; align-items: center; gap: 6px; padding: 0 4px; color: var(--muted); font-size: 11.5px; white-space: nowrap; }
-    #plugin-roadmap-panel .lim .bgx { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; cursor: pointer; }
+    #plugin-roadmap-panel .lim { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 0 4px; color: var(--muted); font-size: 11.5px; min-width: 0; }
+    #plugin-roadmap-panel .lim > select, #plugin-roadmap-panel .lim > .bgx { white-space: nowrap; }
+    #plugin-roadmap-panel .lim > span:first-child { margin-right: -6px; }
+    #plugin-roadmap-panel .lim .bgx { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
     #plugin-roadmap-panel .bgl { display: flex; flex-direction: column; gap: 2px; padding: 0 4px; font-size: 11.5px; }
     #plugin-roadmap-panel .bgl-h { color: var(--muted); font-weight: 600; }
     #plugin-roadmap-panel .bgl-e { color: var(--muted); }
@@ -254,11 +255,13 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .bgr .bs.wait { color: var(--rm-warn); }
     #plugin-roadmap-panel .bgr .bs.ask { color: var(--rm-warn); font-weight: 600; }
     #plugin-roadmap-panel .bgr .bs.ask::before { content: "? "; }
+    #plugin-roadmap-panel .bgr .bs.askmain { color: var(--rm-info); }
     #plugin-roadmap-panel .bgr .bs.stuck { color: var(--rm-bad); }
     #plugin-roadmap-panel .bgr .bs.stuck::before { content: "⚠ "; }
     #plugin-roadmap-panel .bgr .bs.stuck::after { content: var(--rm-note, " — вопроса нет"); }
     #plugin-roadmap-panel .bgr .bs.error { color: var(--rm-bad); }
     #plugin-roadmap-panel .bgr .bs.done { color: var(--rm-ok); }
+    #plugin-roadmap-panel .bgr .bs.doneask { color: var(--rm-warn); font-weight: 600; }
     #plugin-roadmap-panel .bgr .bt { color: var(--muted); }
     #plugin-roadmap-panel .bgr .btn { height: 22px; padding: 0 8px; }
     #plugin-roadmap-panel .lim select { height: 22px; padding: 0 2px; background: var(--input, transparent); border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 4px; font-size: 11.5px; }
@@ -316,6 +319,7 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .si.review { color: var(--rm-review); background: color-mix(in srgb, var(--rm-review) 18%, transparent); }
     #plugin-roadmap-panel .si.ok { color: var(--rm-ok); background: color-mix(in srgb, var(--rm-ok) 18%, transparent); }
     #plugin-roadmap-panel .meta.warn { color: var(--rm-warn); }
+    #plugin-roadmap-panel .meta.info { color: var(--rm-info); }
     #plugin-roadmap-panel .ph.fold, #plugin-roadmap-panel .card.fold { cursor: default; }
     #plugin-roadmap-panel .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px 22px 60px; text-align: center; color: var(--muted); line-height: 18px; }
     #plugin-roadmap-panel .empty .ic { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line, rgba(141,145,165,.14)); background: var(--raised, transparent); color: var(--rm-info); }
@@ -465,6 +469,16 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .rinbox .moved b { color: var(--rm-ok); font-weight: 400; }
     #plugin-roadmap-panel .rinbox .none { padding: 4px; color: var(--muted); }
     #plugin-roadmap-panel .rinbox .idone .card { cursor: pointer; }
+    #plugin-roadmap-panel .rnotes .nth { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex-shrink: 0; }
+    #plugin-roadmap-panel .rnotes .ih { align-items: flex-start; }
+    #plugin-roadmap-panel .rnotes .ih input[type="checkbox"] { flex-shrink: 0; margin: 2px 0 0; cursor: pointer; }
+    #plugin-roadmap-panel .rnotes .ntx { line-height: 17px; max-height: 51px; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
+    #plugin-roadmap-panel .rnotes .ntx.all { max-height: none; }
+    #plugin-roadmap-panel .rnotes .nmark { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+    #plugin-roadmap-panel .rnotes .nmark .lnk { color: var(--rm-info); cursor: pointer; }
+    #plugin-roadmap-panel .rnotes .nmark .lnk:hover { text-decoration: underline; }
+    #plugin-roadmap-panel .rnotes .iacts input[type="text"] { flex: 1 1 140px; min-width: 0; height: 26px; padding: 0 6px; color: var(--text); background: var(--input, transparent); border: 1px solid var(--line, rgba(141,145,165,.2)); border-radius: 4px; font: inherit; }
+    #plugin-roadmap-panel .rnotes .iacts input[type="text"]:focus { outline: 0; border-color: var(--focus, var(--rm-info)); }
     #plugin-roadmap-panel .rhuman .hmph { padding: 4px 4px 0; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
     #plugin-roadmap-panel .rhuman .hmtx { min-width: 0; overflow-wrap: anywhere; line-height: 18px; }
     #plugin-roadmap-panel .rhuman .hmshut { color: var(--muted); }
@@ -526,11 +540,6 @@ function roadmapSetup(host) {
     /* «Правило работы: …» (t960): тип меняет человек одной кнопкой. */
     #plugin-roadmap-panel .rdecs .dpact button { height: 22px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--rm-ok) 50%, transparent); border-radius: 4px; background: transparent; color: var(--rm-ok); font: inherit; font-size: 11.5px; cursor: pointer; }
     #plugin-roadmap-panel .rdecs .dpact button:disabled { opacity: .55; cursor: default; }
-    /* «Для всех проектов» (t698): переключатель записи и заголовки групп списка. */
-    #plugin-roadmap-panel .rdecs .dglob { display: flex; align-items: center; gap: 6px; font-size: 11.5px; line-height: 16px; color: var(--muted); cursor: pointer; width: fit-content; }
-    #plugin-roadmap-panel .rdecs .dglob input { margin: 0; cursor: pointer; }
-    #plugin-roadmap-panel .rdecs .dglob.on { color: var(--rm-info); }
-    #plugin-roadmap-panel .rdecs .dgrp { margin: 6px 0 2px; font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--muted); }
     /* «Переносимый вывод» (t990): что пригодится в другом проекте с тем же стеком. */
     #plugin-roadmap-panel .rdecs .dport { display: flex; flex-direction: column; gap: 2px; padding-left: 8px; border-left: 2px solid color-mix(in srgb, var(--rm-info) 50%, transparent); font-size: 12px; line-height: 17px; overflow-wrap: anywhere; }
     #plugin-roadmap-panel .rdecs .dport .dph { display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--muted); }
@@ -543,12 +552,6 @@ function roadmapSetup(host) {
     #plugin-roadmap-panel .rdecs .dwrong button { height: 22px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--rm-ok) 50%, transparent); border-radius: 4px; background: transparent; color: var(--rm-ok); font: inherit; cursor: pointer; }
     #plugin-roadmap-panel .rdecs .dwrong button.dnot { border-color: color-mix(in srgb, var(--rm-warn) 50%, transparent); color: var(--rm-warn); }
     #plugin-roadmap-panel .rdecs .dwrong button:disabled { opacity: .55; cursor: default; }
-    /* Общая база (t991): где копия записи и почему не ушла; «убрать», «снова в общую базу». */
-    #plugin-roadmap-panel .rdecs .dknown { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding-left: 8px; border-left: 2px solid color-mix(in srgb, var(--rm-info) 50%, transparent); font-size: 11.5px; line-height: 16px; color: var(--muted); overflow-wrap: anywhere; }
-    #plugin-roadmap-panel .rdecs .dknown.bad { border-left-color: color-mix(in srgb, var(--rm-warn) 60%, transparent); color: var(--rm-warn); }
-    #plugin-roadmap-panel .rdecs .dknown .kw { color: var(--muted); }
-    #plugin-roadmap-panel .rdecs .dknown button { height: 22px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--rm-info) 50%, transparent); border-radius: 4px; background: transparent; color: var(--rm-info); font: inherit; cursor: pointer; }
-    #plugin-roadmap-panel .rdecs .dknown button:disabled { opacity: .55; cursor: default; }
     #plugin-roadmap-panel .rdecs .dpatt { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding-left: 8px; border-left: 2px solid color-mix(in srgb, var(--rm-info) 50%, transparent); font-size: 11.5px; line-height: 16px; color: var(--rm-info); overflow-wrap: anywhere; }
     #plugin-roadmap-panel .rdecs .dpatt.wait { border-left-color: color-mix(in srgb, var(--rm-warn) 60%, transparent); color: var(--rm-warn); }
     #plugin-roadmap-panel .rdecs .dpatt .kw { color: var(--muted); }
@@ -586,7 +589,7 @@ function roadmapSetup(host) {
     <div class="crbar" hidden></div><label class="hd"><input type="checkbox"><span></span></label>
     <div class="rbtn" data-act="newcard" hidden>${ICON(I_NEWCARD)}</div><div class="rbtn" data-act="full"></div></div>
     <label class="rsearch">${ICON(I_FIND, 13)}<input type="text" spellcheck="false"></label><div class="rfound" hidden></div>
-    <div class="rbody"></div><div class="rcard" hidden></div><div class="rprompt" hidden></div><div class="rpass" hidden></div><div class="rphase" hidden></div><div class="rcrd" hidden></div><div class="rinbox" hidden></div><div class="rinbox rhuman" hidden></div><div class="rdecs" hidden></div>`;
+    <div class="rbody"></div><div class="rcard" hidden></div><div class="rprompt" hidden></div><div class="rpass" hidden></div><div class="rphase" hidden></div><div class="rcrd" hidden></div><div class="rinbox" hidden></div><div class="rinbox rhuman" hidden></div><div class="rinbox rnotes" hidden></div><div class="rdecs" hidden></div>`;
   // Под «Файлами», если они уже в колонке; список Git (appendChild) встаёт ниже.
   const files = host.right.querySelector('#plugin-files-panel');
   host.right.insertBefore(panel, files ? files.nextSibling : host.right.firstChild);
@@ -605,6 +608,11 @@ function roadmapSetup(host) {
   const phaseEl = $('.rphase');
   const inboxEl = $('.rinbox');
   const humanEl = $('.rhuman');
+  const notesEl = $('.rnotes');
+  /** Заметки доски (t1628), новые сверху: по дате, при равной — по номеру. Новая — без taken и cancelled, как в board.noteState. @returns {any[]} */
+  const notesAll = () => (last && Array.isArray(last.decisions) ? last.decisions : []).filter((/** @type {any} */ d) => d.type === 'заметка')
+    .sort((/** @type {any} */ a, /** @type {any} */ z) => (z.date || '').localeCompare(a.date || '') || z.num - a.num);
+  const noteNew = (/** @type {any} */ d) => !d.cancelled && !d.taken;
   /** Все части строк «Не проверено человеком» с доски (t1644). @returns {any[]} */
   const humanAll = () => (last && Array.isArray(last.phases) ? last.phases : []).flatMap((/** @type {any} */ f) => f.human || []);
   const humanOpen = () => humanAll().filter((/** @type {any} */ h) => h.state === 'open');
@@ -641,6 +649,12 @@ function roadmapSetup(host) {
   const sel = { phase: '', /** @type {Set<string>} */ ids: new Set(), anchor: '' };
   /** Отказ последней кнопки волны (t687): строка под заголовком фазы до следующего нажатия. @type {{ phase: string, text: string } | null} */
   let waveNote = null;
+  /** t1725: фаза, у которой показано предупреждение о флаге нагрузки; следующее нажатие «Итог агентом» запускает всё равно. */
+  let sumAsk = '';
+  /** t1865: у кнопки показано предупреждение о флаге нагрузки — следующее нажатие открывает вкладку всё равно (без loadAsk). */
+  const flagAsk = { compose: false, newcard: false, orch: false };
+  /** Спросить ли у главной части флаг нагрузки при этом нажатии: да, если предупреждение ещё не показано. @param {'compose' | 'newcard' | 'orch'} b */
+  const askFlag = (b) => { const ask = !flagAsk[b]; flagAsk[b] = false; return { loadAsk: ask }; };
   /** Карта → её место в волне (st, why, letter): последняя волна, где карта есть; идущая важнее законченной. Собирает draw. @type {Map<string, any>} */
   let wItems = new Map();
   /** «Стоп» нажат один раз: второй щелчок до until останавливает волну. @type {{ id: string, until: number } | null} */
@@ -652,19 +666,8 @@ function roadmapSetup(host) {
   let differBusy = '';
   /** «Сделать договорённостью» (t960): запись, у которой команда pact ушла и ответа ещё нет. */
   let pactBusy = '';
-  /** Запись, у которой идёт переключение «для всех проектов» (t698). */
-  let globBusy = '';
   /** «Верна» / «отменить» (t987): запись, у которой команда ушла и ответа ещё нет. */
   let wrongBusy = '';
-  /**
-   * Пометки общей базы (t991) — команда known главной части, по открытию экрана записей и по каждой доске, пока он открыт (не в доске: marks читает все s<N>.md).
-   * warn — база не читается (битый state.json). seq — ответ на старый запрос не затирает новый.
-   * cut, max (t1012) — сколько старых файлов базы не прочитано и сколько читается: база больше предела.
-   * @type {{ marks: { id: string, s: string, kind: string, why: string }[], warn: string, cut: number, max: number, seq: number }}
-   */
-  const knownSt = { marks: [], warn: '', cut: 0, max: 0, seq: 0 };
-  /** «Убрать» / «снова в общую базу» (t991): запись, у которой команда ушла и ответа ещё нет. */
-  let knownBusy = '';
   /** «Собрать в паттерн» / «не паттерн» / «утвердить» (t1005): запись, у которой команда ушла и ответа ещё нет. */
   let pattBusy = '';
   /**
@@ -686,6 +689,10 @@ function roadmapSetup(host) {
   const api =(/** @type {string} */ cmd, /** @type {any[]} */ ...a) => host.call(cmd, ...a).catch((/** @type {any} */ e) => ({ error: String((e && e.message) || e) }));
 
   const statusWord = (/** @type {string} */ s) => { const m = got(RM_STATUS, s); return m ? T(`st.${m.key}`, s) : s; };
+  /** Слово статуса карты для показа (t1633): «готово» на проверке — «проверяется». @param {any} c */
+  const shownWord = (c) => (c.grading ? T('st.grading', 'проверяется') : statusWord(c.status));
+  /** Сумма цены проверок карты (t1633). @param {{ sum: number }} g */
+  const costText = (g) => `$${(Number(g.sum) || 0).toFixed(2).replace('.', ',')}`;
   const phaseWord = (/** @type {string} */ s) => T(`ph.${s === 'идёт' ? 'run' : s === 'готова' ? 'done' : 'plan'}`, s);
   /** Фаза готова (t513, FORMAT.md): признаки есть — когда отмечены все; признаков нет — по статусу в файле. @param {any} f */
   const phDone = (f) => (f.criteria && f.criteria.length ? !!f.ready : f.status === 'готова');
@@ -713,9 +720,23 @@ function roadmapSetup(host) {
   /** Слово состояния строки «В фоне»: st от главной части — work, wait, done, error, start. @param {string} st */
   const bgWord = (st) => (st === 'work' ? T('bgl.work', 'работает') : st === 'wait' ? T('bgl.wait', 'ждёт ответа') : st === 'ask' ? T('bgl.wait', 'ждёт ответа')
     : st === 'stuck' ? T('bgl.wait', 'ждёт ответа') : st === 'done' ? T('bgl.done', 'закончил')
+    : st === 'askmain' ? T('bgl.askMain', 'ждёт главную сессию')
+    : st === 'doneask' ? T('bgl.doneAsk', 'карта готова, агент спрашивает')
     : st === 'error' ? T('bgl.error', 'упал') : T('bgl.start', 'запускается'));
   /** Раздел «В фоне» (t1073): строка на скрытую вкладку, кнопки по номеру вкладки. @param {any[]} rows */
-  const bgHtml = (rows, revs = []) => {
+  const bgHtml = (rows, revs = [], grades = []) => {
+    /** Состояние проверки карты (t1633): main.js gradeRows. @param {any} g */
+    const gradeWord = (g) => (g.st === 'run' ? T('bgl.gradeRun', 'проверяет')
+      : g.st === 'queue' ? T('bgl.gradeQueue', 'ждёт места · впереди: {n}', { n: g.ahead || 0 })
+        : g.st === 'limit' ? T('bgl.gradeLimit', 'ждёт сброса лимита · до {t}', { t: when(g.until) })
+          : g.st === 'retry' ? T('bgl.gradeRetry', 'повтор в {t}', { t: when(g.until) })
+            : g.st === 'load' ? T('bgl.gradeLoad', 'ждёт снятия флага нагрузки')
+              : g.st === 'send' ? T('bgl.gradeSend', 'замечания ждут вкладку агента') : bgWord('start'));
+    // Проверяющий карты (t1633): claude -p без вкладки — строка без кнопок, их некуда привести.
+    const gr = grades.map((/** @type {any} */ g) => `<div class="bgr gr" data-grade="${esc(g.card)}">`
+      + `<span class="bn"><b>${esc(g.card)}</b> ${esc(g.title || '')} · ${esc(T('bgl.gradeWho', 'проверяющий'))} · ${esc(T('bgl.revRound', 'круг {n} из {m}', { n: g.round, m: g.rounds }))}</span>`
+      + `<span class="bm">${esc(T('bgl.revWho', 'claude {model}, только читает', { model: g.model }))}</span>`
+      + `<span class="bs ${g.st === 'run' ? 'work' : 'wait'}">${esc(gradeWord(g))}</span><span class="bt" data-since="${Number(g.since) || 0}">${esc(lasted(Number(g.since) || 0))}</span></div>`).join('');
     /** Усилие в карте записано по-русски — словом языка окна, как в поле карты. @param {any} r */
     const ame = (r) => { const e = r.effort && got(lists.EFFORT, r.effort); return [r.agent, r.model, e ? T(`eff.${e.key}`, r.effort) : r.effort].filter(Boolean).join(' '); };
     const head = `<div class="bgl-h" title="${esc(T('bgl.title', 'Агенты в скрытых вкладках проекта. Сколько их — на кнопке «в фоне: N» рядом с «+» над вкладками'))}">${esc(T('bgl.cap', 'В фоне'))}</div>`;
@@ -724,12 +745,12 @@ function roadmapSetup(host) {
       + `<span class="bn">${esc(v.kind === 'phase' ? T('bgl.revPhase', 'Проверка фазы {ph}', { ph: v.phase }) : T('bgl.revRoadmap', 'Проверка роадмапа'))}`
       + ` · ${esc(T('bgl.revRound', 'круг {n} из {m}', { n: v.round, m: v.rounds }))} · ${esc(T('bgl.revSince', 'идёт с {t}', { t: when(Number(v.since) || 0) }))}</span>`
       + `<span class="bm">${esc(T('bgl.revWho', 'claude {model}, только читает', { model: v.model }))}</span>`
-      + `<span class="bs work">${esc(bgWord('work'))}</span><span class="bt" data-since="${Number(v.since) || 0}">${esc(lasted(Number(v.since) || 0))}</span></div>`).join('');
-    if (!rows.length && !rv) return `<div class="bgl">${head}<div class="bgl-e">${esc(T('bgl.empty', 'в фоне никого'))}</div></div>`;
-    return `<div class="bgl">${head}${rv}${rows.map((r) => `<div class="bgr" data-bgsid="${esc(r.sid)}">`
+      + `<span class="bs ${v.load ? 'wait' : 'work'}">${esc(v.load ? T('bgl.gradeLoad', 'ждёт снятия флага нагрузки') : bgWord('work'))}</span><span class="bt" data-since="${Number(v.since) || 0}">${esc(lasted(Number(v.since) || 0))}</span></div>`).join('');
+    if (!rows.length && !rv && !gr) return `<div class="bgl">${head}<div class="bgl-e">${esc(T('bgl.empty', 'в фоне никого'))}</div></div>`;
+    return `<div class="bgl">${head}${rv}${gr}${rows.map((r) => `<div class="bgr" data-bgsid="${esc(r.sid)}">`
       + `<span class="bn">${r.card ? `<b>${esc(r.card)}</b> ` : ''}${esc(r.title || r.sid)}</span>`
       + `<span class="bm" title="${esc(ame(r))}">${esc(ame(r))}</span>`
-      + `<span class="bs ${esc(r.st)}"${r.st === 'stuck' ? ` title="${esc(T('bgl.stuckTitle', 'Агент замолчал, а открытого «## Вопрос» в карте нет: похоже, застрял. Посмотрите вкладку — «Показать»'))}" style="--rm-note:${esc(JSON.stringify(` — ${T('bgl.noQuestion', 'вопроса нет')}`))}"` : r.st === 'ask' ? ` title="${esc(T('bgl.askTitle', 'Карта ждёт вашего ответа: откройте карту и ответьте в поле'))}"` : ''}>${esc(bgWord(r.st))}</span><span class="bt" data-since="${Number(r.since) || 0}">${esc(lasted(Number(r.since) || 0))}</span>`
+      + `<span class="bs ${esc(r.st)}"${r.st === 'stuck' ? ` title="${esc(T('bgl.stuckTitle', 'Агент замолчал, а открытого «## Вопрос» в карте нет: похоже, застрял. Посмотрите вкладку — «Показать»'))}" style="--rm-note:${esc(JSON.stringify(` — ${T('bgl.noQuestion', 'вопроса нет')}`))}"` : r.st === 'ask' ? ` title="${esc(T('bgl.askTitle', 'Карта ждёт вашего ответа: откройте карту и ответьте в поле'))}"` : r.st === 'askmain' ? ` title="${esc(T('bgl.askMainTitle', 'Вопрос карты к главной сессии: она ответит сама. Вам он придёт, если главной нет, она не ответит за 30 мин или передаст его вам'))}"` : r.st === 'doneask' ? ` title="${esc(T('bgl.doneAskTitle', 'Карта готова, но агент что-то спрашивает во вкладке. «Показать» — посмотреть и ответить, «Остановить» — закрыть вкладку'))}"` : ''}>${esc(bgWord(r.st))}</span><span class="bt" data-since="${Number(r.since) || 0}">${esc(lasted(Number(r.since) || 0))}</span>`
       + `<button type="button" class="btn" data-bg="show">${esc(T('show', 'Показать'))}</button>`
       + `<button type="button" class="btn" data-bg="stop" title="${esc(T('bgl.stopTitle', 'Остановить агента и закрыть его вкладку, без вопроса — как kermach tab close --force'))}">${esc(T('bgl.stop', 'Остановить'))}</button></div>`).join('')}</div>`;
   };
@@ -780,8 +801,8 @@ function roadmapSetup(host) {
     return `<span class="crb${cls}" data-crb="${esc(j.id)}" title="${esc(T('cr.badgeTitle', 'Задание {id} плагина «Кредиты» — открыть в панели', { id: j.id }))}">${esc(txt)}</span>`;
   };
   const cardRow = (c, byId, pick = false) => {
-    const m = got(RM_STATUS, c.status) || RM_STATUS['в очереди'];
-    let meta = statusWord(c.status);
+    const m = c.grading ? RM_GRADING : got(RM_STATUS, c.status) || RM_STATUS['в очереди'];
+    let meta = shownWord(c);
     let tone = '';
     // Черновик дальней фазы (t1325, `draft: да`): волна «все» и «независимые» его не берёт, пока на сверке не допишут «Как проверить».
     if (c.status !== 'готово' && String((c.extra && c.extra.draft) || '').trim().toLowerCase() === 'да') meta += ` · ${T('draft', 'черновик')}`;
@@ -792,9 +813,10 @@ function roadmapSetup(host) {
     // Запущена кнопкой, пока ждала в волне (t728): «стоп» волны её вкладку не закроет.
     if (wi && wi.manual && wi.st === 'run' && ['в работе', 'ждёт ответа'].includes(c.status)) meta += ` · ${T('wave.manual', 'запущена вручную')}`;
     if (c.status === 'в очереди') {
-      const wait = c.depends.filter((/** @type {string} */ d) => { const x = byId.get(d); return !x || x.status !== 'готово'; });
+      const wait = c.depends.filter((/** @type {string} */ d) => { const x = byId.get(d); return !x || !rmDone(x); });
       if (wait.length) meta += ` · ${T('waits', 'ждёт {ids}', { ids: wait.join(', ') })}`;
       else if (wi && wi.st === 'file') meta += ` · ${T('wave.file', 'ждёт файл: {id}', { id: wi.why })}`;
+      else if (wi && wi.st === 'load') meta += ` · ${T('wave.load', 'ждёт: флаг нагрузки')}`;
       else if (wi && wi.st === 'slot') meta += ` · ${T('wave.slot', 'ждёт места')}`;
     } else {
       if (c.agent) meta += ` · ${c.agent}`;
@@ -803,11 +825,15 @@ function roadmapSetup(host) {
       const t = c.status === 'готово' ? when(stampAt(c.closed)) : when(c.run && c.run.started ? c.run.started : 0);
       if (t) meta += ` · ${t}`;
     }
-    if (c.status === 'ждёт ответа') tone = ' warn';
+    // t2019: вопрос у главной сессии — спокойный цвет и слова «ждёт главную сессию», оранжевое — только вопросу человеку.
+    if (c.status === 'ждёт ответа') tone = c.askMain ? ' info' : ' warn';
+    if (c.status === 'ждёт ответа' && c.askMain) meta = meta.replace(shownWord(c), T('bgl.askMain', 'ждёт главную сессию'));
+    // t1633: цена законченной проверки — словом «оценка»: на подписке деньги не списываются.
+    if (c.gradeCost && !c.grading) meta += ` · ${T('gradeCost', 'проверка ≈{cost}, оценка', { cost: costText(c.gradeCost) })}`;
     // t1215 (d333): строка «ждёт ответа» или «готово» не дошла до вкладки, из которой звали kermach roadmap run, — сказать здесь.
     if (c.untold) { meta += ` · ⚠ ${T('untold', 'некому сообщить')}`; tone = ' warn'; }
     const on = pick && sel.ids.has(c.id) ? ' sel' : '';
-    return `<div class="card${on}" data-id="${esc(c.id)}"><span class="si ${m.tone}">${esc(m.icon)}</span><span class="num">${esc(c.id)}</span>`
+    return `<div class="card${on}" data-id="${esc(c.id)}"><span class="si ${c.askMain && c.status === 'ждёт ответа' ? 'info' : m.tone}">${esc(m.icon)}</span><span class="num">${esc(c.id)}</span>`
       + `<span class="tt">${esc(c.title || c.id)}</span>${crBadge(c)}<span class="meta${tone}"${c.untold ? ` title="${esc(T('untoldHint', 'Строка «[Роадмап]» об этой карте не дошла до вкладки, из которой её запустили ({why}), и ушла системным уведомлением. Откройте карту — пометка снимется; снимется и после следующего сообщения в ту вкладку', { why: c.untold }))}"` : ''}>${esc(meta)}</span></div>`;
   };
 
@@ -863,7 +889,7 @@ function roadmapSetup(host) {
     const r = b.reports && b.reports[f.id];
     if (!r) return '';
     return `<span class="wbtns"><button type="button" data-report="${esc(f.id)}" title="${esc(T('report.openTitle', 'Отчёт фазы: что сделано и чем доказано по каждой карте, записи фазы — {file}', { file: r.file }))}">${esc(T('report.open', 'Отчёт'))}</button>`
-      + `<button type="button" data-sum="${esc(f.id)}" title="${esc(T('report.sumTitle', 'Агент дописывает в отчёт вывод простыми словами и кандидатов в общие записи. Общими их делаете вы — галочкой «для всех проектов» на экране записей'))}">${esc(r.sum ? T('report.sumAgain', 'Итог заново') : T('report.sum', 'Итог агентом'))}</button></span>`;
+      + `<button type="button" data-sum="${esc(f.id)}" title="${esc(T('report.sumTitle', 'Агент дописывает в отчёт вывод простыми словами и записи, которые пригодятся в других проектах'))}">${esc(r.sum ? T('report.sumAgain', 'Итог заново') : T('report.sum', 'Итог агентом'))}</button></span>`;
   };
   /** «Отчёт» — вкладка документа (плагин «Markdown»), его нет или отказал — программой по умолчанию. @param {string} ph */
   const reportOpen = async (ph) => {
@@ -885,10 +911,17 @@ function roadmapSetup(host) {
   /** «Итог агентом»: вкладка агента; ответ с ошибкой — строкой под фазой. @param {HTMLButtonElement} btn */
   const sumClick = (btn) => {
     const ph = btn.dataset.sum || '';
+    // t1725: после предупреждения о флаге нагрузки второе нажатие — согласие человека, запуск идёт.
+    const force = sumAsk === ph;
+    sumAsk = '';
     btn.disabled = true;
-    api('phaseSum', ph).then((/** @type {any} */ r) => {
+    api('phaseSum', ph, force).then((/** @type {any} */ r) => {
       if (stopped) return;
-      if (!r || r.error) {
+      if (r && r.load) {
+        sumAsk = ph;
+        waveNote = { phase: ph, text: T('report.sumLoad', 'Стоит флаг нагрузки (СТОП-НАГРУЗКА.txt в папке проекта): ноутбук перегружен, итог запустит ещё один claude. Нажмите «Итог агентом» ещё раз, чтобы запустить всё равно') };
+        host.log(`итог ${ph}: стоит флаг нагрузки — показано предупреждение`);
+      } else if (!r || r.error) {
         waveNote = { phase: ph, text: T('report.sumFail', 'Итог не запущен: {why}', { why: (r && r.error) || '?' }) };
         host.log(`итог ${ph}: не запущен: ${(r && r.error) || '?'}`);
       } else {
@@ -928,6 +961,9 @@ function roadmapSetup(host) {
     if (skip.length) html += `<div class="wx">${esc(T('wave.skipped', 'пропущены: {list}', { list: skip.join(', ') }))}</div>`;
     const closed = wv.items.filter((/** @type {any} */ x) => x.st === 'closed').map((/** @type {any} */ x) => x.id);
     if (closed.length) html += `<div class="wx warn">${esc(T('wave.closedList', 'вкладка закрыта, карта не готова: {ids}', { ids: closed.join(', ') }))}</div>`;
+    // t1682: волна стоит из-за флага — строка называет причину и что делать, а не только «идёт · 0 из N».
+    const held = wv.state === 'run' ? wv.items.filter((/** @type {any} */ x) => x.st === 'load').map((/** @type {any} */ x) => x.id) : [];
+    if (held.length) html += `<div class="wx warn load">${esc(T('wave.loadLine', 'стоит флаг нагрузки (СТОП-НАГРУЗКА.txt в папке проекта): новые карты не запускаю, ждут {ids}. Уберите файл — волна продолжит сама', { ids: held.join(', ') }))}</div>`;
     return `${html}</div>`;
   };
   /**
@@ -1047,12 +1083,16 @@ function roadmapSetup(host) {
     // Счётчик — открытые карты, как список экрана «Входящие» (t516): закрытая карта уходит и из списка, и из числа.
     let html = nc.note ? `<div class="ncnote${nc.note.bad ? ' bad' : ''}">${esc(nc.note.text)}</div>` : '';
     html += `<div class="box inbox ibx" data-do="inbox"><span>${esc(T('inbox', 'Входящие'))}</span><span class="badge">${inboxCards().length}</span><span class="grow"></span>${chevron(false)}</div>`;
+    // Заметки (t1628): пункт рядом с «Входящими», счётчик только новых. Заметок на доске нет — пункта нет.
+    if (notesAll().length) html += `<div class="box inbox ibx" data-do="notes"><span>${esc(T('nt.title', 'Заметки'))}</span><span class="badge">${notesAll().filter(noteNew).length}</span><span class="grow"></span>${chevron(false)}</div>`;
     // Что проверить человеку (t1644): на доске без таких строк пункта нет, как у «Решений». Счётчик — открытые: всё закрыто — пункт с нулём, закрытые видны на экране.
     if (humanAll().length) html += `<div class="box inbox ibx" data-do="human"><span>${esc(T('hm.title', 'Проверить человеку'))}</span><span class="badge">${humanOpen().length}</span><span class="grow"></span>${chevron(false)}</div>`;
     // Паспорта нет — строки нет: пустой блок «паспорт» на доске без паспорта ничего не говорит.
     if (b.passport) html += `<div class="box inbox pass" data-do="passport"><span>${esc(T('passport', 'Паспорт проекта'))}</span>${passBadge(b.passport)}<span class="grow"></span>${chevron(false)}</div>`;
     // Записей нет — строки нет, как у паспорта: агент заводит d<N>.md файлом, строка появится сама (t517).
-    if (b.decisions.length) html += `<div class="box inbox ibx" data-do="decs"><span>${esc(T('decs', 'Решения, тупики, договорённости'))}</span><span class="badge">${b.decisions.length}</span><span class="grow"></span>${chevron(false)}</div>`;
+    // Заметки считает свой пункт (t1628).
+    const nDecs = b.decisions.filter((/** @type {any} */ d) => d.type !== 'заметка').length;
+    if (nDecs) html += `<div class="box inbox ibx" data-do="decs"><span>${esc(T('decs', 'Решения, тупики, договорённости'))}</span><span class="badge">${nDecs}</span><span class="grow"></span>${chevron(false)}</div>`;
     // «Посмотреть» (t987): записи, которые агент отметил «неверна»; таких нет — строки нет.
     const nWrong = b.decisions.filter(isWrong).length;
     if (nWrong) html += `<div class="box inbox ibx wrongs" data-do="decsWrong" title="${esc(T('wrongBoxTitle', 'Агент отметил эти записи «неверна» и объяснил почему. Агентам они не подаются, пока вы не решите: «верна» или «отменить»'))}">`
@@ -1083,7 +1123,7 @@ function roadmapSetup(host) {
         + `<span>${esc(T('mainAgent.cap', 'главная:'))}</span><select data-do="magent">${(lists.AGENTS || ['claude', 'codex']).map((/** @type {string} */ a) => `<option value="${esc(a)}"${a === mainAg ? ' selected' : ''}>${esc(a)}</option>`).join('')}</select></label></div>`;
     }
     // Список «В фоне» (t1073): кто в скрытых вкладках, в каком состоянии, сколько идёт. Число скрытых — кнопка «в фоне: N» у «+» (t1061), здесь не повторяем.
-    if (Array.isArray(b.bg) && b.phases.length) html += bgHtml(b.bg, Array.isArray(b.reviews) ? b.reviews : []);
+    if (Array.isArray(b.bg) && b.phases.length) html += bgHtml(b.bg, Array.isArray(b.reviews) ? b.reviews : [], Array.isArray(b.grades) ? b.grades : []);
     if (html.length > sessAt) html = `${html.slice(0, sessAt)}<div class="box sess">${html.slice(sessAt)}</div>`;
     wItems = new Map();
     for (const wv of Array.isArray(b.waves) ? b.waves : []) for (const it of wv.items) {
@@ -1095,23 +1135,20 @@ function roadmapSetup(host) {
       const fz = b.phases.find((/** @type {any} */ x) => x.id === sel.phase);
       for (const id of [...sel.ids]) if (!fz || !fz.cards.includes(id)) sel.ids.delete(id);
     }
-    // t1075: ошибки файлов (карта не показана) — красным; замечания (карта показана) — отдельным серым блоком, свёрнут.
+    // t1075: ошибки файлов (карта не показана) — красным. t1632: замечания (b.warnings) на экран не идут, их разбирает главная сессия на приёмке.
     if (b.errors.length) {
       html += `<div class="box errs"><div class="cap">${esc(T('errsCap', 'Файлы с ошибкой — не показаны: {n}', { n: b.errors.length }))}</div>`;
       for (const p of b.errors) html += `<div class="e"><b>${esc(p.file)}</b> — ${esc(p.reason)}</div>`;
       html += '</div>';
     }
-    if (b.warnings.length) {
-      const wopen = !!folds.get(':warns');
-      html += `<div class="box warns"><div class="cap fold" data-fold=":warns"><span class="tw">${wopen ? '▾' : '▸'}</span>${esc(T('warnsCap', 'Замечания: {n}', { n: b.warnings.length }))}</div>`;
-      if (wopen) for (const p of b.warnings) html += `<div class="e"><b>${esc(p.file)}</b> — ${esc(p.reason)}</div>`;
-      html += '</div>';
-    }
+    // t1632: проверяющий сломан, а главной сказать не удалось — единственное, что человек видит из этих сведений.
+    if (b.graderDown) html += `<div class="note warn graderdown">${esc(T('graderDown', 'Карты не проверяются с {at}: проверяющий не запускается. Программа пробует снова раз в {min} мин. Главной сессии сказать не удалось.', b.graderDown))}</div>`;
     for (const f of b.phases) {
       const cards = f.cards.map((/** @type {string} */ id) => byId.get(id)).filter(Boolean);
-      const done = cards.filter((/** @type {any} */ c) => c.status === 'готово');
-      if (hideDone && phDone(f)) continue;
-      const busy = phStatus(f) === 'идёт' || cards.some((/** @type {any} */ c) => RM_ACTIVE.has(c.status));
+      const done = cards.filter(rmDone);
+      const grading = cards.some((/** @type {any} */ c) => c.grading);
+      if (hideDone && phDone(f) && !grading) continue;
+      const busy = phStatus(f) === 'идёт' || grading || cards.some((/** @type {any} */ c) => RM_ACTIVE.has(c.status));
       const fopen = folds.has(f.id) ? !!folds.get(f.id) : busy;
       const hl = got(HEALTH, f.health);
       const dot = hl ? hl[0] : '';
@@ -1134,7 +1171,7 @@ function roadmapSetup(host) {
       if (cards.length) html += `<div class="bar"><i style="width:${Math.round((done.length / cards.length) * 100)}%"></i></div>`;
       if (hl && dot !== 'g' && f.healthWhy) html += `<div class="why">${esc([f.healthWhy, f.healthBy, f.healthAt].filter(Boolean).join(' · '))}</div>`;
       for (const wv of Array.isArray(b.waves) ? b.waves : []) if (wv.phase === f.id) html += waveLine(wv);
-      const live = cards.filter((/** @type {any} */ c) => c.status !== 'готово');
+      const live = cards.filter((/** @type {any} */ c) => !rmDone(c));
       html += '<div class="cards">';
       for (const c of live) html += cardRow(c, byId, true);
       if (done.length && !hideDone) {
@@ -1148,7 +1185,7 @@ function roadmapSetup(host) {
       if (!cards.length) html += `<div class="card"><span class="tt" style="color:var(--muted)">${esc(T('noCards', 'В фазе пока нет карт'))}</span></div>`;
       html += '</div></div>';
     }
-    if (!b.phases.length && !b.errors.length && !b.warnings.length) html += `<div class="why" style="padding:4px 4px">${esc(T('noPhases', 'Фаз пока нет: карты без фазы — во «Входящих».'))}</div>`;
+    if (!b.phases.length && !b.errors.length) html += `<div class="why" style="padding:4px 4px">${esc(T('noPhases', 'Фаз пока нет: карты без фазы — во «Входящих».'))}</div>`;
     body.innerHTML = html;
   };
 
@@ -1327,8 +1364,8 @@ function roadmapSetup(host) {
     if (!cur) return;
     const q = (/** @type {string} */ s) => /** @type {HTMLElement} */ (cardEl.querySelector(s));
     // Подпись — куда ведёт «назад» (t748): фаза, «Входящие», «Решения и тупики» или доска.
-    q('[data-act="back"]').textContent = `‹ ${srBack ? T('find.back', 'поиск') : fzBack || (ibBack ? T('inbox', 'Входящие') : dcBack ? T('decs', 'Решения, тупики, договорённости') : T('back', 'роадмап'))}`;
-    q('[data-act="back"]').title = srBack || fzBack || ibBack || dcBack ? '' : T('backTitle', 'К списку фаз и карт');
+    q('[data-act="back"]').textContent = `‹ ${srBack ? T('find.back', 'поиск') : fzBack || (ibBack ? T('inbox', 'Входящие') : ntBack ? T('nt.title', 'Заметки') : dcBack ? T('decs', 'Решения, тупики, договорённости') : T('back', 'роадмап'))}`;
+    q('[data-act="back"]').title = srBack || fzBack || ibBack || ntBack || dcBack ? '' : T('backTitle', 'К списку фаз и карт');
     q('[data-act="prompt"]').textContent = T('prompt', 'Показать промпт');
     q('[data-act="prompt"]').title = T('promptTitle', 'Текст, который получит агент: общие правила, паспорт проекта, шаблон вида работы, карта и свежие заметки. Собирается из файлов, только чтение');
     q('[data-act="run"]').textContent = T('run', 'Запустить');
@@ -1364,16 +1401,20 @@ function roadmapSetup(host) {
     const ph = c && c.phase ? b.phases.find((/** @type {any} */ f) => f.id === c.phase) : null;
     q('.crumb').textContent = `/ ${ph ? `${T('phase', 'Фаза {n}', { n: ph.num })} · ${ph.title || ph.id}` : c && c.phase ? c.phase : T('inbox', 'Входящие')}`;
     const st = getV('status');
-    const m = got(RM_STATUS, st) || RM_STATUS['в очереди'];
+    // t1633: «готово» на проверке — пункт списка и значок говорят «проверяется». Значение пункта прежнее: файл карты не меняется.
+    const grading = !!(c && c.grading && st === 'готово');
+    const m = grading ? RM_GRADING : got(RM_STATUS, st) || RM_STATUS['в очереди'];
     const si = q('.pill.st .si');
     si.className = `si ${m.tone}`;
     si.textContent = m.icon;
+    const doneOpt = /** @type {HTMLOptionElement | null} */ (inp('status').querySelector('option[value="готово"]'));
+    if (doneOpt) doneOpt.textContent = grading ? T('st.grading', 'проверяется') : statusWord('готово');
     const deps = c ? c.depends : [];
-    const wait = deps.filter((/** @type {string} */ d) => { const x = byId.get(d); return !x || x.status !== 'готово'; });
+    const wait = deps.filter((/** @type {string} */ d) => { const x = byId.get(d); return !x || !rmDone(x); });
     const w = q('.pill.wait');
     w.hidden = !(st === 'в очереди' && wait.length);
     w.textContent = T('waits', 'ждёт {ids}', { ids: wait.join(', ') });
-    const link = (/** @type {string} */ id) => { const x = byId.get(id); return `<span class="dw"><span class="lnk" data-open="${esc(id)}">${esc(id)}</span>${x ? ` (${esc(statusWord(x.status))})` : ` (${esc(T('noCard', 'карты нет'))})`}</span>`; };
+    const link = (/** @type {string} */ id) => { const x = byId.get(id); return `<span class="dw"><span class="lnk" data-open="${esc(id)}">${esc(id)}</span>${x ? ` (${esc(shownWord(x))})` : ` (${esc(T('noCard', 'карты нет'))})`}</span>`; };
     // t1375: ответ на вопрос карты «ждёт ответа» — та же команда answer плагина, что у kermach roadmap answer: раздел в карте и отпечаток для проверяющего.
     const ans = q('.ans');
     ans.hidden = !(c && c.status === 'ждёт ответа');
@@ -1388,8 +1429,10 @@ function roadmapSetup(host) {
     // Ступень следующего запуска (t832): её считает main.js той же функцией, что и запуск; окно только показывает c.next.
     const nx = q('[data-step="next"]');
     const next = c && c.next && !(c.run && !c.run.gone) ? c.next : null;
-    nx.hidden = !next;
-    nx.textContent = next ? T('nextRun', 'следующий запуск — попытка {n}, {m} {e}', { n: next.tries, m: next.model, e: optText('effort', next.effort) }) : '';
+    // t1633: цена проверок — там же, когда строки следующего запуска нет.
+    const gcost = !next && c && c.gradeCost && !c.grading ? T('gradeCostFull', 'Проверяющий: всего ≈{cost}, ответов {n}. На подписке это оценка, а не списание денег', { cost: costText(c.gradeCost), n: c.gradeCost.n }) : '';
+    nx.hidden = !next && !gcost;
+    nx.textContent = next ? T('nextRun', 'следующий запуск — попытка {n}, {m} {e}', { n: next.tries, m: next.model, e: optText('effort', next.effort) }) : gcost;
     // pick: человек (t830) — модель назвал человек, повтор её не повышает. Снять — кнопкой, без правки файла.
     const pk = q('[data-step="pick"]');
     const pick = !!c && String((c.extra && c.extra.pick) || '').trim().toLowerCase() === 'человек';
@@ -1630,8 +1673,7 @@ function roadmapSetup(host) {
       for (const p of r.parts) {
         const kind = /** @type {any} */ (RM_KIND)[p.v.kind];
         const v = kind ? { ...p.v, kind: T(`kind.${kind}`, p.v.kind) } : p.v;
-        // Часть 6 с общей базой (t991): свой ключ с {sn} и {sm}, без базы — прежний, иначе на uk/en/de «общая база 0 из 0».
-        const key = p.key === 'card' && !p.v.phase ? 'cardInbox' : p.key === 'notes' && p.v.sm && p.v.sm !== '0' ? 'notesShared' : p.key;
+        const key = p.key === 'card' && !p.v.phase ? 'cardInbox' : p.key;
         const note = T(`pnote.${key}`, key === 'cardInbox' ? '{id} · Входящие' : p.note, v);
         html += `<div class="psec" data-part="${esc(p.key)}"><div class="phd"><span class="pn">${p.n}</span><span class="pt">${esc(T(`part.${p.key}`, p.title))}</span>`
           + `<span class="pnote">${esc(note)}</span></div><pre class="box">${esc(p.text)}</pre></div>`;
@@ -1666,17 +1708,48 @@ function roadmapSetup(host) {
       + `<span class="pnote">${esc(kt)}</span></div><pre class="box">${esc(t.text)}</pre></div>`;
     promptEl.innerHTML = html;
   };
-  /** Собрать промпт открытой карты заново: при открытии и когда файлы доски поменялись. */
+  /**
+   * Запросы prompt предпросмотра (t2003): новый не уходит, пока не пришёл ответ на прошлый, а от событий доски — не чаще раза в PROMPT_GAP.
+   * Раньше каждое событие board давало запрос, и на большой доске они шли один за другим и накладывались.
+   * busy — запрос в пути; again — пока он шёл, просили ещё: 'now' — открытие или смена карты, 'soon' — событие доски;
+   * at — когда ушёл последний запрос; timer — отложенный запрос от событий доски.
+   * @type {{ busy: boolean, again: '' | 'now' | 'soon', at: number, timer: any }}
+   */
+  const pq = { busy: false, again: '', at: 0, timer: null };
+  const PROMPT_GAP = 2000;
+  /** Собрать промпт открытой карты заново сразу: при открытии, смене карты, повторном открытии панели. Запрос в пути — следующий сразу после ответа. */
   const loadPrompt = async () => {
-    if (!pv) return;
+    if (!pv || stopped) return;
+    if (pq.busy) { pq.again = 'now'; return; }
+    // Запрос уходит сейчас и увидит все правки до него: отложенный от событий доски не нужен.
+    if (pq.timer) { clearTimeout(pq.timer); pq.timer = null; }
+    pq.busy = true;
+    pq.again = '';
+    pq.at = Date.now();
     const id = pv.id;
-    const r = await api('prompt', id);
-    if (!pv || pv.id !== id || stopped) return;
-    const d = new Date();
-    pv.r = r;
-    pv.at = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-    if (r && r.error) host.log(`промпт ${id} не собран: ${r.error}`);
-    paintPrompt();
+    /** @type {any} */
+    let r;
+    try { r = await api('prompt', id); } finally { pq.busy = false; }
+    if (pv && pv.id === id && !stopped) {
+      const d = new Date();
+      pv.r = r;
+      pv.at = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      if (r && r.error) host.log(`промпт ${id} не собран: ${r.error}`);
+      paintPrompt();
+    }
+    const again = pq.again;
+    pq.again = '';
+    if (again === 'now') loadPrompt();
+    else if (again === 'soon') loadPromptSoon();
+  };
+  /** Файлы доски поменялись: собрать заново не чаще раза в PROMPT_GAP; последнее событие пачки обязательно даёт запрос — иначе предпросмотр останется старым. */
+  const loadPromptSoon = () => {
+    if (!pv || stopped) return;
+    if (pq.busy) { if (!pq.again) pq.again = 'soon'; return; }
+    if (pq.timer) return;
+    const wait = pq.at + PROMPT_GAP - Date.now();
+    if (wait <= 0) { loadPrompt(); return; }
+    pq.timer = setTimeout(() => { pq.timer = null; loadPromptSoon(); }, wait);
   };
   const showPrompt = () => {
     if (!cur) return;
@@ -1689,6 +1762,7 @@ function roadmapSetup(host) {
   };
   const closePrompt = () => {
     pv = null;
+    if (pq.timer) { clearTimeout(pq.timer); pq.timer = null; }
     promptEl.hidden = true;
     promptEl.textContent = '';
     if (cur) { cardEl.hidden = false; growAll(); }
@@ -2029,7 +2103,7 @@ function roadmapSetup(host) {
       /** @type {Map<string, any>} */
       const byId = new Map((last && last.cards ? last.cards : []).map((/** @type {any} */ x) => [x.id, x]));
       const cards = f.cards.map((/** @type {string} */ id) => byId.get(id)).filter(Boolean);
-      const done = cards.filter((/** @type {any} */ c) => c.status === 'готово');
+      const done = cards.filter(rmDone);
       const hl = got(HEALTH, f.health);
       const row2 = (/** @type {string} */ lb, /** @type {string} */ v) => `<div class="f"><span class="lb">${esc(lb)}</span><div class="v">${v}</div></div>`;
       const none = (/** @type {string} */ s) => `<div class="tx none">${esc(s)}</div>`;
@@ -2183,9 +2257,10 @@ function roadmapSetup(host) {
         + `<button type="button" class="btn cl" data-iclose="${id}"${busy} title="${esc(T('ib.closeTitle', 'Поставить карте статус «готово». Файл и номер остаются'))}">${esc(T('ib.close', 'закрыть'))}</button></div></div>`;
     }
     // Закрытые из «Входящих» (t685): серые строки под списком, как готовые карты фазы; «скрыть сделанное» их прячет. Счётчики — только открытые (t516).
-    if (!hideDone && last && Array.isArray(last.cards) && Array.isArray(last.inbox)) {
+    if (last && Array.isArray(last.cards) && Array.isArray(last.inbox)) {
       const ids = new Set(last.inbox);
-      const shut = last.cards.filter((/** @type {any} */ c) => ids.has(c.id) && c.status === 'готово').reverse();
+      // t1633: карта на проверке галочкой не прячется.
+      const shut = last.cards.filter((/** @type {any} */ c) => ids.has(c.id) && c.status === 'готово' && (!hideDone || c.grading)).reverse();
       if (shut.length) html += `<div class="box idone"><div class="cards">${shut.map((/** @type {any} */ c) => cardRow(c, byId)).join('')}</div></div>`;
     }
     for (const d of st.done) html += `<div class="moved"><b>→</b> ${esc(d)}</div>`;
@@ -2394,6 +2469,163 @@ function roadmapSetup(host) {
   document.addEventListener('pointerup', hmUp);
   document.addEventListener('pointercancel', hmUp);
 
+  // ——— «Заметки» во всю панель (t1628): новые сверху, взятые и снятые — фильтром. «В карту» заводит карту во «Входящих» и пишет её номер в заметку ———
+  /**
+   * Открытый экран. type — фильтр: new, taken, dropped, all. sel — отмеченные заметки для одной карты. ask — заметка, у которой спрашиваем причину, why — её текст.
+   * open — заметки с развёрнутым текстом. made — строки «→ d1: карта t2 во „Входящих“», пока экран открыт. later — событие доски пришло, пока фокус в поле причины.
+   * @type {null | { type: string, sel: Set<string>, ask: string, why: string, open: Set<string>, busy: boolean, err: string, made: string[], later: boolean }}
+   */
+  let nt = null;
+  /** Карта открыта из «Заметок»: «назад» с карты ведёт туда, с тем же фильтром. @type {typeof nt} */
+  let ntBack = null;
+  let ntDown = false;
+  const NT_TYPES = [['new', 'nt.new', 'новые'], ['taken', 'nt.taken', 'взятые'], ['dropped', 'nt.dropped', 'снятые'], ['all', 'nt.all', 'все']];
+  /** Текст заметки без пустой «Текст ошибки: —» и без строки причины: причина показана отдельно. @param {any} d */
+  const noteText = (d) => shownText(d).split('\n').filter((l) => !/^Снята \(\d{4}-\d\d-\d\d\):/.test(l)).join('\n').trim();
+  const paintNoteList = () => {
+    if (!nt) return;
+    const st = nt;
+    const all = notesAll();
+    const fresh = all.filter(noteNew);
+    const list = st.type === 'new' ? fresh : st.type === 'taken' ? all.filter((d) => !d.cancelled && d.taken) : st.type === 'dropped' ? all.filter((d) => d.cancelled) : all;
+    // Заметка ушла из новых (другая вкладка, агент) — отметка с неё снимается: иначе карта завелась бы и из неё.
+    for (const id of [...st.sel]) if (!fresh.some((d) => d.id === id)) st.sel.delete(id);
+    const off = st.busy ? ' disabled' : '';
+    let html = `<div class="ctop"><div class="cbar"><span class="back" data-nact="back">‹ ${esc(T('back', 'роадмап'))}</span><span class="ttl">${esc(T('nt.title', 'Заметки'))}</span>`
+      + `<span class="crumb">${esc(T('nt.count', 'новых: {n}, всего: {all}', { n: fresh.length, all: all.length }))}</span></div><div class="notes">`;
+    if (st.err) html += `<div class="note bad" data-n="err">${esc(st.err)}</div>`;
+    html += '</div></div>';
+    html += `<div class="nth"><div class="seg">${NT_TYPES.map(([v, k, ru]) => `<button type="button" data-ntype="${esc(v)}" class="${v === st.type ? 'on' : ''}">${esc(T(k, ru))}</button>`).join('')}</div>`
+      + (st.sel.size ? `<button type="button" class="btn" data-ntakesel="1"${off} title="${esc(T('nt.takeSelTitle', 'Завести одну карту из отмеченных заметок'))}">${esc(T('nt.takeSel', 'одна карта из отмеченных: {n}', { n: st.sel.size }))}</button>` : '')
+      + '</div>';
+    for (const m of st.made) html += `<div class="moved"><b>→</b> ${esc(m)}</div>`;
+    if (!list.length) html += `<div class="none">${esc(st.type === 'new' ? T('nt.empty', 'Новых заметок нет. Заметку, которую запишет агент, вы увидите здесь.') : T('nt.none', 'Таких заметок нет.'))}</div>`;
+    for (const d of list) {
+      const id = esc(d.id);
+      const text = noteText(d);
+      const meta = [d.card, madeAt(d.date), (d.files || []).join(', ')].filter(Boolean).join(' · ');
+      html += `<div class="box ibox" data-nid="${id}"><div class="ih">`
+        + (noteNew(d) ? `<input type="checkbox" data-nsel="${id}"${st.sel.has(d.id) ? ' checked' : ''}${off} title="${esc(T('nt.selTitle', 'Отметить: из нескольких заметок можно завести одну карту'))}">` : '')
+        + `<span class="num">${id}</span><span class="tt" data-nopen="${id}" title="${esc(T('nt.openTitle', 'Показать или свернуть весь текст'))}">${esc(d.title || d.id)}</span></div>`
+        + (meta ? `<div class="src">${esc(meta)}</div>` : '')
+        + (text ? `<div class="ntx${st.open.has(d.id) ? ' all' : ''}">${esc(text)}</div>` : '');
+      if (d.cancelled) html += `<div class="nmark">${esc(T('nt.droppedAt', 'снята {date}: {why}', { date: madeAt(d.cancelled), why: d.dropWhy || '—' }))}</div>`;
+      else if (d.taken) html += `<div class="nmark">${esc(T('nt.takenIn', 'взята в карту'))} <span class="lnk" data-ncard="${esc(d.taken)}">${esc(d.taken)}</span></div>`;
+      else {
+        html += '<div class="iacts">' + (st.ask === d.id
+          ? `<input type="text" data-nwhy="${id}" spellcheck="false" placeholder="${esc(T('nt.why', 'Почему снять'))}"><button type="button" class="btn" data-nsave="${id}"${off}>${esc(T('nt.save', 'записать'))}</button>`
+            + `<button type="button" class="btn cl" data-nact="cancel">${esc(T('nt.cancel', 'отмена'))}</button>`
+          : `<button type="button" class="btn" data-ntake="${id}"${off} title="${esc(T('nt.takeTitle', 'Завести карту во «Входящих» с заголовком и текстом заметки. Номер карты запишется в заметку'))}">${esc(T('nt.take', 'в карту'))}</button>`
+            + `<button type="button" class="btn cl" data-ndrop="${id}"${off} title="${esc(T('nt.dropTitle', 'Записать дату и причину в файл заметки. Файл остаётся'))}">${esc(T('nt.drop', 'снять'))}</button>`) + '</div>';
+      }
+      html += '</div>';
+    }
+    notesEl.innerHTML = html;
+    const box = /** @type {HTMLInputElement | null} */ (notesEl.querySelector('[data-nwhy]'));
+    if (box) box.value = st.why;
+  };
+  /** @param {typeof nt} [st] прежнее состояние экрана — при возврате с карты */
+  const openNotes = (st = null) => {
+    nt = st || { type: 'new', sel: new Set(), ask: '', why: '', open: new Set(), busy: false, err: '', made: [], later: false };
+    body.hidden = true;
+    notesEl.hidden = false;
+    notesEl.scrollTop = 0;
+    paintNoteList();
+  };
+  const hideNotes = () => { nt = null; notesEl.hidden = true; notesEl.textContent = ''; };
+  const closeNotes = () => { hideNotes(); body.hidden = false; draw(); };
+  const notesSoft = () => {
+    const a = document.activeElement;
+    if (nt && a && a.tagName === 'INPUT' && /** @type {HTMLInputElement} */ (a).type === 'text' && notesEl.contains(a)) { nt.later = true; return; }
+    paintNoteList();
+  };
+  const ntFlush = () => {
+    if (!nt || !nt.later || ntDown) return;
+    const a = document.activeElement;
+    if (a && a.tagName === 'INPUT' && notesEl.contains(a)) return;
+    nt.later = false;
+    paintNoteList();
+  };
+  /** Одна карта из заметок: второй щелчок вернёт ту же карту, новой не будет (board.noteCard). @param {string[]} ids */
+  const noteTake = async (ids) => {
+    const st = nt;
+    if (!st || st.busy || !ids.length) return;
+    st.busy = true;
+    st.err = '';
+    paintNoteList();
+    const r = await api('noteTake', ids);
+    st.busy = false;
+    if (!r || r.error || !r.card) {
+      st.err = T('nt.fail', '{id}: не записано: {why}', { id: ids.join(', '), why: (r && r.error) || '?' });
+      host.log(`${ids.join(', ')}: в «Заметках» не записано: ${(r && r.error) || '?'}`);
+    } else {
+      st.sel.clear();
+      st.made.push(T('nt.made', '{ids}: карта {card} во «Входящих»', { ids: ids.join(', '), card: r.card }));
+    }
+    await load();
+  };
+  const noteSave = async (/** @type {string} */ id) => {
+    const st = nt;
+    if (!st || st.busy) return;
+    if (!st.why.trim()) { const b = /** @type {HTMLInputElement | null} */ (notesEl.querySelector('[data-nwhy]')); if (b) b.focus(); return; }
+    st.busy = true;
+    st.err = '';
+    paintNoteList();
+    const r = await api('noteDrop', id, st.why);
+    st.busy = false;
+    if (!r || r.error) {
+      st.err = T('nt.fail', '{id}: не записано: {why}', { id, why: (r && r.error) || '?' });
+      host.log(`${id}: в «Заметках» не снята: ${(r && r.error) || '?'}`);
+    } else { st.ask = ''; st.why = ''; }
+    st.later = false;
+    await load();
+  };
+  notesEl.addEventListener('click', (ev) => {
+    const t = /** @type {HTMLElement} */ (ev.target);
+    if (!nt) return;
+    if (t.closest('[data-nact="back"]')) { closeNotes(); return; }
+    if (t.closest('[data-nact="cancel"]')) { nt.ask = ''; nt.why = ''; paintNoteList(); return; }
+    const ty = /** @type {HTMLElement | null} */ (t.closest('[data-ntype]'));
+    if (ty) { nt.type = ty.dataset.ntype || 'new'; notesEl.scrollTop = 0; paintNoteList(); return; }
+    const sel = /** @type {HTMLInputElement | null} */ (t.closest('[data-nsel]'));
+    if (sel) { if (sel.checked) nt.sel.add(sel.dataset.nsel || ''); else nt.sel.delete(sel.dataset.nsel || ''); paintNoteList(); return; }
+    if (t.closest('[data-ntakesel]')) { noteTake([...nt.sel]); return; }
+    const tk = /** @type {HTMLElement | null} */ (t.closest('[data-ntake]'));
+    if (tk) { noteTake([tk.dataset.ntake || '']); return; }
+    const dr = /** @type {HTMLElement | null} */ (t.closest('[data-ndrop]'));
+    if (dr) {
+      nt.ask = dr.dataset.ndrop || '';
+      nt.why = '';
+      paintNoteList();
+      const b = /** @type {HTMLInputElement | null} */ (notesEl.querySelector('[data-nwhy]'));
+      if (b) b.focus();
+      return;
+    }
+    const sv = /** @type {HTMLElement | null} */ (t.closest('[data-nsave]'));
+    if (sv) { noteSave(sv.dataset.nsave || ''); return; }
+    const op = /** @type {HTMLElement | null} */ (t.closest('[data-nopen]'));
+    if (op) { const id = op.dataset.nopen || ''; if (nt.open.has(id)) nt.open.delete(id); else nt.open.add(id); paintNoteList(); return; }
+    const cd = /** @type {HTMLElement | null} */ (t.closest('[data-ncard]'));
+    if (cd) {
+      ntBack = nt;
+      hideNotes();
+      openCard(cd.dataset.ncard || '');
+      if (!cur) { const st = ntBack; ntBack = null; openNotes(st); }
+    }
+  });
+  notesEl.addEventListener('input', (ev) => { if (nt && /** @type {HTMLElement} */ (ev.target).dataset.nwhy) nt.why = /** @type {HTMLInputElement} */ (ev.target).value; });
+  notesEl.addEventListener('keydown', (ev) => {
+    const t = /** @type {HTMLElement} */ (ev.target);
+    if (!nt || !t.dataset.nwhy) return;
+    if (ev.key === 'Enter') { ev.preventDefault(); noteSave(t.dataset.nwhy); }
+    if (ev.key === 'Escape') { ev.stopPropagation(); nt.ask = ''; nt.why = ''; paintNoteList(); }
+  });
+  notesEl.addEventListener('focusout', () => setTimeout(ntFlush, 0));
+  notesEl.addEventListener('pointerdown', () => { ntDown = true; });
+  const ntUp = () => { if (ntDown) setTimeout(() => { ntDown = false; ntFlush(); }, 0); };
+  document.addEventListener('pointerup', ntUp);
+  document.addEventListener('pointercancel', ntUp);
+
   // ——— «Решения и тупики» во всю панель (t517, экран 16): записи d<N>.md с фильтром по виду, карте и файлу ———
   /**
    * Открытый экран: вид («all», «решение», «тупик», «договорённость»), строки фильтра карты и файла — часть заголовка карты или пути, без учёта регистра.
@@ -2405,9 +2637,7 @@ function roadmapSetup(host) {
   let dc = null;
   /** Карта открыта из списка решений: «назад» с карты ведёт туда, с тем же фильтром. @type {typeof dc} */
   let dcBack = null;
-  const DC_TYPES = [['all', 'decsAll', 'все'], ['решение', 'decsDec', 'решения'], ['тупик', 'decsDead', 'тупики'], ['договорённость', 'decsPact', 'договорённости'], ['заметка', 'decsNote', 'заметки'], ['wrong', 'decsWrong', 'посмотреть'], ['patt', 'decsPatt', 'паттерны'], ['known', 'decsKnown', 'общая база']];
-  /** Пометка общей базы записи (t991) или undefined. @param {string} id */
-  const knownOf = (id) => knownSt.marks.find((m) => m.id === id);
+  const DC_TYPES = [['all', 'decsAll', 'все'], ['решение', 'decsDec', 'решения'], ['тупик', 'decsDead', 'тупики'], ['договорённость', 'decsPact', 'договорённости'], ['wrong', 'decsWrong', 'посмотреть'], ['patt', 'decsPatt', 'паттерны']];
   /** Кандидат в паттерн с центром id (t1005, main.js patternC) или undefined. @param {string} id */
   const candOf = (id) => (last && Array.isArray(last.patternC) ? last.patternC : []).find((/** @type {any} */ c) => c.id === id);
   const decsShown = () => {
@@ -2419,7 +2649,8 @@ function roadmapSetup(host) {
     const whole = /\d$/.test(card), digits = /^\d+$/.test(card);
     const hit = (/** @type {string} */ c) => (!whole ? c.includes(card) : digits ? c.replace(/^\D+/, '') === card : c === card);
     return (last && last.decisions ? last.decisions : [])
-      .filter((/** @type {any} */ d) => (!st.one || d.id === st.one) && (st.type === 'all' || d.type === st.type || (st.type === 'wrong' && isWrong(d)) || (st.type === 'known' && !!knownOf(d.id)) || (st.type === 'patt' && (d.type === 'паттерн' || !!candOf(d.id))))
+      // Заметки — на своём экране (t1628); здесь только запись по номеру и записи одной карты.
+      .filter((/** @type {any} */ d) => (d.type !== 'заметка' || st.one || card) && (!st.one || d.id === st.one) && (st.type === 'all' || d.type === st.type || (st.type === 'wrong' && isWrong(d)) ||(st.type === 'patt' && (d.type === 'паттерн' || !!candOf(d.id))))
         && (!card || hit((d.card || '').toLowerCase()))
         && (!file || d.files.some((/** @type {string} */ f) => f.toLowerCase().includes(file))))
       // Новые сверху: по дате, при равной — по номеру.
@@ -2462,15 +2693,6 @@ function roadmapSetup(host) {
     return [s.length > CAUSE_ALT_MAX ? `${s.slice(0, CAUSE_ALT_MAX).trimEnd()}…` : s, !!s];
   };
   /** Кнопка «сделать договорённостью» (t960) — у решения «Правило работы: …»: агент заводит правило решением, тип меняет человек (t925). @param {any} d */
-  /**
-   * «Для всех проектов» (t698): global: да в шапке записи — копия уходит в общую базу и без «Переносимого вывода», фильтр адресов и путей тот же.
-   * Только у решения и тупика с stack: остальным база всё равно откажет (known.reasonCode), галочка ничего бы не сделала. @param {any} d
-   */
-  const globRow = (d) => {
-    if (!d.global && ((d.type !== 'решение' && d.type !== 'тупик') || !(d.stack && d.stack.length))) return '';
-    return `<label class="dglob${d.global ? ' on' : ''}" title="${esc(T('dc.globTitle', 'Запись получат агенты других проектов с тем же stack: {stack}. Адреса, ключи и пути не уходят — запись тогда остаётся в проекте', { stack: (d.stack || []).join(', ') || '—' }))}">`
-      + `<input type="checkbox" data-dglob="${esc(d.id)}"${d.global ? ' checked' : ''}${globBusy === d.id ? ' disabled' : ''}>${esc(T('dc.glob', 'для всех проектов'))}</label>`;
-  };
   const pactRow = (d) => (d.type !== 'решение' || !/^Правило работы:/.test(d.title || '') ? ''
     : `<div class="dpact"><button type="button" data-dpact="${esc(d.id)}"${pactBusy === d.id ? ' disabled' : ''}`
       + ` title="${esc(T('dc.pactTitle', 'Утвердить правило: в шапку {id} — type: {pact} и agent: {human}, запись пойдёт в «Свежее» каждой карты. Вернуть — type: {dec} и agent: {agent} в файле',
@@ -2503,66 +2725,6 @@ function roadmapSetup(host) {
       + `${esc(T('dc.wrongOk', 'верна'))}</button>`
       + `<button type="button" class="dnot" data-dwcancel="${esc(d.id)}"${off} title="${esc(T('dc.wrongCancelTitle', 'Запись неверна: в шапку {id} — cancelled с сегодняшней датой, агентам она больше не подаётся. Вернуть — убрать cancelled в файле', { id: d.id }))}">`
       + `${esc(T('dc.wrongCancel', 'отменить'))}</button></div></div>`;
-  };
-  /**
-   * Строка общей базы (t991): ушла ли копия записи в known\ и почему нет. Причины not и leak — по коду пометки (t1021), на языке окна.
-   * Кнопка «убрать» — у shared, «снова в общую базу» — у removed и edited (у остальных она завела бы дубль, карта 5 t844). @param {any} d
-   */
-  const knownRow = (d) => {
-    const m = knownOf(d.id);
-    if (!m) return '';
-    const v = { s: m.s, file: `${m.s}.md` };
-    /** @type {Record<string, [string, string]>} */
-    const K = {
-      shared: ['dc.kShared', 'в общей базе: {s}'],
-      new: ['dc.kNew', 'уйдёт в общую базу при следующей сборке промпта'],
-      not: ['dc.kNot', 'в общую базу не идёт:'],
-      leak: ['dc.kLeak', 'не ушла в общую базу:'],
-      edited: ['dc.kEdited', '{file} в общей базе поправлен руками, а запись в проекте изменилась — копию не обновляем'],
-      removed: ['dc.kRemoved', '{file} удалён из общей базы — другие проекты запись не получают'],
-    };
-    const [k, ru] = K[m.kind] || ['', m.kind];
-    // Причина — по коду known.js (t1021): known.WHY, LEAK, WHERE. Кода нет (чужая версия known.js) — русский why как есть.
-    const a = m.args && typeof m.args === 'object' ? m.args : {};
-    /** @type {Record<string, string>} */
-    const NOT = {
-      'not.type': T('dc.kWhy.type', 'не решение и не тупик'),
-      'not.rule': T('dc.kWhy.rule', 'правило работы — только для своего проекта'),
-      'not.unchecked': T('dc.kWhy.unchecked', 'не проверено (how не «проверено»)'),
-      'not.cancelled': T('dc.kWhy.cancelled', 'отменена'),
-      'not.expired': T('dc.kWhy.expired', 'срок вышел'),
-      'not.wrong': T('dc.kWhy.wrong', 'отмечена «неверна»'),
-      'not.unapproved': T('dc.kWhy.unapproved', 'паттерн не утверждён человеком или правлен после утверждения'),
-      'not.nostack': T('dc.kWhy.nostack', 'нет stack'),
-      'not.noportable': T('dc.kWhy.noportable', 'нет раздела «Переносимый вывод»'),
-      'not.inpattern': T('dc.kWhy.inpattern', 'в паттерне {d} — в базу идёт паттерн', { d: a.d }),
-    };
-    /** @type {Record<string, string>} */
-    const WHAT = {
-      email: T('dc.kWhat.email', 'e-mail'), domain: T('dc.kWhat.domain', 'адрес сайта'), ip: T('dc.kWhat.ip', 'IP'),
-      'user-path': T('dc.kWhat.userPath', 'путь с именем пользователя'), 'project-path': T('dc.kWhat.projectPath', 'путь папки проекта'),
-      'project-name': T('dc.kWhat.projectName', 'имя папки проекта'), key: T('dc.kWhat.key', 'похоже на ключ'),
-    };
-    /** @type {Record<string, string>} */
-    const WHERE = { title: T('dc.kWhere.title', 'заголовок'), error: T('dc.kWhere.error', 'строка «Текст ошибки:»'), line: T('dc.kWhere.line', 'строка {n} раздела', { n: a.n }) };
-    const why = m.kind === 'leak'
-      ? (m.code === 'leak' && got(WHAT, a.what) && got(WHERE, a.where) ? `${got(WHAT, a.what)} — ${got(WHERE, a.where)}` : String(m.why || '').replace(/^не ушла в общую базу:\s*/, ''))
-      : m.kind === 'not' ? got(NOT, m.code) || String(m.why || '') : '';
-    const off = knownBusy === d.id ? ' disabled' : '';
-    const btn = m.kind === 'shared'
-      ? `<button type="button" data-kdrop="${esc(d.id)}"${off} title="${esc(T('dc.kDropTitle', 'Файл {file} уйдёт в Корзину: другие проекты запись больше не получат, в проекте она остаётся. Вернуть — «снова в общую базу» или из Корзины', v))}">${esc(T('dc.kDrop', 'убрать'))}</button>`
-      : m.kind === 'removed' || m.kind === 'edited'
-        ? `<button type="button" data-kback="${esc(d.id)}"${off} title="${esc(m.kind === 'edited'
-          ? T('dc.kBackEditTitle', 'Файл {file} с ручной правкой уйдёт в Корзину, строка {s} — из state.json. При следующей сборке промпта в базу уйдёт запись проекта', v)
-          : T('dc.kBackTitle', 'Строка {s} уйдёт из state.json. При следующей сборке промпта запись заведётся в общей базе заново', v))}">${esc(T('dc.kBack', 'снова в общую базу'))}</button>`
-        : '';
-    // Отзывы карт всех проектов о копии (t698, known.countOf): «помогла 2 · не пригодилась 1».
-    const u = m.used && typeof m.used === 'object' ? m.used : null;
-    const said = u ? [['помогла', 'dc.kUsedOk', 'помогла {n}'], ['не пригодилась', 'dc.kUsedNo', 'не пригодилась {n}'], ['неверна', 'dc.kUsedBad', 'неверна {n}'], ['не открывал', 'dc.kUsedShut', 'не открывал {n}']]
-      .filter(([w]) => Number(u[w]) > 0).map(([w, key, ru]) => T(key, ru, { n: Number(u[w]) })).join(' · ') : '';
-    return `<div class="dknown${m.kind === 'shared' || m.kind === 'new' ? '' : ' bad'}" data-known="${esc(m.kind)}"><span>${esc(k ? T(k, ru, v) : ru)}</span>`
-      + (said ? `<span class="kw" data-kused>${esc(said)}</span>` : '')
-      + (why ? `<span class="kw">${esc(why)}</span>` : '') + btn + '</div>';
   };
   /**
    * Паттерн (t1005, план t845 раздел 4). У кандидата — «похоже на паттерн» и кнопки «собрать в паттерн» (карта во «Входящих», текст пишет агент) и «не паттерн».
@@ -2612,32 +2774,6 @@ function roadmapSetup(host) {
     if (!mergeErr) await load();
     else if (dc) paintDecs();
   };
-  /** Предупреждения базы над списком (t991): state.json не читается, s<N>.md с метками конфликта git; на виде «общая база» — обрезка (t1012). */
-  const knownWarn = () => (knownSt.warn ? `<div class="note warn" data-n="known">${esc(T('dc.kWarn', 'Общая база не читается: {error}. Записи проекта в неё не уходят, другие проекты их не получают', { error: knownSt.warn }))}</div>` : '')
-    + knownSt.marks.filter((m) => m.kind === 'conflict').map((m) => `<div class="note warn" data-n="kconflict">${esc(T('dc.kConflict', 'В общей базе {file} с метками конфликта git — агентам не подаётся, поправьте файл', { file: `${m.s}.md` }))}</div>`).join('')
-    + (knownSt.cut && dc && dc.type === 'known' ? `<div class="note warn" data-n="kcut">${esc(T('dc.kCut', 'В общей базе больше {max} файлов: {n} старых не прочитано, агентам они не подаются', { n: knownSt.cut, max: knownSt.max }))}</div>` : '');
-  /** Пометки базы заново; доску не ждёт — экран перерисуется по ответу. */
-  const loadKnown = async () => {
-    const n = ++knownSt.seq;
-    const r = await api('known');
-    if (n !== knownSt.seq) return;
-    knownSt.marks = r && Array.isArray(r.marks) ? r.marks : [];
-    knownSt.warn = r && (r.warn || r.error) ? String(r.warn || r.error) : '';
-    knownSt.cut = r && r.cut > 0 ? Number(r.cut) : 0;
-    knownSt.max = r && r.max > 0 ? Number(r.max) : 0;
-    if (!stopped && dc) paintDecs();
-  };
-  /** «Убрать» или «снова в общую базу» (t991): команда главной части, потом пометки заново. @param {string} id @param {'knownDrop' | 'knownBack'} cmd */
-  const knownClick = async (id, cmd) => {
-    if (knownBusy) return;
-    knownBusy = id;
-    mergeErr = '';
-    paintDecs();
-    const r = await api(cmd, id);
-    knownBusy = '';
-    mergeErr = r && r.error ? T('dc.kErr', 'Общая база не изменена: {error}', { error: r.error }) : '';
-    if (!stopped && dc) await loadKnown();
-  };
   /** Длина строки вместо «Причины» (t966): «Решение:» старых записей — абзац на 400 знаков и больше. */
   const CAUSE_ALT_MAX = 200;
   const paintDecs = () => {
@@ -2651,9 +2787,6 @@ function roadmapSetup(host) {
     const crumb = decsEl.querySelector('.crumb');
     if (crumb) crumb.textContent = I18n.n('roadmap.dc.count', list.length, ['{n} запись', '{n} записи', '{n} записей']);
     for (const b of decsEl.querySelectorAll('[data-dtype]')) b.classList.toggle('on', /** @type {HTMLElement} */ (b).dataset.dtype === st.type);
-    // «Общая база» (t991) — только когда у записей проекта есть пометки базы или она не читается.
-    const kb = /** @type {HTMLElement | null} */ (decsEl.querySelector('[data-dtype="known"]'));
-    if (kb) kb.hidden = !knownSt.marks.length && !knownSt.warn && !knownSt.cut && st.type !== 'known';
     const wb = /** @type {HTMLElement | null} */ (decsEl.querySelector('[data-dtype="wrong"]'));
     if (wb) wb.hidden = !anyWrong;
     // «Паттерны» (t1005) — только когда на доске есть паттерн или кандидат.
@@ -2664,13 +2797,7 @@ function roadmapSetup(host) {
     const day = (/** @type {string} */ s) => { const x = /^(\d{4})-(\d\d)-(\d\d)/.exec(s || ''); return x ? `${x[3]}.${x[2]}` : s || ''; };
     let html = '';
     if (!list.length) html = `<div class="none">${esc(all.length ? T('dc.none', 'Под фильтр ничего не подошло.') : T('dc.empty', 'Записей пока нет. Агент заводит их файлами d<N>.md рядом с картами.'))}</div>`;
-    // «Для всех проектов» (t698) — отдельной группой сверху; заголовки групп — только когда такие записи есть, иначе список прежний.
-    const glob = list.filter((/** @type {any} */ d) => d.global);
-    const rest = list.filter((/** @type {any} */ d) => !d.global);
-    const grp = (/** @type {string} */ n, /** @type {string} */ k, /** @type {string} */ ru) => `<div class="dgrp" data-grp="${n}">${esc(T(k, ru))}</div>`;
-    for (const d of glob.length ? [...glob, ...rest] : list) {
-      if (glob.length && d === glob[0]) html += grp('global', 'dc.grpGlobal', 'для всех проектов');
-      if (glob.length && d === rest[0]) html += grp('own', 'dc.grpOwn', 'только этот проект');
+    for (const d of list) {
       const [cls, label] = dLabel(d);
       const ref = (d.card ? (cards.has(d.card) ? `<span class="lnk" data-dopen="${esc(d.card)}" title="${esc(T('dc.openTitle', 'Открыть карту {id}', { id: d.card }))}">${esc(d.card)}</span>` : `<span>${esc(d.card)}</span>`) : '')
         + d.files.map((/** @type {string} */ f) => `<span>${esc(f)}</span>`).join('');
@@ -2679,10 +2806,9 @@ function roadmapSetup(host) {
       const dmFull = [...dMarks(d, day, true), day(d.date), d.agent].filter(Boolean).join(' · ');
       html += `<div class="box drec" data-id="${esc(d.id)}"><div class="dh" title="${esc(`${d.title || d.id}\n${dmFull}`)}"><span class="dt ${cls}">${esc(label)}</span>`
         + `<span class="tt">${esc(d.title || d.id)}</span><span class="dm">${esc(dm)}</span></div>`
-        + (shownText(d) ? `<div class="dtx">${esc(shownText(d))}</div>` : '') + portRow(d) + globRow(d) + knownRow(d)
+        + (shownText(d) ? `<div class="dtx">${esc(shownText(d))}</div>` : '') + portRow(d)
         + (ref ? `<div class="dref">${ref}</div>` : '') + wrongRow(d) + pactRow(d) + pattRow(d) + likeRow(d) + '</div>';
     }
-    html = knownWarn() + html;
     if (last && last.patternErr) html = `<div class="note warn" data-n="patt">${esc(T('dc.pWarn', 'Утверждения паттернов не читаются: {error}. Паттерны агентам не подаются, их записи подаются как раньше', { error: last.patternErr }))}</div>` + html;
     if (mergeErr) html = `<div class="note warn">${esc(mergeErr)}</div>` + html;
     /** @type {HTMLElement} */ (decsEl.querySelector('.dlist')).innerHTML = html;
@@ -2706,25 +2832,24 @@ function roadmapSetup(host) {
     decsEl.hidden = false;
     decsEl.scrollTop = 0;
     decsFrame();
-    loadKnown();
   };
   const hideDecs = () => { dc = null; decsEl.hidden = true; decsEl.textContent = ''; };
   const closeDecs = () => { hideDecs(); body.hidden = false; draw(); };
   /** Щелчок по решению на карте (t690): экран с фильтром по этой карте; «назад» — на карту, и её «назад» ведёт туда же, куда вёл. */
   const decsOfCard = () => {
     if (!cur) return;
-    const from = { id: cur.id, fz: fzBack, ib: ibBack, dc: dcBack, sr: srBack };
+    const from = { id: cur.id, fz: fzBack, ib: ibBack, dc: dcBack, sr: srBack, nt: ntBack };
     if (pv) closePrompt();
     cur = null;
     cardEl.hidden = true;
     cardEl.textContent = '';
-    fzBack = ''; ibBack = null; dcBack = null; srBack = '';
+    fzBack = ''; ibBack = null; ntBack = null; dcBack = null; srBack = '';
     openDecs({ type: 'all', card: from.id, file: '', from });
   };
   /** «Назад» с экрана, открытого с карты: карта и её цепочка «назад»; карты больше нет — по цепочке дальше. @param {NonNullable<NonNullable<typeof dc>['from']>} from */
   const backToCard = (from) => {
     hideDecs();
-    fzBack = from.fz; ibBack = from.ib; dcBack = from.dc; srBack = from.sr || '';
+    fzBack = from.fz; ibBack = from.ib; ntBack = from.nt || null; dcBack = from.dc; srBack = from.sr || '';
     openCard(from.id);
     if (!cur) closeCard();
   };
@@ -2756,17 +2881,6 @@ function roadmapSetup(host) {
     differBusy = '';
     mergeErr = r && r.error ? T('dc.differErr', 'Не записано «не похоже»: {error}', { error: r.error }) : '';
     if (!stopped && dc) paintDecs();
-  };
-  /** «Для всех проектов» (t698): команда decGlobal, потом пометки базы заново; доску с новой шапкой пришлёт слежение. @param {string} id @param {boolean} on */
-  const globClick = async (id, on) => {
-    if (globBusy) return;
-    globBusy = id;
-    mergeErr = '';
-    paintDecs();
-    const r = await api('decGlobal', id, on);
-    globBusy = '';
-    mergeErr = r && r.error ? T('dc.globErr', 'Пометка «для всех проектов» не изменена: {error}', { error: r.error }) : '';
-    if (!stopped && dc) await loadKnown();
   };
   /** «Сделать договорённостью» (t960): команда pact; доску с новым типом пришлёт слежение. @param {string} id */
   const pactClick = async (id) => {
@@ -2812,13 +2926,6 @@ function roadmapSetup(host) {
     if (pn) { pattClick(pn.dataset.pno || '', 'patternNo'); return; }
     const po = /** @type {HTMLElement | null} */ (t.closest('[data-pok]'));
     if (po) { pattClick(po.dataset.pok || '', 'patternOk'); return; }
-    const kd = /** @type {HTMLElement | null} */ (t.closest('[data-kdrop]'));
-    if (kd) { knownClick(kd.dataset.kdrop || '', 'knownDrop'); return; }
-    const kk = /** @type {HTMLElement | null} */ (t.closest('[data-kback]'));
-    if (kk) { knownClick(kk.dataset.kback || '', 'knownBack'); return; }
-    // Щелчок по подписи доходит сюда вторым событием — по самой галочке, уже переключённой: checked — новое значение.
-    const gl = /** @type {HTMLInputElement | null} */ (t.closest('input[data-dglob]'));
-    if (gl) { globClick(gl.dataset.dglob || '', gl.checked); return; }
     const op = /** @type {HTMLElement | null} */ (t.closest('[data-dopen]'));
     if (!op) return;
     dcBack = dc;
@@ -2985,7 +3092,7 @@ function roadmapSetup(host) {
     // Открыли из поиска (t1100) — к списку найденного с тем же текстом.
     const sq = srBack;
     srBack = '';
-    if (sq) { fzBack = ''; ibBack = null; dcBack = null; openFind(sq); return; }
+    if (sq) { fzBack = ''; ibBack = null; ntBack = null; dcBack = null; openFind(sq); return; }
     // Карту открыли из вида фазы — назад в фазу; фазы больше нет — к доске.
     const back = fzBack;
     fzBack = '';
@@ -2994,6 +3101,9 @@ function roadmapSetup(host) {
     const ibs = ibBack;
     ibBack = null;
     if (ibs) { openInbox(ibs); return; }
+    const nts = ntBack;
+    ntBack = null;
+    if (nts) { openNotes(nts); return; }
     // Открыли из «Решений и тупиков» (t517) — туда же, с тем же фильтром.
     const dcs = dcBack;
     dcBack = null;
@@ -3081,7 +3191,19 @@ function roadmapSetup(host) {
     if (!cur || cur.id !== id) return;
     cur.answering = false;
     if (!r || r.error) cur.ansMsg = T('ans.fail', 'Не записано: {why}', { why: (r && r.error) || '?' });
-    else { box.value = ''; grow(box); cur.ansMsg = T('ans.ok', 'Ответ записан в карту ({head}). Запустите карту снова — агент его прочтёт', { head: String(r.head || '').replace(/^## /, '') }); }
+    else {
+      box.value = ''; grow(box);
+      // t1664: «Запустите карту снова» — только когда живой вкладки нет. Отправлено или ждёт — агент получит ответ сам.
+      // t1767: причина ожидания — кодом agent.code, слова на языке окна; без кода (старый main) — текст agent.why как есть.
+      const head = String(r.head || '').replace(/^## /, ''), ag = r.agent || {};
+      const wy = ag.code === 'ask' ? T('ans.why.ask', 'агент показывает запрос разрешения или вопрос с вариантами, поэтому ответ ждёт: он уйдёт агенту, когда на запрос ответят. Ответить можно и в самой вкладке')
+        : ag.code === 'typed' ? T('ans.why.typed', 'во вкладке агента набран текст — ответ уйдёт, когда поле опустеет') : String(ag.why || '');
+      // t2021: unsure — демон не ответил на запись в срок, ответ мог дойти. Не «запустите снова»: повтор дал бы его агенту дважды.
+      cur.ansMsg = ag.sent ? T('ans.sent', 'Ответ записан в карту ({head}) и отправлен агенту', { head })
+        : ag.unsure ? T('ans.unsure', 'Ответ записан в карту ({head}). Дошёл ли он до агента, неизвестно: вкладка не подтвердила запись вовремя. Посмотрите вкладку, прежде чем отправлять снова; если ответ стоит в поле ввода без отправки — нажмите там Enter', { head })
+        : ag.waiting ? T('ans.wait', 'Ответ записан в карту ({head}). Запускать карту не нужно: агент получит его сам{why}', { head, why: wy ? ` — ${wy}` : '' })
+        : T('ans.ok', 'Ответ записан в карту ({head}). Запустите карту снова — агент его прочтёт', { head });
+    }
     paintCard(last && last.cards ? last.cards.find((/** @type {any} */ x) => x.id === id) : null);
   };
   const ab0 = () => { const b = /** @type {HTMLButtonElement | null} */ (cardEl.querySelector('[data-act="answer"]')); if (b) b.disabled = true; };
@@ -3238,7 +3360,7 @@ function roadmapSetup(host) {
   /** Панель переехала: колонка, строка слева, кнопка шапки; поля карты — по новой ширине. */
   const moved = () => { paintRight(); paintRow(); paintFull(); if (cur) growAll(); };
   /** Прокрутка частей панели (t601): перенос узла в другое место обнуляет scrollTop — запомнить до переноса, вернуть, когда панель уже видна. */
-  const parts = [body, cardEl, promptEl, passEl, phaseEl, inboxEl, humanEl, decsEl];
+  const parts = [body, cardEl, promptEl, passEl, phaseEl, inboxEl, humanEl, notesEl, decsEl];
   const scrolls = () => parts.map((el) => el.scrollTop);
   const unscroll = (/** @type {number[]} */ s) => parts.forEach((el, i) => { if (s[i]) el.scrollTop = s[i]; });
   /** «Во всё окно» (t526): панель — во вкладку «Роадмап · проект»; вкладка уже есть — показать её, второй не будет. */
@@ -3297,25 +3419,72 @@ function roadmapSetup(host) {
    * «Составить роадмап» (t519), «Использовать существующий» и «Выбрать файл…» (t1603): вкладку открывает главная часть. Доска появится — слежение пришлёт её, пустой экран уйдёт сам.
    * @param {'compose' | 'adopt' | 'pickPlan'} [how]
    */
+  /**
+   * Причина отказа openTask на языке окна (t1610): main.js и prompt.js отдают why { k, v } рядом с русским error. Русское окно и неизвестный ключ — error как есть.
+   * @param {any} r ответ api
+   */
+  const whyOf = (r) => {
+    const e = (r && r.error) || '?';
+    const w = r && r.why;
+    if (I18n.lang() === 'ru' || !w || !Object.hasOwn(WHY, w.k)) return e;
+    return WHY[w.k](w.v && typeof w.v === 'object' ? w.v : {});
+  };
+  /** Имя вкладки задания в причине отказа (t1818): main.js шлёт bag (compose, newcard, orch) и русское of; неизвестный bag — of как есть. @param {any} v */
+  const whyTab = (v) => {
+    const b = String((v && v.bag) || '');
+    if (b === 'compose') return T('why.ofCompose', 'составления');
+    if (b === 'newcard') return T('why.ofNewcard', 'новой карты');
+    if (b === 'orch') return T('why.ofOrch', 'главной сессии');
+    return String((v && v.of) || '');
+  };
+  /** Первая половина longFile (t1818): c — long или cmd, what — «промпт» или «задание»; старый ответ без c — русская cause как есть. @param {any} v */
+  const whyCause = (v) => {
+    const what = v.what === 'промпт' ? T('why.whatPrompt', 'промпт') : T('why.whatTask', 'задание');
+    if (v.c === 'long') return T('why.causeLong', '{what} {n} знаков длиннее {max}', { what, n: v.n, max: v.max });
+    if (v.c === 'cmd') return T('why.causeCmd', 'ядро не передало {what} аргументом ({err})', { what, err: v.err });
+    return String(v.cause || '');
+  };
+  /** @type {Record<string, (v: any) => string>} */
+  const WHY = {
+    noBoard: (v) => T('why.noBoard', 'доски нет: сначала «Составить роадмап»', v),
+    hasBoard: (v) => T('why.hasBoard', 'доска уже есть: папка {dir} заведена', v),
+    opening: (v) => T('why.opening', 'вкладка уже открывается', v),
+    noDaemon: (v) => T('why.noDaemon', 'демон не ответил, открыта ли вкладка {of}: {e}', { ...v, of: whyTab(v) }),
+    reconnecting: (v) => T('why.reconnecting', 'вкладка {of} уже открыта: она ещё подключается после перезапуска', { ...v, of: whyTab(v) }),
+    tplRead: (v) => T('why.tplRead', 'задание не прочитано: {e}', v),
+    tplNoHead: (v) => T('why.tplNoHead', 'в {file} нет заголовка «## »: задание пустое', v),
+    tplBlank: (v) => T('why.tplBlank', 'в {file} после заголовка «## » пусто: задание пустое', v),
+    orchRead: (v) => T('why.orchRead', 'задание главной сессии не прочитано: {e}', v),
+    noSection: (v) => T('why.noSection', 'в {file} нет раздела «## {head}»', v),
+    planMissing: (v) => T('why.planMissing', 'файл плана не найден: {file}', v),
+    picking: (v) => T('why.picking', 'окно выбора файла уже открыто', v),
+    pickFail: (v) => T('why.pickFail', 'окно выбора файла не открылось: {e}', v),
+    longFile: (v) => T('why.longFile', '{cause}, а файл для него не записан: {e}', { ...v, cause: whyCause(v) }),
+    tabFail: (v) => T('why.tabFail', 'вкладка не открылась: {e}', v),
+  };
   const composeRun = async (how = 'compose') => {
     if (comp.busy) return;
     comp.busy = true; comp.note = null; comp.how = how;
     draw();
     // Язык окна (t1429) — язык новой доски: main.js запишет его в паспорт, когда агент его заведёт.
-    const r = how === 'compose' ? await api('compose', T('composeTab', 'Роадмап · составить'), I18n.lang())
+    const r = how === 'compose' ? await api('compose', T('composeTab', 'Роадмап · составить'), I18n.lang(), askFlag('compose'))
       : how === 'adopt' ? await api('adopt', T('adoptTab', 'Роадмап · готовый план'), I18n.lang())
         : await api('pickPlan', T('adoptTab', 'Роадмап · готовый план'), I18n.lang(), T('pickPlanTitle', 'Файл плана'));
     comp.busy = false;
     if (stopped) return;
     // Окно выбора отменили: ни вкладки, ни строки под кнопками.
     if (r && r.canceled) { draw(); return; }
-    if (r && r.sid) {
+    if (r && r.load) {
+      flagAsk.compose = true;
+      comp.note = { bad: true, text: T('composeLoad', 'Стоит флаг нагрузки (СТОП-НАГРУЗКА.txt в папке проекта): ноутбук перегружен, вкладка запустит ещё один claude. Нажмите «Составить роадмап» ещё раз, чтобы открыть всё равно') };
+      host.log('составить роадмап: стоит флаг нагрузки — показано предупреждение');
+    } else if (r && r.sid) {
       // Вкладка составления уже открыта (t568): её номер — в строке «составляется…», окно переходит на неё.
       comp.sid = String(r.sid);
       comp.note = { bad: true, text: T('composeAlready', 'Вкладка составления уже открыта, показываю её.') };
       host.pages.show(comp.sid);
     } else if (!r || r.error || !r.session) {
-      comp.note = { bad: true, text: T('composeFail', 'Не открыто: {why}', { why: (r && r.error) || '?' }) };
+      comp.note = { bad: true, text: T('composeFail', 'Не открыто: {why}', { why: whyOf(r) }) };
       host.log(`составить роадмап: не открыто: ${(r && r.error) || '?'}`);
     } else {
       comp.sid = String(r.session.sid);
@@ -3328,15 +3497,19 @@ function roadmapSetup(host) {
     if (nc.busy) return;
     nc.busy = true; nc.note = null;
     draw();
-    const r = await api('newcard', T('newcardTab', 'Роадмап · новая карта'));
+    const r = await api('newcard', T('newcardTab', 'Роадмап · новая карта'), askFlag('newcard'));
     nc.busy = false;
     if (stopped) return;
-    if (r && r.sid) {
+    if (r && r.load) {
+      flagAsk.newcard = true;
+      nc.note = { bad: true, text: T('newcardLoad', 'Стоит флаг нагрузки (СТОП-НАГРУЗКА.txt в папке проекта): ноутбук перегружен, вкладка запустит ещё один claude. Нажмите кнопку «Новая карта» ещё раз, чтобы открыть всё равно') };
+      host.log('новая карта: стоит флаг нагрузки — показано предупреждение');
+    } else if (r && r.sid) {
       // Вкладка новой карты уже открыта: окно переходит на неё, вторую не открываем.
       nc.note = { bad: true, text: T('newcardAlready', 'Вкладка новой карты уже открыта, показываю её.') };
       host.pages.show(String(r.sid));
     } else if (!r || r.error || !r.session) {
-      nc.note = { bad: true, text: T('newcardFail', 'Не открыто: {why}', { why: (r && r.error) || '?' }) };
+      nc.note = { bad: true, text: T('newcardFail', 'Не открыто: {why}', { why: whyOf(r) }) };
       host.log(`новая карта: не открыто: ${(r && r.error) || '?'}`);
     } else {
       nc.note = { bad: false, text: T('newcardOpened', 'Вкладка открыта. Опишите агенту задачу: карта появится здесь, когда он её заведёт.') };
@@ -3351,14 +3524,18 @@ function roadmapSetup(host) {
     if (oc.busy) return;
     oc.busy = true; nc.note = null;
     draw();
-    const r = await api('start', T('orchTab', 'Главная сессия'));
+    const r = await api('start', T('orchTab', 'Главная сессия'), askFlag('orch'));
     oc.busy = false;
     if (stopped) return;
-    if (r && r.sid) {
+    if (r && r.load) {
+      flagAsk.orch = true;
+      nc.note = { bad: true, text: T('orchLoad', 'Стоит флаг нагрузки (СТОП-НАГРУЗКА.txt в папке проекта): ноутбук перегружен, вкладка запустит ещё один агент. Нажмите кнопку «Новая главная сессия» ещё раз, чтобы открыть всё равно') };
+      host.log('главная сессия: стоит флаг нагрузки — показано предупреждение');
+    } else if (r && r.sid) {
       nc.note = { bad: true, text: T('orchAlready', 'Вкладка главной сессии уже открыта, показываю её.') };
       host.pages.show(String(r.sid));
     } else if (!r || r.error || !r.session) {
-      nc.note = { bad: true, text: T('orchFail', 'Не открыто: {why}', { why: (r && r.error) || '?' }) };
+      nc.note = { bad: true, text: T('orchFail', 'Не открыто: {why}', { why: whyOf(r) }) };
       host.log(`главная сессия: не открыто: ${(r && r.error) || '?'}`);
     } else {
       nc.note = { bad: false, text: T('orchOpened', 'Вкладка главной сессии открыта: она прочитает журнал и доску и напишет, где мы.') };
@@ -3560,6 +3737,7 @@ function roadmapSetup(host) {
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="passport"]')) { openPassport(); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="inbox"]')) { openInbox(); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="human"]')) { openHuman(); return; }
+    if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="notes"]')) { openNotes(); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="decs"]')) { openDecs(); return; }
     if (/** @type {HTMLElement} */ (ev.target).closest('[data-do="decsWrong"]')) { openDecs({ type: 'wrong', card: '', file: '' }); return; }
     const op = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (ev.target).closest('[data-ophase]'));
@@ -3574,7 +3752,7 @@ function roadmapSetup(host) {
     if (!f && sel.ids.size) { clearSel(); draw(); return; }
     if (!f || !last || !last.phases) return;
     const id = f.dataset.fold || '';
-    if (id.endsWith(':done') || id === ':warns') folds.set(id, !folds.get(id));
+    if (id.endsWith(':done')) folds.set(id, !folds.get(id));
     else {
       const ph = /** @type {HTMLElement} */ (f.closest('.phase'));
       folds.set(id, !ph.querySelector('.cards'));
@@ -3668,7 +3846,7 @@ function roadmapSetup(host) {
     // Вкладка итога сменила состояние (t1182) — старая строка под фазой («уже пишется») уступает «записан» / «не записан».
     const sumSt = (/** @type {any} */ x, /** @type {string} */ ph) => x && x.reports && x.reports[ph] ? x.reports[ph].sumSt : undefined;
     if (waveNote && sumSt(b, waveNote.phase) && sumSt(b, waveNote.phase) !== sumSt(last, waveNote.phase)) waveNote = null;
-    last = b; if (open) drawSoft(); refreshPassport(); refreshPhase(); inboxSoft(); humanSoft(); paintDecs(); if (!foundEl.hidden) paintFound(); if (dc) loadKnown(); if (cur) refreshCard(); if (pv) loadPrompt(); });
+    last = b; if (open) drawSoft(); refreshPassport(); refreshPhase(); inboxSoft(); humanSoft(); notesSoft(); paintDecs(); if (!foundEl.hidden) paintFound(); if (cur) refreshCard(); if (pv) loadPromptSoon(); });
   // Скрытая вкладка карты «готово» (t1060): главная часть выждала паузу, окно закрывает её без вопроса; экран демон пишет в .kermach/runs/<карта>-<время>.log.
   host.on('runClose', (/** @type {any} */ x) => {
     const term = host.bridge && host.bridge.term;
@@ -3716,7 +3894,7 @@ function roadmapSetup(host) {
     if (typeof s.mainAgent === 'string' && s.mainAgent !== mainAg) { mainAg = s.mainAgent; if (open) draw(); }
     if (s.open) setOpen(true, false);
   });
-  const offLang = w.I18n ? w.I18n.onChange(() => { labels(); if (open) draw(); if (cur) { cardLabels(); refreshCard(); } if (pv) paintPrompt(); paintPassport(); paintPhase(); paintInbox(); humanSoft(); if (dc) decsFrame(); }) : null;
+  const offLang = w.I18n ? w.I18n.onChange(() => { labels(); if (open) draw(); if (cur) { cardLabels(); refreshCard(); } if (pv) paintPrompt(); paintPassport(); paintPhase(); paintInbox(); humanSoft(); notesSoft(); if (dc) decsFrame(); }) : null;
   // Вкладка прошлого раза — на своё место; была активной — снова активная.
   /** @type {{ pos: number | null, active?: boolean } | null} */
   let wasTab = null;
@@ -3725,6 +3903,7 @@ function roadmapSetup(host) {
   return () => {
     stopped = true;
     if (syncTimer) clearTimeout(syncTimer);
+    if (pq.timer) clearTimeout(pq.timer);
     clearInterval(bgClock);
     document.removeEventListener('mousemove', bandMove);
     document.removeEventListener('mouseup', bandStop);

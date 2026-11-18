@@ -498,13 +498,13 @@ function register(c, of) {
   ipcMain.handle('browser:shot', async (e, id) => {
     if (!sender.allowed(e, 'browser:shot')) return sender.refused();
     const g = guestOf(e.sender, id);
-    if (!g) return { error: 'вкладка сайта не найдена' };
+    if (!g) return { error: i18n.t('browser.err1', 'вкладка сайта не найдена') };
     for (const w of editing.values()) {
-      if (w.host === e.sender.id) { if (!w.win.isDestroyed()) w.win.focus(); return { error: 'окно правки снимка уже открыто' }; }
+      if (w.host === e.sender.id) { if (!w.win.isDestroyed()) w.win.focus(); return { error: i18n.t('browser.err2', 'окно правки снимка уже открыто') }; }
     }
     try {
       const img = await g.capturePage();
-      if (img.isEmpty()) return { error: 'снимок страницы пустой — страница ещё не показана' };
+      if (img.isEmpty()) return { error: i18n.t('browser.err3', 'снимок страницы пустой — страница ещё не показана') };
       const shot = img.getSize();
       const png = await edit(e.sender, img);
       if (!png) { c.log(`браузер: снимок страницы ${shot.width}×${shot.height} — правка отменена`); return { error: 'отменено' }; }
@@ -518,7 +518,7 @@ function register(c, of) {
       return { path: file };
     } catch (err) {
       c.log(`браузер: снимок страницы не сохранён: ${err}`);
-      return { error: `снимок не сохранён: ${err}` };
+      return { error: i18n.t('browser.err4', 'снимок не сохранён: {err}', { err }) };
     }
   });
   // Окно правки снимка (t201) берёт снимок, отдаёт готовую PNG или отменяет. Отправитель — только живое окно правки (editorOf).
@@ -532,7 +532,7 @@ function register(c, of) {
     const w = editorOf(e, 'browser:edit-done');
     if (!w) return sender.refused();
     const png = pngOf(bytes, w.width, w.height);
-    if (!png) { c.log('браузер: окно правки прислало не PNG или PNG больше снимка — не принято'); return { error: 'картинка не прочитана' }; }
+    if (!png) { c.log('браузер: окно правки прислало не PNG или PNG больше снимка — не принято'); return { error: i18n.t('browser.err5', 'картинка не прочитана') }; }
     w.done(png);
     return { ok: true };
   });
@@ -547,7 +547,7 @@ function register(c, of) {
   ipcMain.handle('browser:view', (e, id, kind) => {
     if (!sender.allowed(e, 'browser:view')) return sender.refused();
     const g = guestOf(e.sender, id);
-    if (!g) return { error: 'вкладка сайта не найдена' };
+    if (!g) return { error: i18n.t('browser.err6', 'вкладка сайта не найдена') };
     const size = kind === 'desktop' ? null : sizeOf(kind);
     if (kind !== 'desktop' && !size) return { error: 'нет такого вида' };
     try {
@@ -555,7 +555,7 @@ function register(c, of) {
       return { kind, size, zoom: e.sender.getZoomFactor(), changed };
     } catch (err) {
       c.log(`браузер: вид ${kind} не применён: ${err}`);
-      return { error: `вид не применён: ${err}` };
+      return { error: i18n.t('browser.err7', 'вид не применён: {err}', { err }) };
     }
   });
   // «Выбрать элемент» (t39): on — включить подсветку в госте и ждать щелчка; ответ { text } — описание для агента,
@@ -563,7 +563,7 @@ function register(c, of) {
   ipcMain.handle('browser:pick', (e, id, on) => {
     if (!sender.allowed(e, 'browser:pick')) return sender.refused();
     const g = guestOf(e.sender, id);
-    if (!g) return { error: 'вкладка сайта не найдена' };
+    if (!g) return { error: i18n.t('browser.err8', 'вкладка сайта не найдена') };
     const was = picking.get(g.id);
     if (was) { picking.delete(g.id); was.done({ cancelled: true }); }
     if (!on) { g.send('browser:pick-off'); return { cancelled: true }; }
@@ -587,7 +587,7 @@ function register(c, of) {
     picking.delete(g.id);
     if (raw === null) { w.done({ cancelled: true }); return; }
     const d = grab.sanitize(raw);
-    if (!d) { c.log('браузер: описание элемента не той формы или больше 64 КБ — не вставлено'); w.done({ error: 'описание элемента не прочитано' }); return; }
+    if (!d) { c.log('браузер: описание элемента не той формы или больше 64 КБ — не вставлено'); w.done({ error: i18n.t('browser.err9', 'описание элемента не прочитано') }); return; }
     c.log(`браузер: выбран элемент ${d.target.tagName} ${d.target.selector.slice(0, 120)}`);
     // Строка «Экран» (t166): масштаб Windows и разрешение — дисплея, где стоит окно проекта. Со страницы их не берём:
     // devicePixelRatio растёт от Ctrl+плюс, а screen.width страницы — в пикселях страницы, а не монитора.

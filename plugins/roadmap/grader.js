@@ -264,12 +264,14 @@ function build(tpl, c, changes, o = {}) {
   /** @type {Record<string, string>} */
   const vars = { карта: c.id, что: String(c.fields.what || '').trim() || '(пусто)', проверка: String(c.fields.check || '').trim() || '(пусто)', изменения: changes, ответы: answersOf(c.body, { ...o, ref: c.id }) || '(нет)',
     вид: String(c.kind || '').trim() || '(нет)', сделано: String(c.fields.done || '').trim() || '(пусто)', доказательство: String(c.fields.proof || '').trim() || '(пусто)',
-    зачем: String(c.fields.why || '').trim() || '(пусто)', указания: String(c.fields.notes || '').trim() || '(нет)' };
+    зачем: String(c.fields.why || '').trim() || '(пусто)', указания: String(c.fields.notes || '').trim() || '(нет)',
+    // t1642: вид проверки — только значение поля: файл карты со словами агента проверяющему не даём (проверка t1330, случай t8).
+    заявлено: (c.tested || []).join(', ') || '(нет)' };
   // t1424: блок для ревью и разведки — до подстановки, чтобы «<!-- конец -->» из текста карты не обрезал его. Нет блока в своей копии шаблона — задание как есть.
   // t1434: так же блок «как в образце» — только карте, у которой sampleGap.
   const gap = !soft && sampleGap(c.fields || {});
   const t = tpl.replace(SOFT_BLOCK, (m, body) => (soft ? `\n${body}` : '')).replace(SAMPLE_BLOCK, (m, body) => (gap ? `\n${body}` : ''));
-  return prompt.defuseAt(t.replace(/\{(карта|что|зачем|проверка|указания|изменения|ответы|вид|сделано|доказательство)\}/g, (m, k) => vars[k]));
+  return prompt.defuseAt(t.replace(/\{(карта|что|зачем|проверка|указания|изменения|ответы|вид|сделано|доказательство|заявлено)\}/g, (m, k) => vars[k]));
 }
 
 /** Отпечатки ответов человека (t1354) — в папке данных плагина, куда агент карты не пишет: файл карты он правит сам. */
@@ -319,14 +321,45 @@ const LOCK_STALE_MS = 20000;
 /** Повторов записи карты, когда её меняют параллельно, и пауза перед проверкой «раздел на месте». */
 const ANSWER_TRIES = 10;
 const ANSWER_SETTLE_MS = 500;
+/**
+ * t1987: шаги опроса. Каждое чтение карты — около 1 мс главного потока, папки доски на 2300 файлов — тоже: по 25 мс выходило 20–40 чтений,
+ * 20–40 мс на запись. Время ожидания прежнее (500 мс «раздел на месте», до 1 с чужой временный файл), опрос реже.
+ */
+const ANSWER_SETTLE_STEP_MS = 100;
+const ANSWER_BUSY_STEP_MS = 50;
+const ANSWER_BUSY_MS = 1000;
 /** Синхронная пауза, как board.save. @param {number} ms */
 const pause = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
-/** rename с повтором: на Windows чужое чтение в эти миллисекунды даёт EPERM или EBUSY. @param {string} from @param {string} to */
-function renameRetry(from, to) {
+/**
+ * t1987: запись ответа — генератор: в местах пауз он отдаёт число миллисекунд, а ждёт водитель.
+ * runSync ждёт Atomics.wait — команда kermach roadmap answer, свой процесс. runAsync ждёт setTimeout — главный процесс программы:
+ * Atomics.wait там держал все окна и демон 0,64 с на каждый ответ (t1984). Между паузами код синхронный, как прежде: сверка и rename — в одном куске.
+ * @template T @param {Generator<number, T, void>} g @returns {T}
+ */
+function runSync(g) {
+  try {
+    for (let s = g.next(); ; s = g.next()) { if (s.done) return s.value; pause(s.value); }
+  } finally { g.return(/** @type {any} */ (undefined)); }
+}
+/** Асинхронный водитель (t1987): паузы — setTimeout, поток свободен. @template T @param {Generator<number, T, void>} g @returns {Promise<T>} */
+async function runAsync(g) {
+  try {
+    for (let s = g.next(); ; s = g.next()) { if (s.done) return s.value; await new Promise((r) => setTimeout(r, s.value)); }
+  } finally { g.return(/** @type {any} */ (undefined)); }
+}
+/**
+ * rename с повтором: на Windows чужое чтение в эти миллисекунды даёт EPERM или EBUSY.
+ * still — перед повтором: false — цель уже не та, rename не делаем, from удалён, ответ false. @param {string} from @param {string} to @param {() => boolean} [still]
+ * @returns {Generator<number, boolean, void>}
+ */
+function* renameRetry(from, to, still) {
   for (let i = 0; ; i++) {
-    try { fs.renameSync(from, to); return; } catch (e) {
+    // t1889 (d521): файл держал другой писатель (close) — после паузы он мог уже записать своё; still() — цель та же, что при сборке текста.
+    // t1987: still() и renameSync — после паузы в одном синхронном куске, между ними пауз нет.
+    if (i > 0 && still && !still()) { try { fs.unlinkSync(from); } catch { /* уже нет */ } return false; }
+    try { fs.renameSync(from, to); return true; } catch (e) {
       if (i >= 9 || !e || !['EPERM', 'EBUSY', 'EACCES'].includes(/** @type {any} */ (e).code)) { try { fs.unlinkSync(from); } catch { /* уже нет */ } throw e; }
-      pause(30);
+      yield 30;
     }
   }
 }
@@ -334,9 +367,10 @@ function renameRetry(from, to) {
  * fn под замком answers.json.lock в dataDir: файл с wx, общий для всех процессов.
  * t1385: в замке свой ярлык; fn получает touch — обновить mtime на каждом круге, чтобы долгую запись не сочли брошенной.
  * Брошенный замок забираем rename в свой файл (второй забирающий получит ENOENT); finally удаляет замок, только если ярлык наш.
- * @template T @param {string} dataDir @param {(touch: () => void) => T} fn @returns {T}
+ * t1987: и ожидание замка, и fn — генераторы: два ответа в одном процессе (панель и Telegram) ждут друг друга без остановки потока; замок снимается после конца fn.
+ * @template T @param {string} dataDir @param {(touch: () => void) => Generator<number, T, void>} fn @returns {Generator<number, T, void>}
  */
-function locked(dataDir, fn) {
+function* locked(dataDir, fn) {
   fs.mkdirSync(dataDir, { recursive: true });
   const lk = path.join(dataDir, `${ANSWERS}.lock`);
   const tag = `${process.pid} ${Date.now()} ${Math.random().toString(36).slice(2)}\n`;
@@ -353,11 +387,13 @@ function locked(dataDir, fn) {
         }
       } catch { continue; }
       if (Date.now() > end) throw new Error(`ответы заняты другим ответом дольше ${LOCK_WAIT_MS / 1000} с (${lk})`);
-      pause(20);
+      yield 20;
     }
   }
-  const touch = () => { try { const n = new Date(); fs.utimesSync(lk, n, n); } catch { /* замок отняли — finally его не тронет */ } };
-  try { return fn(touch); } finally {
+  // t1987: touch зовут и после пауз (между ними главный поток мог занять чужая работа) — чаще раза в секунду не пишем: каждая запись — 0,2–0,8 мс потока, брошенным замок считается через 20 с.
+  let touched = Date.now();
+  const touch = () => { if (Date.now() - touched < 1000) return; touched = Date.now(); try { const n = new Date(); fs.utimesSync(lk, n, n); } catch { /* замок отняли — finally его не тронет */ } };
+  try { return yield* fn(touch); } finally {
     try { if (fs.readFileSync(lk, 'utf8') === tag) fs.unlinkSync(lk); } catch { /* уже снят */ }
   }
 }
@@ -367,10 +403,22 @@ function locked(dataDir, fn) {
  * Пишут только панель (команда answer плагина) и главная сессия (kermach roadmap answer); из вкладки агента карты команда отказывает.
  * Строки «#…», «```» и подписи полей в тексте — отказ: они стали бы разметкой карты, и ответ разобрался бы не тем текстом.
  * Файл карты и answers.json — через временный файл и rename. from 'session' (t1393) — раздел «## Ответ главной сессии (…)»: отвечала главная сессия, а не человек.
+ * Синхронно — для команды kermach (свой процесс). В главном процессе программы — answerAsync (t1987): те же шаги, паузы без остановки потока.
  * @param {string} dataDir @param {string} project @param {string} ref @param {string} text @param {Date} [now] @param {string} [from]
  * @returns {{ head: string, sha1: string }}
  */
-function answer(dataDir, project, ref, text, now = new Date(), from = '') {
+function answer(dataDir, project, ref, text, now = new Date(), from = '') { return runSync(answerSteps(dataDir, project, ref, text, now, from)); }
+/**
+ * answer для главного процесса программы (t1987): панель, Telegram. Ошибка записи — отклонённое обещание с тем же текстом.
+ * @param {string} dataDir @param {string} project @param {string} ref @param {string} text @param {Date} [now] @param {string} [from]
+ * @returns {Promise<{ head: string, sha1: string }>}
+ */
+function answerAsync(dataDir, project, ref, text, now = new Date(), from = '') { return runAsync(answerSteps(dataDir, project, ref, text, now, from)); }
+/**
+ * Шаги answer (t1987): генератор, yield — пауза в мс. @param {string} dataDir @param {string} project @param {string} ref @param {string} text @param {Date} now @param {string} from
+ * @returns {Generator<number, { head: string, sha1: string }, void>}
+ */
+function* answerSteps(dataDir, project, ref, text, now, from) {
   if (!dataDir) throw new Error('нет папки данных программы');
   if (!/^t\d{1,6}$/.test(ref)) throw new Error('нужен номер карты, например t12');
   const t = String(text || '').replace(/\r/g, '').split('\n').map((l) => l.replace(/\s+$/, '')).join('\n').trim();
@@ -383,7 +431,7 @@ function answer(dataDir, project, ref, text, now = new Date(), from = '') {
   const head = `## ${from === 'session' ? 'Ответ главной сессии' : 'Ответ человека'} (${z(now.getDate())}.${z(now.getMonth() + 1)} ${z(now.getHours())}:${z(now.getMinutes())})`;
   // t1374: answer зовут панель (главный процесс) и kermach roadmap answer (свой процесс) — замок в папке данных на всё чтение-запись:
   // без него два ответа в одну секунду читали один answers.json, и второй rename стирал отпечаток первого.
-  return locked(dataDir, (touch) => {
+  return yield* locked(dataDir, function* (touch) {
     let sha1 = '';
     for (let i = 0; ; i++) {
       touch();
@@ -399,21 +447,28 @@ function answer(dataDir, project, ref, text, now = new Date(), from = '') {
         items[sha1] = { at: board.stamp(), where: `${projectKey(project)}|${ref}` };
         const af = path.join(dataDir, ANSWERS), atmp = `${af}.${process.pid}.tmp`;
         fs.writeFileSync(atmp, JSON.stringify({ items }, null, 1) + '\n', 'utf8');
-        renameRetry(atmp, af);
+        yield* renameRetry(atmp, af);
       }
       // close (board.update в процессе kermach) замка не знает: файл карты сменился, пока собирали текст, — собираем заново поверх нового.
       // board.save пишет через «.<карта>.<pid>.<…>.tmp» и rename: такой файл есть — close посреди записи, наш rename стёр бы его «Что сделано».
       const dir = path.dirname(file), mark = `.${path.basename(file)}.`;
       const busy = () => { try { return fs.readdirSync(dir).some((n) => n.startsWith(mark) && n.endsWith('.tmp')); } catch { return false; } };
-      for (let w = 0; busy() && w < 40; w++) pause(25);
-      if (busy() || fs.readFileSync(file, 'utf8') !== old) { if (i < ANSWER_TRIES) continue; throw new Error('карту всё время меняют — ответ не записан, отпечаток сохранён'); }
+      // t1889 (d521): свой временный файл — до последней сверки: между сверкой и rename остаётся чтение карты, а не запись всего файла.
+      // Rename не прошёл (файл держит close) — перед повтором сверяем снова: close успел записать — собираем заново поверх его текста.
+      // Окно не закрыто совсем (close замка не знает), только сужено; общий замок карты в board.save — отдельная работа.
       const tmp = `${file}.${process.pid}.tmp`;
+      const unchanged = () => { try { return !busy() && fs.readFileSync(file, 'utf8') === old; } catch { return false; } };
       fs.writeFileSync(tmp, next, 'utf8');
-      renameRetry(tmp, file);
+      for (let w = 0; busy() && w < ANSWER_BUSY_MS / ANSWER_BUSY_STEP_MS; w++) { yield ANSWER_BUSY_STEP_MS; touch(); }
+      if (!unchanged() || !(yield* renameRetry(tmp, file, unchanged))) {
+        try { fs.unlinkSync(tmp); } catch { /* уже нет */ }
+        if (i < ANSWER_TRIES) continue;
+        throw new Error('карту всё время меняют — ответ не записан, отпечаток сохранён');
+      }
       // close прочитал карту до нашего rename и записал после (board.save повторяет rename до 300 мс) — раздела нет: дописываем снова поверх его «Что сделано».
       const has = () => answerSections(fs.readFileSync(file, 'utf8')).some((a) => a.head === head && a.text === mine.text);
       let kept = true;
-      for (let w = 0; w < ANSWER_SETTLE_MS / 25 && (kept = has()); w++) pause(25);
+      for (let w = 0; w < ANSWER_SETTLE_MS / ANSWER_SETTLE_STEP_MS && (kept = has()); w++) { yield ANSWER_SETTLE_STEP_MS; touch(); }
       if (kept && has()) return { head, sha1 };
       if (i >= ANSWER_TRIES) throw new Error('ответ пропал из карты после записи — карту переписывают, отпечаток сохранён');
     }
@@ -832,7 +887,10 @@ async function regrade(project, id, o = {}) {
   const size = require('./size');
   const c = board.read(project).cards.find((/** @type {any} */ x) => x.id === id);
   if (!c) return { error: `карты ${id} на доске нет` };
-  if (c.status !== 'готово') return { error: `карта ${id} не закрыта (status: ${c.status}) — заново проверяется только карта «готово»` };
+  // t1889 (d567): проверяющий окна дважды не дал итога (twice, build) — «ждёт ответа» и «не проверена: …» в checked:, человеку вариант «1) проверить ещё раз».
+  // Его и выполняет эта команда. «Ждёт ответа» по вопросу агента или по итогу проверяющего (checked не «не проверена») — отказ, как прежде.
+  const unchecked = c.status === 'ждёт ответа' && /^не проверена:/.test(String((c.extra || {}).checked || '').trim());
+  if (c.status !== 'готово' && !unchecked) return { error: `карта ${id} не закрыта (status: ${c.status}) — заново проверяется только карта «готово» или «ждёт ответа», которой проверяющий не дал итога` };
   const round = nextRound(project, id);
   const since = createdAt(c.created) || Date.now();
   const base = await baseAt(project, since);
@@ -861,7 +919,7 @@ async function regrade(project, id, o = {}) {
   const k = Number(/-(\d+)\.md$/.exec(name)?.[1]) || round;
   const line = checkedLine(k, Math.max(3, k), r);
   board.update(project, id, { checked: line });
-  return { round: k, effort, raws, file: `${GRADES}/${name}`, line, r };
+  return { round: k, effort, raws, file: `${GRADES}/${name}`, line, r, status: c.status };
 }
 
-module.exports = { TEMPLATE, VERDICTS, GRADES, REMIND, remindOf, SOFT, SOFT_BLOCK, SAMPLE_BLOCK, sampleGap, MODEL, STEPS, hasCommand, skipOf, effortOf, timeoutOf, baseOf, baseAt, pathsOf, changesOf, changesInfo, proofsOf, template, build, ANSWERS, answerSections, answer, answersOf, parse, sessionOf, rawOf, limitOf, limitWait, flags, grade, gradesDir, saveRaws, withRaw, shared, running, SLOTS, queued, slot, adopt, cancel, release, report, howLine, checkedLine, nextRound, regrade };
+module.exports = { TEMPLATE, VERDICTS, GRADES, REMIND, remindOf, SOFT, SOFT_BLOCK, SAMPLE_BLOCK, sampleGap, MODEL, STEPS, hasCommand, skipOf, effortOf, timeoutOf, baseOf, baseAt, pathsOf, changesOf, changesInfo, proofsOf, template, build, ANSWERS, answerSections, answer, answerAsync, answersOf, parse, sessionOf, rawOf, limitOf, limitWait, flags, grade, gradesDir, saveRaws, withRaw, shared, running, SLOTS, queued, slot, adopt, cancel, release, report, howLine, checkedLine, nextRound, regrade };

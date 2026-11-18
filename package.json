@@ -1,8 +1,7 @@
 {
   "name": "kermach",
   "productName": "Kermach",
-  "version": "1.0.5",
-  "macBuild": 2,
+  "version": "1.0.9",
   "private": true,
   "main": "main/main.js",
   "dependencies": {
@@ -73,14 +72,11 @@
       "extendInfo": {
         "NSHumanReadableCopyright": "MIT",
         "LSApplicationCategoryType": "public.app-category.developer-tools"
-      },
-      "bundleVersion": "1.0.5.2",
-      "bundleShortVersion": "1.0.5.2",
-      "artifactName": "Kermach-1.0.5.2-arm64-mac.${ext}"
+      }
     },
     "dmg": {
       "title": "Kermach ${version}",
-      "artifactName": "Kermach-1.0.5.2-arm64.dmg"
+      "artifactName": "Kermach-${version}-arm64.dmg"
     },
     "afterSign": "build/adhoc-sign.cjs"
   }

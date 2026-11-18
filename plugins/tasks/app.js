@@ -41,12 +41,12 @@ const log = (/** @type {string} */ m) => { if (ctx) ctx.log(`дела: ${m}`); }
 const same = (/** @type {string} */ a, /** @type {string} */ b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 const plugDir = () => path.join(/** @type {Ctx} */ (ctx).dataDir, 'plugins-data', 'tasks');
 
-/** Проекты Kermach из projects.json — только чтение. @returns {{ path: string, name: string, color: string, icon: string }[]} */
+/** Проекты Kermach из projects.json — только чтение; image — картинка проекта (t1678, d681). @returns {{ path: string, name: string, color: string, icon: string, image?: string }[]} */
 function projectsOf() {
   try {
     const d = JSON.parse(fs.readFileSync(path.join(/** @type {Ctx} */ (ctx).dataDir, 'projects.json'), 'utf8'));
     return Array.isArray(d.projects) ? d.projects.filter((/** @type {any} */ p) => p && p.path).map((/** @type {any} */ p) => ({
-      path: String(p.path), name: String(p.name || path.basename(String(p.path))), color: String(p.color || ''), icon: String(p.icon || '') })) : [];
+      path: String(p.path), name: String(p.name || path.basename(String(p.path))), color: String(p.color || ''), icon: String(p.icon || ''), ...(typeof p.image === 'string' && p.image ? { image: p.image } : {}) })) : [];
   } catch { return []; }
 }
 

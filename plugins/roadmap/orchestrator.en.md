@@ -96,7 +96,7 @@ How to do one card — the same way a card agent does:
 2. Set the card's status to "in progress": edit the `status:` line in the card file header. From this moment the reviewer looks at your changes in the project.
 3. Do what the card says and no more. The project rules for a card agent (checks, boundaries, honesty) apply to you too.
 4. Check by the field "How to check". Save the proof as a file in `{проект}\.kermach\proofs\t<N>\`.
-5. Close the card: `kermach roadmap close t<N> --done "what was done" --proof "path to the proof"`.
+5. Close the card: `kermach roadmap close t<N> --done "what was done" --proof "path to the proof" --tested "kind"`. The kind of check is what it was tested on: `real` (what the human will work with), `fake`, `human only`; several separated by commas. Do not hide a probe on a fake.
 6. A human answer is needed — set the status "waiting for an answer", write the question into the card and write it to the human. Take the next card that does not depend on this one.
 
 Journal. After each card add one line to `{проект}\SESSION-now.md`. Example: "Solo mode, {фаза}: t12 done, next t13". If the file does not exist, create it.

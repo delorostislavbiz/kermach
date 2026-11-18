@@ -65,7 +65,9 @@ function filesSetup(host) {
   row.style.cssText = 'margin:6px 6px 0;height:34px;display:flex;align-items:center;gap:8px;padding:0 10px;color:var(--muted);font-size:12px;'
     + 'border-top:1px solid rgba(var(--muted-rgb),.14);cursor:default;flex-shrink:0';
   row.innerHTML = `${ICON(I_FOLDER)}<span></span>`;
-  host.side.appendChild(row);
+  // Место по алфавиту папок, как при загрузке (t1845, t1895): перед первой строкой плагина, чья папка дальше; включили заново — встаёт туда же, не в конец.
+  const next = [...host.side.children].find((e) => e.id.startsWith('plugin-') && e.id > row.id);
+  host.side.insertBefore(row, next || null);
   host.side.hidden = false;
 
   const panel = document.createElement('div');

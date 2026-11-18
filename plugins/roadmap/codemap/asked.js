@@ -51,7 +51,17 @@ function writeFileOf(mapFile, root) {
  */
 function ownFile(file) {
   const st = fs.lstatSync(file, { throwIfNoEntry: false });
-  if (st && (!st.isFile() || st.nlink > 1)) { try { fs.unlinkSync(file); } catch (e) { if (/** @type {any} */ (e).code !== 'ENOENT') throw e; } }
+  if (!st || (st.isFile() && st.nlink <= 1)) return;
+  try {
+    // Папка на месте имени (t1677, d293): unlinkSync на ней — EPERM, record глотал ошибку, и журнал не писался никогда.
+    // Как .gitignore карты (worker.js mapDir, t911): пустую убрать, непустую отодвинуть в сторону — чужое не удаляем.
+    if (st.isDirectory()) {
+      try { fs.rmdirSync(file); } catch (e) {
+        if (!['ENOTEMPTY', 'EEXIST'].includes(/** @type {any} */ (e).code)) throw e;
+        fs.renameSync(file, `${file}.dir-${Date.now()}`);
+      }
+    } else fs.unlinkSync(file);
+  } catch (e) { if (/** @type {any} */ (e).code !== 'ENOENT') throw e; }
 }
 
 /** @param {string} text */
@@ -106,6 +116,12 @@ function record(mapFile, q, hits, top, weak = false, root = '') {
 const LOCK_STALE_MS = 2000;
 /** Дольше замок не ждать (t1068): EPERM без файла замка (папка без права записи) иначе крутил цикл вечно. */
 const LOCK_WAIT_MS = 3000;
+/**
+ * Пауза между попытками взять замок (t2012), как шаг команды kermach у замка заметок (board.js LOCK_STEP_MS, t1992).
+ * Круг с неудаляемым замком (open wx, lstat, unlink) после паузы стоит ~1–1,5 мс процессора. Atomics.wait на Windows ждёт кратно
+ * шагу таймера ~15,6 мс: 5 мс — на деле ~15, 25 — ~31. За 3 с ~97 кругов, ~100–200 мс процессора (spikes/t2012-asked-lock/probe-result.txt).
+ */
+const LOCK_STEP_MS = 25;
 
 /**
  * Выполнить fn под замком <file>.lock. Замок — файл с wx: ссылку на его имени не открыть, создаётся только новый.
@@ -115,16 +131,22 @@ function locked(file, fn) {
   const lock = `${file}.lock`;
   const nap = new Int32Array(new SharedArrayBuffer(4));
   const until = Date.now() + LOCK_WAIT_MS;
-  for (;;) {
-    try { fs.closeSync(fs.openSync(lock, 'wx')); break; } catch (e) {
-      const code = /** @type {any} */ (e).code;
-      if (code !== 'EEXIST' && code !== 'EPERM') throw e;
+  let code = '';
+  for (let round = 0; ; round++) {
+    // t2012: предел и пауза — в начале каждого круга, кроме первого (как noteLockSteps в board.js, t2004). Брошенный замок,
+    // который не удалить (папка на его месте, файл держат открытым без права удаления), уходил на новый круг через continue
+    // мимо паузы: до LOCK_WAIT_MS цикл крутился без отдыха и занимал ядро (spikes/t2012-asked-lock).
+    if (round > 0) {
       if (Date.now() > until) throw new Error(`журнал не записан: замок ${lock} не взять за ${LOCK_WAIT_MS / 1000} с (${code}) — нет права записи в папку или замок держит другой процесс`);
+      Atomics.wait(nap, 0, 0, LOCK_STEP_MS);
+    }
+    try { fs.closeSync(fs.openSync(lock, 'wx')); break; } catch (e) {
+      code = /** @type {any} */ (e).code;
+      if (code !== 'EEXIST' && code !== 'EPERM') throw e;
       // Замок, который другой процесс как раз удаляет, на Windows даёт EPERM и на lstat (t1382): он уходит — подождать и повторить.
       let st;
       try { st = fs.lstatSync(lock, { throwIfNoEntry: false }); } catch (le) { if (/** @type {any} */ (le).code !== 'EPERM') throw le; }
-      if (st && Date.now() - st.mtimeMs > LOCK_STALE_MS) { try { fs.unlinkSync(lock); } catch { /* убрал другой */ } continue; }
-      Atomics.wait(nap, 0, 0, 5);
+      if (st && Date.now() - st.mtimeMs > LOCK_STALE_MS) { try { fs.unlinkSync(lock); } catch { /* убрал другой или не удалить */ } }
     }
   }
   try { fn(); } finally { try { fs.unlinkSync(lock); } catch { /* уже убран как брошенный */ } }

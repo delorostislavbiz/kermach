@@ -15,6 +15,8 @@ const keychain = require('./mac-keychain');
 
 /** macOS: ключ лежит в Связке ключей (main\mac-keychain.js), в поле enc — только номер записи. */
 const KC_SERVICE = 'Kermach API key';
+/** t1811: текст ошибки на языке программы; без главного процесса — русский. */
+const tr = (/** @type {string} */ k, /** @type {string} */ ru, /** @type {any} */ v) => { try { return require('./i18n').t(k, ru, v); } catch { return ru.replace(/\{(\w+)\}/g, (m, n) => (v && n in v ? String(v[n]) : m)); } };
 
 /** Потолок на один запуск по умолчанию, $ (ТЗ). */
 const BUDGET_DEF = 5;
@@ -124,9 +126,9 @@ async function save(patch) {
   let enc = '';
   if (typeof pt.key === 'string' && pt.key.trim()) {
     const key = pt.key.trim();
-    if (process.platform !== 'win32' && process.platform !== 'darwin') return { error: 'Хранение ключа пока только на Windows и macOS' };
-    if (key.length > 2000 || /\s/.test(key)) return { error: 'Это не похоже на ключ: пробелы или слишком длинный' };
-    try { enc = await protect(key); } catch (e) { return { error: `Ключ не зашифрован: ${e instanceof Error ? e.message : e}` }; }
+    if (process.platform !== 'win32' && process.platform !== 'darwin') return { error: tr('apiKey.err1', 'Хранение ключа пока только на Windows') };
+    if (key.length > 2000 || /\s/.test(key)) return { error: tr('apiKey.err2', 'Это не похоже на ключ: пробелы или слишком длинный') };
+    try { enc = await protect(key); } catch (e) { return { error: tr('apiKey.err3', 'Ключ не зашифрован: {v0}', { v0: e instanceof Error ? e.message : e }) }; }
   }
   const s = read();
   const oldEnc = s.enc;
@@ -136,18 +138,18 @@ async function save(patch) {
     s.enc = enc; s.mode = 'key'; s.last4 = key.slice(-4).replace(/[^\w-]/g, ''); s.cmd = '';
   } else if (typeof pt.cmd === 'string') {
     const cmd = pt.cmd.trim();
-    if (cmd.length > 1000) return { error: 'Команда длиннее 1000 знаков' };
+    if (cmd.length > 1000) return { error: tr('apiKey.err4', 'Команда длиннее 1000 знаков') };
     if (cmd) { s.mode = 'cmd'; s.cmd = cmd; s.enc = ''; s.last4 = ''; } else if (s.mode === 'cmd') { s.mode = ''; s.cmd = ''; }
   }
   if (pt.budget !== undefined) {
     const b = Number(pt.budget);
-    if (!Number.isFinite(b) || b <= 0 || b > BUDGET_MAX) return { error: `Потолок — число больше 0 и не больше ${BUDGET_MAX}` };
+    if (!Number.isFinite(b) || b <= 0 || b > BUDGET_MAX) return { error: tr('apiKey.err5', 'Потолок — число больше 0 и не больше {BUDGET_MAX}', { BUDGET_MAX }) };
     s.budget = Math.round(b * 100) / 100;
   }
   if (pt.model !== undefined) s.model = MODELS.includes(pt.model) ? pt.model : '';
   try { write(clean(s)); } catch (e) {
     if (enc && process.platform === 'darwin') await keychain.remove(KC_SERVICE, enc);
-    return { error: `api-key.json не записан: ${e}` };
+    return { error: tr('apiKey.err6', 'api-key.json не записан: {e}', { e }) };
   }
   // macOS: прежняя запись Связки ключей больше не нужна (сменили или удалили ключ).
   if (process.platform === 'darwin' && oldEnc && oldEnc !== s.enc) await keychain.remove(KC_SERVICE, oldEnc);
@@ -180,11 +182,11 @@ function killTree(pid) {
  */
 async function check(o = {}) {
   const cmd = helper();
-  if (!cmd) return { ok: false, error: 'Ключ не задан' };
+  if (!cmd) return { ok: false, error: tr('apiKey.err7', 'Ключ не задан') };
   let prog = o.claude;
   if (!prog) {
     const f = require('./find-program').findProgram('claude');
-    if (!f) return { ok: false, error: `Claude Code не найден: ${require('./find-program').notFound(['claude'])}` };
+    if (!f) return { ok: false, error: tr('apiKey.err8', 'Claude Code не найден: {v0}', { v0: require('./find-program').notFound(['claude']) }) };
     prog = [f.file, f.pre];
   }
   const dir = path.join(path.dirname(file), 'api-check');
@@ -209,8 +211,8 @@ async function check(o = {}) {
       log(`кредиты API: «Проверить» — ${r.ok ? `ключ работает ($${r.cost})` : `ошибка: ${r.error}`}`);
       res(r);
     };
-    const timer = setTimeout(() => finish({ ok: false, error: `Claude не ответил за ${CHECK_WAIT / 1000} с` }), CHECK_WAIT);
-    c.on('error', (e) => finish({ ok: false, error: `Claude не запустился: ${e.message}` }));
+    const timer = setTimeout(() => finish({ ok: false, error: tr('apiKey.err9', 'Claude не ответил за {v0} с', { v0: CHECK_WAIT / 1000 }) }), CHECK_WAIT);
+    c.on('error', (e) => finish({ ok: false, error: tr('apiKey.err10', 'Claude не запустился: {message}', { message: e.message }) }));
     c.stderr.on('data', (d) => { if (said.join('').length < 2000) said.push(String(d)); });
     c.stdout.on('data', (d) => {
       buf += String(d);

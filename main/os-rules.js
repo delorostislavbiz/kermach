@@ -54,7 +54,7 @@ function loginPath({ shell, env, home, run }) {
 const PS_ARGS = ['-A', '-o', 'pid=,ppid=,lstart=,command='];
 
 /**
- * Вывод ps → процессы в том же виде, что снимок PowerShell в stop-all.js. lstart — пять слов: «Mon Oct  5 17:39:00 2026», точность — секунда.
+ * Вывод ps → процессы в том же виде, что таблица PowerShell в proc-table.js (t1189). В src не зовётся: держит проба Mac-веток t222-unit (d397). lstart — пять слов: «Mon Oct  5 17:39:00 2026», точность — секунда.
  * @param {string} out
  * @returns {{ pid: number, ppid: number, started: number, cmd: string }[]}
  */

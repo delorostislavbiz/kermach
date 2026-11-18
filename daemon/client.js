@@ -13,6 +13,12 @@ const { PROTOCOL_VERSION, PIPE, LEGACY_PIPE, KEY_FILE, lineReader, frame } = req
 
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Срок ответа на короткий вопрос плагина (t1999): readTab, writeTab и terminals в src/main/terminals.js.
+ * Демон жив, но завис — канал не закрывается, и без срока вызов ждал бы вечно: сверка «Роадмапа» и опрос вставших карт вставали молча.
+ */
+const ANSWER_MS = 15000;
+
 /** Ключ канала из файла демона (t275); нет файла — пусто: старый демон ключа не пишет и не спрашивает. */
 function readKey() {
   try { return fs.readFileSync(KEY_FILE, 'utf8').trim(); } catch { return ''; }
@@ -31,14 +37,14 @@ class DaemonClient extends EventEmitter {
     /** Как запущен демон, если его запустил этот клиент: 'rundll32' или 'напрямую'. @type {string} */
     this.spawnedVia = '';
     this.nextId = 1;
-    /** @type {Map<number, { resolve: Function, reject: Function, sync?: (msg: any) => void }>} */
+    /** timer — срок ответа (t1999), если его задал вызывающий. @type {Map<number, { resolve: Function, reject: Function, sync?: (msg: any) => void, timer?: NodeJS.Timeout }>} */
     this.pending = new Map();
     /** Канал закрыт: запросы сразу получают отказ (t191). Иначе запись в закрытый сокет глушится, 'close' уже был — ответа не будет никогда. */
     this.closed = false;
     sock.on('data', lineReader((msg) => this.onMessage(msg)));
     sock.on('close', () => {
       this.closed = true;
-      for (const p of this.pending.values()) p.reject(new Error('канал к демону закрыт'));
+      for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('канал к демону закрыт')); }
       this.pending.clear();
       this.emit('close');
     });
@@ -49,8 +55,10 @@ class DaemonClient extends EventEmitter {
   onMessage(msg) {
     if (msg.id !== undefined) {
       const p = this.pending.get(msg.id);
+      // Нет записи — ответ опоздал: срок вышел, вызывающий уже получил отказ (t1999).
       if (!p) return;
       this.pending.delete(msg.id);
+      clearTimeout(p.timer);
       // sync срабатывает сразу, до разбора следующих кадров, — нужен attach, чтобы снимок лёг раньше живого вывода.
       if (p.sync) p.sync(msg);
       if (msg.ok) p.resolve(msg);
@@ -62,16 +70,28 @@ class DaemonClient extends EventEmitter {
 
   /**
    * Запрос с ответом.
-   * @param {string} cmd @param {Record<string, any>} [fields] @param {(msg: any) => void} [sync]
+   * ms — срок ответа (t1999); без него ждём, пока демон ответит или канал закроется. Срок вышел — отказ с code 'timeout'
+   * и текстом «демон не ответил за N с», запрос забыт: поздний ответ демона пропускается. Сам запрос не повторяется:
+   * команда могла уже дойти до демона (write — во вкладку), решает вызывающий.
+   * @param {string} cmd @param {Record<string, any>} [fields] @param {(msg: any) => void} [sync] @param {number} [ms]
    * @returns {Promise<any>}
    */
-  request(cmd, fields = {}, sync) {
+  request(cmd, fields = {}, sync, ms) {
     // Тот же текст, что у запросов, ждавших ответа при обрыве: для connectSettled (t198) он значит «демон выходит» только у hello —
     // первого запроса свежего канала, где closed ещё false.
     if (this.closed || this.sock.destroyed) return Promise.reject(new Error('канал к демону закрыт'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject, sync });
+      /** @type {{ resolve: Function, reject: Function, sync?: (msg: any) => void, timer?: NodeJS.Timeout }} */
+      const p = { resolve, reject, sync };
+      if (ms && ms > 0) {
+        p.timer = setTimeout(() => {
+          if (this.pending.get(id) !== p) return;
+          this.pending.delete(id);
+          reject(Object.assign(new Error(`демон не ответил за ${Math.round(ms / 1000)} с`), { code: 'timeout', cmd }));
+        }, ms);
+      }
+      this.pending.set(id, p);
       this.sock.write(frame({ id, cmd, ...fields }));
     });
   }
@@ -220,4 +240,4 @@ function spawnDaemon() {
   return 'напрямую';
 }
 
-module.exports = { connect, ensureDaemon, DaemonClient };
+module.exports = { connect, ensureDaemon, DaemonClient, ANSWER_MS };

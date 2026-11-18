@@ -15,9 +15,73 @@ const TERM_MIN = 10;
 const TERM_MAX = 28;
 /** Сдвиг шрифта просмотра Markdown от «Шрифта терминала», px: кнопки A−/A+ (t242). Видимый размер окно держит в TERM_MIN…TERM_MAX. */
 const MD_SHIFT = TERM_MAX - TERM_MIN;
-const DEFAULTS = { uiZoom: 100, termFont: 17, mdShift: 0, sound: true, notify: true, copySelect: true, theme: '', ui: uiThemes.DEFAULT_UI, appearance: 'system', agentView: 'chat', claudeBypass: true, lang: '', projectsBase: '', inboxDir: '', plugins: {}, pluginMain: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
+/** Порог сна вкладки Claude (t1751, t1771), минуты: 0 — не усыплять, не больше суток. Дробь — для проб. */
+const SLEEP_MAX = 1440;
+const DEFAULTS = { uiZoom: 100, termFont: 17, mdShift: 0, sound: true, notify: true, copySelect: true, sleepMin: 60, theme: '', ui: uiThemes.DEFAULT_UI, appearance: 'system', agentView: 'chat', claudeBypass: true, lang: '', projectsBase: '', inboxDir: '', plugins: {}, pluginMain: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
 /** Предел мешка настроек одного плагина в JSON, знаков (t256): больше — запись отклоняется, остаётся прежняя. */
 const BAG_MAX = 64 * 1024;
+/**
+ * Изменчивые ключи мешков плагинов (t1870): состояние работы, а не выбор человека. «Роадмап» меняет их на каждом событии карты
+ * (запуск, «готово», проверяющий, круг статусов — d829), а запись settings.json — файл целиком (у Ростислава 95 КБ),
+ * рассылка всем окнам, подписчики и строка «настройки:» в main.log. Они лежат в своём файле папки данных плагина:
+ * plugins-data\<плагин>\run-state.json { v: 1, <ключ>: … }. Плагин видит их в своём мешке как раньше (get/set), окнам они не уходят.
+ * @type {Record<string, string[]>}
+ */
+const VOLATILE = { roadmap: ['runs', 'past', 'solo', 'review', 'phaseReview', 'gradeCost', 'stalls'] };
+const VOL_FILE = 'run-state.json';
+/**
+ * Предел изменчивых ключей одного плагина, знаков в JSON. Свой, а не BAG_MAX: 16.11 мешок «Роадмапа» дорос до 65527 знаков из 65536,
+ * и каждая запись, которая его увеличивала, молча отбрасывалась — отметка проверяющего не сохранялась, сверка доски шла по кругу без пауз,
+ * главный поток был занят на 90 % (задержка набора в терминале).
+ */
+const VOL_MAX = 2 * 1024 * 1024;
+/** Когда про отказ записи мешка писали в журнал: не чаще раза в минуту на плагин. @type {Record<string, number>} */
+const bagTold = {};
+/** Последний записанный текст файла плагина: тот же — не пишем. @type {Record<string, string>} */
+const volSaved = {};
+/** Файл изменчивых ключей плагина id. @param {string} id */
+const volFile = (id) => path.join(dataDir(), 'plugins-data', id, VOL_FILE);
+/** Изменчивые ключи мешка плагина: только то, что есть. @param {string} id @param {any} bag */
+const volOf = (id, bag) => {
+  /** @type {Record<string, any>} */
+  const o = {};
+  if (bag && typeof bag === 'object') for (const k of VOLATILE[id] || []) if (bag[k] !== undefined) o[k] = bag[k];
+  return o;
+};
+/** Мешки без изменчивых ключей — для settings.json, окон и сравнения. @param {Record<string, any>} bags */
+const stripVol = (bags) => {
+  /** @type {Record<string, any>} */
+  const out = { ...bags };
+  for (const id of Object.keys(VOLATILE)) {
+    if (!out[id] || typeof out[id] !== 'object') continue;
+    const b = { ...out[id] };
+    for (const k of VOLATILE[id]) delete b[k];
+    out[id] = b;
+  }
+  return out;
+};
+/** Настройки без изменчивых ключей: settings.json, окна (settings:changed, ответы IPC). @param {Settings} s */
+const plain = (s) => ({ ...s, pluginSettings: stripVol(s.pluginSettings) });
+/**
+ * Записать файлы изменчивых ключей, которые изменились: атомарно, временный файл и rename. Папку плагина создаём сами.
+ * Файл не записался — строка в журнал и false: settings.json тогда не чистим, иначе записи пропадут.
+ */
+function saveVol() {
+  let ok = true;
+  for (const id of Object.keys(VOLATILE)) {
+    const text = JSON.stringify({ v: 1, ...volOf(id, cur.pluginSettings[id]) });
+    if (volSaved[id] === text) continue;
+    const f = volFile(id);
+    try {
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f + '.tmp', text);
+      fs.renameSync(f + '.tmp', f);
+      volSaved[id] = text;
+    } catch (e) { ok = false; try { fs.unlinkSync(f + '.tmp'); } catch {} log(`настройки: ${f} не записан: ${e}`); }
+  }
+  return ok;
+}
+
 /** Пресеты раскладок окна проекта (t397): не больше PRESETS_MAX, имя до 60 знаков. */
 const PRESETS_MAX = 20;
 const LAYOUTS = ['cols2', 'cols3', 'one2', 'grid4'];
@@ -37,12 +101,13 @@ const partKind = (k) => (PART_KINDS.includes(k) || (typeof k === 'string' && /^a
  * appearance — светлый или тёмный вид: system (как в системе), light, dark. У Termius Dark вид задаёт схема, без схемы — тёмный.
  * Все поля выбирает один список «Тема» в «Настройках» (t723, renderer\dialogs.js): пункт пишет ui, appearance, theme и plugins.themes вместе;
  *   plugins.themes — признак «схема включена», своего выключателя у плагина «Темы» нет.
+ * sleepMin — порог сна вкладки Claude в «готово» (t1771), минуты; 0 — не усыплять. Главный процесс шлёт его демону запросом sleep (terminals.js).
  * agentView — как открывать вкладки агентов: chat (вид «Разговор») или terminal.
  * claudeBypass — вкладки Claude запускаются с --dangerously-skip-permissions (без запросов разрешений); по умолчанию да.
  * lang — язык надписей (t258): '' — русский ('ru' из Mac-версии до 1.0 — тоже русский), первый пуск на macOS — украинский; иначе ключ из поля "lang" plugin.json включённого плагина (main\i18n.js).
  * layoutPresets — пресеты раскладок окна проекта (t397), общие для всех проектов: { name, kind, fr, parts, files: { open, width } };
  *   parts — вид вкладки в каждой части ('' — часть пустая), files — панель «Файлы» (открыта ли, ширина в px).
- * @typedef {{ uiZoom: number, termFont: number, mdShift: number, sound: boolean, notify: boolean, copySelect: boolean, theme: string, ui: string, appearance: string, agentView: string, claudeBypass: boolean, lang: string, plugins: Record<string, boolean>, pluginMain: Record<string, boolean>, agents: Record<string, boolean>,
+ * @typedef {{ uiZoom: number, termFont: number, mdShift: number, sound: boolean, notify: boolean, copySelect: boolean, sleepMin: number, theme: string, ui: string, appearance: string, agentView: string, claudeBypass: boolean, lang: string, plugins: Record<string, boolean>, pluginMain: Record<string, boolean>, agents: Record<string, boolean>,
  *   pluginSettings: Record<string, Record<string, any>>, layoutPresets: any[] }} Settings
  */
 
@@ -65,8 +130,12 @@ function cleanFlags(raw, base) {
   return out;
 }
 
-/** Мешки настроек плагинов: имя — как имя папки, значение — объект не больше BAG_MAX знаков в JSON; не объект (null) — мешка нет. @param {any} raw @param {Record<string, any>} base */
-function cleanBags(raw, base) {
+/**
+ * Мешки настроек плагинов: имя — как имя папки, значение — объект не больше BAG_MAX знаков в JSON; не объект (null) — мешка нет.
+ * refused (t1989) — сюда причина отказа по имени плагина: set отдаёт её плагину (refusalOf), иначе он не знает, что записи нет.
+ * @param {any} raw @param {Record<string, any>} base @param {Record<string, string>} [refused]
+ */
+function cleanBags(raw, base, refused) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...base };
   /** @type {Record<string, any>} */
   const out = {};
@@ -74,8 +143,19 @@ function cleanBags(raw, base) {
     if (!/^[\w.-]{1,64}$/.test(k) || !v || typeof v !== 'object' || Array.isArray(v)) continue;
     let text = '';
     try { text = JSON.stringify(v); } catch { continue; }
-    if (text.length <= BAG_MAX) out[k] = JSON.parse(text);
-    else if (base[k]) out[k] = base[k];
+    // Изменчивые ключи (run-state.json) считаем отдельно: в BAG_MAX идёт только выбор человека.
+    const vol = VOLATILE[k] ? JSON.stringify(volOf(k, v)).length : 0;
+    const own = VOLATILE[k] ? JSON.stringify(stripVol({ [k]: v })[k]).length : text.length;
+    if (own <= BAG_MAX && vol <= VOL_MAX) { out[k] = JSON.parse(text); continue; }
+    if (base[k]) out[k] = base[k];
+    // Отказ — вслух: плагин считает, что записал, и молчаливый отказ заводит его в круг.
+    const reason = own > BAG_MAX ? `настройки ${own} знаков, предел ${BAG_MAX}` : `состояние ${vol} знаков, предел ${VOL_MAX}`;
+    if (refused) refused[k] = reason;
+    const now = Date.now();
+    if (!(now - (bagTold[k] || 0) < 60000)) {
+      bagTold[k] = now;
+      log(`настройки: запись плагина ${k} отклонена — ${reason}; осталось прежнее`);
+    }
   }
   return out;
 }
@@ -105,10 +185,10 @@ const agentOn = (id) => cur.agents[id] === true;
 
 /**
  * Приводит значения к допустимым; чужое и неверное заменяется текущим.
- * @param {any} raw @param {Settings} base
+ * @param {any} raw @param {Settings} base @param {Record<string, string>} [refused] — отказы записи мешков плагинов (cleanBags, t1989)
  * @returns {Settings}
  */
-function clean(raw, base) {
+function clean(raw, base, refused) {
   const r = raw && typeof raw === 'object' ? raw : {};
   const font = Math.round(Number(r.termFont));
   const shift = typeof r.mdShift === 'number' ? Math.round(r.mdShift) : NaN;
@@ -119,6 +199,7 @@ function clean(raw, base) {
     sound: typeof r.sound === 'boolean' ? r.sound : base.sound,
     notify: typeof r.notify === 'boolean' ? r.notify : base.notify,
     copySelect: typeof r.copySelect === 'boolean' ? r.copySelect : base.copySelect,
+    sleepMin: typeof r.sleepMin === 'number' && Number.isFinite(r.sleepMin) && r.sleepMin >= 0 && r.sleepMin <= SLEEP_MAX ? r.sleepMin : base.sleepMin,
     // Строка без проверки по списку схем (t257): схемы — файл плагина, его меняют без перезапуска программы.
     theme: typeof r.theme === 'string' && r.theme.length <= 64 ? r.theme : base.theme,
     // Тема не этой системы («Скло» в файле, перенесённом с Mac) — прежняя или умолчание (t506). «Тема разработчика» теперь Termius Dark (t651).
@@ -133,7 +214,7 @@ function clean(raw, base) {
     plugins: cleanFlags(r.plugins, base.plugins),
     pluginMain: cleanFlags(r.pluginMain, base.pluginMain || {}),
     agents: cleanFlags(r.agents, base.agents),
-    pluginSettings: cleanBags(r.pluginSettings, base.pluginSettings),
+    pluginSettings: cleanBags(r.pluginSettings, base.pluginSettings, refused),
     layoutPresets: cleanPresets(r.layoutPresets, base.layoutPresets || []),
   };
 }
@@ -155,8 +236,52 @@ function sysLang(loc) {
 /** Поля lang в файле нет (t1303): язык ставит register после app ready. */
 let langUnset = false;
 
-/** Читает файл. Нет — молча умолчания; испорчен — умолчания и строка в журнал. @param {string} dataDir */
+/** Читает settings.json и файлы изменчивых ключей плагинов (t1870). @param {string} dataDir */
 function load(dataDir) {
+  loadMain(dataDir);
+  loadVol();
+  return cur;
+}
+
+/**
+ * Изменчивые ключи плагинов из run-state.json (t1870). Ключ есть и в settings.json — он главнее: после переноса он появляется там,
+ * только если его записала программа до t1870 или проба. Такие ключи переносим один раз: сначала файл плагина, потом settings.json без них.
+ * Файл испорчен — строка в журнал, файл откладываем в .bad-<время>, пустым поверх не пишем.
+ */
+function loadVol() {
+  /** @type {string[]} */
+  const moved = [];
+  for (const id of Object.keys(VOLATILE)) {
+    delete volSaved[id];
+    const had = volOf(id, cur.pluginSettings[id]);
+    /** @type {any} */
+    let j = {};
+    const f = volFile(id);
+    try {
+      const text = fs.readFileSync(f, 'utf8');
+      j = JSON.parse(text);
+      if (!j || typeof j !== 'object' || Array.isArray(j)) throw new Error('не объект');
+      volSaved[id] = text;
+    } catch (e) {
+      j = {};
+      if (!e || /** @type {any} */ (e).code !== 'ENOENT') {
+        const bad = `${f}.bad-${Date.now()}`;
+        try { fs.renameSync(f, bad); } catch { /* файла уже нет */ }
+        log(`настройки: ${f} не прочитан (${e instanceof Error ? e.message : e}), отложен в ${bad}`);
+      }
+    }
+    const merged = { ...volOf(id, j), ...had };
+    if (Object.keys(merged).length) cur.pluginSettings[id] = { ...(cur.pluginSettings[id] || {}), ...merged };
+    if (Object.keys(had).length) moved.push(`${id}: ${Object.keys(had).join(', ')}`);
+  }
+  if (moved.length && saveVol()) {
+    save();
+    log(`настройки: изменчивые ключи перенесены из settings.json в ${VOL_FILE} папки данных плагина (${moved.join('; ')})`);
+  }
+}
+
+/** Читает settings.json. Нет — молча умолчания; испорчен — умолчания и строка в журнал. @param {string} dataDir */
+function loadMain(dataDir) {
   file = path.join(dataDir, 'settings.json');
   cur = { ...DEFAULTS, plugins: {}, pluginMain: {}, agents: {}, pluginSettings: {}, layoutPresets: [] };
   langUnset = false;
@@ -189,9 +314,11 @@ function load(dataDir) {
   return cur;
 }
 
+/** settings.json без изменчивых ключей (t1870); их файл не записался — пишем их и в settings.json, чтобы не пропали. */
 function save() {
+  const vol = saveVol();
   try {
-    fs.writeFileSync(file + '.tmp', JSON.stringify({ v: 1, ...cur }, null, 2));
+    fs.writeFileSync(file + '.tmp', JSON.stringify({ v: 1, ...(vol ? plain(cur) : cur) }, null, 2));
     fs.renameSync(file + '.tmp', file);
   } catch (e) { log(`настройки: settings.json не записан: ${e}`); }
 }
@@ -203,7 +330,7 @@ const pages = () => webContents.getAllWebContents().filter((w) => !w.isDestroyed
 function apply(w) {
   if (w.isDestroyed()) return;
   w.setZoomFactor(cur.uiZoom / 100);
-  w.send('settings:changed', cur);
+  w.send('settings:changed', plain(cur));
 }
 
 /**
@@ -300,6 +427,42 @@ const dressAll = () => { for (const w of BrowserWindow.getAllWindows()) if (w.ge
 /** @returns {Settings} */
 const get = () => ({ ...cur, plugins: { ...cur.plugins }, pluginMain: { ...cur.pluginMain }, agents: { ...cur.agents }, pluginSettings: JSON.parse(JSON.stringify(cur.pluginSettings)), layoutPresets: JSON.parse(JSON.stringify(cur.layoutPresets)) });
 
+/** Глубокая заморозка: объект и всё внутри только для чтения. @param {any} v */
+const deepFreeze = (v) => {
+  if (v && typeof v === 'object' && !Object.isFrozen(v)) { Object.freeze(v); for (const k of Object.keys(v)) deepFreeze(v[k]); }
+  return v;
+};
+/**
+ * Замороженные копии мешков плагинов (t1991): мешок в cur → его копия. Ключ — сам объект мешка: set и load кладут в cur новые
+ * объекты (cleanBags — JSON.parse, loadVol — новый мешок), на месте мешок не меняется. Новый мешок — новая копия; старая уходит со сборкой мусора.
+ * @type {WeakMap<object, any>}
+ */
+const frozenBags = new WeakMap();
+/**
+ * Настройки одного плагина: только его часть. get() копирует все настройки программы — плагин, который читает свои
+ * настройки на каждую карту доски, занимал этим 45 % главного потока (замер kermach diag cpu, 16.11).
+ * t1991: копия одна до следующей записи и заморожена целиком. Раньше JSON-копия делалась на каждый вызов: 1,4 мс,
+ * при мешке 1,9 МБ — 36 мс, а «Роадмап» зовёт get десятки раз на круг (в круге 16.11 — 4718 мс из 10,4 с).
+ * Ответ общий для всех читателей, поэтому только для чтения: менять — в своей копии ({ ...s, поле }) и ctx.settings.set.
+ * @param {string} id @returns {any}
+ */
+const pluginSettingsOf = (id) => {
+  const s = cur.pluginSettings[id];
+  if (!s) return undefined;
+  let f = frozenBags.get(s);
+  if (!f) { f = deepFreeze(JSON.parse(JSON.stringify(s))); frozenBags.set(s, f); }
+  return f;
+};
+
+/** Отказы записи мешков в последнем вызове set (t1989): плагин → причина. @type {Record<string, string>} */
+let lastRefused = {};
+/**
+ * Причина, по которой последний set не записал мешок плагина id (предел BAG_MAX или VOL_MAX); записал — ''.
+ * Мост плагинов (plugin-bridge.js) читает её сразу после своего set: set синхронный, чужой вызов между ними не встанет.
+ * @param {string} id
+ */
+const refusalOf = (id) => lastRefused[id] || '';
+
 /** @param {any} patch @returns {Settings} */
 function set(patch) {
   const pt = patch && typeof patch === 'object' ? patch : {};
@@ -307,17 +470,33 @@ function set(patch) {
   const part = (/** @type {any} */ x) => (x && typeof x === 'object' ? x : {});
   // Мешок плагина заменяется целиком (t256): плагин присылает свой объект полностью; null — мешок удалить.
   const bags = { ...cur.pluginSettings, ...part(pt.pluginSettings) };
+  // t1870: мешок без изменчивых ключей (его прислало окно — окнам они не уходят, — или старый снимок) их не стирает: берём из cur.
+  for (const id of Object.keys(VOLATILE)) {
+    const nb = part(pt.pluginSettings)[id];
+    if (!nb || typeof nb !== 'object' || Array.isArray(nb)) continue;
+    const keep = Object.fromEntries(Object.entries(volOf(id, cur.pluginSettings[id])).filter(([k]) => nb[k] === undefined));
+    if (Object.keys(keep).length) bags[id] = { ...nb, ...keep };
+  }
   const merged = { ...cur, ...pt, plugins: { ...cur.plugins, ...part(pt.plugins) }, pluginMain: { ...cur.pluginMain, ...part(pt.pluginMain) }, agents: { ...cur.agents, ...part(pt.agents) }, pluginSettings: bags };
-  const next = clean(merged, cur);
-  if (next.uiZoom === cur.uiZoom && next.termFont === cur.termFont && next.mdShift === cur.mdShift && next.sound === cur.sound && next.notify === cur.notify && next.copySelect === cur.copySelect && next.theme === cur.theme && next.lang === cur.lang && next.projectsBase === cur.projectsBase && next.inboxDir === cur.inboxDir
+  // t1989: отказ виден по сборщику, а не по сравнению: мешок отклонён — next равен cur, и set выходит тем же ранним ответом, что и запись того же самого.
+  lastRefused = {};
+  const next = clean(merged, cur, lastRefused);
+  if (next.uiZoom === cur.uiZoom && next.termFont === cur.termFont && next.mdShift === cur.mdShift && next.sound === cur.sound && next.notify === cur.notify && next.copySelect === cur.copySelect && next.sleepMin === cur.sleepMin && next.theme === cur.theme && next.lang === cur.lang && next.projectsBase === cur.projectsBase && next.inboxDir === cur.inboxDir
     && next.ui === cur.ui && next.appearance === cur.appearance && next.agentView === cur.agentView && next.claudeBypass === cur.claudeBypass
     && JSON.stringify(next.plugins) === JSON.stringify(cur.plugins) && JSON.stringify(next.pluginMain) === JSON.stringify(cur.pluginMain) && JSON.stringify(next.agents) === JSON.stringify(cur.agents)
     && JSON.stringify(next.pluginSettings) === JSON.stringify(cur.pluginSettings) && JSON.stringify(next.layoutPresets) === JSON.stringify(cur.layoutPresets)) return get();
+  // t1870: изменились только изменчивые ключи (запуски карт и т. п.) — пишем лишь их файл: без settings.json, строки «настройки:», рассылки окнам и подписчиков.
+  if (JSON.stringify(plain(next)) === JSON.stringify(plain(cur))) {
+    cur = next;
+    // Файл не записался — save() кладёт их в settings.json, иначе после перезапуска их не будет.
+    if (!saveVol()) save();
+    return get();
+  }
   // Схема плагина «Темы» и его выключатель тоже меняют вид: у Termius Dark светлая схема — светлые системные части окна (t710).
   const restyle = next.ui !== cur.ui || next.appearance !== cur.appearance || next.theme !== cur.theme || next.plugins.themes !== cur.plugins.themes;
   cur = next;
   save();
-  log(`настройки: шрифт окон ${cur.uiZoom} %, шрифт терминала ${cur.termFont}, сдвиг Markdown ${cur.mdShift}, звук ${cur.sound ? 'вкл' : 'выкл'}, уведомления ${cur.notify ? 'вкл' : 'выкл'}, копирование выделенного ${cur.copySelect ? 'вкл' : 'выкл'}, тема ${cur.theme || 'по умолчанию'}${cur.ui === 'termius' ? '' : `, интерфейс ${cur.ui} (${cur.appearance})`}, вкладки агентов ${cur.agentView}, Claude ${cur.claudeBypass ? 'без запросов разрешений' : 'с запросами разрешений'}, язык ${cur.lang || 'ru'}, выключены плагины: ${Object.keys(cur.plugins).filter((k) => !cur.plugins[k]).join(', ') || 'нет'}, включены агенты: ${Object.keys(cur.agents).filter((k) => cur.agents[k]).join(', ') || 'нет'}${Object.values(cur.pluginMain).some(Boolean) ? `, главная часть своих плагинов: ${Object.keys(cur.pluginMain).filter((k) => cur.pluginMain[k]).join(', ')}` : ''}`);
+  log(`настройки: шрифт окон ${cur.uiZoom} %, шрифт терминала ${cur.termFont}, сдвиг Markdown ${cur.mdShift}, звук ${cur.sound ? 'вкл' : 'выкл'}, уведомления ${cur.notify ? 'вкл' : 'выкл'}, копирование выделенного ${cur.copySelect ? 'вкл' : 'выкл'}, сон Claude ${cur.sleepMin ? `${cur.sleepMin} мин` : 'выкл'}, тема ${cur.theme || 'по умолчанию'}${cur.ui === 'termius' ? '' : `, интерфейс ${cur.ui} (${cur.appearance})`}, вкладки агентов ${cur.agentView}, Claude ${cur.claudeBypass ? 'без запросов разрешений' : 'с запросами разрешений'}, язык ${cur.lang || 'ru'}, выключены плагины: ${Object.keys(cur.plugins).filter((k) => !cur.plugins[k]).join(', ') || 'нет'}, включены агенты: ${Object.keys(cur.agents).filter((k) => cur.agents[k]).join(', ') || 'нет'}${Object.values(cur.pluginMain).some(Boolean) ? `, главная часть своих плагинов: ${Object.keys(cur.pluginMain).filter((k) => cur.pluginMain[k]).join(', ')}` : ''}`);
   if (restyle) syncNative();
   for (const w of pages()) apply(w);
   if (restyle) dressAll();
@@ -387,13 +566,13 @@ function register(c) {
   ipcMain.handle('settings:get', (e) => {
     if (!sender.allowed(e, 'settings:get')) return sender.refused();
     if (e.sender.getType() === 'window') e.sender.setZoomFactor(cur.uiZoom / 100);
-    return get();
+    return plain(get());
   });
   // telegramOp (t1496) — действие раздела «Telegram»: токен уходит в telegram.js и шифруется, в set() и settings.json не попадает.
   ipcMain.handle('settings:set', (e, patch) => {
     if (!sender.allowed(e, 'settings:set')) return sender.refused();
     if (patch && typeof patch === 'object' && patch.telegramOp) return require('./telegram').op(patch.telegramOp);
-    return set(patch);
+    return plain(set(patch));
   });
   // Поля «Папка новых проектов» и «Папка Входящих» (t1286): системный выбор папки, отмена — ''.
   ipcMain.handle('settings:pickDir', async (e, key) => {
@@ -407,7 +586,11 @@ function register(c) {
     return r.canceled || !r.filePaths[0] ? '' : r.filePaths[0];
   });
   // Записать папку (t1286): пусто — умолчание; относительный путь, нет папки или это файл — { error }, settings.json не меняется.
-  ipcMain.handle('settings:dir', async (e, key, value) => (sender.allowed(e, 'settings:dir') ? setDir(key, value) : sender.refused()));
+  ipcMain.handle('settings:dir', async (e, key, value) => {
+    if (!sender.allowed(e, 'settings:dir')) return sender.refused();
+    const r = await setDir(key, value);
+    return r && typeof r === 'object' && 'pluginSettings' in r ? plain(/** @type {Settings} */ (r)) : r;
+  });
   // Система сменила светлый/тёмный вид (на macOS и акцент) — новые темы в режиме «как в системе» перекрашиваются сразу (t506).
   syncNative();
   const sysChanged = () => { if (cur.ui !== 'termius') { for (const w of pages()) apply(w); dressAll(); } };
@@ -423,4 +606,4 @@ function register(c) {
   ipcMain.on('settings:dict', (e) => { e.returnValue = sender.allowed(e, 'settings:dict') ? require('./i18n').dict() : null; });
 }
 
-module.exports = { register, load, get, set, setDir, look, schemes, background, dress, onChange, pluginOn, pluginMainOn, agentOn, sysLang, ZOOMS, TERM_MIN, TERM_MAX, DEFAULTS };
+module.exports = { register, load, get, pluginSettingsOf, refusalOf, set, setDir, look, schemes, background, dress, onChange, pluginOn, pluginMainOn, agentOn, sysLang, ZOOMS, TERM_MIN, TERM_MAX, SLEEP_MAX, DEFAULTS, BAG_MAX, VOL_MAX };

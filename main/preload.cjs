@@ -75,6 +75,8 @@ const bridge = {
   term: {
     // open — при открытии окна: вкладки без живого терминала запускаются заново (main\terminals.js).
     list: (open) => ipcRenderer.invoke('term:list', open || {}),
+    // Демон не принял порог сна из «Настроек» (t1836): { refused }.
+    sleepState: () => ipcRenderer.invoke('term:sleepState'),
     // opts — вкладка от плагина (t253): { args, cwd, env, title, prompt }, проверяет главный процесс (terminals.js, checkExtra).
     create: (kind, cols, rows, opts) => ipcRenderer.invoke('term:create', { kind, cols, rows, opts }),
     attach: (sid, cols, rows) => ipcRenderer.invoke('term:attach', { sid, cols, rows }),
@@ -93,6 +95,7 @@ const bridge = {
     seen: (sid) => ipcRenderer.send('term:seen', { sid }),
     // И обратно — «Спрятать в фон» в меню вкладки (d307); onHide — вкладку спрятали (меню или плагин): окно снимает её с полосы.
     hide: (sid) => ipcRenderer.invoke('term:hide', { sid }),
+    warm: (sid, on) => ipcRenderer.invoke('term:warm', { sid, on: !!on }),
     onHide: (cb) => ipcRenderer.on('term:hide', (_e, m) => cb(m.sid)),
     onData: (cb) => ipcRenderer.on('term:data', (_e, m) => cb(m.sid, m.data)),
     onExit: (cb) => ipcRenderer.on('term:exit', (_e, m) => cb(m.sid, m.code, m.state)),
